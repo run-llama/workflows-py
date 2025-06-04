@@ -13,15 +13,19 @@ from typing import (
 )
 from weakref import WeakSet
 
-from llama_index.core.bridge.pydantic import ValidationError
-from llama_index.core.instrumentation import get_dispatcher
-from llama_index.core.workflow.types import RunResultT
+from pydantic import ValidationError
 
 from .checkpointer import Checkpoint, CheckpointCallback
 from .context import Context
 from .context_serializers import BaseSerializer, JsonSerializer
 from .decorators import StepConfig, step
-from .errors import *
+from .errors import (
+    WorkflowConfigurationError,
+    WorkflowDone,
+    WorkflowRuntimeError,
+    WorkflowTimeoutError,
+    WorkflowValidationError,
+)
 from .events import (
     Event,
     HumanResponseEvent,
@@ -30,15 +34,15 @@ from .events import (
     StopEvent,
 )
 from .handler import WorkflowHandler
-from .service import ServiceManager
 from .resource import ResourceManager
+from .service import ServiceManager
+from .types import RunResultT
 from .utils import (
     ServiceDefinition,
     get_steps_from_class,
     get_steps_from_instance,
 )
 
-dispatcher = get_dispatcher(__name__)
 logger = logging.getLogger()
 
 
@@ -279,7 +283,6 @@ class Workflow(metaclass=WorkflowMeta):
                     run_id=run_id,
                     service_manager=self._service_manager,
                     resource_manager=self._resource_manager,
-                    dispatcher=dispatcher,
                 )
 
         # add dedicated cancel task
@@ -330,7 +333,6 @@ class Workflow(metaclass=WorkflowMeta):
             logger.debug(e)
             raise WorkflowRuntimeError(msg)
 
-    @dispatcher.span
     def run(
         self,
         ctx: Optional[Context] = None,
@@ -425,7 +427,6 @@ class Workflow(metaclass=WorkflowMeta):
         asyncio.create_task(_run_workflow())
         return result
 
-    @dispatcher.span
     def run_from(
         self,
         checkpoint: Checkpoint,
@@ -531,7 +532,7 @@ class Workflow(metaclass=WorkflowMeta):
                 stop_ok = True
                 break
         if not stop_ok:
-            msg = f"No event of type StopEvent is produced."
+            msg = "No event of type StopEvent is produced."
             raise WorkflowValidationError(msg)
 
         # Check if all consumed events are produced (except specific built-in events)

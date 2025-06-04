@@ -1,10 +1,9 @@
 import asyncio
 from typing import Any, AsyncGenerator, List, Optional
 
-from llama_index.core.workflow.context import Context
-from llama_index.core.workflow.errors import WorkflowDone
-from llama_index.core.workflow.events import Event, StopEvent
-
+from .context import Context
+from .errors import WorkflowDone
+from .events import Event, StopEvent
 from .types import RunResultT
 from .utils import BUSY_WAIT_DELAY
 

@@ -1,7 +1,7 @@
 from _collections_abc import dict_items, dict_keys, dict_values
 from typing import Any, Dict, Type
 
-from llama_index.core.bridge.pydantic import (
+from pydantic import (
     BaseModel,
     ConfigDict,
     PrivateAttr,
@@ -35,7 +35,7 @@ class Event(BaseModel):
 
         ```python
         from llama_index.core.workflows.events import Event
-        from llama_index.core.bridge.pydantic import Field, PrivateAttr
+        from pydantic import Field, PrivateAttr
 
         class CustomEvent(Event):
             field_1: int = Field(description="my custom field")

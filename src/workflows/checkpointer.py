@@ -13,14 +13,15 @@ from typing import (
     Type,
 )
 
-from llama_index.core.bridge.pydantic import (
+from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
 )
-from llama_index.core.workflow.context_serializers import BaseSerializer, JsonSerializer
-from llama_index.core.workflow.errors import WorkflowStepDoesNotExistError
-from llama_index.core.workflow.events import Event
+
+from .context_serializers import BaseSerializer, JsonSerializer
+from .errors import WorkflowStepDoesNotExistError
+from .events import Event
 
 if TYPE_CHECKING:  # pragma: no cover
     from .context import Context

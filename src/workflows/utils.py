@@ -19,11 +19,11 @@ try:
 except ImportError:  # pragma: no cover
     from typing import Union as UnionType  # type: ignore[assignment]
 
-from llama_index.core.bridge.pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict
 
-from .resource import ResourceDefinition
 from .errors import WorkflowValidationError
 from .events import Event, EventType
+from .resource import ResourceDefinition
 
 BUSY_WAIT_DELAY = 0.01
 
@@ -156,7 +156,7 @@ def validate_step_signature(spec: StepSignatureSpec) -> None:
         raise WorkflowValidationError(msg)
 
     if not spec.return_types:
-        msg = f"Return types of workflows step functions must be annotated with their type."
+        msg = "Return types of workflows step functions must be annotated with their type."
         raise WorkflowValidationError(msg)
 
 

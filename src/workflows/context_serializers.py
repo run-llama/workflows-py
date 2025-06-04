@@ -3,10 +3,10 @@ import json
 import pickle
 from abc import ABC, abstractmethod
 from typing import Any
+
 from pydantic import BaseModel
 
-from llama_index.core.schema import BaseComponent
-from .utils import import_module_from_qualified_name, get_qualified_name
+from .utils import get_qualified_name, import_module_from_qualified_name
 
 
 class BaseSerializer(ABC):
@@ -20,13 +20,14 @@ class BaseSerializer(ABC):
 class JsonSerializer(BaseSerializer):
     def _serialize_value(self, value: Any) -> Any:
         """Helper to serialize a single value."""
-        if isinstance(value, BaseComponent):
-            return {
-                "__is_component": True,
-                "value": value.to_dict(),
-                "qualified_name": get_qualified_name(value),
-            }
-        elif isinstance(value, BaseModel):
+        # FIXME: move BaseComponent out of llamaindex core
+        # if isinstance(value, BaseComponent):
+        #     return {
+        #         "__is_component": True,
+        #         "value": value.to_dict(),
+        #         "qualified_name": get_qualified_name(value),
+        #     }
+        if isinstance(value, BaseModel):
             return {
                 "__is_pydantic": True,
                 "value": value.model_dump(),
@@ -42,7 +43,7 @@ class JsonSerializer(BaseSerializer):
         try:
             serialized_value = self._serialize_value(value)
             return json.dumps(serialized_value)
-        except Exception as e:
+        except Exception:
             raise ValueError(f"Failed to serialize value: {type(value)}: {value!s}")
 
     def _deserialize_value(self, data: Any) -> Any:

@@ -1,15 +1,15 @@
 from typing import TYPE_CHECKING, Any, Callable, List, Optional, Type
 
-from llama_index.core.bridge.pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict
 
 from .errors import WorkflowValidationError
+from .resource import ResourceDefinition
 from .utils import (
     ServiceDefinition,
     inspect_signature,
     is_free_function,
     validate_step_signature,
 )
-from .resource import ResourceDefinition
 
 if TYPE_CHECKING:  # pragma: no cover
     from .workflow import Workflow

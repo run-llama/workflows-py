@@ -18,8 +18,6 @@ from typing import (
     TypeVar,
 )
 
-from llama_index.core.instrumentation.dispatcher import Dispatcher
-
 from .checkpointer import CheckpointCallback
 from .context_serializers import BaseSerializer, JsonSerializer
 from .decorators import StepConfig
@@ -30,8 +28,8 @@ from .errors import (
     WorkflowRuntimeError,
 )
 from .events import Event, InputRequiredEvent
-from .service import ServiceManager
 from .resource import ResourceManager
+from .service import ServiceManager
 from .types import RunResultT
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -344,7 +342,7 @@ class Context:
                 # Do not use the default value 'Task'
                 if t_name != "Task":
                     return t_name
-        except RuntimeError as e:
+        except RuntimeError:
             # This is a sync step, fallback to using events list
             pass
 
@@ -549,7 +547,6 @@ class Context:
         run_id: str,
         service_manager: ServiceManager,
         resource_manager: ResourceManager,
-        dispatcher: Dispatcher,
     ) -> None:
         self._tasks.add(
             asyncio.create_task(
@@ -563,7 +560,6 @@ class Context:
                     run_id=run_id,
                     service_manager=service_manager,
                     resource_manager=resource_manager,
-                    dispatcher=dispatcher,
                 ),
                 name=name,
             )
@@ -580,7 +576,6 @@ class Context:
         run_id: str,
         service_manager: ServiceManager,
         resource_manager: ResourceManager,
-        dispatcher: Dispatcher,
     ) -> None:
         while True:
             ev = await self._queues[name].get()
@@ -613,8 +608,9 @@ class Context:
                 )
             kwargs[config.event_name] = ev
 
+            # FIXME:
             # wrap the step with instrumentation
-            instrumented_step = dispatcher.span(step)
+            instrumented_step = step
 
             # - check if its async or not
             # - if not async, run it in an executor
