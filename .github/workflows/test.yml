@@ -1,0 +1,37 @@
+name: Unit Testing
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+env:
+  # Which Python from the matrix will be used to run the coverage check
+  COV_PYTHON_VERSION: 3.13
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install uv and set the python version
+        uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+
+      - name: Run tests
+        if: ${{ matrix.python-version != env.COV_PYTHON_VERSION }}
+        run: uv run pytest
+
+      - name: Run tests with coverage
+        if: ${{ matrix.python-version == env.COV_PYTHON_VERSION }}
+        run: uv run pytest --cov
