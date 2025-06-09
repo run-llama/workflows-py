@@ -5,6 +5,7 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.9"
 dependencies = [
+    "llama-index-instrumentation>=0.1.0",
     "pydantic>=2.11.5",
 ]
 

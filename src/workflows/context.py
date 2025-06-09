@@ -82,6 +82,9 @@ class Context:
         self._lock = asyncio.Lock()
         self._globals: Dict[str, Any] = {}
 
+        # instrumentation
+        self._dispatcher = workflow._dispatcher
+
     def _init_broker_data(self) -> None:
         self._queues: Dict[str, asyncio.Queue] = {}
         self._tasks: Set[asyncio.Task] = set()
@@ -608,9 +611,8 @@ class Context:
                 )
             kwargs[config.event_name] = ev
 
-            # FIXME:
             # wrap the step with instrumentation
-            instrumented_step = step
+            instrumented_step = self._dispatcher.span(step)
 
             # - check if its async or not
             # - if not async, run it in an executor
