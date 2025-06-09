@@ -13,6 +13,7 @@ from typing import (
 )
 from weakref import WeakSet
 
+from llama_index_instrumentation import get_dispatcher
 from pydantic import ValidationError
 
 from .checkpointer import Checkpoint, CheckpointCallback
@@ -43,6 +44,7 @@ from .utils import (
     get_steps_from_instance,
 )
 
+dispatcher = get_dispatcher(__name__)
 logger = logging.getLogger()
 
 
@@ -114,6 +116,8 @@ class Workflow(metaclass=WorkflowMeta):
         self._service_manager = service_manager or ServiceManager()
         # Resource management
         self._resource_manager = resource_manager or ResourceManager()
+        # Instrumentation
+        self._dispatcher = dispatcher
 
     def _ensure_start_event_class(self) -> type[StartEvent]:
         """
@@ -333,6 +337,7 @@ class Workflow(metaclass=WorkflowMeta):
             logger.debug(e)
             raise WorkflowRuntimeError(msg)
 
+    @dispatcher.span
     def run(
         self,
         ctx: Optional[Context] = None,
@@ -427,6 +432,7 @@ class Workflow(metaclass=WorkflowMeta):
         asyncio.create_task(_run_workflow())
         return result
 
+    @dispatcher.span
     def run_from(
         self,
         checkpoint: Checkpoint,
