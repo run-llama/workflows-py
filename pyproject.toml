@@ -1,3 +1,7 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 [project]
 name = "llama-index-workflows"
 version = "0.1.0"
@@ -10,8 +14,7 @@ dependencies = [
 ]
 
 [dependency-groups]
-dev = [
-    "pytest>=8.4.0",
-    "pytest-asyncio>=1.0.0",
-    "pytest-cov>=6.1.1",
-]
+dev = ["pytest>=8.4.0", "pytest-asyncio>=1.0.0", "pytest-cov>=6.1.1"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/workflows"]
