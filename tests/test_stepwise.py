@@ -35,7 +35,7 @@ class StepWorkflow(Workflow):
 
 
 @pytest.mark.asyncio
-async def test_simple_stepwise():
+async def test_simple_stepwise() -> None:
     workflow = StepWorkflow(disable_validation=True)
     handler = workflow.run(stepwise=True)
     while produced_events := await handler.run_step():

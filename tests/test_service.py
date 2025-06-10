@@ -10,7 +10,7 @@ from workflows.workflow import Workflow
 class ServiceWorkflow(Workflow):
     """This wokflow is only responsible to generate a number, it knows nothing about the caller."""
 
-    def __init__(self, *args, **kwargs) -> None:
+    def __init__(self, *args, **kwargs) -> None:  # type: ignore
         self._the_answer = kwargs.pop("the_answer", 42)
         super().__init__(*args, **kwargs)
 
@@ -50,7 +50,7 @@ class DummyWorkflow(Workflow):
 
 
 @pytest.mark.asyncio
-async def test_e2e():
+async def test_e2e() -> None:
     wf = DummyWorkflow()
     # We are responsible for passing the ServiceWorkflow instances to the dummy workflow
     # and give it a name, in this case "service_workflow"
@@ -60,20 +60,20 @@ async def test_e2e():
 
 
 @pytest.mark.asyncio
-async def test_default_value_for_service():
+async def test_default_value_for_service() -> None:
     wf = DummyWorkflow()
     # We don't add any workflow to leverage the default value defined by the user
     res = await wf.run()
     assert res == 84
 
 
-def test_service_manager_add(workflow):
+def test_service_manager_add(workflow: Workflow) -> None:
     s = ServiceManager()
     s.add("test_id", workflow)
     assert s._services["test_id"] == workflow
 
 
-def test_service_manager_get(workflow):
+def test_service_manager_get(workflow: Workflow) -> None:
     s = ServiceManager()
     s._services["test_id"] = workflow
     assert s.get("test_id") == workflow

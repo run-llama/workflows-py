@@ -20,35 +20,35 @@ from workflows.utils import (
 from .conftest import AnotherTestEvent, OneTestEvent
 
 
-def test_validate_step_signature_of_method():
-    def f(self, ev: OneTestEvent) -> OneTestEvent:
+def test_validate_step_signature_of_method() -> None:
+    def f(self, ev: OneTestEvent) -> OneTestEvent:  # type: ignore
         return OneTestEvent()
 
     validate_step_signature(inspect_signature(f))
 
 
-def test_validate_step_signature_of_free_function():
+def test_validate_step_signature_of_free_function() -> None:
     def f(ev: OneTestEvent) -> OneTestEvent:
         return OneTestEvent()
 
     validate_step_signature(inspect_signature(f))
 
 
-def test_validate_step_signature_union():
+def test_validate_step_signature_union() -> None:
     def f(ev: Union[OneTestEvent, AnotherTestEvent]) -> OneTestEvent:
         return OneTestEvent()
 
     validate_step_signature(inspect_signature(f))
 
 
-def test_validate_step_signature_of_free_function_with_context():
+def test_validate_step_signature_of_free_function_with_context() -> None:
     def f(ctx: Context, ev: OneTestEvent) -> OneTestEvent:
         return OneTestEvent()
 
     validate_step_signature(inspect_signature(f))
 
 
-def test_validate_step_signature_union_invalid():
+def test_validate_step_signature_union_invalid() -> None:
     def f(ev: Union[OneTestEvent, str]) -> None:
         pass
 
@@ -59,7 +59,7 @@ def test_validate_step_signature_union_invalid():
         validate_step_signature(inspect_signature(f))
 
 
-def test_validate_step_signature_no_params():
+def test_validate_step_signature_no_params() -> None:
     def f() -> None:
         pass
 
@@ -69,8 +69,8 @@ def test_validate_step_signature_no_params():
         validate_step_signature(inspect_signature(f))
 
 
-def test_validate_step_signature_no_annotations():
-    def f(self, ev) -> None:
+def test_validate_step_signature_no_annotations() -> None:
+    def f(self, ev) -> None:  # type: ignore
         pass
 
     with pytest.raises(
@@ -80,8 +80,8 @@ def test_validate_step_signature_no_annotations():
         validate_step_signature(inspect_signature(f))
 
 
-def test_validate_step_signature_wrong_annotations():
-    def f(self, ev: str) -> None:
+def test_validate_step_signature_wrong_annotations() -> None:
+    def f(self, ev: str) -> None:  # type: ignore
         pass
 
     with pytest.raises(
@@ -91,8 +91,8 @@ def test_validate_step_signature_wrong_annotations():
         validate_step_signature(inspect_signature(f))
 
 
-def test_validate_step_signature_no_return_annotations():
-    def f(self, ev: OneTestEvent):
+def test_validate_step_signature_no_return_annotations() -> None:
+    def f(self, ev: OneTestEvent):  # type: ignore
         pass
 
     with pytest.raises(
@@ -102,8 +102,8 @@ def test_validate_step_signature_no_return_annotations():
         validate_step_signature(inspect_signature(f))
 
 
-def test_validate_step_signature_no_events():
-    def f(self, ctx: Context) -> None:
+def test_validate_step_signature_no_events() -> None:
+    def f(self, ctx: Context) -> None:  # type: ignore
         pass
 
     with pytest.raises(
@@ -113,11 +113,11 @@ def test_validate_step_signature_no_events():
         validate_step_signature(inspect_signature(f))
 
 
-def test_validate_step_signature_too_many_params():
-    def f1(self, ev: OneTestEvent, foo: OneTestEvent) -> None:
+def test_validate_step_signature_too_many_params() -> None:
+    def f1(self, ev: OneTestEvent, foo: OneTestEvent) -> None:  # type: ignore
         pass
 
-    def f2(ev: OneTestEvent, foo: OneTestEvent):
+    def f2(ev: OneTestEvent, foo: OneTestEvent) -> None:  # type: ignore
         pass
 
     with pytest.raises(
@@ -133,7 +133,7 @@ def test_validate_step_signature_too_many_params():
         validate_step_signature(inspect_signature(f2))
 
 
-def test_get_steps_from():
+def test_get_steps_from() -> None:
     class Test:
         @step
         def start(self, start: StartEvent) -> OneTestEvent:
@@ -143,7 +143,7 @@ def test_get_steps_from():
         def my_method(self, event: OneTestEvent) -> StopEvent:
             return StopEvent()
 
-        def not_a_step(self):
+        def not_a_step(self) -> None:
             pass
 
     steps = get_steps_from_class(Test)
@@ -155,8 +155,8 @@ def test_get_steps_from():
     assert "my_method" in steps
 
 
-def test_get_param_types():
-    def f(foo: str):
+def test_get_param_types() -> None:
+    def f(foo: str) -> None:
         pass
 
     sig = inspect.signature(f)
@@ -166,8 +166,8 @@ def test_get_param_types():
     assert res[0] is str
 
 
-def test_get_param_types_no_annotations():
-    def f(foo):
+def test_get_param_types_no_annotations() -> None:
+    def f(foo) -> None:  # type: ignore
         pass
 
     sig = inspect.signature(f)
@@ -177,8 +177,8 @@ def test_get_param_types_no_annotations():
     assert res[0] is Any
 
 
-def test_get_param_types_union():
-    def f(foo: Union[str, int]):
+def test_get_param_types_union() -> None:
+    def f(foo: Union[str, int]) -> None:
         pass
 
     sig = inspect.signature(f)
@@ -188,35 +188,35 @@ def test_get_param_types_union():
     assert res == [str, int]
 
 
-def test_get_return_types():
+def test_get_return_types() -> None:
     def f(foo: int) -> str:
         return ""
 
     assert _get_return_types(f) == [str]
 
 
-def test_get_return_types_union():
+def test_get_return_types_union() -> None:
     def f(foo: int) -> Union[str, int]:
         return ""
 
     assert _get_return_types(f) == [str, int]
 
 
-def test_get_return_types_optional():
+def test_get_return_types_optional() -> None:
     def f(foo: int) -> Optional[str]:
         return ""
 
     assert _get_return_types(f) == [str]
 
 
-def test_get_return_types_list():
+def test_get_return_types_list() -> None:
     def f(foo: int) -> List[str]:
         return [""]
 
     assert _get_return_types(f) == [List[str]]
 
 
-def test_is_free_function():
+def test_is_free_function() -> None:
     assert is_free_function("my_function") is True
     assert is_free_function("MyClass.my_method") is False
     assert is_free_function("some_function.<locals>.my_function") is True

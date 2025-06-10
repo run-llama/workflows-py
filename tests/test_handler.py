@@ -6,14 +6,14 @@ from workflows.context import Context
 from workflows.handler import WorkflowHandler
 
 
-def test_str():
+def test_str() -> None:
     h = WorkflowHandler()
     h.set_result([])
     assert str(h) == "[]"
 
 
 @pytest.mark.asyncio
-async def test_stream_no_context():
+async def test_stream_no_context() -> None:
     h = WorkflowHandler()
     with pytest.raises(ValueError, match="Context is not set!"):
         async for ev in h.stream_events():
@@ -21,7 +21,7 @@ async def test_stream_no_context():
 
 
 @pytest.mark.asyncio
-async def test_run_step_no_context():
+async def test_run_step_no_context() -> None:
     h = WorkflowHandler()
     with pytest.raises(
         ValueError,
@@ -31,7 +31,7 @@ async def test_run_step_no_context():
 
 
 @pytest.mark.asyncio
-async def test_run_step_no_stepwise():
+async def test_run_step_no_stepwise() -> None:
     ctx = mock.MagicMock(spec=Context, stepwise=False)
     h = WorkflowHandler(ctx=ctx)
     with pytest.raises(

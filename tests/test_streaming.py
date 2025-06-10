@@ -1,4 +1,5 @@
 import asyncio
+from typing import Any
 
 import pytest
 
@@ -14,7 +15,7 @@ from .conftest import OneTestEvent
 class StreamingWorkflow(Workflow):
     @step
     async def chat(self, ctx: Context, ev: StartEvent) -> StopEvent:
-        async def stream_messages():
+        async def stream_messages() -> Any:
             resp = "Paul Graham is a British-American computer scientist, entrepreneur, vc, and writer."
             for word in resp.split():
                 yield word
@@ -26,7 +27,7 @@ class StreamingWorkflow(Workflow):
 
 
 @pytest.mark.asyncio
-async def test_e2e():
+async def test_e2e() -> None:
     wf = StreamingWorkflow()
     r = wf.run()
 
@@ -38,7 +39,7 @@ async def test_e2e():
 
 
 @pytest.mark.asyncio
-async def test_too_many_runs():
+async def test_too_many_runs() -> None:
     wf = StreamingWorkflow()
     r = asyncio.gather(wf.run(), wf.run())
     with pytest.raises(
@@ -51,7 +52,7 @@ async def test_too_many_runs():
 
 
 @pytest.mark.asyncio
-async def test_task_raised():
+async def test_task_raised() -> None:
     class DummyWorkflow(Workflow):
         @step
         async def step(self, ctx: Context, ev: StartEvent) -> StopEvent:
@@ -74,7 +75,7 @@ async def test_task_raised():
 
 
 @pytest.mark.asyncio
-async def test_task_timeout():
+async def test_task_timeout() -> None:
     class DummyWorkflow(Workflow):
         @step
         async def step(self, ctx: Context, ev: StartEvent) -> StopEvent:
@@ -96,7 +97,7 @@ async def test_task_timeout():
 
 
 @pytest.mark.asyncio
-async def test_multiple_sequential_streams():
+async def test_multiple_sequential_streams() -> None:
     wf = StreamingWorkflow()
     r = wf.run()
 
@@ -113,7 +114,7 @@ async def test_multiple_sequential_streams():
 
 
 @pytest.mark.asyncio
-async def test_multiple_ongoing_streams():
+async def test_multiple_ongoing_streams() -> None:
     wf = StreamingWorkflow()
     stream_1 = wf.run()
     stream_2 = wf.run()
@@ -130,7 +131,7 @@ async def test_multiple_ongoing_streams():
 
 
 @pytest.mark.asyncio
-async def test_resume_streams():
+async def test_resume_streams() -> None:
     class CounterWorkflow(Workflow):
         @step
         async def count(self, ctx: Context, ev: StartEvent) -> StopEvent:

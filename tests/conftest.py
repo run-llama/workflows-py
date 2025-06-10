@@ -34,15 +34,15 @@ class DummyWorkflow(Workflow):
 
 
 @pytest.fixture()
-def workflow():
+def workflow() -> Workflow:
     return DummyWorkflow()
 
 
 @pytest.fixture()
-def events():
+def events() -> list:
     return [OneTestEvent, AnotherTestEvent]
 
 
 @pytest.fixture()
-def ctx():
+def ctx() -> Context:
     return Context(workflow=DummyWorkflow())

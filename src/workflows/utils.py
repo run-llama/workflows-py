@@ -171,7 +171,7 @@ def get_steps_from_class(_class: object) -> Dict[str, Callable]:
         Dict[str, Callable]: A dictionary mapping step names to their corresponding methods.
 
     """
-    step_methods = {}
+    step_methods: dict[str, Callable] = {}
     all_methods = inspect.getmembers(_class, predicate=inspect.isfunction)
 
     for name, method in all_methods:
@@ -192,7 +192,7 @@ def get_steps_from_instance(workflow: object) -> Dict[str, Callable]:
         Dict[str, Callable]: A dictionary mapping step names to their corresponding methods.
 
     """
-    step_methods = {}
+    step_methods: dict[str, Callable] = {}
     all_methods = inspect.getmembers(workflow, predicate=inspect.ismethod)
 
     for name, method in all_methods:
@@ -315,8 +315,8 @@ def import_module_from_qualified_name(qualified_name: str) -> Any:
     if not qualified_name or "." not in qualified_name:
         raise ValueError("Qualified name must be in format 'module.attribute'")
 
+    module_path = qualified_name.rsplit(".", 1)
     try:
-        module_path = qualified_name.rsplit(".", 1)
         module = import_module(module_path[0])
         return getattr(module, module_path[1])
     except ImportError as e:

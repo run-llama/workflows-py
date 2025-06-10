@@ -8,7 +8,7 @@ from workflows.workflow import Workflow
 
 
 @pytest.mark.asyncio
-async def test_retry_e2e():
+async def test_retry_e2e() -> None:
     class CountEvent(Event):
         """Empty event to signal a step to increment a counter in the Context."""
 
@@ -31,13 +31,13 @@ async def test_retry_e2e():
     assert await workflow.run() == "All good!"
 
 
-def test_ConstantDelayRetryPolicy_init():
+def test_ConstantDelayRetryPolicy_init() -> None:
     p = ConstantDelayRetryPolicy()
     assert p.maximum_attempts == 3
     assert p.delay == 5
 
 
-def test_ConstantDelayRetryPolicy_next():
+def test_ConstantDelayRetryPolicy_next() -> None:
     delay = 4.2
     p = ConstantDelayRetryPolicy(maximum_attempts=5, delay=delay)
     assert p.next(elapsed_time=0.0, attempts=4, error=Exception()) == delay
