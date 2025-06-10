@@ -1,0 +1,59 @@
+---
+default_language_version:
+  python: python3
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-byte-order-marker
+      - id: check-merge-conflict
+      - id: check-toml
+      - id: check-yaml
+        args: [--allow-multiple-documents]
+      - id: detect-private-key
+      - id: end-of-file-fixer
+      - id: mixed-line-ending
+      - id: trailing-whitespace
+
+  - repo: https://github.com/charliermarsh/ruff-pre-commit
+    rev: v0.11.13
+    hooks:
+      - id: ruff-format
+      - id: ruff-check
+        args: [--fix, --exit-non-zero-on-fix]
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.15.0
+    hooks:
+      - id: mypy
+        additional_dependencies:
+          [
+            "types-Deprecated",
+            "types-PyYAML",
+            "types-botocore",
+            "types-aiobotocore",
+            "types-protobuf==4.24.0.4",
+            "types-redis",
+            "types-requests",
+            "types-setuptools",
+            "types-click",
+          ]
+        args:
+          [
+            --disallow-untyped-defs,
+            --ignore-missing-imports,
+            --python-version=3.11,
+          ]
+        # exclude: ^(examples/|e2e_tests/|tests/message_queues/test_aws.py)
+
+  - repo: https://github.com/codespell-project/codespell
+    rev: v2.3.0
+    hooks:
+      - id: codespell
+        additional_dependencies: [tomli]
+
+  - repo: https://github.com/pappasam/toml-sort
+    rev: v0.23.1
+    hooks:
+      - id: toml-sort-fix

@@ -20,13 +20,13 @@ class ThirdEvent(Event):
 
 class ChatMessage(BaseModel):
     @classmethod
-    def from_str(cls, role, content):
+    def from_str(cls, role, content):  # type: ignore
         return mock.MagicMock(content=content)
 
 
 class Memory(mock.MagicMock):
     @classmethod
-    def from_defaults(cls, *args, **kwargs):
+    def from_defaults(cls, *args, **kwargs):  # type: ignore
         return mock.MagicMock()
 
 
@@ -35,10 +35,10 @@ class MessageStopEvent(StopEvent):
 
 
 @pytest.mark.asyncio
-async def test_resource():
+async def test_resource() -> None:
     m = Memory.from_defaults("user_id_123", token_limit=60000)
 
-    def get_memory(*args, **kwargs) -> Memory:
+    def get_memory(*args, **kwargs) -> Memory:  # type: ignore
         return m
 
     class TestWorkflow(Workflow):
@@ -60,10 +60,10 @@ async def test_resource():
 
 
 @pytest.mark.asyncio
-async def test_resource_async():
+async def test_resource_async() -> None:
     m = Memory.from_defaults("user_id_123", token_limit=60000)
 
-    async def get_memory(*args, **kwargs) -> Memory:
+    async def get_memory(*args, **kwargs) -> Memory:  # type: ignore
         return m
 
     class TestWorkflow(Workflow):
@@ -87,11 +87,11 @@ async def test_resource_async():
 
 
 @pytest.mark.asyncio
-async def test_caching_behavior():
+async def test_caching_behavior() -> None:
     class CounterThing:
         counter = 0
 
-        def incr(self):
+        def incr(self) -> None:
             self.counter += 1
 
     class StepEvent(Event):
@@ -118,28 +118,28 @@ async def test_caching_behavior():
         ) -> StopEvent:
             global cc
             counter_thing.incr()
-            cc = counter_thing.counter
+            cc = counter_thing.counter  # type: ignore
             return StopEvent()
 
     wf_1 = TestWorkflow(disable_validation=True)
     await wf_1.run()
     assert (
-        cc == 2
+        cc == 2  # type: ignore
     )  # this is expected to be 2, as it is a cached resource shared by test_step and test_step_2, which means at test_step it counter_thing.counter goes from 0 to 1 and at test_step_2 goes from 1 to 2
 
     wf_2 = TestWorkflow(disable_validation=True)
     await wf_2.run()
     assert (
-        cc == 2
+        cc == 2  # type: ignore
     )  # the cache is workflow-specific, so since wf_2 is different from wf_1, we expect no interference between the two
 
 
 @pytest.mark.asyncio
-async def test_non_caching_behavior():
+async def test_non_caching_behavior() -> None:
     class CounterThing:
         counter = 0
 
-        def incr(self):
+        def incr(self) -> None:
             self.counter += 1
 
     class StepEvent(Event):
@@ -157,7 +157,7 @@ async def test_non_caching_behavior():
         ) -> StepEvent:
             global cc1
             counter_thing.incr()
-            cc1 = counter_thing.counter
+            cc1 = counter_thing.counter  # type: ignore
             return StepEvent()
 
         @step
@@ -170,10 +170,10 @@ async def test_non_caching_behavior():
         ) -> StopEvent:
             global cc2
             counter_thing.incr()
-            cc2 = counter_thing.counter
+            cc2 = counter_thing.counter  # type: ignore
             return StopEvent()
 
     wf_1 = TestWorkflow(disable_validation=True)
     await wf_1.run()
-    assert cc1 == 1
-    assert cc2 == 1
+    assert cc1 == 1  # type: ignore
+    assert cc2 == 1  # type: ignore

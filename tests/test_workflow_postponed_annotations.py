@@ -23,7 +23,7 @@ class PostponedAnnotationsWorkflow(Workflow):
 
 
 @pytest.mark.asyncio
-async def test_workflow_postponed_annotations():
+async def test_workflow_postponed_annotations() -> None:
     workflow = PostponedAnnotationsWorkflow()
     result = await workflow.run()
     assert workflow.is_done()
@@ -31,7 +31,7 @@ async def test_workflow_postponed_annotations():
 
 
 @pytest.mark.asyncio
-async def test_workflow_forward_reference():
+async def test_workflow_forward_reference() -> None:
     class ForwardRefWorkflow(Workflow):
         @step
         async def step1(self, ev: StartEvent) -> OneTestEvent:

@@ -30,7 +30,7 @@ class _TestEvent2(Event):
         self._modified_private_param = _modified_private_param * 2
 
 
-def test_event_init_basic():
+def test_event_init_basic() -> None:
     evt = Event(a=1, b=2, c="c")
 
     assert evt.a == 1
@@ -42,7 +42,7 @@ def test_event_init_basic():
     assert evt.keys() == {"a": 1, "b": 2, "c": "c"}.keys()
 
 
-def test_custom_event_with_fields_and_private_params():
+def test_custom_event_with_fields_and_private_params() -> None:
     evt = _TestEvent(a=1, param="test_param", _private_param_1="test_private_param_1")  # type: ignore
 
     assert evt.a == 1
@@ -53,7 +53,7 @@ def test_custom_event_with_fields_and_private_params():
     assert evt._private_param_2 == ""
 
 
-def test_custom_event_override_init():
+def test_custom_event_override_init() -> None:
     evt = _TestEvent2(a=1, b=2, _private_param=2, _modified_private_param=2)
 
     assert evt.a == 1
@@ -63,13 +63,13 @@ def test_custom_event_override_init():
     assert evt._modified_private_param == 4
 
 
-def test_event_missing_key():
+def test_event_missing_key() -> None:
     ev = _TestEvent(param="bar")
     with pytest.raises(AttributeError):
         ev.wrong_key
 
 
-def test_event_not_a_field():
+def test_event_not_a_field() -> None:
     ev = _TestEvent(param="foo", not_a_field="bar")  # type: ignore
     assert ev._data["not_a_field"] == "bar"
     ev.not_a_field = "baz"
@@ -79,7 +79,7 @@ def test_event_not_a_field():
     assert ev.get("not_a_field") == "barbaz"
 
 
-def test_event_dict_api():
+def test_event_dict_api() -> None:
     ev = _TestEvent(param="foo")
     assert len(ev) == 0
     ev["a_new_key"] = "bar"
@@ -92,7 +92,7 @@ def test_event_dict_api():
     assert ev.dict() == {"a_new_key": "bar"}
 
 
-def test_event_serialization():
+def test_event_serialization() -> None:
     ev = _TestEvent(param="foo", not_a_field="bar")  # type: ignore
     serializer = JsonSerializer()
     serialized_ev = serializer.serialize(ev)
@@ -107,5 +107,5 @@ def test_event_serialization():
     assert ev._data == deseriazlied_ev._data
 
 
-def test_bool():
+def test_bool() -> None:
     assert bool(_TestEvent(param="foo")) is True

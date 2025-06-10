@@ -22,7 +22,7 @@ from .conftest import AnotherTestEvent, OneTestEvent
 
 
 @pytest.mark.asyncio
-async def test_collect_events():
+async def test_collect_events() -> None:
     ev1 = OneTestEvent()
     ev2 = AnotherTestEvent()
 
@@ -50,47 +50,47 @@ async def test_collect_events():
 
 
 @pytest.mark.asyncio
-async def test_get_default(workflow):
+async def test_get_default(workflow: Workflow) -> None:
     c1 = Context(workflow)
     assert await c1.get(key="test_key", default=42) == 42
 
 
 @pytest.mark.asyncio
-async def test_get(ctx):
+async def test_get(ctx: Context) -> None:
     await ctx.set("foo", 42)
     assert await ctx.get("foo") == 42
 
 
 @pytest.mark.asyncio
-async def test_get_not_found(ctx):
+async def test_get_not_found(ctx: Context) -> None:
     with pytest.raises(ValueError):
         await ctx.get("foo")
 
 
 @pytest.mark.asyncio
-async def test_legacy_data(workflow):
+async def test_legacy_data(workflow: Workflow) -> None:
     c1 = Context(workflow)
     await c1.set(key="test_key", value=42)
     assert await c1.get("test_key") == 42
 
 
-def test_send_event_step_is_none(ctx):
+def test_send_event_step_is_none(ctx: Context) -> None:
     ctx._queues = {"step1": mock.MagicMock(), "step2": mock.MagicMock()}
     ev = Event(foo="bar")
     ctx.send_event(ev)
     for q in ctx._queues.values():
-        q.put_nowait.assert_called_with(ev)
+        q.put_nowait.assert_called_with(ev)  # type: ignore
     assert ctx._broker_log == [ev]
 
 
-def test_send_event_to_non_existent_step(ctx):
+def test_send_event_to_non_existent_step(ctx: Context) -> None:
     with pytest.raises(
         WorkflowRuntimeError, match="Step does_not_exist does not exist"
     ):
         ctx.send_event(Event(), "does_not_exist")
 
 
-def test_send_event_to_wrong_step(ctx):
+def test_send_event_to_wrong_step(ctx: Context) -> None:
     ctx._step_configs["step"] = StepConfig(  # type: ignore[attr-defined]
         accepted_events=[],
         event_name="test_event",
@@ -109,11 +109,11 @@ def test_send_event_to_wrong_step(ctx):
         ctx.send_event(Event(), "step")
 
 
-def test_send_event_to_step(workflow):
+def test_send_event_to_step(workflow: Workflow) -> None:
     step2 = mock.MagicMock()
     step2.__step_config.accepted_events = [Event]
 
-    workflow._get_steps = mock.MagicMock(
+    workflow._get_steps = mock.MagicMock(  # type: ignore
         return_value={"step1": mock.MagicMock(), "step2": step2}
     )
 
@@ -127,18 +127,18 @@ def test_send_event_to_step(workflow):
     ctx._queues["step2"].put_nowait.assert_called_with(ev)  # type: ignore
 
 
-def test_get_result(ctx):
+def test_get_result(ctx: Context) -> None:
     ctx._retval = 42
     assert ctx.get_result() == 42
 
 
-def test_to_dict_with_events_buffer(ctx):
+def test_to_dict_with_events_buffer(ctx: Context) -> None:
     ctx.collect_events(OneTestEvent(), [OneTestEvent, AnotherTestEvent])
     assert json.dumps(ctx.to_dict())
 
 
 @pytest.mark.asyncio
-async def test_deprecated_params(ctx):
+async def test_deprecated_params(ctx: Context) -> None:
     with pytest.warns(
         DeprecationWarning, match="`make_private` is deprecated and will be ignored"
     ):
@@ -146,7 +146,7 @@ async def test_deprecated_params(ctx):
 
 
 @pytest.mark.asyncio
-async def test_empty_inprogress_when_workflow_done(workflow):
+async def test_empty_inprogress_when_workflow_done(workflow: Workflow) -> None:
     h = workflow.run()
     _ = await h
 
@@ -156,7 +156,7 @@ async def test_empty_inprogress_when_workflow_done(workflow):
 
 
 @pytest.mark.asyncio
-async def test_wait_for_event(ctx):
+async def test_wait_for_event(ctx: Context) -> None:
     # skip test if python version is 3.9 or lower
     if sys.version_info < (3, 10):
         pytest.skip("Skipping test for Python 3.9 or lower")
@@ -169,7 +169,7 @@ async def test_wait_for_event(ctx):
 
 
 @pytest.mark.asyncio
-async def test_wait_for_event_with_requirements(ctx):
+async def test_wait_for_event_with_requirements(ctx: Context) -> None:
     # skip test if python version is 3.9 or lower
     if sys.version_info < (3, 10):
         pytest.skip("Skipping test for Python 3.9 or lower")
@@ -185,7 +185,7 @@ async def test_wait_for_event_with_requirements(ctx):
 
 
 @pytest.mark.asyncio
-async def test_wait_for_event_in_workflow():
+async def test_wait_for_event_in_workflow() -> None:
     class TestWorkflow(Workflow):
         @step
         async def step1(self, ctx: Context, ev: StartEvent) -> StopEvent:
@@ -206,7 +206,7 @@ async def test_wait_for_event_in_workflow():
 
 
 @pytest.mark.asyncio
-async def test_prompt_and_wait(ctx):
+async def test_prompt_and_wait(ctx: Context) -> None:
     prompt_id = "test_prompt_and_wait"
     prompt_event = InputRequiredEvent(prefix="test_prompt_and_wait")
     expected_event = HumanResponseEvent
@@ -248,38 +248,41 @@ class WaitingWorkflow(Workflow):
     ) -> Union[Waiter1, Waiter2]:
         ctx.send_event(Waiter1(msg="foo"))
         ctx.send_event(Waiter2(msg="bar"))
+        return None  # type: ignore
 
     @step
     async def waiter_one(self, ctx: Context, ev: Waiter1) -> ResultEvent:
         ctx.write_event_to_stream(InputRequiredEvent(prefix="waiter_one"))
 
-        ev: HumanResponseEvent = await ctx.wait_for_event(
-            HumanResponseEvent, {"waiter_id": "waiter_one"}
+        new_ev: HumanResponseEvent = await ctx.wait_for_event(
+            HumanResponseEvent,
+            {"waiter_id": "waiter_one"},  # type: ignore
         )
-        return ResultEvent(result=ev.response)
+        return ResultEvent(result=new_ev.response)
 
     @step
     async def waiter_two(self, ctx: Context, ev: Waiter2) -> ResultEvent:
         ctx.write_event_to_stream(InputRequiredEvent(prefix="waiter_two"))
 
-        ev: HumanResponseEvent = await ctx.wait_for_event(
-            HumanResponseEvent, {"waiter_id": "waiter_two"}
+        new_ev: HumanResponseEvent = await ctx.wait_for_event(
+            HumanResponseEvent,
+            {"waiter_id": "waiter_two"},  # type: ignore
         )
-        return ResultEvent(result=ev.response)
+        return ResultEvent(result=new_ev.response)
 
     @step
     async def collect_waiters(self, ctx: Context, ev: ResultEvent) -> StopEvent:
-        events: Optional[List[ResultEvent]] = ctx.collect_events(
+        events: Optional[List[ResultEvent]] = ctx.collect_events(  # type: ignore
             ev, [ResultEvent, ResultEvent]
         )
         if events is None:
-            return None
+            return None  # type: ignore
 
         return StopEvent(result=[e.result for e in events])
 
 
 @pytest.mark.asyncio
-async def test_wait_for_multiple_events_in_workflow():
+async def test_wait_for_multiple_events_in_workflow() -> None:
     workflow = WaitingWorkflow()
     handler = workflow.run()
     assert handler.ctx
@@ -317,24 +320,24 @@ async def test_wait_for_multiple_events_in_workflow():
     assert result == ["fizz", "buzz"]
 
 
-def test_get_holding_events(ctx):
+def test_get_holding_events(ctx: Context) -> None:
     ctx._step_events_holding = None
     assert ctx.get_holding_events() == []
 
 
 @pytest.mark.asyncio
-async def test_clear(ctx):
+async def test_clear(ctx: Context) -> None:
     await ctx.set("test_key", 42)
     ctx.clear()
     res = await ctx.get("test_key", default=None)
     assert res is None
 
 
-def test_serialization_roundtrip(ctx, workflow):
+def test_serialization_roundtrip(ctx: Context, workflow: Workflow) -> None:
     assert Context.from_dict(workflow, ctx.to_dict())
 
 
-def test_old_serialization(ctx, workflow):
+def test_old_serialization(ctx: Context, workflow: Workflow) -> None:
     old_payload = {
         "globals": {},
         "streaming_queue": "[]",

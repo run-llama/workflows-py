@@ -23,7 +23,7 @@ class ServiceManager:
     def get(self, name: str, default: Optional["Workflow"] = None) -> "Workflow":
         try:
             return self._services[name]
-        except KeyError as e:
+        except KeyError:
             if default:
                 return default
 
