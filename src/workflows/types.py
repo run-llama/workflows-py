@@ -1,4 +1,11 @@
-from typing import Any, TypeVar, Union
+from __future__ import annotations
+
+from typing import Any, TypeVar
+
+try:
+    from typing import Union
+except ImportError:
+    from typing_extensions import Union
 
 from .events import StopEvent
 

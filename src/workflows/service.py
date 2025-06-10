@@ -1,5 +1,6 @@
-from typing import Dict, TYPE_CHECKING, Optional
+from __future__ import annotations
 
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:  # pragma: no cover
     from .workflow import Workflow
@@ -18,9 +19,9 @@ class ServiceManager:
     """
 
     def __init__(self) -> None:
-        self._services: Dict[str, Workflow] = {}
+        self._services: dict[str, Workflow] = {}
 
-    def get(self, name: str, default: Optional["Workflow"] = None) -> "Workflow":
+    def get(self, name: str, default: "Workflow | None" = None) -> "Workflow":
         try:
             return self._services[name]
         except KeyError:

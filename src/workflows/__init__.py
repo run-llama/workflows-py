@@ -31,8 +31,6 @@ __all__ = [
     "WorkflowRuntimeError",
     "WorkflowTimeoutError",
     "WorkflowValidationError",
-    "draw_all_possible_flows",
-    "draw_most_recent_execution",
     "step",
     "Context",
     "InputRequiredEvent",

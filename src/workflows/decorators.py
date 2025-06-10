@@ -1,4 +1,6 @@
-from typing import TYPE_CHECKING, Any, Callable, List, Optional, Type
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any, Callable, Type
 
 from pydantic import BaseModel, ConfigDict
 
@@ -19,22 +21,21 @@ from .retry_policy import RetryPolicy
 class StepConfig(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
-    accepted_events: List[Any]
+    accepted_events: list[Any]
     event_name: str
-    return_types: List[Any]
-    context_parameter: Optional[str]
+    return_types: list[Any]
+    context_parameter: str | None
     num_workers: int
-    requested_services: List[ServiceDefinition]
-    retry_policy: Optional[RetryPolicy]
-    resources: List[ResourceDefinition]
+    requested_services: list[ServiceDefinition]
+    retry_policy: RetryPolicy | None
+    resources: list[ResourceDefinition]
 
 
 def step(
     *args: Any,
-    workflow: Optional[Type["Workflow"]] = None,
-    pass_context: bool = False,
+    workflow: Type["Workflow"] | None = None,
     num_workers: int = 4,
-    retry_policy: Optional[RetryPolicy] = None,
+    retry_policy: RetryPolicy | None = None,
 ) -> Callable:
     """
     Decorator used to mark methods and functions as workflow steps.

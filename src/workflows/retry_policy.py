@@ -1,11 +1,13 @@
-from typing import Protocol, Optional, runtime_checkable
+from __future__ import annotations
+
+from typing import Protocol, runtime_checkable
 
 
 @runtime_checkable
 class RetryPolicy(Protocol):
     def next(
         self, elapsed_time: float, attempts: int, error: Exception
-    ) -> Optional[float]:
+    ) -> float | None:
         """
         Decides if we should make another retry, returning the number of seconds to wait before the next run.
 
@@ -37,7 +39,7 @@ class ConstantDelayRetryPolicy:
 
     def next(
         self, elapsed_time: float, attempts: int, error: Exception
-    ) -> Optional[float]:
+    ) -> float | None:
         if attempts >= self.maximum_attempts:
             return None
 

@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import functools
 import uuid
@@ -5,11 +7,7 @@ from typing import (
     TYPE_CHECKING,
     Any,
     Awaitable,
-    Dict,
-    List,
-    Optional,
     Protocol,
-    Set,
     Type,
 )
 
@@ -33,9 +31,9 @@ class CheckpointCallback(Protocol):
     def __call__(
         self,
         run_id: str,
-        last_completed_step: Optional[str],
-        input_ev: Optional[Event],
-        output_ev: Optional[Event],
+        last_completed_step: str | None,
+        input_ev: Event | None,
+        output_ev: Event | None,
         ctx: "Context",
     ) -> Awaitable[None]: ...
 
@@ -43,10 +41,10 @@ class CheckpointCallback(Protocol):
 class Checkpoint(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
     id_: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    last_completed_step: Optional[str]
-    input_event: Optional[Event]
-    output_event: Optional[Event]
-    ctx_state: Dict[str, Any]
+    last_completed_step: str | None
+    input_event: Event | None
+    output_event: Event | None
+    ctx_state: dict[str, Any]
 
 
 class WorkflowCheckpointer:
@@ -63,8 +61,8 @@ class WorkflowCheckpointer:
     def __init__(
         self,
         workflow: "Workflow",
-        checkpoint_serializer: Optional[BaseSerializer] = None,
-        disabled_steps: List[str] = [],
+        checkpoint_serializer: BaseSerializer | None = None,
+        disabled_steps: list[str] = [],
     ):
         """
         Create a WorkflowCheckpointer object.
@@ -73,15 +71,15 @@ class WorkflowCheckpointer:
             workflow (Workflow): The wrapped workflow.
             checkpoint_serializer (Optional[BaseSerializer], optional): The serializer to use
                 for serializing associated `Context` of a Workflow run. Defaults to None.
-            disabled_steps (List[str], optional): Steps for which to disable checkpointing. Defaults to [].
+            disabled_steps (list[str], optional): Steps for which to disable checkpointing. Defaults to [].
 
         """
-        self._checkpoints: Dict[str, List[Checkpoint]] = {}
+        self._checkpoints: dict[str, list[Checkpoint]] = {}
         self._checkpoint_serializer = checkpoint_serializer or JsonSerializer()
         self._lock: asyncio.Lock = asyncio.Lock()
 
         self.workflow = workflow
-        self.enabled_checkpoints: Set[str] = {
+        self.enabled_checkpoints: set[str] = {
             k for k in workflow._get_steps() if k != "_done"
         }
         for step_name in disabled_steps:
@@ -122,7 +120,7 @@ class WorkflowCheckpointer:
         )
 
     @property
-    def checkpoints(self) -> Dict[str, List[Checkpoint]]:
+    def checkpoints(self) -> dict[str, list[Checkpoint]]:
         return self._checkpoints
 
     def new_checkpoint_callback_for_run(self) -> CheckpointCallback:
@@ -130,9 +128,9 @@ class WorkflowCheckpointer:
 
         async def _create_checkpoint(
             run_id: str,
-            last_completed_step: Optional[str],
-            input_ev: Optional[Event],
-            output_ev: Optional[Event],
+            last_completed_step: str | None,
+            input_ev: Event | None,
+            output_ev: Event | None,
             ctx: "Context",
         ) -> None:
             """Build a checkpoint around the last completed step."""
@@ -156,9 +154,9 @@ class WorkflowCheckpointer:
     def _checkpoint_filter_condition(
         self,
         ckpt: Checkpoint,
-        last_completed_step: Optional[str],
-        input_event_type: Optional[Type[Event]],
-        output_event_type: Optional[Type[Event]],
+        last_completed_step: str | None,
+        input_event_type: Type[Event] | None,
+        output_event_type: Type[Event] | None,
     ) -> bool:
         if last_completed_step and ckpt.last_completed_step is not last_completed_step:
             return False
@@ -170,11 +168,11 @@ class WorkflowCheckpointer:
 
     def filter_checkpoints(
         self,
-        run_id: Optional[str] = None,
-        last_completed_step: Optional[str] = None,
-        input_event_type: Optional[Type[Event]] = None,
-        output_event_type: Optional[Type[Event]] = None,
-    ) -> List[Checkpoint]:
+        run_id: str | None = None,
+        last_completed_step: str | None = None,
+        input_event_type: Type[Event] | None = None,
+        output_event_type: Type[Event] | None = None,
+    ) -> list[Checkpoint]:
         """Returns a list of Checkpoint's based on user provided filters."""
         if (
             not run_id
