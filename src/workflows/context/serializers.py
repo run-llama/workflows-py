@@ -22,23 +22,30 @@ class BaseSerializer(ABC):
 class JsonSerializer(BaseSerializer):
     def _serialize_value(self, value: Any) -> Any:
         """Helper to serialize a single value."""
-        # FIXME: move BaseComponent out of llamaindex core
-        # if isinstance(value, BaseComponent):
-        #     return {
-        #         "__is_component": True,
-        #         "value": value.to_dict(),
-        #         "qualified_name": get_qualified_name(value),
-        #     }
+        # Note: to avoid circular dependencies we cannot import BaseComponent from llama_index.core
+        # if we want to use isinstance(value, BaseComponent) instead of guessing type from the presence
+        # of class_name, we need to move BaseComponent out of core
+        if hasattr(value, "class_name"):
+            retval = {
+                "__is_component": True,
+                "value": value.to_dict(),
+                "qualified_name": get_qualified_name(value),
+            }
+            return retval
+
         if isinstance(value, BaseModel):
             return {
                 "__is_pydantic": True,
                 "value": value.model_dump(),
                 "qualified_name": get_qualified_name(value),
             }
-        elif isinstance(value, dict):
+
+        if isinstance(value, dict):
             return {k: self._serialize_value(v) for k, v in value.items()}
-        elif isinstance(value, list):
+
+        if isinstance(value, list):
             return [self._serialize_value(item) for item in value]
+
         return value
 
     def serialize(self, value: Any) -> str:
