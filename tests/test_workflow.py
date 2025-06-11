@@ -7,8 +7,7 @@ from unittest import mock
 
 import pytest
 
-from workflows.context import Context
-from workflows.context_serializers import PickleSerializer
+from workflows.context import Context, PickleSerializer
 from workflows.decorators import step
 from workflows.errors import (
     WorkflowCancelledByUser,

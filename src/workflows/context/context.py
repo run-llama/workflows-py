@@ -16,22 +16,23 @@ from typing import (
     TypeVar,
 )
 
-from .checkpointer import CheckpointCallback
-from .context_serializers import BaseSerializer, JsonSerializer
-from .decorators import StepConfig
-from .errors import (
+from workflows.decorators import StepConfig
+from workflows.errors import (
     ContextSerdeError,
     WorkflowCancelledByUser,
     WorkflowDone,
     WorkflowRuntimeError,
 )
-from .events import Event, InputRequiredEvent
-from .resource import ResourceManager
-from .service import ServiceManager
-from .types import RunResultT
+from workflows.events import Event, InputRequiredEvent
+from workflows.resource import ResourceManager
+from workflows.service import ServiceManager
+from workflows.types import RunResultT
+
+from .serializers import BaseSerializer, JsonSerializer
 
 if TYPE_CHECKING:  # pragma: no cover
-    from .workflow import Workflow
+    from workflows import Workflow
+    from workflows.checkpointer import CheckpointCallback
 
 T = TypeVar("T", bound=Event)
 EventBuffer = dict[str, list[Event]]
@@ -544,7 +545,7 @@ class Context:
         config: StepConfig,
         stepwise: bool,
         verbose: bool,
-        checkpoint_callback: CheckpointCallback | None,
+        checkpoint_callback: "CheckpointCallback | None",
         run_id: str,
         service_manager: ServiceManager,
         resource_manager: ResourceManager,
@@ -573,7 +574,7 @@ class Context:
         config: StepConfig,
         stepwise: bool,
         verbose: bool,
-        checkpoint_callback: CheckpointCallback | None,
+        checkpoint_callback: "CheckpointCallback | None",
         run_id: str,
         service_manager: ServiceManager,
         resource_manager: ResourceManager,
