@@ -16,8 +16,7 @@ from llama_index_instrumentation import get_dispatcher
 from pydantic import ValidationError
 
 from .checkpointer import Checkpoint, CheckpointCallback
-from .context import Context
-from .context_serializers import BaseSerializer, JsonSerializer
+from .context import BaseSerializer, Context, JsonSerializer
 from .decorators import StepConfig, step
 from .errors import (
     WorkflowConfigurationError,

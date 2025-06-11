@@ -17,7 +17,8 @@ from pydantic import (
     Field,
 )
 
-from .context_serializers import BaseSerializer, JsonSerializer
+from workflows.context import BaseSerializer, JsonSerializer
+
 from .errors import WorkflowStepDoesNotExistError
 from .events import Event
 
