@@ -89,7 +89,7 @@ def test_event_dict_api() -> None:
     assert k == "a_new_key"
     assert v == "bar"
     assert next(iter(ev)) == "a_new_key"
-    assert ev.dict() == {"a_new_key": "bar"}
+    assert ev.to_dict() == {"a_new_key": "bar"}
 
 
 def test_event_serialization() -> None:

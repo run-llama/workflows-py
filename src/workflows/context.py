@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import functools
 import json
@@ -9,10 +11,6 @@ from typing import (
     Any,
     Callable,
     DefaultDict,
-    Dict,
-    List,
-    Optional,
-    Set,
     Tuple,
     Type,
     TypeVar,
@@ -36,7 +34,7 @@ if TYPE_CHECKING:  # pragma: no cover
     from .workflow import Workflow
 
 T = TypeVar("T", bound=Event)
-EventBuffer = Dict[str, List[Event]]
+EventBuffer = dict[str, list[Event]]
 
 
 # Only warn once about unserializable keys
@@ -71,7 +69,7 @@ class Context:
         self.stepwise = stepwise
         self.is_running = False
         # Store the step configs of this workflow, to be used in send_event
-        self._step_configs: dict[str, Optional[StepConfig]] = {}
+        self._step_configs: dict[str, StepConfig | None] = {}
         for step_name, step_func in workflow._get_steps().items():
             self._step_configs[step_name] = getattr(step_func, "__step_config", None)
 
@@ -80,18 +78,18 @@ class Context:
 
         # Global data storage
         self._lock = asyncio.Lock()
-        self._globals: Dict[str, Any] = {}
+        self._globals: dict[str, Any] = {}
 
         # instrumentation
         self._dispatcher = workflow._dispatcher
 
     def _init_broker_data(self) -> None:
-        self._queues: Dict[str, asyncio.Queue] = {}
-        self._tasks: Set[asyncio.Task] = set()
-        self._broker_log: List[Event] = []
+        self._queues: dict[str, asyncio.Queue] = {}
+        self._tasks: set[asyncio.Task] = set()
+        self._broker_log: list[Event] = []
         self._cancel_flag: asyncio.Event = asyncio.Event()
-        self._step_flags: Dict[str, asyncio.Event] = {}
-        self._step_events_holding: Optional[List[Event]] = None
+        self._step_flags: dict[str, asyncio.Event] = {}
+        self._step_events_holding: list[Event] | None = None
         self._step_lock: asyncio.Lock = asyncio.Lock()
         self._step_condition: asyncio.Condition = asyncio.Condition(
             lock=self._step_lock
@@ -99,12 +97,12 @@ class Context:
         self._step_event_written: asyncio.Condition = asyncio.Condition(
             lock=self._step_lock
         )
-        self._accepted_events: List[Tuple[str, str]] = []
+        self._accepted_events: list[Tuple[str, str]] = []
         self._retval: RunResultT = None
         # Map the step names that were executed to a list of events they received.
         # This will be serialized, and is needed to resume a Workflow run passing
         # an existing context.
-        self._in_progress: Dict[str, List[Event]] = defaultdict(list)
+        self._in_progress: dict[str, list[Event]] = defaultdict(list)
         # Keep track of the steps currently running. This is only valid when a
         # workflow is running and won't be serialized. Note that a single step
         # might have multiple workers, so we keep a counter.
@@ -112,7 +110,7 @@ class Context:
         # Streaming machinery
         self._streaming_queue: asyncio.Queue = asyncio.Queue()
         # Step-specific instance
-        self._event_buffers: Dict[str, EventBuffer] = {}
+        self._event_buffers: dict[str, EventBuffer] = {}
 
     def _serialize_queue(self, queue: asyncio.Queue, serializer: BaseSerializer) -> str:
         queue_items = list(queue._queue)  # type: ignore
@@ -123,7 +121,7 @@ class Context:
         self,
         queue_str: str,
         serializer: BaseSerializer,
-        prefix_queue_objs: List[Any] = [],
+        prefix_queue_objs: list[Any] = [],
     ) -> asyncio.Queue:
         queue_objs = json.loads(queue_str)
         queue_objs = prefix_queue_objs + queue_objs
@@ -133,7 +131,7 @@ class Context:
             queue.put_nowait(event_obj)
         return queue
 
-    def _serialize_globals(self, serializer: BaseSerializer) -> Dict[str, Any]:
+    def _serialize_globals(self, serializer: BaseSerializer) -> dict[str, Any]:
         serialized_globals = {}
         for key, value in self._globals.items():
             try:
@@ -151,8 +149,8 @@ class Context:
         return serialized_globals
 
     def _deserialize_globals(
-        self, serialized_globals: Dict[str, Any], serializer: BaseSerializer
-    ) -> Dict[str, Any]:
+        self, serialized_globals: dict[str, Any], serializer: BaseSerializer
+    ) -> dict[str, Any]:
         deserialized_globals = {}
         for key, value in serialized_globals.items():
             try:
@@ -161,7 +159,7 @@ class Context:
                 raise ValueError(f"Failed to deserialize value for key {key}: {e}")
         return deserialized_globals
 
-    def to_dict(self, serializer: Optional[BaseSerializer] = None) -> Dict[str, Any]:
+    def to_dict(self, serializer: BaseSerializer | None = None) -> dict[str, Any]:
         serializer = serializer or JsonSerializer()
 
         return {
@@ -191,8 +189,8 @@ class Context:
     def from_dict(
         cls,
         workflow: "Workflow",
-        data: Dict[str, Any],
-        serializer: Optional[BaseSerializer] = None,
+        data: dict[str, Any],
+        serializer: BaseSerializer | None = None,
     ) -> "Context":
         serializer = serializer or JsonSerializer()
 
@@ -285,11 +283,11 @@ class Context:
             if self._currently_running_steps[name] == 0:
                 del self._currently_running_steps[name]
 
-    async def running_steps(self) -> List[str]:
+    async def running_steps(self) -> list[str]:
         async with self.lock:
             return list(self._currently_running_steps)
 
-    async def get(self, key: str, default: Optional[Any] = Ellipsis) -> Any:
+    async def get(self, key: str, default: Any | None = Ellipsis) -> Any:
         """
         Get the value corresponding to `key` from the Context.
 
@@ -311,7 +309,7 @@ class Context:
         raise ValueError(msg)
 
     @property
-    def data(self) -> Dict[str, Any]:  # pragma: no cover
+    def data(self) -> dict[str, Any]:  # pragma: no cover
         """
         This property is provided for backward compatibility.
 
@@ -336,7 +334,7 @@ class Context:
     def _get_full_path(self, ev_type: Type[Event]) -> str:
         return f"{ev_type.__module__}.{ev_type.__name__}"
 
-    def _get_event_buffer_id(self, events: List[Type[Event]]) -> str:
+    def _get_event_buffer_id(self, events: list[Type[Event]]) -> str:
         # Try getting the current task name
         try:
             current_task = asyncio.current_task()
@@ -353,8 +351,8 @@ class Context:
         return ":".join(sorted(self._get_full_path(e_type) for e_type in events))
 
     def collect_events(
-        self, ev: Event, expected: List[Type[Event]], buffer_id: Optional[str] = None
-    ) -> Optional[List[Event]]:
+        self, ev: Event, expected: list[Type[Event]], buffer_id: str | None = None
+    ) -> list[Event] | None:
         """
         Collects events for buffering in workflows.
 
@@ -364,13 +362,13 @@ class Context:
 
         Args:
             ev (Event): The current event to add to the buffer.
-            expected (List[Type[Event]]): List of expected event types to collect.
+            expected (list[Type[Event]]): list of expected event types to collect.
             buffer_id (str): A unique identifier for the events collected. Ideally this should be
             the step name, so to avoid any interference between different steps. If not provided,
             a stable identifier will be created using the list of expected events.
 
         Returns:
-            Optional[List[Event]]: List of collected events in the order of expected types if all
+            list[Event] | None: list of collected events in the order of expected types if all
                                   expected events are found; otherwise None.
 
         """
@@ -382,7 +380,7 @@ class Context:
         event_type_path = self._get_full_path(type(ev))
         self._event_buffers[buffer_id][event_type_path].append(ev)
 
-        retval: List[Event] = []
+        retval: list[Event] = []
         for e_type in expected:
             e_type_path = self._get_full_path(e_type)
             e_instance_list = self._event_buffers[buffer_id].get(e_type_path, [])
@@ -415,14 +413,14 @@ class Context:
 
             self._step_events_holding.append(event)
 
-    def get_holding_events(self) -> List[Event]:
+    def get_holding_events(self) -> list[Event]:
         """Returns a copy of the list of events holding the stepwise execution."""
         if self._step_events_holding is None:
             return []
 
         return list(self._step_events_holding)
 
-    def send_event(self, message: Event, step: Optional[str] = None) -> None:
+    def send_event(self, message: Event, step: str | None = None) -> None:
         """
         Sends an event to a specific step in the workflow.
 
@@ -451,10 +449,10 @@ class Context:
     async def wait_for_event(
         self,
         event_type: Type[T],
-        waiter_event: Optional[Event] = None,
-        waiter_id: Optional[str] = None,
-        requirements: Optional[Dict[str, Any]] = None,
-        timeout: Optional[float] = 2000,
+        waiter_event: Event | None = None,
+        waiter_id: str | None = None,
+        requirements: dict[str, Any] | None = None,
+        timeout: float | None = 2000,
     ) -> T:
         """
         Asynchronously wait for a specific event type to be received.
@@ -507,7 +505,7 @@ class Context:
             finally:
                 await self.set(waiter_id, False)
 
-    def write_event_to_stream(self, ev: Optional[Event]) -> None:
+    def write_event_to_stream(self, ev: Event | None) -> None:
         self._streaming_queue.put_nowait(ev)
 
     def get_result(self) -> RunResultT:
@@ -546,7 +544,7 @@ class Context:
         config: StepConfig,
         stepwise: bool,
         verbose: bool,
-        checkpoint_callback: Optional[CheckpointCallback],
+        checkpoint_callback: CheckpointCallback | None,
         run_id: str,
         service_manager: ServiceManager,
         resource_manager: ResourceManager,
@@ -575,7 +573,7 @@ class Context:
         config: StepConfig,
         stepwise: bool,
         verbose: bool,
-        checkpoint_callback: Optional[CheckpointCallback],
+        checkpoint_callback: CheckpointCallback | None,
         run_id: str,
         service_manager: ServiceManager,
         resource_manager: ResourceManager,
@@ -597,7 +595,7 @@ class Context:
                 print(f"Running step {name}")
 
             # run step
-            kwargs: Dict[str, Any] = {}
+            kwargs: dict[str, Any] = {}
             if config.context_parameter:
                 kwargs[config.context_parameter] = self
             for service_definition in config.requested_services:

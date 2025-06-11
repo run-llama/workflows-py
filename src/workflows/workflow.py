@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import logging
 import uuid
@@ -6,9 +8,6 @@ from typing import (
     Any,
     AsyncGenerator,
     Callable,
-    Dict,
-    Optional,
-    Set,
     Tuple,
 )
 from weakref import WeakSet
@@ -49,9 +48,9 @@ logger = logging.getLogger()
 
 
 class WorkflowMeta(type):
-    def __init__(cls, name: str, bases: Tuple[type, ...], dct: Dict[str, Any]) -> None:
+    def __init__(cls, name: str, bases: Tuple[type, ...], dct: dict[str, Any]) -> None:
         super().__init__(name, bases, dct)
-        cls._step_functions: Dict[str, Callable] = {}
+        cls._step_functions: dict[str, Callable] = {}
 
 
 class Workflow(metaclass=WorkflowMeta):
@@ -71,12 +70,12 @@ class Workflow(metaclass=WorkflowMeta):
 
     def __init__(
         self,
-        timeout: Optional[float] = 10.0,
+        timeout: float | None = 10.0,
         disable_validation: bool = False,
         verbose: bool = False,
-        service_manager: Optional[ServiceManager] = None,
-        resource_manager: Optional[ResourceManager] = None,
-        num_concurrent_runs: Optional[int] = None,
+        service_manager: ServiceManager | None = None,
+        resource_manager: ResourceManager | None = None,
+        num_concurrent_runs: int | None = None,
     ) -> None:
         """
         Create an instance of the workflow.
@@ -111,7 +110,7 @@ class Workflow(metaclass=WorkflowMeta):
         )
         # Broker machinery
         self._contexts: WeakSet[Context] = WeakSet()
-        self._stepwise_context: Optional[Context] = None
+        self._stepwise_context: Context | None = None
         # Services management
         self._service_manager = service_manager or ServiceManager()
         # Resource management
@@ -212,7 +211,7 @@ class Workflow(metaclass=WorkflowMeta):
 
         It raises an exception if a step with the same name was already added to the workflow.
         """
-        step_config: Optional[StepConfig] = getattr(func, "__step_config", None)
+        step_config: StepConfig | None = getattr(func, "__step_config", None)
         if not step_config:
             msg = f"Step function {func.__name__} is missing the `@step` decorator."
             raise WorkflowValidationError(msg)
@@ -233,18 +232,18 @@ class Workflow(metaclass=WorkflowMeta):
         for name, wf in workflows.items():
             self._service_manager.add(name, wf)
 
-    def _get_steps(self) -> Dict[str, Callable]:
+    def _get_steps(self) -> dict[str, Callable]:
         """Returns all the steps, whether defined as methods or free functions."""
         return {**get_steps_from_instance(self), **self._step_functions}  # type: ignore[attr-defined]
 
     def _start(
         self,
         stepwise: bool = False,
-        ctx: Optional[Context] = None,
-        checkpoint_callback: Optional[CheckpointCallback] = None,
+        ctx: Context | None = None,
+        checkpoint_callback: CheckpointCallback | None = None,
     ) -> Tuple[Context, str]:
         """
-        Sets up the queues and tasks for each declared step.
+        sets up the queues and tasks for each declared step.
 
         This method also launches each step as an async task.
         """
@@ -294,7 +293,7 @@ class Workflow(metaclass=WorkflowMeta):
 
         return ctx, run_id
 
-    def send_event(self, message: Event, step: Optional[str] = None) -> None:
+    def send_event(self, message: Event, step: str | None = None) -> None:
         msg = (
             "Use a Context instance to send events from a step. "
             "Make sure your step method or function takes a parameter of type Context like `ctx: Context` and "
@@ -311,7 +310,7 @@ class Workflow(metaclass=WorkflowMeta):
         ctx.send_event(message=message, step=step)
 
     def _get_start_event_instance(
-        self, start_event: Optional[StartEvent], **kwargs: Any
+        self, start_event: StartEvent | None, **kwargs: Any
     ) -> StartEvent:
         if start_event is not None:
             # start_event was used wrong
@@ -340,10 +339,10 @@ class Workflow(metaclass=WorkflowMeta):
     @dispatcher.span
     def run(
         self,
-        ctx: Optional[Context] = None,
+        ctx: Context | None = None,
         stepwise: bool = False,
-        checkpoint_callback: Optional[CheckpointCallback] = None,
-        start_event: Optional[StartEvent] = None,
+        checkpoint_callback: CheckpointCallback | None = None,
+        start_event: StartEvent | None = None,
         **kwargs: Any,
     ) -> WorkflowHandler:
         """Runs the workflow until completion."""
@@ -436,8 +435,8 @@ class Workflow(metaclass=WorkflowMeta):
     def run_from(
         self,
         checkpoint: Checkpoint,
-        ctx_serializer: Optional[BaseSerializer] = None,
-        checkpoint_callback: Optional[CheckpointCallback] = None,
+        ctx_serializer: BaseSerializer | None = None,
+        checkpoint_callback: CheckpointCallback | None = None,
         **kwargs: Any,
     ) -> WorkflowHandler:
         """
@@ -493,15 +492,15 @@ class Workflow(metaclass=WorkflowMeta):
         if self._disable_validation:
             return False
 
-        produced_events: Set[type] = {self._start_event_class}
-        consumed_events: Set[type] = set()
-        requested_services: Set[ServiceDefinition] = set()
+        produced_events: set[type] = {self._start_event_class}
+        consumed_events: set[type] = set()
+        requested_services: set[ServiceDefinition] = set()
 
         # Collect steps that incorrectly accept StopEvent
         steps_accepting_stop_event: list[str] = []
 
         for name, step_func in self._get_steps().items():
-            step_config: Optional[StepConfig] = getattr(step_func, "__step_config")
+            step_config: StepConfig | None = getattr(step_func, "__step_config")
             # At this point we know step config is not None, let's make the checker happy
             assert step_config is not None
 

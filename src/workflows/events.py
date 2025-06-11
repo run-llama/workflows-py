@@ -1,5 +1,7 @@
+from __future__ import annotations
+
 from _collections_abc import dict_items, dict_keys, dict_values
-from typing import Any, Dict, Type
+from typing import Any, Type
 
 from pydantic import (
     BaseModel,
@@ -14,7 +16,7 @@ class Event(BaseModel):
     Base class for event types that mimics dict interface.
 
     PrivateAttr:
-        _data (Dict[str, Any]): Underlying Python dict.
+        _data (dict[str, Any]): Underlying Python dict.
 
     Examples:
         Basic example usage
@@ -54,7 +56,7 @@ class Event(BaseModel):
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    _data: Dict[str, Any] = PrivateAttr(default_factory=dict)
+    _data: dict[str, Any] = PrivateAttr(default_factory=dict)
 
     def __init__(self, **params: Any):
         """
@@ -123,7 +125,7 @@ class Event(BaseModel):
     def __iter__(self) -> Any:
         return iter(self._data)
 
-    def dict(self, *args: Any, **kwargs: Any) -> Dict[str, Any]:
+    def to_dict(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
         return self._data
 
     def __bool__(self) -> bool:
@@ -131,7 +133,7 @@ class Event(BaseModel):
         return True
 
     @model_serializer(mode="wrap")
-    def custom_model_dump(self, handler: Any) -> Dict[str, Any]:
+    def custom_model_dump(self, handler: Any) -> dict[str, Any]:
         data = handler(self)
         # include _data in serialization
         if self._data:

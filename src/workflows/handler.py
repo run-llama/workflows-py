@@ -1,5 +1,7 @@
+from __future__ import annotations
+
 import asyncio
-from typing import Any, AsyncGenerator, List, Optional
+from typing import Any, AsyncGenerator
 
 from .context import Context
 from .errors import WorkflowDone
@@ -12,8 +14,8 @@ class WorkflowHandler(asyncio.Future[RunResultT]):
     def __init__(
         self,
         *args: Any,
-        ctx: Optional[Context] = None,
-        run_id: Optional[str] = None,
+        ctx: Context | None = None,
+        run_id: str | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(*args, **kwargs)
@@ -21,7 +23,7 @@ class WorkflowHandler(asyncio.Future[RunResultT]):
         self._ctx = ctx
 
     @property
-    def ctx(self) -> Optional[Context]:
+    def ctx(self) -> Context | None:
         return self._ctx
 
     def __str__(self) -> str:
@@ -42,7 +44,7 @@ class WorkflowHandler(asyncio.Future[RunResultT]):
             if isinstance(ev, StopEvent):
                 break
 
-    async def run_step(self) -> Optional[List[Event]]:
+    async def run_step(self) -> list[Event] | None:
         """
         Runs the next workflow step and returns the output Event.
 

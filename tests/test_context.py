@@ -1,7 +1,15 @@
+from __future__ import annotations
+
 import asyncio
 import json
 import sys
-from typing import List, Optional, Union
+
+try:
+    from typing import Union
+except ImportError:
+    from typing_extensions import Union
+
+from typing import Optional
 from unittest import mock
 
 import pytest
@@ -272,7 +280,7 @@ class WaitingWorkflow(Workflow):
 
     @step
     async def collect_waiters(self, ctx: Context, ev: ResultEvent) -> StopEvent:
-        events: Optional[List[ResultEvent]] = ctx.collect_events(  # type: ignore
+        events: list[ResultEvent] | None = ctx.collect_events(  # type: ignore
             ev, [ResultEvent, ResultEvent]
         )
         if events is None:

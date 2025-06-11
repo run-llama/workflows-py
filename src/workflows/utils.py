@@ -1,17 +1,21 @@
+from __future__ import annotations
+
 import inspect
 from importlib import import_module
 from typing import (
     Annotated,
     Any,
     Callable,
-    Dict,
-    List,
     Optional,
-    Union,
     get_args,
     get_origin,
     get_type_hints,
 )
+
+try:
+    from typing import Union
+except ImportError:
+    from typing_extensions import Union
 
 # handle python version compatibility
 try:
@@ -47,17 +51,17 @@ class ServiceDefinition(BaseModel):
 
     name: str
     service: Any
-    default_value: Optional[Any]
+    default_value: Any | None
 
 
 class StepSignatureSpec(BaseModel):
     """A Pydantic model representing the signature of a step function or method."""
 
-    accepted_events: Dict[str, List[EventType]]
-    return_types: List[Any]
-    context_parameter: Optional[str]
-    requested_services: Optional[List[ServiceDefinition]]
-    resources: List[Any]
+    accepted_events: dict[str, list[EventType]]
+    return_types: list[Any]
+    context_parameter: str | None
+    requested_services: list[ServiceDefinition] | None
+    resources: list[Any]
 
 
 def inspect_signature(fn: Callable) -> StepSignatureSpec:
@@ -84,7 +88,7 @@ def inspect_signature(fn: Callable) -> StepSignatureSpec:
     sig = inspect.signature(fn)
     type_hints = get_type_hints(fn, include_extras=True)
 
-    accepted_events: Dict[str, List[EventType]] = {}
+    accepted_events: dict[str, list[EventType]] = {}
     context_parameter = None
     requested_services = []
     resources = []
@@ -160,7 +164,7 @@ def validate_step_signature(spec: StepSignatureSpec) -> None:
         raise WorkflowValidationError(msg)
 
 
-def get_steps_from_class(_class: object) -> Dict[str, Callable]:
+def get_steps_from_class(_class: object) -> dict[str, Callable]:
     """
     Given a class, return the list of its methods that were defined as steps.
 
@@ -168,7 +172,7 @@ def get_steps_from_class(_class: object) -> Dict[str, Callable]:
         _class (object): The class to inspect for step methods.
 
     Returns:
-        Dict[str, Callable]: A dictionary mapping step names to their corresponding methods.
+        dict[str, Callable]: A dictionary mapping step names to their corresponding methods.
 
     """
     step_methods: dict[str, Callable] = {}
@@ -181,7 +185,7 @@ def get_steps_from_class(_class: object) -> Dict[str, Callable]:
     return step_methods
 
 
-def get_steps_from_instance(workflow: object) -> Dict[str, Callable]:
+def get_steps_from_instance(workflow: object) -> dict[str, Callable]:
     """
     Given a workflow instance, return the list of its methods that were defined as steps.
 
@@ -189,7 +193,7 @@ def get_steps_from_instance(workflow: object) -> Dict[str, Callable]:
         workflow (object): The workflow instance to inspect.
 
     Returns:
-        Dict[str, Callable]: A dictionary mapping step names to their corresponding methods.
+        dict[str, Callable]: A dictionary mapping step names to their corresponding methods.
 
     """
     step_methods: dict[str, Callable] = {}
@@ -202,7 +206,7 @@ def get_steps_from_instance(workflow: object) -> Dict[str, Callable]:
     return step_methods
 
 
-def _get_param_types(param: inspect.Parameter, type_hints: dict) -> List[Any]:
+def _get_param_types(param: inspect.Parameter, type_hints: dict) -> list[Any]:
     """
     Extract and process the types of a parameter.
 
@@ -214,7 +218,7 @@ def _get_param_types(param: inspect.Parameter, type_hints: dict) -> List[Any]:
         type_hints (dict): The resolved type hints for the function.
 
     Returns:
-        List[Any]: A list of extracted types, excluding None from Unions/Optionals.
+        list[Any]: A list of extracted types, excluding None from Unions/Optionals.
 
     """
     typ = type_hints.get(param.name, param.annotation)
@@ -225,7 +229,7 @@ def _get_param_types(param: inspect.Parameter, type_hints: dict) -> List[Any]:
     return [typ]
 
 
-def _get_return_types(func: Callable) -> List[Any]:
+def _get_return_types(func: Callable) -> list[Any]:
     """
     Extract the return type hints from a function.
 

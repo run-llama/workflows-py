@@ -1,14 +1,15 @@
+from __future__ import annotations
+
 import inspect
 from typing import (
+    Any,
+    Awaitable,
     Callable,
     Generic,
     TypeVar,
-    Union,
-    Awaitable,
-    Dict,
-    Any,
     cast,
 )
+
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -18,9 +19,7 @@ T = TypeVar("T")
 
 
 class _Resource(Generic[T]):
-    def __init__(
-        self, factory: Callable[..., Union[T, Awaitable[T]]], cache: bool
-    ) -> None:
+    def __init__(self, factory: Callable[..., T | Awaitable[T]], cache: bool) -> None:
         self._factory = factory
         self._is_async = inspect.iscoroutinefunction(factory)
         self.name = factory.__qualname__
@@ -46,7 +45,7 @@ def Resource(factory: Callable[..., T], cache: bool = True) -> _Resource[T]:
 
 class ResourceManager:
     def __init__(self) -> None:
-        self.resources: Dict[str, Any] = {}
+        self.resources: dict[str, Any] = {}
 
     async def set(self, name: str, val: Any) -> None:
         self.resources.update({name: val})
@@ -61,5 +60,5 @@ class ResourceManager:
             val = self.resources.get(resource.name)
         return val
 
-    def get_all(self) -> Dict[str, Any]:
+    def get_all(self) -> dict[str, Any]:
         return self.resources
