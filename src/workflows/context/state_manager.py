@@ -20,7 +20,7 @@ class InMemoryStateManager(Generic[T]):
     
     class MyWorkflow(Workflow):
         @step
-        async def step_1(self, ctx: Context[MyState], ev: StartEvent) -> StopEvent:
+        async def step_1(self, ctx: Annotated[Context, MyState], ev: StartEvent) -> StopEvent:
             state = await ctx.state.get()
             state.name = "John"
             state.age = 30
