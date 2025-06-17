@@ -7,7 +7,7 @@ Contributions are welcome! We do our best to keep an eye on the issues and PRs a
 Generally, we're looking for:
 
 - **New workflow features**: Improvements to the core workflow engine, step decorators, event handling, or context management
-- **Better error handling and validation**: Enhanced error messages, better validation of workflow configurations, improved debugging capabilities, and better retry mechanisms  
+- **Better error handling and validation**: Enhanced error messages, better validation of workflow configurations, improved debugging capabilities, and better retry mechanisms
 - **Performance optimizations**: Improvements to workflow execution speed, memory usage, or concurrent processing
 - **Documentation improvements**: Better examples, tutorials, API documentation, or architectural explanations
 - **Testing enhancements**: More comprehensive test coverage, performance tests, or integration tests
