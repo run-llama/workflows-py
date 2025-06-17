@@ -15,7 +15,7 @@ Using Workflows, you get access to an async-first event-driven system for buildi
 - **async-first** - workflows are built around python's async functionality - steps are async functions that process incoming events from an asyncio queue and emit new events to other queues. This also means that workflows work best in your async apps like FastAPI, Jupyter Notebooks, etc.
 - **event-driven** - workflows consist of steps and events. Organizing your code around events and steps makes it easier to reason about and test.
 - **state management** - each run of a workflow is self-contained, meaning you can launch a workflow, save information within it, serialize the state of a workflow and resume it later.
-- **observability** - workflows are automatically instrumented for observability, meaning you can use tools like [Arize Pheonix] and [OpenTelemetry] right out of the box.
+- **observability** - workflows are automatically instrumented for observability, meaning you can use tools like `Arize Phoenix` and `OpenTelemetry` right out of the box.
 
 ## Quick Start
 
@@ -43,7 +43,7 @@ class MyWorkflow(Workflow):
         await ctx.set("num_runs", num_runs)
 
         return MyEvent(msg=[ev.input_msg] * num_runs)
-    
+
     @step
     async def process(self, ctx: Context, ev: MyEvent) -> StopEvent:
         data_length = len("".join(ev.msg))
