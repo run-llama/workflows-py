@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from _collections_abc import dict_items, dict_keys, dict_values
-from typing import Any, Type
+from typing import Any, Type, Dict
 
 from pydantic import (
     BaseModel,
@@ -56,7 +56,7 @@ class Event(BaseModel):
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    _data: dict[str, Any] = PrivateAttr(default_factory=dict)
+    _data: Dict[str, Any] = PrivateAttr(default_factory=dict)
 
     def __init__(self, **params: Any):
         """
@@ -69,7 +69,7 @@ class Event(BaseModel):
         private_attrs = {}
         data = {}
         for k, v in params.items():
-            if k in self.model_fields:
+            if k in self.__pydantic_fields__:
                 fields[k] = v
             elif k in self.__private_attributes__:
                 private_attrs[k] = v
@@ -82,7 +82,7 @@ class Event(BaseModel):
             self._data.update(data)
 
     def __getattr__(self, __name: str) -> Any:
-        if __name in self.__private_attributes__ or __name in self.model_fields:
+        if __name in self.__private_attributes__ or __name in self.__pydantic_fields__:
             return super().__getattr__(__name)  # type: ignore
         else:
             try:
@@ -93,7 +93,7 @@ class Event(BaseModel):
                 )
 
     def __setattr__(self, name: str, value: Any) -> None:
-        if name in self.__private_attributes__ or name in self.model_fields:
+        if name in self.__private_attributes__ or name in self.__pydantic_fields__:
             super().__setattr__(name, value)
         else:
             self._data.__setitem__(name, value)
@@ -125,7 +125,7 @@ class Event(BaseModel):
     def __iter__(self) -> Any:
         return iter(self._data)
 
-    def to_dict(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
+    def to_dict(self, *args: Any, **kwargs: Any) -> Dict[str, Any]:
         return self._data
 
     def __bool__(self) -> bool:
@@ -133,7 +133,7 @@ class Event(BaseModel):
         return True
 
     @model_serializer(mode="wrap")
-    def custom_model_dump(self, handler: Any) -> dict[str, Any]:
+    def custom_model_dump(self, handler: Any) -> Dict[str, Any]:
         data = handler(self)
         # include _data in serialization
         if self._data:
