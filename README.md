@@ -13,7 +13,7 @@ LlamaIndex Workflows are a framework for orchestrating and chaining together com
 Workflows shine when you need to orchestrate complex, multi-step processes that involve AI models, APIs, and decision-making. Here are some examples of what you can build:
 
 - **AI Agents** - Create intelligent systems that can reason, make decisions, and take actions across multiple steps
-- **Document Processing Pipelines** - Build systems that ingest, analyze, summarize, and route documents through various processing stages  
+- **Document Processing Pipelines** - Build systems that ingest, analyze, summarize, and route documents through various processing stages
 - **Multi-Model AI Applications** - Coordinate between different AI models (LLMs, vision models, etc.) to solve complex tasks
 - **Research Assistants** - Develop workflows that can search, analyze, synthesize information, and provide comprehensive answers
 - **Content Generation Systems** - Create pipelines that generate, review, edit, and publish content with human-in-the-loop approval
