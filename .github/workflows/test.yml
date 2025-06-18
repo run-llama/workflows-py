@@ -29,9 +29,15 @@ jobs:
           enable-cache: true
 
       - name: Run tests
-        if: ${{ matrix.python-version != env.COV_PYTHON_VERSION }}
+        if: matrix.python-version != env.COV_PYTHON_VERSION
         run: uv run pytest
 
       - name: Run tests with coverage
-        if: ${{ matrix.python-version == env.COV_PYTHON_VERSION }}
+        if: matrix.python-version == env.COV_PYTHON_VERSION
         run: uv run pytest --cov
+
+      - name: Report Coveralls
+        if: matrix.python-version == env.COV_PYTHON_VERSION
+        uses: coverallsapp/github-action@v2
+        env:
+          COVERALLS_REPO_TOKEN: ${{ secrets.COVERALLS_REPO_TOKEN }}
