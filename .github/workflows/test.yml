@@ -34,7 +34,7 @@ jobs:
 
       - name: Run tests with coverage
         if: matrix.python-version == env.COV_PYTHON_VERSION
-        run: uv run pytest --cov
+        run: uv run pytest --cov --cov-report=xml
 
       - name: Report Coveralls
         if: matrix.python-version == env.COV_PYTHON_VERSION
