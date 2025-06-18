@@ -69,6 +69,7 @@ class Event(BaseModel):
         private_attrs = {}
         data = {}
         for k, v in params.items():
+            # using __class__.model_fields because using model_fields directly is deprecated
             if k in self.__class__.model_fields:
                 fields[k] = v
             elif k in self.__private_attributes__:
@@ -82,7 +83,10 @@ class Event(BaseModel):
             self._data.update(data)
 
     def __getattr__(self, __name: str) -> Any:
-        if __name in self.__private_attributes__ or __name in self.__class__.model_fields:
+        if (
+            __name in self.__private_attributes__
+            or __name in self.__class__.model_fields
+        ):
             return super().__getattr__(__name)  # type: ignore
         else:
             try:
