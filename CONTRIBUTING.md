@@ -39,7 +39,17 @@ Generally, the code organization is relatively flat. Here's a quick overview of 
 
 This section assumes you have `uv` installed.
 
-The install is simply:
+When developing locally, development works best with a virtual environment. You can create one with:
+
+```bash
+uv venv
+# On MacOS/Linux
+source .venv/bin/activate
+# On Windows
+.venv\Scripts\activate
+```
+
+Then, install the dependencies with:
 
 ```bash
 uv sync
