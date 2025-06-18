@@ -57,6 +57,12 @@ uv sync
 
 The `pyproject.toml` file contains the dependencies for the project along with other details like the package name, version, etc. Generally you won't have to edit this file.
 
+Linting is done automatically with `pre-commit`. Initialize it with:
+
+```bash
+uv run pre-commit install
+```
+
 ### Run tests
 
 Tests are run with `pytest`. You can run them with:
@@ -67,9 +73,9 @@ uv run pytest
 
 Generally, all features should be covered by robust tests. If you are adding a new feature or fixing a bug, please add tests for it.
 
-### Linting
+### Manually running linting
 
-We use `pre-commit` to run linting and formatting on the codebase. You can run it with:
+We use `pre-commit` to run linting and formatting on the codebase. You can run it manually with:
 
 ```bash
 uv run -- pre-commit run -a
