@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 LlamaIndex Inc.
+
 from __future__ import annotations
 
 from _collections_abc import dict_items, dict_keys, dict_values
