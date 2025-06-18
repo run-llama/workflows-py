@@ -5,7 +5,7 @@ from typing import Any, Type
 
 from pydantic import (
     BaseModel,
-    Configdict,
+    ConfigDict,
     PrivateAttr,
     model_serializer,
 )
@@ -55,7 +55,7 @@ class Event(BaseModel):
 
     """
 
-    model_config = Configdict(arbitrary_types_allowed=True)
+    model_config = ConfigDict(arbitrary_types_allowed=True)
     _data: dict[str, Any] = PrivateAttr(default_factory=dict)
 
     def __init__(self, **params: Any):
