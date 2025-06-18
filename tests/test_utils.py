@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 LlamaIndex Inc.
+
 import inspect
 from typing import Any, List, Optional, Union, get_type_hints
 
