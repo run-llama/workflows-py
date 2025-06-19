@@ -69,7 +69,6 @@ class Event(BaseModel):
         private_attrs = {}
         data = {}
         for k, v in params.items():
-            # using __class__.model_fields because using model_fields directly is deprecated
             if k in self.__class__.model_fields:
                 fields[k] = v
             elif k in self.__private_attributes__:
