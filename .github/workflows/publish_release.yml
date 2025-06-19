@@ -9,7 +9,7 @@ on:
 jobs:
   build-n-publish:
     name: Build and publish to PyPI
-    if: github.repository == 'run-llama/workflows'
+    if: github.repository == 'run-llama/workflows-py'
     runs-on: ubuntu-latest
     permissions:
       contents: write
