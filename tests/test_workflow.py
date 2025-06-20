@@ -55,7 +55,7 @@ def test_fn() -> None:
 
 @pytest.mark.asyncio
 async def test_workflow_initialization(workflow: Workflow) -> None:
-    assert workflow._timeout == 10
+    assert workflow._timeout == 45
     assert not workflow._disable_validation
     assert not workflow._verbose
 
