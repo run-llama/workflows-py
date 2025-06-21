@@ -626,11 +626,11 @@ class Context(Generic[MODEL_T]):
 
             # run step
             # Initialize state manager if needed
-            if (
-                hasattr(config, "context_state_type")
-                and config.context_state_type is not None
-            ):
-                if self._state_manager is None:
+            if self._state_manager is None:
+                if (
+                    hasattr(config, "context_state_type")
+                    and config.context_state_type is not None
+                ):
                     # Instantiate the state class and initialize the state manager
                     try:
                         # Try to instantiate the state class
@@ -640,9 +640,9 @@ class Context(Generic[MODEL_T]):
                         raise WorkflowRuntimeError(
                             f"Failed to initialize state of type {config.context_state_type}: {e}"
                         ) from e
-            else:
-                # Initialize state manager with DictState by default
-                await self._init_state_manager(DictState())
+                else:
+                    # Initialize state manager with DictState by default
+                    await self._init_state_manager(DictState())
 
             kwargs: dict[str, Any] = {}
             if config.context_parameter:
