@@ -25,6 +25,7 @@ class StepConfig(BaseModel):
     event_name: str
     return_types: list[Any]
     context_parameter: str | None
+    context_state_type: Any | None
     num_workers: int
     requested_services: list[ServiceDefinition]
     retry_policy: RetryPolicy | None
@@ -71,6 +72,7 @@ def step(
             event_name=event_name,
             return_types=spec.return_types,
             context_parameter=spec.context_parameter,
+            context_state_type=spec.context_state_type,
             num_workers=num_workers,
             requested_services=spec.requested_services or [],
             retry_policy=retry_policy,

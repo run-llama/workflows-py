@@ -59,6 +59,7 @@ class StepSignatureSpec(BaseModel):
     accepted_events: dict[str, list[EventType]]
     return_types: list[Any]
     context_parameter: str | None
+    context_state_type: Any | None
     requested_services: list[ServiceDefinition] | None
     resources: list[Any]
 
@@ -89,6 +90,7 @@ def inspect_signature(fn: Callable) -> StepSignatureSpec:
 
     accepted_events: dict[str, list[EventType]] = {}
     context_parameter = None
+    context_state_type = None
     requested_services = []
     resources = []
 
@@ -99,12 +101,27 @@ def inspect_signature(fn: Callable) -> StepSignatureSpec:
             continue
 
         annotation = type_hints.get(name, t.annotation)
+
+        # Handle Context[StateType] annotations
+        if get_origin(annotation) is not None:
+            origin = get_origin(annotation)
+            args = get_args(annotation)
+
+            # Check if this is Context[StateType]
+            if hasattr(origin, "__name__") and origin.__name__ == "Context":
+                context_parameter = name
+                # Extract state type from generic parameter
+                if args:
+                    context_state_type = args[0]
+                continue
+
+        # Handle Annotated types for resources
         if get_origin(annotation) is Annotated:
-            base_type, resource = get_args(annotation)
+            _, resource = get_args(annotation)
             resources.append(ResourceDefinition(name=name, resource=resource))
             continue
 
-        # Get name and type of the Context param
+        # Get name and type of the Context param (without state type)
         if hasattr(annotation, "__name__") and annotation.__name__ == "Context":
             context_parameter = name
             continue
@@ -134,6 +151,7 @@ def inspect_signature(fn: Callable) -> StepSignatureSpec:
         accepted_events=accepted_events,
         return_types=_get_return_types(fn),
         context_parameter=context_parameter,
+        context_state_type=context_state_type,
         requested_services=requested_services,
         resources=resources,
     )

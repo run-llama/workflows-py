@@ -11,6 +11,7 @@ from typing import (
     Any,
     Callable,
     DefaultDict,
+    Generic,
     Tuple,
     Type,
     TypeVar,
@@ -29,6 +30,7 @@ from workflows.service import ServiceManager
 from workflows.types import RunResultT
 
 from .serializers import BaseSerializer, JsonSerializer
+from .state_manager import InMemoryStateManager, MODEL_T, DictState
 
 if TYPE_CHECKING:  # pragma: no cover
     from workflows import Workflow
@@ -46,7 +48,7 @@ class UnserializableKeyWarning(Warning):
 warnings.simplefilter("once", UnserializableKeyWarning)
 
 
-class Context:
+class Context(Generic[MODEL_T]):
     """
     A global object representing a context for a given workflow run.
 
@@ -80,9 +82,29 @@ class Context:
         # Global data storage
         self._lock = asyncio.Lock()
         self._globals: dict[str, Any] = {}
+        # Initialize state manager with DictState by default
+        self._state_manager: InMemoryStateManager[MODEL_T] | None = None
+        self._init_state_manager(DictState())  # type: ignore
 
         # instrumentation
         self._dispatcher = workflow._dispatcher
+
+    def _init_state_manager(self, state_class: MODEL_T) -> None:
+        if self._state_manager is not None:
+            if type(state_class) is not type(self._state_manager.state):
+                raise ValueError(
+                    f"Cannot initialize with state class {type(state_class)} because it already has a state class {type(self._state_manager.state)}"
+                )
+
+        self._state_manager = InMemoryStateManager(state_class)
+
+    @property
+    def state(self) -> InMemoryStateManager[MODEL_T]:
+        if self._state_manager is None:
+            # This should never happen since we initialize with DictState by default
+            raise ValueError("State manager not initialized.")
+
+        return self._state_manager
 
     def _init_broker_data(self) -> None:
         self._queues: dict[str, asyncio.Queue] = {}
@@ -163,8 +185,16 @@ class Context:
     def to_dict(self, serializer: BaseSerializer | None = None) -> dict[str, Any]:
         serializer = serializer or JsonSerializer()
 
+        # Serialize state using the state manager's method
+        state_data = {}
+        if self._state_manager is not None:
+            state_data = self._state_manager.to_dict(serializer)
+
         return {
-            "globals": self._serialize_globals(serializer),
+            "globals": self._serialize_globals(
+                serializer
+            ),  # Keep for backward compatibility
+            "state": state_data,  # Use state manager's serialize method
             "streaming_queue": self._serialize_queue(self._streaming_queue, serializer),
             "queues": {
                 k: self._serialize_queue(v, serializer) for k, v in self._queues.items()
@@ -197,7 +227,19 @@ class Context:
 
         try:
             context = cls(workflow, stepwise=data["stepwise"])
-            context._globals = context._deserialize_globals(data["globals"], serializer)
+
+            # Deserialize legacy globals for backward compatibility
+            if "globals" in data:
+                context._globals = context._deserialize_globals(
+                    data["globals"], serializer
+                )
+
+            # Deserialize state manager using the state manager's method
+            if "state" in data:
+                context._state_manager = InMemoryStateManager.from_dict(
+                    data["state"], serializer
+                )
+
             context._streaming_queue = context._deserialize_queue(
                 data["streaming_queue"], serializer
             )
@@ -233,6 +275,9 @@ class Context:
         """
         Store `value` into the Context under `key`.
 
+        DEPRECATED: Use `await ctx.state.set_path(key, value)` instead.
+        This method is deprecated and will be removed in a future version.
+
         Args:
             key: A unique string to identify the value stored.
             value: The data to be stored.
@@ -241,13 +286,19 @@ class Context:
             ValueError: When make_private is True but a key already exists in the global storage.
 
         """
+        warnings.warn(
+            "Context.set(key, value) is deprecated. Use 'await ctx.state.set(key, value)' instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
         if make_private:
             warnings.warn(
                 "`make_private` is deprecated and will be ignored", DeprecationWarning
             )
 
-        async with self.lock:
-            self._globals[key] = value
+        # Delegate to state manager
+        await self.state.set(key, value)
 
     async def mark_in_progress(self, name: str, ev: Event) -> None:
         """
@@ -292,6 +343,9 @@ class Context:
         """
         Get the value corresponding to `key` from the Context.
 
+        DEPRECATED: Use `await ctx.state.get_path(key)` instead.
+        This method is deprecated and will be removed in a future version.
+
         Args:
             key: A unique string to identify the value stored.
             default: The value to return when `key` is missing instead of raising an exception.
@@ -300,14 +354,13 @@ class Context:
             ValueError: When there's not value accessible corresponding to `key`.
 
         """
-        async with self.lock:
-            if key in self._globals:
-                return self._globals[key]
-            elif default is not Ellipsis:
-                return default
+        warnings.warn(
+            "Context.get() is deprecated. Use 'await ctx.state.get()' instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
 
-        msg = f"Key '{key}' not found in Context"
-        raise ValueError(msg)
+        return await self.state.get(key, default=default)
 
     @property
     def data(self) -> dict[str, Any]:  # pragma: no cover
@@ -596,6 +649,22 @@ class Context:
                 print(f"Running step {name}")
 
             # run step
+            # Initialize state manager if needed
+            if (
+                hasattr(config, "context_state_type")
+                and config.context_state_type is not None
+            ):
+                if self._state_manager is None:
+                    # Instantiate the state class and initialize the state manager
+                    try:
+                        # Try to instantiate the state class
+                        state_instance = config.context_state_type()
+                        self._init_state_manager(state_instance)
+                    except Exception as e:
+                        raise WorkflowRuntimeError(
+                            f"Failed to initialize state of type {config.context_state_type}: {e}"
+                        ) from e
+
             kwargs: dict[str, Any] = {}
             if config.context_parameter:
                 kwargs[config.context_parameter] = self
