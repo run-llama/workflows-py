@@ -1,7 +1,7 @@
 import asyncio
 import warnings
 from pydantic import BaseModel
-from typing import Any, Generic, TypeVar
+from typing import Any, Generic, Optional, TypeVar
 
 from workflows.events import Event
 from .serializers import BaseSerializer
@@ -177,7 +177,7 @@ class InMemoryStateManager(Generic[MODEL_T]):
 
         return cls(state_instance)  # type: ignore
 
-    async def get(self, path: str, default: Any | None = Ellipsis) -> Any:
+    async def get(self, path: str, default: Optional[Any] = Ellipsis) -> Any:
         """
         Return a value from *path*, where path is a dot-separated string.
         Example: await sm.get("user.profile.name")
