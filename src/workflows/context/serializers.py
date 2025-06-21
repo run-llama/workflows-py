@@ -39,7 +39,7 @@ class JsonSerializer(BaseSerializer):
         if isinstance(value, BaseModel):
             return {
                 "__is_pydantic": True,
-                "value": value.model_dump(),
+                "value": value.model_dump(mode="json"),
                 "qualified_name": get_qualified_name(value),
             }
 
