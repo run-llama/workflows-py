@@ -549,7 +549,8 @@ class Context(Generic[MODEL_T]):
     def clear(self) -> None:
         """Clear any data stored in the context."""
         # Clear the user data storage
-        self._state_manager = None
+        if self._state_manager is not None:
+            self._state_manager._state = self._state_manager._state.__class__()
 
     async def shutdown(self) -> None:
         """
