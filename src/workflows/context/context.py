@@ -82,18 +82,17 @@ class Context(Generic[MODEL_T]):
         # Global data storage
         self._lock = asyncio.Lock()
         self._globals: dict[str, Any] = {}
-        # Initialize state manager with DictState by default
         self._state_manager: InMemoryStateManager[MODEL_T] | None = None
-        self._init_state_manager(DictState())  # type: ignore
 
         # instrumentation
         self._dispatcher = workflow._dispatcher
 
-    def _init_state_manager(self, state_class: MODEL_T) -> None:
+    async def _init_state_manager(self, state_class: MODEL_T) -> None:
         if self._state_manager is not None:
-            if type(state_class) is not type(self._state_manager.state):
+            existing_state = await self._state_manager.get_all()
+            if type(state_class) is not type(existing_state):
                 raise ValueError(
-                    f"Cannot initialize with state class {type(state_class)} because it already has a state class {type(self._state_manager.state)}"
+                    f"Cannot initialize with state class {type(state_class)} because it already has a state class {type(existing_state)}"
                 )
 
         self._state_manager = InMemoryStateManager(state_class)
@@ -275,7 +274,7 @@ class Context(Generic[MODEL_T]):
         """
         Store `value` into the Context under `key`.
 
-        DEPRECATED: Use `await ctx.state.set_path(key, value)` instead.
+        DEPRECATED: Use `await ctx.state.set(key, value)` instead.
         This method is deprecated and will be removed in a future version.
 
         Args:
@@ -659,11 +658,14 @@ class Context(Generic[MODEL_T]):
                     try:
                         # Try to instantiate the state class
                         state_instance = config.context_state_type()
-                        self._init_state_manager(state_instance)
+                        await self._init_state_manager(state_instance)
                     except Exception as e:
                         raise WorkflowRuntimeError(
                             f"Failed to initialize state of type {config.context_state_type}: {e}"
                         ) from e
+            else:
+                # Initialize state manager with DictState by default
+                await self._init_state_manager(DictState())
 
             kwargs: dict[str, Any] = {}
             if config.context_parameter:

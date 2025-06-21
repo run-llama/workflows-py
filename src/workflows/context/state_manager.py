@@ -1,6 +1,5 @@
 import asyncio
 import warnings
-import importlib
 from pydantic import BaseModel
 from typing import Any, Generic, TypeVar
 
@@ -54,11 +53,11 @@ class InMemoryStateManager(Generic[MODEL_T]):
     class MyWorkflow(Workflow):
         @step
         async def step_1(self, ctx: Context[MyState], ev: StartEvent) -> StopEvent:
-            # ctx.state.get() is now properly typed as MyState
-            state = await ctx.state.get()
+            # ctx._state.get() is now properly typed as MyState
+            state = await ctx._state.get()
             state.name = "John"  # Type-safe: IDE knows this is a string
             state.age = 30       # Type-safe: IDE knows this is an int
-            await ctx.state.set(state)
+            await ctx._state.set(state)
             return StopEvent()
     ```
 
@@ -67,11 +66,11 @@ class InMemoryStateManager(Generic[MODEL_T]):
     class MyWorkflow(Workflow):
         @step
         async def step_1(self, ctx: Context, ev: StartEvent) -> StopEvent:
-            # ctx.state behaves like a dict
-            state = await ctx.state.get()
+            # ctx._state behaves like a dict
+            state = await ctx._state.get()
             state.name = "John"     # Works like a dict
             state.age = 30          # Dynamic assignment
-            await ctx.state.set(state)
+            await ctx._state.set(state)
             return StopEvent()
     ```
 
@@ -88,17 +87,20 @@ class InMemoryStateManager(Generic[MODEL_T]):
     known_unserializable_keys = ("memory",)
 
     def __init__(self, initial_state: MODEL_T):
-        self.state = initial_state
+        self._state = initial_state
         self._lock = asyncio.Lock()
 
     async def get_all(self) -> MODEL_T:
         """Get a copy of the current state."""
-        return self.state.model_copy()
+        return self._state.model_copy()
 
     async def set_all(self, state: MODEL_T) -> None:
         """Set the current state."""
+        if not isinstance(state, type(self._state)):
+            raise ValueError(f"State must be of type {type(self._state)}")
+
         async with self._lock:
-            self.state = state
+            self._state = state
 
     def to_dict(self, serializer: "BaseSerializer") -> dict[str, Any]:
         """
@@ -107,10 +109,10 @@ class InMemoryStateManager(Generic[MODEL_T]):
         For DictState, uses the BaseSerializer for individual items since they can be arbitrary types.
         For other Pydantic models, leverages Pydantic's serialization but uses BaseSerializer for complex types.
         """
-        state_dict = self.state.model_dump()
+        state_dict = self._state.model_dump()
 
         # Special handling for DictState - serialize each item in _data
-        if isinstance(self.state, DictState):
+        if isinstance(self._state, DictState):
             serialized_data = {}
             for key, value in state_dict.get("_data", {}).items():
                 try:
@@ -129,17 +131,17 @@ class InMemoryStateManager(Generic[MODEL_T]):
 
             return {
                 "state_data": {"_data": serialized_data},
-                "state_type": type(self.state).__name__,
-                "state_module": type(self.state).__module__,
+                "state_type": type(self._state).__name__,
+                "state_module": type(self._state).__module__,
             }
         else:
             # For regular Pydantic models, rely on pydantic's serialization
-            serialized_state = serializer.serialize(self.state)
+            serialized_state = serializer.serialize(self._state)
 
             return {
                 "state_data": serialized_state,
-                "state_type": type(self.state).__name__,
-                "state_module": type(self.state).__module__,
+                "state_type": type(self._state).__name__,
+                "state_module": type(self._state).__module__,
             }
 
     @classmethod
@@ -155,9 +157,6 @@ class InMemoryStateManager(Generic[MODEL_T]):
 
         state_data = serialized_state.get("state_data", {})
         state_type = serialized_state.get("state_type", "DictState")
-        state_module = serialized_state.get(
-            "state_module", "workflows.context.state_manager"
-        )
 
         # Deserialize the state data
         if state_type == "DictState":
@@ -174,27 +173,7 @@ class InMemoryStateManager(Generic[MODEL_T]):
 
             state_instance = DictState(_data=deserialized_data)
         else:
-            # For custom state classes, deserialize each field and try to import and instantiate
-            deserialized_data = {}
-            for key, value in state_data.items():
-                try:
-                    deserialized_data[key] = serializer.deserialize(value)
-                except Exception as e:
-                    raise ValueError(
-                        f"Failed to deserialize state value for key {key}: {e}"
-                    )
-
-            try:
-                module = importlib.import_module(state_module)
-                state_class = getattr(module, state_type)
-                state_instance = state_class(**deserialized_data)
-            except (ImportError, AttributeError, TypeError) as e:
-                # Fallback to DictState if we can't recreate the original state class
-                warnings.warn(
-                    f"Could not restore state class {state_module}.{state_type}, falling back to DictState: {e}",
-                    category=UserWarning,
-                )
-                state_instance = DictState(_data=deserialized_data)
+            state_instance = serializer.deserialize(state_data)
 
         return cls(state_instance)  # type: ignore
 
@@ -209,7 +188,7 @@ class InMemoryStateManager(Generic[MODEL_T]):
 
         async with self._lock:
             try:
-                value: Any = self.state
+                value: Any = self._state
                 for segment in segments:
                     value = self._traverse_step(value, segment)
             except Exception:
@@ -231,7 +210,7 @@ class InMemoryStateManager(Generic[MODEL_T]):
             raise ValueError(f"Path length exceeds {MAX_DEPTH} segments")
 
         async with self._lock:
-            current = self.state
+            current = self._state
 
             # Navigate/create intermediate segments
             for segment in segments[:-1]:
