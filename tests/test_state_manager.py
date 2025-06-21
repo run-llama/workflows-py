@@ -6,6 +6,7 @@ from pydantic import (
     field_serializer,
     field_validator,
 )
+from typing import Union
 
 from workflows.context.serializers import JsonSerializer
 from workflows.context.state_manager import DictState, InMemoryStateManager
@@ -33,7 +34,7 @@ class MyState(BaseModel):
 
     @field_validator("my_obj", mode="before")
     @classmethod
-    def deserialize_my_obj(cls, v: str | MyRandomObject) -> MyRandomObject:
+    def deserialize_my_obj(cls, v: Union[str, MyRandomObject]) -> MyRandomObject:
         if isinstance(v, MyRandomObject):
             return v
         if isinstance(v, str):
