@@ -81,27 +81,32 @@ class Context(Generic[MODEL_T]):
 
         # Global data storage
         self._lock = asyncio.Lock()
-        self._globals: dict[str, Any] = {}
         self._state_manager: InMemoryStateManager[MODEL_T] | None = None
 
         # instrumentation
         self._dispatcher = workflow._dispatcher
 
     async def _init_state_manager(self, state_class: MODEL_T) -> None:
+        # If a state manager already exists, ensure the requested state type is compatible
         if self._state_manager is not None:
             existing_state = await self._state_manager.get_all()
             if type(state_class) is not type(existing_state):
+                # Existing state type differs from the requested one – this is not allowed
                 raise ValueError(
                     f"Cannot initialize with state class {type(state_class)} because it already has a state class {type(existing_state)}"
                 )
 
+            # State manager already initialised and compatible – nothing to do
+            return
+
+        # First-time initialisation
         self._state_manager = InMemoryStateManager(state_class)
 
     @property
     def state(self) -> InMemoryStateManager[MODEL_T]:
+        # Default to DictState if no state manager is initialized
         if self._state_manager is None:
-            # This should never happen since we initialize with DictState by default
-            raise ValueError("State manager not initialized.")
+            self._state_manager = InMemoryStateManager(DictState())
 
         return self._state_manager
 
@@ -153,26 +158,14 @@ class Context(Generic[MODEL_T]):
             queue.put_nowait(event_obj)
         return queue
 
-    def _serialize_globals(self, serializer: BaseSerializer) -> dict[str, Any]:
-        serialized_globals = {}
-        for key, value in self._globals.items():
-            try:
-                serialized_globals[key] = serializer.serialize(value)
-            except Exception as e:
-                if key in self.known_unserializable_keys:
-                    # Skip serialization of known unserializable keys
-                    warnings.warn(
-                        f"Skipping serialization of known unserializable key: {key} -- "
-                        "This is expected but will require this item to be set manually after deserialization.",
-                        category=UnserializableKeyWarning,
-                    )
-                    continue
-                raise ValueError(f"Failed to serialize value for key {key}: {e}")
-        return serialized_globals
-
     def _deserialize_globals(
         self, serialized_globals: dict[str, Any], serializer: BaseSerializer
     ) -> dict[str, Any]:
+        """
+        DEPRECATED: Kept to support reloading a Context from an old serialized payload.
+
+        This method is deprecated and will be removed in a future version.
+        """
         deserialized_globals = {}
         for key, value in serialized_globals.items():
             try:
@@ -190,9 +183,6 @@ class Context(Generic[MODEL_T]):
             state_data = self._state_manager.to_dict(serializer)
 
         return {
-            "globals": self._serialize_globals(
-                serializer
-            ),  # Keep for backward compatibility
             "state": state_data,  # Use state manager's serialize method
             "streaming_queue": self._serialize_queue(self._streaming_queue, serializer),
             "queues": {
@@ -227,17 +217,15 @@ class Context(Generic[MODEL_T]):
         try:
             context = cls(workflow, stepwise=data["stepwise"])
 
-            # Deserialize legacy globals for backward compatibility
-            if "globals" in data:
-                context._globals = context._deserialize_globals(
-                    data["globals"], serializer
-                )
-
             # Deserialize state manager using the state manager's method
             if "state" in data:
                 context._state_manager = InMemoryStateManager.from_dict(
                     data["state"], serializer
                 )
+            elif "globals" in data:
+                # Deserialize legacy globals for backward compatibility
+                globals = context._deserialize_globals(data["globals"], serializer)
+                context._state_manager = InMemoryStateManager(DictState(**globals))
 
             context._streaming_queue = context._deserialize_queue(
                 data["streaming_queue"], serializer
@@ -360,17 +348,6 @@ class Context(Generic[MODEL_T]):
         )
 
         return await self.state.get(key, default=default)
-
-    @property
-    def data(self) -> dict[str, Any]:  # pragma: no cover
-        """
-        This property is provided for backward compatibility.
-
-        Use `get` and `set` instead.
-        """
-        msg = "`data` is deprecated, please use the `get` and `set` method to store data into the Context."
-        warnings.warn(msg, DeprecationWarning, stacklevel=2)
-        return self._globals
 
     @property
     def lock(self) -> asyncio.Lock:
@@ -572,7 +549,7 @@ class Context(Generic[MODEL_T]):
     def clear(self) -> None:
         """Clear any data stored in the context."""
         # Clear the user data storage
-        self._globals.clear()
+        self._state_manager = None
 
     async def shutdown(self) -> None:
         """

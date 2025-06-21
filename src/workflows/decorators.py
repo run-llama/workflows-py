@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Callable, Type
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from .errors import WorkflowValidationError
 from .resource import ResourceDefinition
@@ -25,11 +25,11 @@ class StepConfig(BaseModel):
     event_name: str
     return_types: list[Any]
     context_parameter: str | None
-    context_state_type: Any | None
     num_workers: int
     requested_services: list[ServiceDefinition]
     retry_policy: RetryPolicy | None
     resources: list[ResourceDefinition]
+    context_state_type: Type[BaseModel] | None = Field(default=None)
 
 
 def step(
