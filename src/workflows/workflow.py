@@ -72,7 +72,7 @@ class Workflow(metaclass=WorkflowMeta):
 
     def __init__(
         self,
-        timeout: float | None = 10.0,
+        timeout: float | None = 45.0,
         disable_validation: bool = False,
         verbose: bool = False,
         service_manager: ServiceManager | None = None,
