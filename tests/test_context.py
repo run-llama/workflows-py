@@ -15,7 +15,7 @@ from unittest import mock
 import pytest
 
 from workflows.context import Context
-from workflows.context.state_manager import DictState
+from workflows.context.state_store import DictState
 from workflows.decorators import StepConfig, step
 from workflows.errors import ContextSerdeError, WorkflowRuntimeError
 from workflows.events import (

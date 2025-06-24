@@ -30,7 +30,7 @@ from workflows.service import ServiceManager
 from workflows.types import RunResultT
 
 from .serializers import BaseSerializer, JsonSerializer
-from .state_manager import InMemoryStateManager, MODEL_T, DictState
+from .state_store import InMemoryStateStore, MODEL_T, DictState
 
 if TYPE_CHECKING:  # pragma: no cover
     from workflows import Workflow
@@ -81,15 +81,15 @@ class Context(Generic[MODEL_T]):
 
         # Global data storage
         self._lock = asyncio.Lock()
-        self._state_manager: InMemoryStateManager[MODEL_T] | None = None
+        self._state_store: InMemoryStateStore[MODEL_T] | None = None
 
         # instrumentation
         self._dispatcher = workflow._dispatcher
 
-    async def _init_state_manager(self, state_class: MODEL_T) -> None:
+    async def _init_state_store(self, state_class: MODEL_T) -> None:
         # If a state manager already exists, ensure the requested state type is compatible
-        if self._state_manager is not None:
-            existing_state = await self._state_manager.get_all()
+        if self._state_store is not None:
+            existing_state = await self._state_store.get_all()
             if type(state_class) is not type(existing_state):
                 # Existing state type differs from the requested one – this is not allowed
                 raise ValueError(
@@ -100,15 +100,15 @@ class Context(Generic[MODEL_T]):
             return
 
         # First-time initialisation
-        self._state_manager = InMemoryStateManager(state_class)
+        self._state_store = InMemoryStateStore(state_class)
 
     @property
-    def state(self) -> InMemoryStateManager[MODEL_T]:
+    def store(self) -> InMemoryStateStore[MODEL_T]:
         # Default to DictState if no state manager is initialized
-        if self._state_manager is None:
-            self._state_manager = InMemoryStateManager(DictState())
+        if self._state_store is None:
+            self._state_store = InMemoryStateStore(DictState())
 
-        return self._state_manager
+        return self._state_store
 
     def _init_broker_data(self) -> None:
         self._queues: dict[str, asyncio.Queue] = {}
@@ -179,8 +179,8 @@ class Context(Generic[MODEL_T]):
 
         # Serialize state using the state manager's method
         state_data = {}
-        if self._state_manager is not None:
-            state_data = self._state_manager.to_dict(serializer)
+        if self._state_store is not None:
+            state_data = self._state_store.to_dict(serializer)
 
         return {
             "state": state_data,  # Use state manager's serialize method
@@ -219,13 +219,13 @@ class Context(Generic[MODEL_T]):
 
             # Deserialize state manager using the state manager's method
             if "state" in data:
-                context._state_manager = InMemoryStateManager.from_dict(
+                context._state_store = InMemoryStateStore.from_dict(
                     data["state"], serializer
                 )
             elif "globals" in data:
                 # Deserialize legacy globals for backward compatibility
                 globals = context._deserialize_globals(data["globals"], serializer)
-                context._state_manager = InMemoryStateManager(DictState(**globals))
+                context._state_store = InMemoryStateStore(DictState(**globals))
 
             context._streaming_queue = context._deserialize_queue(
                 data["streaming_queue"], serializer
@@ -262,7 +262,7 @@ class Context(Generic[MODEL_T]):
         """
         Store `value` into the Context under `key`.
 
-        DEPRECATED: Use `await ctx.state.set(key, value)` instead.
+        DEPRECATED: Use `await ctx.store.set(key, value)` instead.
         This method is deprecated and will be removed in a future version.
 
         Args:
@@ -274,7 +274,7 @@ class Context(Generic[MODEL_T]):
 
         """
         warnings.warn(
-            "Context.set(key, value) is deprecated. Use 'await ctx.state.set(key, value)' instead.",
+            "Context.set(key, value) is deprecated. Use 'await ctx.store.set(key, value)' instead.",
             DeprecationWarning,
             stacklevel=2,
         )
@@ -285,7 +285,7 @@ class Context(Generic[MODEL_T]):
             )
 
         # Delegate to state manager
-        await self.state.set(key, value)
+        await self.store.set(key, value)
 
     async def mark_in_progress(self, name: str, ev: Event) -> None:
         """
@@ -330,7 +330,7 @@ class Context(Generic[MODEL_T]):
         """
         Get the value corresponding to `key` from the Context.
 
-        DEPRECATED: Use `await ctx.state.get_path(key)` instead.
+        DEPRECATED: Use `await ctx.store.get(key)` instead.
         This method is deprecated and will be removed in a future version.
 
         Args:
@@ -342,12 +342,12 @@ class Context(Generic[MODEL_T]):
 
         """
         warnings.warn(
-            "Context.get() is deprecated. Use 'await ctx.state.get()' instead.",
+            "Context.get() is deprecated. Use 'await ctx.store.get()' instead.",
             DeprecationWarning,
             stacklevel=2,
         )
 
-        return await self.state.get(key, default=default)
+        return await self.store.get(key, default=default)
 
     @property
     def lock(self) -> asyncio.Lock:
@@ -547,10 +547,20 @@ class Context(Generic[MODEL_T]):
         return self._streaming_queue
 
     def clear(self) -> None:
-        """Clear any data stored in the context."""
+        """Clear any data stored in the context.
+
+        DEPRECATED: Use `await ctx.store.set(StateCLS())` instead.
+        This method is deprecated and will be removed in a future version.
+        """
+        warnings.warn(
+            "Context.clear() is deprecated. Use 'await ctx.store.set(StateCLS())' instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
         # Clear the user data storage
-        if self._state_manager is not None:
-            self._state_manager._state = self._state_manager._state.__class__()
+        if self._state_store is not None:
+            self._state_store._state = self._state_store._state.__class__()
 
     async def shutdown(self) -> None:
         """
@@ -627,7 +637,7 @@ class Context(Generic[MODEL_T]):
 
             # run step
             # Initialize state manager if needed
-            if self._state_manager is None:
+            if self._state_store is None:
                 if (
                     hasattr(config, "context_state_type")
                     and config.context_state_type is not None
@@ -636,14 +646,14 @@ class Context(Generic[MODEL_T]):
                     try:
                         # Try to instantiate the state class
                         state_instance = config.context_state_type()
-                        await self._init_state_manager(state_instance)
+                        await self._init_state_store(state_instance)
                     except Exception as e:
                         raise WorkflowRuntimeError(
                             f"Failed to initialize state of type {config.context_state_type}: {e}"
                         ) from e
                 else:
                     # Initialize state manager with DictState by default
-                    await self._init_state_manager(DictState())
+                    await self._init_state_store(DictState())
 
             kwargs: dict[str, Any] = {}
             if config.context_parameter:

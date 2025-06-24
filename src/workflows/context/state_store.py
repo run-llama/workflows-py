@@ -29,7 +29,7 @@ class DictState(Event):
     pass
 
 
-class InMemoryStateManager(Generic[MODEL_T]):
+class InMemoryStateStore(Generic[MODEL_T]):
     """
     State manager for a workflow that provides type-safe state management.
 
@@ -147,7 +147,7 @@ class InMemoryStateManager(Generic[MODEL_T]):
     @classmethod
     def from_dict(
         cls, serialized_state: dict[str, Any], serializer: "BaseSerializer"
-    ) -> "InMemoryStateManager[MODEL_T]":
+    ) -> "InMemoryStateStore[MODEL_T]":
         """
         Deserialize and restore a state manager.
         """

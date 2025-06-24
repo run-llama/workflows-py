@@ -9,7 +9,7 @@ from pydantic import (
 from typing import Union
 
 from workflows.context.serializers import JsonSerializer
-from workflows.context.state_manager import DictState, InMemoryStateManager
+from workflows.context.state_store import DictState, InMemoryStateStore
 
 
 class MyRandomObject:
@@ -44,13 +44,13 @@ class MyState(BaseModel):
 
 
 @pytest.fixture
-def default_state_manager() -> InMemoryStateManager[DictState]:
-    return InMemoryStateManager(DictState())
+def default_state_manager() -> InMemoryStateStore[DictState]:
+    return InMemoryStateStore(DictState())
 
 
 @pytest.fixture
-def custom_state_manager() -> InMemoryStateManager[MyState]:
-    return InMemoryStateManager(
+def custom_state_manager() -> InMemoryStateStore[MyState]:
+    return InMemoryStateStore(
         MyState(
             my_obj=MyRandomObject("llama-index"),
             name="John",
@@ -61,7 +61,7 @@ def custom_state_manager() -> InMemoryStateManager[MyState]:
 
 @pytest.mark.asyncio
 async def test_state_manager_defaults(
-    default_state_manager: InMemoryStateManager[DictState],
+    default_state_manager: InMemoryStateStore[DictState],
 ) -> None:
     assert (
         await default_state_manager.get_all()
@@ -87,7 +87,7 @@ async def test_state_manager_defaults(
 
 @pytest.mark.asyncio
 async def test_default_state_manager_serialization(
-    default_state_manager: InMemoryStateManager[DictState],
+    default_state_manager: InMemoryStateStore[DictState],
 ) -> None:
     assert (
         await default_state_manager.get_all()
@@ -100,7 +100,7 @@ async def test_default_state_manager_serialization(
     assert await default_state_manager.get("age") == 30
 
     data = default_state_manager.to_dict(JsonSerializer())
-    new_state_manager: InMemoryStateManager[DictState] = InMemoryStateManager.from_dict(
+    new_state_manager: InMemoryStateStore[DictState] = InMemoryStateStore.from_dict(
         data, JsonSerializer()
     )
 
@@ -110,7 +110,7 @@ async def test_default_state_manager_serialization(
 
 @pytest.mark.asyncio
 async def test_custom_state_manager(
-    custom_state_manager: InMemoryStateManager[MyState],
+    custom_state_manager: InMemoryStateStore[MyState],
 ) -> None:
     assert (await custom_state_manager.get_all()).model_dump(mode="json") == MyState(
         my_obj=MyRandomObject("llama-index"), name="John", age=30
@@ -138,7 +138,7 @@ async def test_custom_state_manager(
 
 @pytest.mark.asyncio
 async def test_state_manager_custom_serialization(
-    custom_state_manager: InMemoryStateManager[MyState],
+    custom_state_manager: InMemoryStateStore[MyState],
 ) -> None:
     await custom_state_manager.set("name", "Jane")
     await custom_state_manager.set("age", 25)
@@ -147,7 +147,7 @@ async def test_state_manager_custom_serialization(
     assert await custom_state_manager.get("age") == 25
 
     data = custom_state_manager.to_dict(JsonSerializer())
-    new_state_manager: InMemoryStateManager[MyState] = InMemoryStateManager.from_dict(
+    new_state_manager: InMemoryStateStore[MyState] = InMemoryStateStore.from_dict(
         data, JsonSerializer()
     )
 

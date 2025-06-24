@@ -15,13 +15,13 @@ class MyWorkflow(Workflow):
     @step
     async def step(self, ctx: Context[MyState], ev: StartEvent) -> StopEvent:
         # Modify state attributes
-        await ctx.state.set("name", "John")
-        await ctx.state.set("age", 30)
+        await ctx.store.set("name", "John")
+        await ctx.store.set("age", 30)
 
         # Get and update entire state
-        state = await ctx.state.get_all()
+        state = await ctx.store.get_all()
         state.age += 1
-        await ctx.state.set_all(state)
+        await ctx.store.set_all(state)
 
         return StopEvent()
 
@@ -36,5 +36,5 @@ async def test_typed_state() -> None:
     _ = await handler
 
     # Check final state
-    state = await handler.ctx.state.get_all()
+    state = await handler.ctx.store.get_all()
     assert state.model_dump() == MyState(name="John", age=31).model_dump()

@@ -6,7 +6,7 @@ import pytest
 
 from workflows.checkpointer import WorkflowCheckpointer
 from workflows.context import Context
-from workflows.context.state_manager import DictState
+from workflows.context.state_store import DictState
 from workflows.events import (
     StartEvent,
     StopEvent,
