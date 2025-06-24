@@ -89,7 +89,7 @@ class Context(Generic[MODEL_T]):
     async def _init_state_store(self, state_class: MODEL_T) -> None:
         # If a state manager already exists, ensure the requested state type is compatible
         if self._state_store is not None:
-            existing_state = await self._state_store.get_all()
+            existing_state = await self._state_store.get_state()
             if type(state_class) is not type(existing_state):
                 # Existing state type differs from the requested one – this is not allowed
                 raise ValueError(

@@ -19,9 +19,9 @@ class MyWorkflow(Workflow):
         await ctx.store.set("age", 30)
 
         # Get and update entire state
-        state = await ctx.store.get_all()
+        state = await ctx.store.get_state()
         state.age += 1
-        await ctx.store.set_all(state)
+        await ctx.store.set_state(state)
 
         return StopEvent()
 
@@ -36,5 +36,5 @@ async def test_typed_state() -> None:
     _ = await handler
 
     # Check final state
-    state = await handler.ctx.store.get_all()
+    state = await handler.ctx.store.get_state()
     assert state.model_dump() == MyState(name="John", age=31).model_dump()

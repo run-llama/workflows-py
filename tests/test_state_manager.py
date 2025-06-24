@@ -64,7 +64,7 @@ async def test_state_manager_defaults(
     default_state_manager: InMemoryStateStore[DictState],
 ) -> None:
     assert (
-        await default_state_manager.get_all()
+        await default_state_manager.get_state()
     ).model_dump_json() == DictState().model_dump_json()
 
     await default_state_manager.set("name", "John")
@@ -79,7 +79,7 @@ async def test_state_manager_defaults(
     await default_state_manager.set("nested.a", "c")
     assert await default_state_manager.get("nested.a") == "c"
 
-    full_state = await default_state_manager.get_all()
+    full_state = await default_state_manager.get_state()
     assert full_state.name == "John"
     assert full_state.age == 30
     assert full_state.nested["a"] == "c"
@@ -90,7 +90,7 @@ async def test_default_state_manager_serialization(
     default_state_manager: InMemoryStateStore[DictState],
 ) -> None:
     assert (
-        await default_state_manager.get_all()
+        await default_state_manager.get_state()
     ).model_dump() == DictState().model_dump()
 
     await default_state_manager.set("name", "John")
@@ -112,7 +112,7 @@ async def test_default_state_manager_serialization(
 async def test_custom_state_manager(
     custom_state_manager: InMemoryStateStore[MyState],
 ) -> None:
-    assert (await custom_state_manager.get_all()).model_dump(mode="json") == MyState(
+    assert (await custom_state_manager.get_state()).model_dump(mode="json") == MyState(
         my_obj=MyRandomObject("llama-index"), name="John", age=30
     ).model_dump(mode="json")
 
@@ -122,7 +122,7 @@ async def test_custom_state_manager(
     assert await custom_state_manager.get("name") == "Jane"
     assert await custom_state_manager.get("age") == 25
 
-    full_state = await custom_state_manager.get_all()
+    full_state = await custom_state_manager.get_state()
     assert isinstance(full_state, MyState)
     assert full_state.name == "Jane"
     assert full_state.age == 25

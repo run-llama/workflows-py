@@ -90,11 +90,11 @@ class InMemoryStateStore(Generic[MODEL_T]):
         self._state = initial_state
         self._lock = asyncio.Lock()
 
-    async def get_all(self) -> MODEL_T:
+    async def get_state(self) -> MODEL_T:
         """Get a copy of the current state."""
         return self._state.model_copy()
 
-    async def set_all(self, state: MODEL_T) -> None:
+    async def set_state(self, state: MODEL_T) -> None:
         """Set the current state."""
         if not isinstance(state, type(self._state)):
             raise ValueError(f"State must be of type {type(self._state)}")
