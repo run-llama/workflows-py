@@ -9,6 +9,7 @@ import pytest
 
 from workflows.checkpointer import WorkflowCheckpointer
 from workflows.context import Context
+from workflows.context.state_store import DictState
 from workflows.events import (
     StartEvent,
     StopEvent,
@@ -27,7 +28,7 @@ def workflow_checkpointer(workflow: DummyWorkflow) -> WorkflowCheckpointer:
 async def test_create_checkpoint(workflow_checkpointer: WorkflowCheckpointer) -> None:
     incoming_ev = StartEvent()
     output_ev = OneTestEvent()
-    ctx = Context(workflow=workflow_checkpointer.workflow)
+    ctx: Context[DictState] = Context(workflow=workflow_checkpointer.workflow)
     checkpointer = workflow_checkpointer.new_checkpoint_callback_for_run()
 
     # execute checkpoint async callable

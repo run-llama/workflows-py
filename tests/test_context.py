@@ -18,6 +18,7 @@ from unittest import mock
 import pytest
 
 from workflows.context import Context
+from workflows.context.state_store import DictState
 from workflows.decorators import StepConfig, step
 from workflows.errors import ContextSerdeError, WorkflowRuntimeError
 from workflows.events import (
@@ -62,7 +63,7 @@ async def test_collect_events() -> None:
 
 @pytest.mark.asyncio
 async def test_get_default(workflow: Workflow) -> None:
-    c1 = Context(workflow)
+    c1: Context[DictState] = Context(workflow)
     assert await c1.get(key="test_key", default=42) == 42
 
 
@@ -80,7 +81,7 @@ async def test_get_not_found(ctx: Context) -> None:
 
 @pytest.mark.asyncio
 async def test_legacy_data(workflow: Workflow) -> None:
-    c1 = Context(workflow)
+    c1: Context[DictState] = Context(workflow)
     await c1.set(key="test_key", value=42)
     assert await c1.get("test_key") == 42
 
@@ -128,7 +129,7 @@ def test_send_event_to_step(workflow: Workflow) -> None:
         return_value={"step1": mock.MagicMock(), "step2": step2}
     )
 
-    ctx = Context(workflow=workflow)
+    ctx: Context[DictState] = Context(workflow=workflow)
     ctx._queues = {"step1": mock.MagicMock(), "step2": mock.MagicMock()}
 
     ev = Event(foo="bar")

@@ -14,6 +14,7 @@ from typing import (
     Any,
     Callable,
     DefaultDict,
+    Generic,
     Tuple,
     Type,
     TypeVar,
@@ -32,6 +33,7 @@ from workflows.service import ServiceManager
 from workflows.types import RunResultT
 
 from .serializers import BaseSerializer, JsonSerializer
+from .state_store import InMemoryStateStore, MODEL_T, DictState
 
 if TYPE_CHECKING:  # pragma: no cover
     from workflows import Workflow
@@ -49,7 +51,7 @@ class UnserializableKeyWarning(Warning):
 warnings.simplefilter("once", UnserializableKeyWarning)
 
 
-class Context:
+class Context(Generic[MODEL_T]):
     """
     A global object representing a context for a given workflow run.
 
@@ -82,10 +84,34 @@ class Context:
 
         # Global data storage
         self._lock = asyncio.Lock()
-        self._globals: dict[str, Any] = {}
+        self._state_store: InMemoryStateStore[MODEL_T] | None = None
 
         # instrumentation
         self._dispatcher = workflow._dispatcher
+
+    async def _init_state_store(self, state_class: MODEL_T) -> None:
+        # If a state manager already exists, ensure the requested state type is compatible
+        if self._state_store is not None:
+            existing_state = await self._state_store.get_state()
+            if type(state_class) is not type(existing_state):
+                # Existing state type differs from the requested one – this is not allowed
+                raise ValueError(
+                    f"Cannot initialize with state class {type(state_class)} because it already has a state class {type(existing_state)}"
+                )
+
+            # State manager already initialised and compatible – nothing to do
+            return
+
+        # First-time initialisation
+        self._state_store = InMemoryStateStore(state_class)
+
+    @property
+    def store(self) -> InMemoryStateStore[MODEL_T]:
+        # Default to DictState if no state manager is initialized
+        if self._state_store is None:
+            self._state_store = InMemoryStateStore(DictState())
+
+        return self._state_store
 
     def _init_broker_data(self) -> None:
         self._queues: dict[str, asyncio.Queue] = {}
@@ -135,26 +161,14 @@ class Context:
             queue.put_nowait(event_obj)
         return queue
 
-    def _serialize_globals(self, serializer: BaseSerializer) -> dict[str, Any]:
-        serialized_globals = {}
-        for key, value in self._globals.items():
-            try:
-                serialized_globals[key] = serializer.serialize(value)
-            except Exception as e:
-                if key in self.known_unserializable_keys:
-                    # Skip serialization of known unserializable keys
-                    warnings.warn(
-                        f"Skipping serialization of known unserializable key: {key} -- "
-                        "This is expected but will require this item to be set manually after deserialization.",
-                        category=UnserializableKeyWarning,
-                    )
-                    continue
-                raise ValueError(f"Failed to serialize value for key {key}: {e}")
-        return serialized_globals
-
     def _deserialize_globals(
         self, serialized_globals: dict[str, Any], serializer: BaseSerializer
     ) -> dict[str, Any]:
+        """
+        DEPRECATED: Kept to support reloading a Context from an old serialized payload.
+
+        This method is deprecated and will be removed in a future version.
+        """
         deserialized_globals = {}
         for key, value in serialized_globals.items():
             try:
@@ -166,8 +180,13 @@ class Context:
     def to_dict(self, serializer: BaseSerializer | None = None) -> dict[str, Any]:
         serializer = serializer or JsonSerializer()
 
+        # Serialize state using the state manager's method
+        state_data = {}
+        if self._state_store is not None:
+            state_data = self._state_store.to_dict(serializer)
+
         return {
-            "globals": self._serialize_globals(serializer),
+            "state": state_data,  # Use state manager's serialize method
             "streaming_queue": self._serialize_queue(self._streaming_queue, serializer),
             "queues": {
                 k: self._serialize_queue(v, serializer) for k, v in self._queues.items()
@@ -200,7 +219,17 @@ class Context:
 
         try:
             context = cls(workflow, stepwise=data["stepwise"])
-            context._globals = context._deserialize_globals(data["globals"], serializer)
+
+            # Deserialize state manager using the state manager's method
+            if "state" in data:
+                context._state_store = InMemoryStateStore.from_dict(
+                    data["state"], serializer
+                )
+            elif "globals" in data:
+                # Deserialize legacy globals for backward compatibility
+                globals = context._deserialize_globals(data["globals"], serializer)
+                context._state_store = InMemoryStateStore(DictState(**globals))
+
             context._streaming_queue = context._deserialize_queue(
                 data["streaming_queue"], serializer
             )
@@ -236,6 +265,9 @@ class Context:
         """
         Store `value` into the Context under `key`.
 
+        DEPRECATED: Use `await ctx.store.set(key, value)` instead.
+        This method is deprecated and will be removed in a future version.
+
         Args:
             key: A unique string to identify the value stored.
             value: The data to be stored.
@@ -244,13 +276,19 @@ class Context:
             ValueError: When make_private is True but a key already exists in the global storage.
 
         """
+        warnings.warn(
+            "Context.set(key, value) is deprecated. Use 'await ctx.store.set(key, value)' instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
         if make_private:
             warnings.warn(
                 "`make_private` is deprecated and will be ignored", DeprecationWarning
             )
 
-        async with self.lock:
-            self._globals[key] = value
+        # Delegate to state manager
+        await self.store.set(key, value)
 
     async def mark_in_progress(self, name: str, ev: Event) -> None:
         """
@@ -295,6 +333,9 @@ class Context:
         """
         Get the value corresponding to `key` from the Context.
 
+        DEPRECATED: Use `await ctx.store.get(key)` instead.
+        This method is deprecated and will be removed in a future version.
+
         Args:
             key: A unique string to identify the value stored.
             default: The value to return when `key` is missing instead of raising an exception.
@@ -303,25 +344,13 @@ class Context:
             ValueError: When there's not value accessible corresponding to `key`.
 
         """
-        async with self.lock:
-            if key in self._globals:
-                return self._globals[key]
-            elif default is not Ellipsis:
-                return default
+        warnings.warn(
+            "Context.get() is deprecated. Use 'await ctx.store.get()' instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
 
-        msg = f"Key '{key}' not found in Context"
-        raise ValueError(msg)
-
-    @property
-    def data(self) -> dict[str, Any]:  # pragma: no cover
-        """
-        This property is provided for backward compatibility.
-
-        Use `get` and `set` instead.
-        """
-        msg = "`data` is deprecated, please use the `get` and `set` method to store data into the Context."
-        warnings.warn(msg, DeprecationWarning, stacklevel=2)
-        return self._globals
+        return await self.store.get(key, default=default)
 
     @property
     def lock(self) -> asyncio.Lock:
@@ -521,9 +550,20 @@ class Context:
         return self._streaming_queue
 
     def clear(self) -> None:
-        """Clear any data stored in the context."""
+        """Clear any data stored in the context.
+
+        DEPRECATED: Use `await ctx.store.set(StateCLS())` instead.
+        This method is deprecated and will be removed in a future version.
+        """
+        warnings.warn(
+            "Context.clear() is deprecated. Use 'await ctx.store.set(StateCLS())' instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
         # Clear the user data storage
-        self._globals.clear()
+        if self._state_store is not None:
+            self._state_store._state = self._state_store._state.__class__()
 
     async def shutdown(self) -> None:
         """
@@ -599,6 +639,25 @@ class Context:
                 print(f"Running step {name}")
 
             # run step
+            # Initialize state manager if needed
+            if self._state_store is None:
+                if (
+                    hasattr(config, "context_state_type")
+                    and config.context_state_type is not None
+                ):
+                    # Instantiate the state class and initialize the state manager
+                    try:
+                        # Try to instantiate the state class
+                        state_instance = config.context_state_type()
+                        await self._init_state_store(state_instance)
+                    except Exception as e:
+                        raise WorkflowRuntimeError(
+                            f"Failed to initialize state of type {config.context_state_type}: {e}"
+                        ) from e
+                else:
+                    # Initialize state manager with DictState by default
+                    await self._init_state_store(DictState())
+
             kwargs: dict[str, Any] = {}
             if config.context_parameter:
                 kwargs[config.context_parameter] = self
