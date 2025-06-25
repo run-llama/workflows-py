@@ -35,7 +35,7 @@ Generally, the code organization is relatively flat. Here's a quick overview of 
 - **[src/workflows/types.py](src/workflows/types.py)**: Type definitions and type variables used throughout the library
 - **[src/workflows/utils.py](src/workflows/utils.py)**: Utility functions for step introspection, signature validation, and other helpers
 
-### Setup
+## Setup
 
 This section assumes you have `uv` installed.
 
@@ -63,7 +63,7 @@ Linting is done automatically with `pre-commit`. Initialize it with:
 uv run pre-commit install
 ```
 
-### Run tests
+## Run tests
 
 Tests are run with `pytest`. You can run them with:
 
@@ -82,3 +82,14 @@ uv run -- pre-commit run -a
 ```
 
 The `pre-commit` config is located in the `.pre-commit-config.yaml` file.
+
+## Release (requires repo push access)
+
+- Update the `version` key in the `project` table of the `pyproject.toml` file.
+  - Change the version numbers following the [SemVer](https://semver.org/) specification.
+- Commit directly to `main`
+- Tag the commit on `main` you just created using an annotated tag: `git tag -m"v0.0.0" v0.0.0`
+- Push the `main` branch along with tags: `git push origin main --tags`
+- Monitor the [release workflow](https://github.com/run-llama/workflows-py/actions/workflows/publish_release.yml)
+  - Check the [release page](https://github.com/run-llama/workflows-py/releases) contains the new changelog, manually amend it if necessary
+  - Check the package was published on [PyPI](https://pypi.org/project/llama-index-workflows/)
