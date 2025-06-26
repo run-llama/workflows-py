@@ -87,7 +87,12 @@ In the example above
 - Intermediate events are user defined and can be used to pass information between steps.
 - The `Context` object is also used to share information between steps.
 
-Visit the [complete documentation](https://docs.llamaindex.ai/en/stable/understanding/workflows/) for more examples!
+Visit the [complete documentation](https://docs.llamaindex.ai/en/stable/understanding/workflows/) for more examples using `llama-index`!
+
+## More examples
+
+- [Basic Feature Run-Through](./examples/feature_walkthrough.ipynb)
+- [Building a Function Calling Agent with `llama-index`](./examples/agent.ipynb)
 
 ## Related Packages
 
