@@ -109,12 +109,10 @@ class InMemoryStateStore(Generic[MODEL_T]):
         For DictState, uses the BaseSerializer for individual items since they can be arbitrary types.
         For other Pydantic models, leverages Pydantic's serialization but uses BaseSerializer for complex types.
         """
-        state_dict = self._state.model_dump()
-
         # Special handling for DictState - serialize each item in _data
         if isinstance(self._state, DictState):
             serialized_data = {}
-            for key, value in state_dict.get("_data", {}).items():
+            for key, value in self._state.items():
                 try:
                     serialized_data[key] = serializer.serialize(value)
                 except Exception as e:

@@ -17,6 +17,10 @@ class MyRandomObject:
         self.name = name
 
 
+class PydanticObject(BaseModel):
+    name: str
+
+
 class MyState(BaseModel):
     model_config = ConfigDict(
         arbitrary_types_allowed=True,
@@ -25,6 +29,7 @@ class MyState(BaseModel):
     )
 
     my_obj: MyRandomObject
+    pydantic_obj: PydanticObject
     name: str
     age: int
 
@@ -53,6 +58,7 @@ def custom_state_manager() -> InMemoryStateStore[MyState]:
     return InMemoryStateStore(
         MyState(
             my_obj=MyRandomObject("llama-index"),
+            pydantic_obj=PydanticObject(name="llama-index"),
             name="John",
             age=30,
         )
@@ -113,7 +119,10 @@ async def test_custom_state_manager(
     custom_state_manager: InMemoryStateStore[MyState],
 ) -> None:
     assert (await custom_state_manager.get_state()).model_dump(mode="json") == MyState(
-        my_obj=MyRandomObject("llama-index"), name="John", age=30
+        my_obj=MyRandomObject("llama-index"),
+        pydantic_obj=PydanticObject(name="llama-index"),
+        name="John",
+        age=30,
     ).model_dump(mode="json")
 
     await custom_state_manager.set("name", "Jane")
@@ -127,6 +136,7 @@ async def test_custom_state_manager(
     assert full_state.name == "Jane"
     assert full_state.age == 25
     assert full_state.my_obj.name == "llama-index"
+    assert full_state.pydantic_obj.name == "llama-index"
 
     # Ensure pydantic is providing type safety
     with pytest.raises(ValidationError):
@@ -155,3 +165,6 @@ async def test_state_manager_custom_serialization(
     assert await new_state_manager.get("age") == 25
 
     assert (await new_state_manager.get("my_obj")).name == "llama-index"
+
+    state = await new_state_manager.get_state()
+    assert state.pydantic_obj.name == "llama-index"
