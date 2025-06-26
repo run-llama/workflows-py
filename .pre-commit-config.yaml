@@ -52,6 +52,7 @@ repos:
     hooks:
       - id: codespell
         additional_dependencies: [tomli]
+        exclude: ^examples/
 
   - repo: https://github.com/pappasam/toml-sort
     rev: v0.23.1
