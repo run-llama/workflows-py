@@ -93,6 +93,7 @@ Visit the [complete documentation](https://docs.llamaindex.ai/en/stable/understa
 
 - [Basic Feature Run-Through](./examples/feature_walkthrough.ipynb)
 - [Building a Function Calling Agent with `llama-index`](./examples/agent.ipynb)
+- [Tracing Workflows](./examples/tracing.ipynb)
 
 ## Related Packages
 
