@@ -1,9 +1,10 @@
+import asyncio
 import pytest
 from pydantic import BaseModel, Field
 
 from workflows import Context, Workflow
 from workflows.decorators import step
-from workflows.events import StartEvent, StopEvent
+from workflows.events import StartEvent, StopEvent, Event
 
 
 class MyState(BaseModel):
@@ -38,3 +39,61 @@ async def test_typed_state() -> None:
     # Check final state
     state = await handler.ctx.store.get_state()
     assert state.model_dump() == MyState(name="John", age=31).model_dump()
+
+
+class SomeState(BaseModel):
+    val: int = Field(default=0)
+
+
+class WorkerEvent(Event):
+    pass
+
+
+class ResultEvent(Event):
+    pass
+
+
+class GatherEvent(Event):
+    pass
+
+
+class ParallelWorkflow(Workflow):
+    @step
+    async def init(
+        self, ctx: Context[SomeState], ev: StartEvent
+    ) -> WorkerEvent | GatherEvent:
+        for _ in range(10):
+            ctx.send_event(WorkerEvent())
+
+        return GatherEvent()
+
+    @step
+    async def worker(self, ctx: Context[SomeState], ev: WorkerEvent) -> ResultEvent:
+        async with ctx.store.state() as state:
+            state.val += 1
+            await asyncio.sleep(0.01)
+            if state.val % 2 == 0:
+                state.val -= 1
+
+        return ResultEvent()
+
+    @step
+    async def gather(
+        self, ctx: Context[SomeState], ev: GatherEvent | ResultEvent
+    ) -> StopEvent | None:
+        results = ctx.collect_events(ev, [ResultEvent] * 10)
+        if not results:
+            return None
+
+        state = await ctx.store.get_state()
+        return StopEvent(result=state.val)
+
+
+@pytest.mark.asyncio
+async def test_typed_state_with_context_manager() -> None:
+    wf = ParallelWorkflow()
+
+    result = await wf.run()
+
+    # Should only be 1 since the context manager locks the state
+    assert result == 1

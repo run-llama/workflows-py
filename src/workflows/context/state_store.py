@@ -1,7 +1,8 @@
 import asyncio
 import warnings
+from contextlib import asynccontextmanager
 from pydantic import BaseModel
-from typing import Any, Generic, Optional, TypeVar
+from typing import Any, AsyncGenerator, Generic, Optional, TypeVar
 
 from workflows.events import Event
 from .serializers import BaseSerializer
@@ -174,6 +175,25 @@ class InMemoryStateStore(Generic[MODEL_T]):
             state_instance = serializer.deserialize(state_data)
 
         return cls(state_instance)  # type: ignore
+
+    @asynccontextmanager
+    async def state(self) -> AsyncGenerator[MODEL_T, None]:
+        """
+        Context manager to get a copy of the state.
+
+        Example:
+        ```python
+        async with ctx.store.state() as state:
+            state.name = "John"
+            state.age = 30
+        ```
+        """
+        async with self._lock:
+            state = self._state
+
+            yield state
+
+            self._state = state
 
     async def get(self, path: str, default: Optional[Any] = Ellipsis) -> Any:
         """
