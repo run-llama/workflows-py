@@ -179,7 +179,9 @@ class InMemoryStateStore(Generic[MODEL_T]):
     @asynccontextmanager
     async def state(self) -> AsyncGenerator[MODEL_T, None]:
         """
-        Context manager to get a copy of the state.
+        A context manager for editing the state.
+        The state will be locked while the context manager is active.
+        Any changes made to the state will be saved when the context manager is exited.
 
         Example:
         ```python
