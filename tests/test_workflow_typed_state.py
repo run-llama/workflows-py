@@ -70,7 +70,7 @@ class ParallelWorkflow(Workflow):
 
     @step
     async def worker(self, ctx: Context[SomeState], ev: WorkerEvent) -> ResultEvent:
-        async with ctx.store.state() as state:
+        async with ctx.store.edit_state() as state:
             state.val += 1
             await asyncio.sleep(0.01)
             if state.val % 2 == 0:

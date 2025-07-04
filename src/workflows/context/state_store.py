@@ -177,7 +177,7 @@ class InMemoryStateStore(Generic[MODEL_T]):
         return cls(state_instance)  # type: ignore
 
     @asynccontextmanager
-    async def state(self) -> AsyncGenerator[MODEL_T, None]:
+    async def edit_state(self) -> AsyncGenerator[MODEL_T, None]:
         """
         A context manager for editing the state.
         The state will be locked while the context manager is active.
@@ -185,7 +185,7 @@ class InMemoryStateStore(Generic[MODEL_T]):
 
         Example:
         ```python
-        async with ctx.store.state() as state:
+        async with ctx.store.edit_state() as state:
             state.name = "John"
             state.age = 30
         ```
