@@ -44,23 +44,26 @@ And create your first workflow:
 
 ```python
 import asyncio
+from pydantic import BaseModel, Field
 from workflows import Context, Workflow, step
 from workflows.events import Event, StartEvent, StopEvent
 
 class MyEvent(Event):
     msg: list[str]
 
+class RunState(BaseModel):
+    num_runs: int = Field(default=0)
+
 class MyWorkflow(Workflow):
     @step
-    async def start(self, ctx: Context, ev: StartEvent) -> MyEvent:
-        num_runs = await ctx.get("num_runs", default=0)
-        num_runs += 1
-        await ctx.set("num_runs", num_runs)
+    async def start(self, ctx: Context[RunState], ev: StartEvent) -> MyEvent:
+        async with ctx.store.edit_state() as state:
+            state.num_runs += 1
 
-        return MyEvent(msg=[ev.input_msg] * num_runs)
+            return MyEvent(msg=[ev.input_msg] * state.num_runs)
 
     @step
-    async def process(self, ctx: Context, ev: MyEvent) -> StopEvent:
+    async def process(self, ctx: Context[RunState], ev: MyEvent) -> StopEvent:
         data_length = len("".join(ev.msg))
         new_msg = f"Processed {len(ev.msg)} times, data length: {data_length}"
         return StopEvent(result=new_msg)
