@@ -12,6 +12,8 @@
 
 LlamaIndex Workflows are a framework for orchestrating and chaining together complex systems of steps and events.
 
+![Workflows Demo GIF](https://media0.giphy.com/media/v1.Y2lkPTc5MGI3NjExenVnOWpwcDhpM2M4eXVwZWhzdTR3OGFqcTB6dzFuZzNpZ2x4ZXVpdiZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/TonNqQh6JVTG6M8S6b/giphy.gif)
+
 ## What can you build with Workflows?
 
 Workflows shine when you need to orchestrate complex, multi-step processes that involve AI models, APIs, and decision-making. Here are some examples of what you can build:
