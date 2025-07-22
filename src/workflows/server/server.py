@@ -1,3 +1,7 @@
+import logging
+from typing import Any
+
+import uvicorn
 from starlette.applications import Starlette
 from starlette.exceptions import HTTPException
 from starlette.middleware import Middleware
@@ -11,14 +15,16 @@ from workflows.handler import WorkflowHandler
 
 from .utils import nanoid
 
+logger = logging.getLogger()
+
 
 class WorkflowServer:
-    def __init__(self):
+    def __init__(self, middleware: list[Middleware] | None = None):
         self._workflows: dict[str, Workflow] = {}
         self._contexts: dict[str, Context] = {}
         self._handlers: dict[str, WorkflowHandler] = {}
 
-        self._middleware = [
+        self._middleware = middleware or [
             Middleware(
                 CORSMiddleware,
                 allow_origins=["*"],
@@ -59,6 +65,23 @@ class WorkflowServer:
 
     def add_workflow(self, name: str, workflow: Workflow) -> None:
         self._workflows[name] = workflow
+
+    async def serve(
+        self,
+        host: str = "localhost",
+        port: int = 80,
+        uvicorn_config: dict[str, Any] | None = None,
+    ) -> None:
+        """Run the server."""
+        uvicorn_config = uvicorn_config or {}
+
+        config = uvicorn.Config(self.app, host=host, port=port, **uvicorn_config)
+        server = uvicorn.Server(config)
+        logger.info(
+            f"Starting Workflow server at http://{host}:{port}{uvicorn_config.get('root_path', '/')}"
+        )
+
+        await server.serve()
 
     #
     # HTTP endpoints

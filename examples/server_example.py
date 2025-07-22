@@ -10,7 +10,7 @@ This example shows how to:
 5. Make HTTP requests to execute workflows
 """
 
-import uvicorn
+import asyncio
 
 from workflows import Workflow, step
 from workflows.events import StartEvent, StopEvent
@@ -59,7 +59,7 @@ def create_server():
     return server
 
 
-def main():
+async def main():
     """Run the server."""
     server = create_server()
 
@@ -72,11 +72,11 @@ def main():
     print("  POST /workflows/{name}/run-nowait - Start workflow asynchronously")
     print("  GET  /results/{handler_id} - Get async workflow result")
 
-    uvicorn.run(server.app, host="0.0.0.0", port=8000, log_level="info")
+    await server.serve(host="0.0.0.0", port=8000)
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
 
 
 # Example HTTP requests you can make:
