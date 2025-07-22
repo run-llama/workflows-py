@@ -23,5 +23,8 @@ dependencies = [
   "pydantic>=2.11.5"
 ]
 
+[tool.coverage.run]
+omit = ["tests/*"]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/workflows"]
