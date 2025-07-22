@@ -25,3 +25,6 @@ dependencies = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/workflows"]
+
+[tool.coverage.run]
+omit = ["tests/*"]
