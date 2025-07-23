@@ -108,7 +108,7 @@ class WorkflowServer:
             context = None
             if context_data:
                 context = Context.from_dict(workflow=workflow, data=context_data)
-            result = await workflow.run(context=context, **run_kwargs)
+            result = await workflow.run(ctx=context, **run_kwargs)
 
             return JSONResponse({"result": result})
         except Exception as e:
@@ -126,17 +126,13 @@ class WorkflowServer:
             context = None
             if context_data:
                 context = Context.from_dict(workflow=workflow, data=context_data)
-            self._handlers[handler_id] = workflow.run(context=context, **run_kwargs)
+            self._handlers[handler_id] = workflow.run(ctx=context, **run_kwargs)
 
             return JSONResponse({"handler_id": handler_id, "status": "started"})
         except Exception as e:
             return JSONResponse({"error": str(e)}, status_code=500)
 
     async def _get_workflow_result(self, request: Request) -> JSONResponse:
-        if "handler_id" not in request.path_params:
-            raise HTTPException(
-                detail="'handler_id' parameter missing", status_code=400
-            )
         handler_id = request.path_params["handler_id"]
         handler = self._handlers.pop(handler_id, None)
         if handler is None:
