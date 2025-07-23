@@ -19,10 +19,11 @@ def server() -> WorkflowServer:
 
 @pytest_asyncio.fixture
 async def async_client(
-    server: WorkflowServer, simple_test_workflow: Workflow, error_workflow: Workflow
+    server: WorkflowServer, simple_test_workflow: Workflow, error_workflow: Workflow, streaming_workflow: Workflow
 ) -> AsyncGenerator:
     server.add_workflow("test", simple_test_workflow)
     server.add_workflow("error", error_workflow)
+    server.add_workflow("streaming", streaming_workflow)
     transport = ASGITransport(app=server.app)
     yield AsyncClient(transport=transport, base_url="http://test")
 
@@ -42,7 +43,7 @@ async def test_list_workflows(async_client: AsyncClient) -> None:
         assert response.status_code == 200
         data = response.json()
         assert "workflows" in data
-        assert set(data["workflows"]) == {"test", "error"}
+        assert set(data["workflows"]) == {"test", "error", "streaming"}
 
 
 @pytest.mark.asyncio
@@ -196,3 +197,119 @@ async def test_get_workflow_result_not_found(async_client: AsyncClient) -> None:
     async with async_client as client:
         response = await client.get("/results/nonexistent")
         assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_stream_events_success(async_client: AsyncClient) -> None:
+    """Test streaming events from a workflow."""
+    async with async_client as client:
+        # Start streaming workflow
+        response = await client.post(
+            "/workflows/streaming/run-nowait", json={"kwargs": {"count": 3}}
+        )
+        assert response.status_code == 200
+        data = response.json()
+        handler_id = data["handler_id"]
+
+        # Stream events
+        response = await client.get(f"/events/{handler_id}")
+        assert response.status_code == 200
+        assert response.headers["content-type"] == "application/x-ndjson"
+
+        # Collect streamed events
+        events = []
+        async for line in response.aiter_lines():
+            if line.strip():
+                import json
+                event_data = json.loads(line)
+                # Filter out empty events
+                if event_data:
+                    events.append(event_data)
+
+        # Verify we got the expected events - filter out any that don't have message/sequence
+        stream_events = [e for e in events if "message" in e and "sequence" in e]
+        assert len(stream_events) == 3
+        for i, event in enumerate(stream_events):
+            assert event["message"] == f"event_{i}"
+            assert event["sequence"] == i
+
+
+@pytest.mark.asyncio
+async def test_stream_events_raw(async_client: AsyncClient) -> None:
+    """Test streaming raw events from a workflow."""
+    async with async_client as client:
+        # Start streaming workflow
+        response = await client.post(
+            "/workflows/streaming/run-nowait", json={"kwargs": {"count": 2}}
+        )
+        assert response.status_code == 200
+        data = response.json()
+        handler_id = data["handler_id"]
+
+        # Stream raw events
+        response = await client.get(f"/events/{handler_id}?raw_event=true")
+        assert response.status_code == 200
+        assert response.headers["content-type"] == "application/x-ndjson"
+
+        # Collect streamed events
+        events = []
+        async for line in response.aiter_lines():
+            if line.strip():
+                import json
+                event_data = json.loads(line)
+                # Filter out empty events
+                if event_data:
+                    events.append(event_data)
+
+        # Verify we got raw event objects with metadata
+        # Filter for StreamEvent objects (not StopEvent)
+        stream_events = [e for e in events if "value" in e and "message" in e.get("value", {})]
+        assert len(stream_events) == 2
+        
+        for i, event in enumerate(stream_events):
+            # Raw events should have qualified_name and value fields
+            assert "qualified_name" in event
+            assert "value" in event
+            assert event["qualified_name"] == "tests.server.conftest.StreamEvent"
+            assert event["value"]["message"] == f"event_{i}"
+            assert event["value"]["sequence"] == i
+
+
+@pytest.mark.asyncio
+async def test_stream_events_not_found(async_client: AsyncClient) -> None:
+    """Test streaming events from non-existent handler."""
+    async with async_client as client:
+        response = await client.get("/events/nonexistent")
+        assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_stream_events_no_events(async_client: AsyncClient) -> None:
+    """Test streaming from workflow that emits no events."""
+    async with async_client as client:
+        # Start simple workflow that doesn't emit events
+        response = await client.post(
+            "/workflows/test/run-nowait", json={"kwargs": {"message": "test"}}
+        )
+        assert response.status_code == 200
+        data = response.json()
+        handler_id = data["handler_id"]
+
+        # Try to stream events
+        response = await client.get(f"/events/{handler_id}")
+        assert response.status_code == 200
+        assert response.headers["content-type"] == "application/x-ndjson"
+
+        # Should get no stream events (may get StopEvent)
+        events = []
+        async for line in response.aiter_lines():
+            if line.strip():
+                import json
+                event_data = json.loads(line)
+                # Filter out empty events
+                if event_data:
+                    events.append(event_data)
+
+        # Filter for actual stream events (not workflow control events like StopEvent)
+        stream_events = [e for e in events if "message" in e and "sequence" in e]
+        assert len(stream_events) == 0

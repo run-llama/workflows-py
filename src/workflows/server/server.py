@@ -2,8 +2,10 @@
 # Copyright (c) 2025 LlamaIndex Inc.
 from __future__ import annotations
 
+import asyncio
+import json
 import logging
-from typing import Any
+from typing import Any, AsyncGenerator
 
 import uvicorn
 from starlette.applications import Starlette
@@ -11,10 +13,11 @@ from starlette.exceptions import HTTPException
 from starlette.middleware import Middleware
 from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, StreamingResponse
 from starlette.routing import Route
 
 from workflows import Context, Workflow
+from workflows.context.serializers import JsonSerializer
 from workflows.handler import WorkflowHandler
 
 from .utils import nanoid
@@ -56,6 +59,11 @@ class WorkflowServer:
             Route(
                 "/results/{handler_id}",
                 self._get_workflow_result,
+                methods=["GET"],
+            ),
+            Route(
+                "/events/{handler_id}",
+                self._stream_events,
                 methods=["GET"],
             ),
             Route(
@@ -145,6 +153,30 @@ class WorkflowServer:
             return JSONResponse({"result": result})
         except Exception as e:
             return JSONResponse({"error": str(e)}, status_code=500)
+
+    async def _stream_events(self, request: Request) -> StreamingResponse:
+        handler_id = request.path_params["handler_id"]
+        handler = self._handlers.get(handler_id)
+        if handler is None:
+            raise HTTPException(detail="Handler not found", status_code=404)
+        
+        # Get raw_event query parameter
+        raw_event = request.query_params.get("raw_event", "false").lower() == "true"
+
+        async def event_stream(handler: WorkflowHandler) -> AsyncGenerator[str, None]:
+            serializer = JsonSerializer()
+            # need to convert back to str to use SSE
+            async for event in handler.stream_events():
+                data = json.loads(serializer.serialize(event))
+                if raw_event:
+                    yield json.dumps(data) + "\n"
+                else:
+                    yield json.dumps(data.get("value")) + "\n"
+                await asyncio.sleep(0.01)
+
+        return StreamingResponse(
+            event_stream(handler), media_type="application/x-ndjson"
+        )
 
     #
     # Private methods
