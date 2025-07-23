@@ -66,38 +66,44 @@ class MathWorkflow(Workflow):
 
 class ProcessingWorkflow(Workflow):
     """Example workflow that demonstrates event streaming with progress updates."""
-    
+
     @step
     async def process(self, ctx: Context, ev: StartEvent) -> StopEvent:
         items = getattr(ev, "items", ["item1", "item2", "item3", "item4", "item5"])
-        
-        ctx.write_event_to_stream(ProgressEvent(
-            step="start", 
-            progress=0, 
-            message=f"Starting processing of {len(items)} items"
-        ))
-        
+
+        ctx.write_event_to_stream(
+            ProgressEvent(
+                step="start",
+                progress=0,
+                message=f"Starting processing of {len(items)} items",
+            )
+        )
+
         results = []
         for i, item in enumerate(items):
             # Simulate processing time
             await asyncio.sleep(0.5)
-            
+
             # Emit progress event
             progress = int((i + 1) / len(items) * 100)
-            ctx.write_event_to_stream(ProgressEvent(
-                step="processing",
-                progress=progress,
-                message=f"Processed {item} ({i + 1}/{len(items)})"
-            ))
-            
+            ctx.write_event_to_stream(
+                ProgressEvent(
+                    step="processing",
+                    progress=progress,
+                    message=f"Processed {item} ({i + 1}/{len(items)})",
+                )
+            )
+
             results.append(f"processed_{item}")
-        
-        ctx.write_event_to_stream(ProgressEvent(
-            step="complete",
-            progress=100,
-            message="Processing completed successfully"
-        ))
-        
+
+        ctx.write_event_to_stream(
+            ProgressEvent(
+                step="complete",
+                progress=100,
+                message="Processing completed successfully",
+            )
+        )
+
         return StopEvent(result={"processed_items": results, "total": len(results)})
 
 
@@ -181,7 +187,7 @@ curl http://localhost:8000/events/xyz789
 
 # You should see streaming output like:
 # {"sequence": 0}
-# {"sequence": 1}  
+# {"sequence": 1}
 # {"sequence": 2}
 
 # 3. After events complete, get the final result:

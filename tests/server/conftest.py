@@ -34,11 +34,11 @@ class StreamingWorkflow(Workflow):
     @step
     async def stream_data(self, ctx: Context, ev: StartEvent) -> StopEvent:
         count = getattr(ev, "count", 3)
-        
+
         for i in range(count):
             ctx.write_event_to_stream(StreamEvent(message=f"event_{i}", sequence=i))
             await asyncio.sleep(0.01)  # Small delay between events
-            
+
         return StopEvent(result=f"completed_{count}_events")
 
 

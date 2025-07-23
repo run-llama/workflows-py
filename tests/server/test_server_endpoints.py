@@ -19,7 +19,10 @@ def server() -> WorkflowServer:
 
 @pytest_asyncio.fixture
 async def async_client(
-    server: WorkflowServer, simple_test_workflow: Workflow, error_workflow: Workflow, streaming_workflow: Workflow
+    server: WorkflowServer,
+    simple_test_workflow: Workflow,
+    error_workflow: Workflow,
+    streaming_workflow: Workflow,
 ) -> AsyncGenerator:
     server.add_workflow("test", simple_test_workflow)
     server.add_workflow("error", error_workflow)
@@ -221,6 +224,7 @@ async def test_stream_events_success(async_client: AsyncClient) -> None:
         async for line in response.aiter_lines():
             if line.strip():
                 import json
+
                 event_data = json.loads(line)
                 # Filter out empty events
                 if event_data:
@@ -256,6 +260,7 @@ async def test_stream_events_raw(async_client: AsyncClient) -> None:
         async for line in response.aiter_lines():
             if line.strip():
                 import json
+
                 event_data = json.loads(line)
                 # Filter out empty events
                 if event_data:
@@ -263,9 +268,11 @@ async def test_stream_events_raw(async_client: AsyncClient) -> None:
 
         # Verify we got raw event objects with metadata
         # Filter for StreamEvent objects (not StopEvent)
-        stream_events = [e for e in events if "value" in e and "message" in e.get("value", {})]
+        stream_events = [
+            e for e in events if "value" in e and "message" in e.get("value", {})
+        ]
         assert len(stream_events) == 2
-        
+
         for i, event in enumerate(stream_events):
             # Raw events should have qualified_name and value fields
             assert "qualified_name" in event
@@ -305,6 +312,7 @@ async def test_stream_events_no_events(async_client: AsyncClient) -> None:
         async for line in response.aiter_lines():
             if line.strip():
                 import json
+
                 event_data = json.loads(line)
                 # Filter out empty events
                 if event_data:

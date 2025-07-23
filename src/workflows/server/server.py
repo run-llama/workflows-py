@@ -159,7 +159,7 @@ class WorkflowServer:
         handler = self._handlers.get(handler_id)
         if handler is None:
             raise HTTPException(detail="Handler not found", status_code=404)
-        
+
         # Get raw_event query parameter
         raw_event = request.query_params.get("raw_event", "false").lower() == "true"
 
