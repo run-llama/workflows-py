@@ -48,29 +48,13 @@ class MathWorkflow(Workflow):
         )
 
 
-def create_server():
-    """Create and configure the workflow server."""
+async def main() -> None:
+    """Run the server."""
     server = WorkflowServer()
 
     # Register workflows
     server.add_workflow("greeting", GreetingWorkflow())
     server.add_workflow("math", MathWorkflow())
-
-    return server
-
-
-async def main():
-    """Run the server."""
-    server = create_server()
-
-    print("Starting workflow server on http://localhost:8000")
-    print("\nAvailable endpoints:")
-    print("  GET  /health - Health check")
-    print("  GET  /workflows - List all workflows")
-    print("  GET  /workflows/{name} - Get workflow info")
-    print("  POST /workflows/{name}/run - Run workflow synchronously")
-    print("  POST /workflows/{name}/run-nowait - Start workflow asynchronously")
-    print("  GET  /results/{handler_id} - Get async workflow result")
 
     await server.serve(host="0.0.0.0", port=8000)
 

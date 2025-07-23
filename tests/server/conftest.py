@@ -24,10 +24,10 @@ class ErrorWorkflow(Workflow):
 
 
 @pytest.fixture
-def simple_test_workflow():
+def simple_test_workflow() -> Workflow:
     return SimpleTestWorkflow()
 
 
 @pytest.fixture
-def error_workflow():
+def error_workflow() -> Workflow:
     return ErrorWorkflow()

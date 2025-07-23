@@ -17,7 +17,6 @@ from workflows import Workflow, step
 from workflows.events import StartEvent, StopEvent
 from workflows.server import WorkflowServer
 
-
 # Existing FastAPI application with some routes
 app = FastAPI(title="My API with Workflows", version="1.0.0")
 
@@ -29,17 +28,21 @@ class UserModel(BaseModel):
 
 # Existing API routes
 @app.get("/")
-async def root():
+async def root() -> dict:
     return {"message": "Welcome to My API"}
 
 
 @app.get("/users/{user_id}")
-async def get_user(user_id: int):
-    return {"user_id": user_id, "name": f"User {user_id}", "email": f"user{user_id}@example.com"}
+async def get_user(user_id: int) -> dict:
+    return {
+        "user_id": user_id,
+        "name": f"User {user_id}",
+        "email": f"user{user_id}@example.com",
+    }
 
 
 @app.post("/users")
-async def create_user(user: UserModel):
+async def create_user(user: UserModel) -> dict:
     return {"message": f"Created user {user.name}", "user": user}
 
 
@@ -50,14 +53,14 @@ class UserProcessingWorkflow(Workflow):
         user_data = getattr(ev, "user_data", {})
         name = user_data.get("name", "Unknown")
         email = user_data.get("email", "unknown@example.com")
-        
+
         # Simulate some processing
         processed_data = {
             "processed_name": name.upper(),
             "domain": email.split("@")[1] if "@" in email else "unknown",
-            "status": "processed"
+            "status": "processed",
         }
-        
+
         return StopEvent(result=processed_data)
 
 
@@ -66,45 +69,38 @@ class NotificationWorkflow(Workflow):
     async def send_notification(self, ev: StartEvent) -> StopEvent:
         message = getattr(ev, "message", "Default notification")
         recipient = getattr(ev, "recipient", "admin@example.com")
-        
+
         # Simulate sending notification
         result = {
             "notification_id": "notif_123",
             "message": message,
             "recipient": recipient,
             "sent_at": "2024-01-01T12:00:00Z",
-            "status": "sent"
+            "status": "sent",
         }
-        
+
         return StopEvent(result=result)
 
 
-def create_workflow_server():
-    """Create and configure the workflow server."""
+def setup_app() -> FastAPI:
+    """Set up the complete application with workflows."""
+    # Create workflow server
     workflow_server = WorkflowServer()
-    
+
     # Register workflows
     workflow_server.add_workflow("user_processing", UserProcessingWorkflow())
     workflow_server.add_workflow("notification", NotificationWorkflow())
-    
-    return workflow_server
 
-
-def setup_app():
-    """Set up the complete application with workflows."""
-    # Create workflow server
-    workflow_server = create_workflow_server()
-    
     # Mount workflow server as sub-application
     app.mount("/workflows", workflow_server.app)
-    
+
     return app
 
 
-def main():
+def main() -> None:
     """Run the server."""
     complete_app = setup_app()
-    
+
     print("Starting FastAPI application with workflows on http://localhost:8000")
     print("\nExisting API endpoints:")
     print("  GET  / - Root endpoint")
@@ -116,7 +112,7 @@ def main():
     print("  GET  /workflows/workflows/{name} - Get workflow info")
     print("  POST /workflows/workflows/{name}/run - Run workflow synchronously")
     print("  POST /workflows/workflows/{name}/run-async - Run workflow asynchronously")
-    
+
     uvicorn.run(complete_app, host="0.0.0.0", port=8000, log_level="info")
 
 
