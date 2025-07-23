@@ -1,7 +1,7 @@
 import asyncio
 import warnings
 from contextlib import asynccontextmanager
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 from typing import Any, AsyncGenerator, Generic, Optional, TypeVar
 
 from workflows.events import Event
@@ -244,6 +244,14 @@ class InMemoryStateStore(Generic[MODEL_T]):
 
             # Assign the final value
             self._assign_step(current, segments[-1], value)
+
+    async def clear(self) -> None:
+        """Clear the state."""
+        async with self._lock:
+            try:
+                self._state = self._state.__class__()
+            except ValidationError:
+                raise ValueError("State must have defaults for all fields")
 
     def _traverse_step(self, obj: Any, segment: str) -> Any:
         """Follow one segment into *obj* (dict key, list index, or attribute)."""
