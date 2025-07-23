@@ -552,11 +552,11 @@ class Context(Generic[MODEL_T]):
     def clear(self) -> None:
         """Clear any data stored in the context.
 
-        DEPRECATED: Use `await ctx.store.set(StateCLS())` instead.
+        DEPRECATED: Use `await ctx.store.clear()` instead.
         This method is deprecated and will be removed in a future version.
         """
         warnings.warn(
-            "Context.clear() is deprecated. Use 'await ctx.store.set(StateCLS())' instead.",
+            "Context.clear() is deprecated. Use 'await ctx.store.clear()' instead.",
             DeprecationWarning,
             stacklevel=2,
         )
@@ -652,7 +652,9 @@ class Context(Generic[MODEL_T]):
                         await self._init_state_store(state_instance)
                     except Exception as e:
                         raise WorkflowRuntimeError(
-                            f"Failed to initialize state of type {config.context_state_type}: {e}"
+                            f"Failed to initialize state of type {config.context_state_type}. "
+                            "Does your state define defaults for all fields? Original error:\n"
+                            f"{e}"
                         ) from e
                 else:
                     # Initialize state manager with DictState by default

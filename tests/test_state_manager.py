@@ -168,3 +168,14 @@ async def test_state_manager_custom_serialization(
 
     state = await new_state_manager.get_state()
     assert state.pydantic_obj.name == "llama-index"
+
+
+@pytest.mark.asyncio
+async def test_state_manager_clear() -> None:
+    state_manager = InMemoryStateStore(DictState())
+    await state_manager.set("name", "Jane")
+    await state_manager.set("age", 25)
+
+    await state_manager.clear()
+    assert await state_manager.get("name", default=None) is None
+    assert await state_manager.get("age", default=None) is None
