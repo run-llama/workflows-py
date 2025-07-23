@@ -247,11 +247,10 @@ class InMemoryStateStore(Generic[MODEL_T]):
 
     async def clear(self) -> None:
         """Clear the state."""
-        async with self._lock:
-            try:
-                self._state = self._state.__class__()
-            except ValidationError:
-                raise ValueError("State must have defaults for all fields")
+        try:
+            await self.set_state(self._state.__class__())
+        except ValidationError:
+            raise ValueError("State must have defaults for all fields")
 
     def _traverse_step(self, obj: Any, segment: str) -> Any:
         """Follow one segment into *obj* (dict key, list index, or attribute)."""
