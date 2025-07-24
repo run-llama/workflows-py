@@ -329,10 +329,12 @@ async def test_stream_events_sse(async_client: AsyncClient) -> None:
             line = line.strip()
             if line.startswith("event: "):
                 # Extract event type
-                current_event["event_type"].removeprefix("event: ")
+                current_event["event_type"] = line.removeprefix(
+                    "event: "
+                )  # Remove "event: " prefix
             elif line.startswith("data: "):
                 # Extract JSON from SSE data line
-                event_json = line[6:]  # Remove "data: " prefix
+                event_json = line.removeprefix("data: ")  # Remove "data: " prefix
                 event_data = json.loads(event_json)
                 # Filter out empty events
                 if event_data:
