@@ -138,6 +138,9 @@ class WorkflowServer:
         if handler is None:
             raise HTTPException(detail="Handler not found", status_code=404)
 
+        if not handler.done():
+            return JSONResponse({}, status_code=202)
+
         try:
             result = await handler
 

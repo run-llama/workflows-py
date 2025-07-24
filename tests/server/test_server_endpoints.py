@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2025 LlamaIndex Inc.
 
+import asyncio
 from typing import AsyncGenerator
 
 import pytest
@@ -222,6 +223,8 @@ async def test_get_workflow_result(
         assert "handler_id" in data
         handler_id = data["handler_id"]
 
+        await asyncio.sleep(0.1)
+
         # get result
         response = await client.get(f"/results/{handler_id}")
         assert response.status_code == 200
@@ -245,6 +248,8 @@ async def test_get_workflow_result_error(
         data = response.json()
         assert "handler_id" in data
         handler_id = data["handler_id"]
+
+        await asyncio.sleep(0.1)
 
         # get result
         response = await client.get(f"/results/{handler_id}")
