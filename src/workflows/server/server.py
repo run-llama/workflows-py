@@ -178,7 +178,7 @@ class WorkflowServer:
                 else:
                     yield f"{serialized_event}\n"
 
-                await asyncio.sleep(0.01)
+                await asyncio.sleep(0)
 
         return StreamingResponse(event_stream(handler), media_type=media_type)
 
