@@ -2,6 +2,7 @@
 # Copyright (c) 2025 LlamaIndex Inc.
 
 import asyncio
+import json
 from typing import AsyncGenerator
 
 import pytest
@@ -287,8 +288,6 @@ async def test_stream_events_success(async_client: AsyncClient) -> None:
         events = []
         async for line in response.aiter_lines():
             if line.strip():
-                import json
-
                 event_data = json.loads(line)
                 # Filter out empty events
                 if event_data:
@@ -332,8 +331,6 @@ async def test_stream_events_sse(async_client: AsyncClient) -> None:
                 # Extract event type
                 current_event["event_type"] = line[7:]  # Remove "event: " prefix
             elif line.startswith("data: "):
-                import json
-
                 # Extract JSON from SSE data line
                 event_json = line[6:]  # Remove "data: " prefix
                 event_data = json.loads(event_json)
@@ -390,8 +387,6 @@ async def test_stream_events_no_events(async_client: AsyncClient) -> None:
         events = []
         async for line in response.aiter_lines():
             if line.strip():
-                import json
-
                 event_data = json.loads(line)
                 # Filter out empty events
                 if event_data:
