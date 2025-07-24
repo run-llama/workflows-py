@@ -234,8 +234,6 @@ async def test_get_workflow_result(
         assert "result" in result_data
         assert result_data["result"] == "processed: message from context"
 
-        assert handler_id not in server._handlers
-
 
 @pytest.mark.asyncio
 async def test_get_workflow_result_error(
@@ -259,8 +257,6 @@ async def test_get_workflow_result_error(
         result_data = response.json()
         assert "error" in result_data
         assert result_data["error"] == "Error in step 'error_step': Test error"
-
-        assert handler_id not in server._handlers
 
 
 @pytest.mark.asyncio

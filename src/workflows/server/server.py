@@ -18,6 +18,7 @@ from starlette.routing import Route
 
 from workflows import Context, Workflow
 from workflows.context.serializers import JsonSerializer
+from workflows.events import StopEvent
 from workflows.handler import WorkflowHandler
 
 from .utils import nanoid
@@ -30,6 +31,7 @@ class WorkflowServer:
         self._workflows: dict[str, Workflow] = {}
         self._contexts: dict[str, Context] = {}
         self._handlers: dict[str, WorkflowHandler] = {}
+        self._results: dict[str, StopEvent] = {}
 
         self._middleware = middleware or [
             Middleware(
@@ -134,7 +136,12 @@ class WorkflowServer:
 
     async def _get_workflow_result(self, request: Request) -> JSONResponse:
         handler_id = request.path_params["handler_id"]
-        handler = self._handlers.pop(handler_id, None)
+
+        # Immediately return the result if available
+        if handler_id in self._results:
+            return JSONResponse({"result": self._results[handler_id]})
+
+        handler = self._handlers.get(handler_id)
         if handler is None:
             raise HTTPException(detail="Handler not found", status_code=404)
 
@@ -143,6 +150,7 @@ class WorkflowServer:
 
         try:
             result = await handler
+            self._results[handler_id] = result
 
             return JSONResponse({"result": result})
         except Exception as e:
