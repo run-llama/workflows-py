@@ -165,11 +165,11 @@ curl -X POST http://localhost:8000/workflows/greeting/run-nowait \
   -H "Content-Type: application/json" \
   -d '{"kwargs": {"name": "Async User"}}'
 
-# 2. Stream events from the workflow (replace {handler_id} with actual handler_id from above)
+# 2. Stream events from the workflow (NDJSON format)
 curl http://localhost:8000/events/{handler_id}
 
-# 3. Stream raw events (includes event metadata)
-curl http://localhost:8000/events/{handler_id}?raw_event=true
+# 3. Stream events using Server-Sent Events (SSE) format
+curl http://localhost:8000/events/{handler_id}?sse=true
 
 # 4. Get the final result after events complete
 curl http://localhost:8000/results/{handler_id}
@@ -185,10 +185,20 @@ curl -X POST http://localhost:8000/workflows/greeting/run-nowait \
 # 2. In another terminal, immediately start streaming events:
 curl http://localhost:8000/events/xyz789
 
-# You should see streaming output like:
-# {"sequence": 0}
-# {"sequence": 1}
-# {"sequence": 2}
+# NDJSON format (default) - full event objects:
+# {"__is_pydantic": true, "value": {"sequence": 0, "message": "event_0"}, "qualified_name": "examples.server_example.StreamEvent"}
+# {"__is_pydantic": true, "value": {"sequence": 1, "message": "event_1"}, "qualified_name": "examples.server_example.StreamEvent"}
+# {"__is_pydantic": true, "value": {"sequence": 2, "message": "event_2"}, "qualified_name": "examples.server_example.StreamEvent"}
+
+# SSE format (?sse=true) - event type and values:
+# event: examples.server_example.StreamEvent
+# data: {"sequence": 0, "message": "event_0"}
+#
+# event: examples.server_example.StreamEvent
+# data: {"sequence": 1, "message": "event_1"}
+#
+# event: examples.server_example.StreamEvent
+# data: {"sequence": 2, "message": "event_2"}
 
 # 3. After events complete, get the final result:
 curl http://localhost:8000/results/xyz789
@@ -206,20 +216,48 @@ curl -X POST http://localhost:8000/workflows/processing/run-nowait \
 # 2. Stream progress events in real-time:
 curl http://localhost:8000/events/proc123
 
-# You should see streaming output like:
-# {"step": "start", "progress": 0, "message": "Starting processing of 3 items"}
-# {"step": "processing", "progress": 33, "message": "Processed task1 (1/3)"}
-# {"step": "processing", "progress": 66, "message": "Processed task2 (2/3)"}
-# {"step": "processing", "progress": 100, "message": "Processed task3 (3/3)"}
-# {"step": "complete", "progress": 100, "message": "Processing completed successfully"}
+# NDJSON format (default) - full event objects:
+# {"__is_pydantic": true, "value": {"step": "start", "progress": 0, "message": "Starting processing of 3 items"}, "qualified_name": "examples.server_example.ProgressEvent"}
+# {"__is_pydantic": true, "value": {"step": "processing", "progress": 33, "message": "Processed task1 (1/3)"}, "qualified_name": "examples.server_example.ProgressEvent"}
+# ...
+
+# SSE format (?sse=true) - event type and values:
+# event: examples.server_example.ProgressEvent
+# data: {"step": "start", "progress": 0, "message": "Starting processing of 3 items"}
+#
+# event: examples.server_example.ProgressEvent
+# data: {"step": "processing", "progress": 33, "message": "Processed task1 (1/3)"}
+#
+# event: examples.server_example.ProgressEvent
+# data: {"step": "processing", "progress": 66, "message": "Processed task2 (2/3)"}
+# ...
 
 # 3. Get final result:
 curl http://localhost:8000/results/proc123
 
 # Response: {"result": {"processed_items": ["processed_task1", "processed_task2", "processed_task3"], "total": 3}}
 
-# Event streaming with raw event data (includes event metadata):
-curl http://localhost:8000/events/{handler_id}?raw_event=true
+# SSE Example - Real-time streaming in web browsers:
+curl http://localhost:8000/events/{handler_id}?sse=true
 
-# This returns full event objects with metadata like event type, timestamp, etc.
+# SSE is perfect for real-time web applications:
+# - Content-Type: text/event-stream
+# - Events formatted as "event: {type}" followed by "data: {json}"
+# - Compatible with browser EventSource API
+# - Event types help with filtering in JavaScript
+#
+# JavaScript example:
+# const eventSource = new EventSource('/events/xyz789?sse=true');
+# eventSource.addEventListener('examples.server_example.ProgressEvent', (event) => {
+#   const data = JSON.parse(event.data);
+#   console.log(`Progress: ${data.progress}% - ${data.message}`);
+# });
+
+# NDJSON Example - For programmatic consumption:
+curl http://localhost:8000/events/{handler_id}
+
+# NDJSON includes full event metadata:
+# - Content-Type: application/x-ndjson
+# - Full event objects with type information
+# - Perfect for logging and debugging
 """

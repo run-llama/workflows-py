@@ -161,22 +161,24 @@ class WorkflowServer:
             raise HTTPException(detail="Handler not found", status_code=404)
 
         # Get raw_event query parameter
-        raw_event = request.query_params.get("raw_event", "false").lower() == "true"
+        sse = request.query_params.get("sse", "false").lower() == "true"
+        media_type = "text/event-stream" if sse else "application/x-ndjson"
 
         async def event_stream(handler: WorkflowHandler) -> AsyncGenerator[str, None]:
             serializer = JsonSerializer()
-            # need to convert back to str to use SSE
+
             async for event in handler.stream_events():
-                data = json.loads(serializer.serialize(event))
-                if raw_event:
-                    yield json.dumps(data) + "\n"
+                serialized_event = serializer.serialize(event)
+                if sse:
+                    # need to convert back to str to use SSE
+                    event_dict = json.loads(serialized_event)
+                    yield f"event: {event_dict.get('qualified_name')}\ndata: {json.dumps(event_dict.get('value'))}\n"
                 else:
-                    yield json.dumps(data.get("value")) + "\n"
+                    yield f"{serialized_event}\n"
+
                 await asyncio.sleep(0.01)
 
-        return StreamingResponse(
-            event_stream(handler), media_type="application/x-ndjson"
-        )
+        return StreamingResponse(event_stream(handler), media_type=media_type)
 
     #
     # Private methods

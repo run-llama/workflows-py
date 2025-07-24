@@ -230,17 +230,21 @@ async def test_stream_events_success(async_client: AsyncClient) -> None:
                 if event_data:
                     events.append(event_data)
 
-        # Verify we got the expected events - filter out any that don't have message/sequence
-        stream_events = [e for e in events if "message" in e and "sequence" in e]
+        # Verify we got the expected events - NDJSON format returns full event objects
+        stream_events = [
+            e for e in events if "value" in e and "message" in e.get("value", {})
+        ]
         assert len(stream_events) == 3
         for i, event in enumerate(stream_events):
-            assert event["message"] == f"event_{i}"
-            assert event["sequence"] == i
+            assert "qualified_name" in event
+            assert event["qualified_name"] == "tests.server.conftest.StreamEvent"
+            assert event["value"]["message"] == f"event_{i}"
+            assert event["value"]["sequence"] == i
 
 
 @pytest.mark.asyncio
-async def test_stream_events_raw(async_client: AsyncClient) -> None:
-    """Test streaming raw events from a workflow."""
+async def test_stream_events_sse(async_client: AsyncClient) -> None:
+    """Test streaming events using Server-Sent Events format."""
     async with async_client as client:
         # Start streaming workflow
         response = await client.post(
@@ -250,36 +254,47 @@ async def test_stream_events_raw(async_client: AsyncClient) -> None:
         data = response.json()
         handler_id = data["handler_id"]
 
-        # Stream raw events
-        response = await client.get(f"/events/{handler_id}?raw_event=true")
+        # Stream events in SSE format
+        response = await client.get(f"/events/{handler_id}?sse=true")
         assert response.status_code == 200
-        assert response.headers["content-type"] == "application/x-ndjson"
+        assert response.headers["content-type"].startswith("text/event-stream")
 
         # Collect streamed events
         events = []
+        current_event = {}
         async for line in response.aiter_lines():
-            if line.strip():
+            line = line.strip()
+            if line.startswith("event: "):
+                # Extract event type
+                current_event["event_type"] = line[7:]  # Remove "event: " prefix
+            elif line.startswith("data: "):
                 import json
 
-                event_data = json.loads(line)
+                # Extract JSON from SSE data line
+                event_json = line[6:]  # Remove "data: " prefix
+                event_data = json.loads(event_json)
                 # Filter out empty events
                 if event_data:
-                    events.append(event_data)
+                    current_event["data"] = event_data
+                    events.append(current_event.copy())
+                    current_event = {}
 
-        # Verify we got raw event objects with metadata
-        # Filter for StreamEvent objects (not StopEvent)
+        # Verify we got event values (not full event objects)
+        # SSE format returns event data with event_type field
         stream_events = [
-            e for e in events if "value" in e and "message" in e.get("value", {})
+            e
+            for e in events
+            if "data" in e
+            and "message" in e.get("data", {})
+            and "sequence" in e.get("data", {})
         ]
         assert len(stream_events) == 2
 
         for i, event in enumerate(stream_events):
-            # Raw events should have qualified_name and value fields
-            assert "qualified_name" in event
-            assert "value" in event
-            assert event["qualified_name"] == "tests.server.conftest.StreamEvent"
-            assert event["value"]["message"] == f"event_{i}"
-            assert event["value"]["sequence"] == i
+            # SSE format returns event type and data separately
+            assert event["event_type"] == "tests.server.conftest.StreamEvent"
+            assert event["data"]["message"] == f"event_{i}"
+            assert event["data"]["sequence"] == i
 
 
 @pytest.mark.asyncio
@@ -319,5 +334,12 @@ async def test_stream_events_no_events(async_client: AsyncClient) -> None:
                     events.append(event_data)
 
         # Filter for actual stream events (not workflow control events like StopEvent)
-        stream_events = [e for e in events if "message" in e and "sequence" in e]
+        # Look for events with message and sequence in the value field (StreamEvent pattern)
+        stream_events = [
+            e
+            for e in events
+            if "value" in e
+            and "message" in e.get("value", {})
+            and "sequence" in e.get("value", {})
+        ]
         assert len(stream_events) == 0
