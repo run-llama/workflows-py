@@ -108,38 +108,29 @@ class WorkflowServer:
 
     async def _run_workflow(self, request: Request) -> JSONResponse:
         workflow = self._extract_workflow(request)
+        context, start_event, run_kwargs = await self._extract_run_params(
+            request, workflow
+        )
 
         try:
-            body = await request.json()
-            context_data = body.get("context")
-            run_kwargs = body.get("kwargs", {})
-
-            context = None
-            if context_data:
-                context = Context.from_dict(workflow=workflow, data=context_data)
-            result = await workflow.run(ctx=context, **run_kwargs)
-
+            result = await workflow.run(
+                ctx=context, start_event=start_event, **run_kwargs
+            )
             return JSONResponse({"result": result})
         except Exception as e:
-            return JSONResponse({"error": str(e)}, status_code=500)
+            raise HTTPException(detail=f"Error running workflow: {e}", status_code=500)
 
     async def _run_workflow_nowait(self, request: Request) -> JSONResponse:
         workflow = self._extract_workflow(request)
+        context, start_event, run_kwargs = await self._extract_run_params(
+            request, workflow
+        )
         handler_id = nanoid()
 
-        try:
-            body = await request.json()
-            context_data = body.get("context")
-            run_kwargs = body.get("kwargs", {})
-
-            context = None
-            if context_data:
-                context = Context.from_dict(workflow=workflow, data=context_data)
-            self._handlers[handler_id] = workflow.run(ctx=context, **run_kwargs)
-
-            return JSONResponse({"handler_id": handler_id, "status": "started"})
-        except Exception as e:
-            return JSONResponse({"error": str(e)}, status_code=500)
+        self._handlers[handler_id] = workflow.run(
+            ctx=context, start_event=start_event, **run_kwargs
+        )
+        return JSONResponse({"handler_id": handler_id, "status": "started"})
 
     async def _get_workflow_result(self, request: Request) -> JSONResponse:
         handler_id = request.path_params["handler_id"]
@@ -193,3 +184,37 @@ class WorkflowServer:
             raise HTTPException(detail="Workflow not found", status_code=404)
 
         return self._workflows[name]
+
+    async def _extract_run_params(self, request: Request, workflow: Workflow) -> tuple:
+        try:
+            body = await request.json()
+            context_data = body.get("context")
+            run_kwargs = body.get("kwargs", {})
+            start_event_str = body.get("start_event")
+
+            # Extract custom StartEvent if present
+            start_event = None
+            if start_event_str:
+                serializer = JsonSerializer()
+                try:
+                    start_event = serializer.deserialize(start_event_str)
+                except Exception as e:
+                    raise HTTPException(
+                        detail=f"Validation error for 'start_event': {e}",
+                        status_code=400,
+                    )
+
+            # Extract custom Context if present
+            context = None
+            if context_data:
+                context = Context.from_dict(workflow=workflow, data=context_data)
+
+            return (context, start_event, run_kwargs)
+
+        except HTTPException:
+            # Re-raise HTTPExceptions as-is (like start_event validation errors)
+            raise
+        except Exception as e:
+            raise HTTPException(
+                detail=f"Error processing request body: {e}", status_code=500
+            )

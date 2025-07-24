@@ -85,6 +85,19 @@ async def test_run_workflow_with_context(
 
 
 @pytest.mark.asyncio
+async def test_run_workflow_with_start_event(async_client: AsyncClient) -> None:
+    async with async_client as client:
+        # Test with simple start event containing message
+        start_event_json = '{"__is_pydantic": true, "value": {"_data": {"message": "start event message"}}, "qualified_name": "workflows.events.StartEvent"}'
+        response = await client.post(
+            "/workflows/test/run", json={"start_event": start_event_json}
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["result"] == "processed: start event message"
+
+
+@pytest.mark.asyncio
 async def test_run_workflow_not_found(async_client: AsyncClient) -> None:
     async with async_client as client:
         response = await client.post("/workflows/nonexistent/run", json={})
@@ -96,9 +109,7 @@ async def test_run_workflow_error(async_client: AsyncClient) -> None:
     async with async_client as client:
         response = await client.post("/workflows/error/run", json={})
         assert response.status_code == 500
-        data = response.json()
-        assert "error" in data
-        assert "Test error" in data["error"]
+        assert "Test error" in response.text
 
 
 @pytest.mark.asyncio
@@ -110,6 +121,50 @@ async def test_run_workflow_invalid_json(async_client: AsyncClient) -> None:
             headers={"Content-Type": "application/json"},
         )
         assert response.status_code == 500
+
+
+@pytest.mark.asyncio
+async def test_run_workflow_invalid_start_event(async_client: AsyncClient) -> None:
+    async with async_client as client:
+        # Test with invalid JSON for start_event
+        response = await client.post(
+            "/workflows/test/run", json={"start_event": "invalid json"}
+        )
+        assert response.status_code == 400
+        assert "Validation error for 'start_event'" in response.text
+
+
+@pytest.mark.asyncio
+async def test_run_workflow_nowait_invalid_start_event(
+    async_client: AsyncClient,
+) -> None:
+    async with async_client as client:
+        # Test with invalid JSON for start_event in nowait endpoint
+        response = await client.post(
+            "/workflows/test/run-nowait", json={"start_event": "invalid json"}
+        )
+        assert response.status_code == 400
+        assert "Validation error for 'start_event'" in response.text
+
+
+@pytest.mark.asyncio
+async def test_run_workflow_with_start_event_and_kwargs(
+    async_client: AsyncClient,
+) -> None:
+    async with async_client as client:
+        # Test that start_event takes precedence over kwargs
+        start_event_json = '{"__is_pydantic": true, "value": {"_data": {"message": "start event priority"}}, "qualified_name": "workflows.events.StartEvent"}'
+        response = await client.post(
+            "/workflows/test/run",
+            json={
+                "start_event": start_event_json,
+                "kwargs": {"message": "kwargs message"},
+            },
+        )
+        assert response.status_code == 200
+        data = response.json()
+        # start_event should take precedence
+        assert data["result"] == "processed: start event priority"
 
 
 @pytest.mark.asyncio
@@ -127,18 +182,26 @@ async def test_run_workflow_nowait_success(async_client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
+async def test_run_workflow_nowait_with_start_event(async_client: AsyncClient) -> None:
+    async with async_client as client:
+        # Test with start event containing message
+        start_event_json = '{"__is_pydantic": true, "value": {"_data": {"message": "async start event"}}, "qualified_name": "workflows.events.StartEvent"}'
+        response = await client.post(
+            "/workflows/test/run-nowait", json={"start_event": start_event_json}
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert "handler_id" in data
+        assert "status" in data
+        assert data["status"] == "started"
+        assert len(data["handler_id"]) == 10  # Default nanoid length
+
+
+@pytest.mark.asyncio
 async def test_run_workflow_nowait_not_found(async_client: AsyncClient) -> None:
     async with async_client as client:
         response = await client.post("/workflows/nonexistent/run-nowait", json={})
         assert response.status_code == 404
-
-
-@pytest.mark.asyncio
-async def test_run_workflow_nowait_error(async_client: AsyncClient) -> None:
-    async with async_client as client:
-        # run no-wait
-        response = await client.post("/workflows/error/run-nowait", json="wrong_format")
-        assert response.status_code == 500
 
 
 @pytest.mark.asyncio

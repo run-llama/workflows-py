@@ -139,10 +139,21 @@ curl -X POST http://localhost:8000/workflows/greeting/run \
   -H "Content-Type: application/json" \
   -d '{"kwargs": {"name": "Alice"}}'
 
+# Run greeting workflow with custom StartEvent
+# Note: start_event must be a JSON-serialized StartEvent object in JsonSerializer format
+curl -X POST http://localhost:8000/workflows/greeting/run \
+  -H "Content-Type: application/json" \
+  -d '{"start_event": "{\"__is_pydantic\": true, \"value\": {\"_data\": {\"name\": \"CustomUser\"}}, \"qualified_name\": \"workflows.events.StartEvent\"}"}'
+
 # Run math workflow
 curl -X POST http://localhost:8000/workflows/math/run \
   -H "Content-Type: application/json" \
   -d '{"kwargs": {"a": 10, "b": 5, "operation": "multiply"}}'
+
+# Run math workflow with custom StartEvent
+curl -X POST http://localhost:8000/workflows/math/run \
+  -H "Content-Type: application/json" \
+  -d '{"start_event": "{\"__is_pydantic\": true, \"value\": {\"_data\": {\"a\": 15, \"b\": 3, \"operation\": \"subtract\"}}, \"qualified_name\": \"workflows.events.StartEvent\"}"}'
 
 # Run workflow with context
 curl -X POST http://localhost:8000/workflows/greeting/run \
@@ -153,6 +164,11 @@ curl -X POST http://localhost:8000/workflows/greeting/run \
 curl -X POST http://localhost:8000/workflows/math/run-nowait \
   -H "Content-Type: application/json" \
   -d '{"kwargs": {"a": 100, "b": 25, "operation": "divide"}}'
+
+# Run workflow asynchronously with custom StartEvent
+curl -X POST http://localhost:8000/workflows/processing/run-nowait \
+  -H "Content-Type: application/json" \
+  -d '{"start_event": "{\"__is_pydantic\": true, \"value\": {\"_data\": {\"items\": [\"custom1\", \"custom2\"]}}, \"qualified_name\": \"workflows.events.StartEvent\"}"}'
 
 # Example response: {"handler_id": "abc123", "status": "started"}
 
@@ -211,6 +227,11 @@ curl -X POST http://localhost:8000/workflows/processing/run-nowait \
   -H "Content-Type: application/json" \
   -d '{"kwargs": {"items": ["task1", "task2", "task3"]}}'
 
+# 1b. Start processing workflow with custom StartEvent:
+curl -X POST http://localhost:8000/workflows/processing/run-nowait \
+  -H "Content-Type: application/json" \
+  -d '{"start_event": "{\"__is_pydantic\": true, \"value\": {\"_data\": {\"items\": [\"event_task1\", \"event_task2\"]}}, \"qualified_name\": \"workflows.events.StartEvent\"}"}'
+
 # Response: {"handler_id": "proc123", "status": "started"}
 
 # 2. Stream progress events in real-time:
@@ -260,4 +281,18 @@ curl http://localhost:8000/events/{handler_id}
 # - Content-Type: application/x-ndjson
 # - Full event objects with type information
 # - Perfect for logging and debugging
+
+# StartEvent Serialization Helper:
+# To create properly formatted start_event JSON strings for the API, use:
+#
+# from workflows.events import StartEvent
+# from workflows.context.serializers import JsonSerializer
+#
+# event = StartEvent(name="test", value=42)
+# serializer = JsonSerializer()
+# start_event_json = serializer.serialize(event)
+# print(start_event_json)  # Use this value in your curl request
+#
+# Example result:
+# {"__is_pydantic": true, "value": {"_data": {"name": "test", "value": 42}}, "qualified_name": "workflows.events.StartEvent"}
 """
