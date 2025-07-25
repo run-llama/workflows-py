@@ -140,8 +140,8 @@ async def test_resume_streams() -> None:
         async def count(self, ctx: Context, ev: StartEvent) -> StopEvent:
             ctx.write_event_to_stream(Event(msg="hello!"))
 
-            cur_count = await ctx.get("cur_count", default=0)
-            await ctx.set("cur_count", cur_count + 1)
+            cur_count = await ctx.store.get("cur_count", default=0)
+            await ctx.store.set("cur_count", cur_count + 1)
             return StopEvent(result="done")
 
     wf = CounterWorkflow()
@@ -158,4 +158,4 @@ async def test_resume_streams() -> None:
     await handler_2
 
     assert handler_2.ctx
-    assert await handler_2.ctx.get("cur_count") == 2
+    assert await handler_2.ctx.store.get("cur_count") == 2

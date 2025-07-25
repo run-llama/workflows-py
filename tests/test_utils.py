@@ -226,3 +226,8 @@ def test_is_free_function() -> None:
     assert is_free_function("some_function.<locals>.MyClass.my_function") is False
     with pytest.raises(ValueError):
         is_free_function("")
+
+
+def test_inspect_signature_raises_if_not_callable() -> None:
+    with pytest.raises(TypeError, match="Expected a callable object, got str"):
+        inspect_signature("foo")  # type: ignore

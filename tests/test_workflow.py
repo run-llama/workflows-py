@@ -116,8 +116,8 @@ async def test_workflow_run_step_continue_context() -> None:
     class DummyWorkflow(Workflow):
         @step
         async def step(self, ctx: Context, ev: StartEvent) -> StopEvent:
-            cur_number = await ctx.get("number", default=0)
-            await ctx.set("number", cur_number + 1)
+            cur_number = await ctx.store.get("number", default=0)
+            await ctx.store.set("number", cur_number + 1)
             return StopEvent(result="Done")
 
 
@@ -246,7 +246,7 @@ async def test_workflow_num_workers() -> None:
         async def original_step(
             self, ctx: Context, ev: StartEvent
         ) -> Union[OneTestEvent, LastEvent]:
-            await ctx.set("num_to_collect", 3)
+            await ctx.store.set("num_to_collect", 3)
             ctx.send_event(OneTestEvent(test_param="test1"))
             ctx.send_event(OneTestEvent(test_param="test2"))
             ctx.send_event(OneTestEvent(test_param="test3"))
@@ -265,7 +265,7 @@ async def test_workflow_num_workers() -> None:
         async def final_step(
             self, ctx: Context, ev: Union[AnotherTestEvent, LastEvent]
         ) -> StopEvent:
-            n = await ctx.get("num_to_collect")
+            n = await ctx.store.get("num_to_collect")
             events = ctx.collect_events(ev, [AnotherTestEvent] * n)
             if events is None:
                 return None  # type: ignore
@@ -491,8 +491,8 @@ async def test_workflow_continue_context() -> None:
     class DummyWorkflow(Workflow):
         @step
         async def step(self, ctx: Context, ev: StartEvent) -> StopEvent:
-            cur_number = await ctx.get("number", default=0)
-            await ctx.set("number", cur_number + 1)
+            cur_number = await ctx.store.get("number", default=0)
+            await ctx.store.set("number", cur_number + 1)
             return StopEvent(result="Done")
 
     wf = DummyWorkflow()
@@ -502,21 +502,21 @@ async def test_workflow_continue_context() -> None:
     result = await r
     assert r.ctx
     assert result == "Done"
-    assert await r.ctx.get("number") == 1
+    assert await r.ctx.store.get("number") == 1
 
     # second run -- independent from the first
     r = wf.run()
     result = await r
     assert r.ctx
     assert result == "Done"
-    assert await r.ctx.get("number") == 1
+    assert await r.ctx.store.get("number") == 1
 
     # third run -- continue from the second run
     r = wf.run(ctx=r.ctx)
     result = await r
     assert r.ctx
     assert result == "Done"
-    assert await r.ctx.get("number") == 2
+    assert await r.ctx.store.get("number") == 2
 
 
 @pytest.mark.asyncio
@@ -524,9 +524,9 @@ async def test_workflow_pickle() -> None:
     class DummyWorkflow(Workflow):
         @step
         async def step(self, ctx: Context, ev: StartEvent) -> StopEvent:
-            cur_step = await ctx.get("step", default=0)
-            await ctx.set("step", cur_step + 1)
-            await ctx.set("test_fn", test_fn)
+            cur_step = await ctx.store.get("step", default=0)
+            await ctx.store.set("step", cur_step + 1)
+            await ctx.store.set("test_fn", test_fn)
             return StopEvent(result="Done")
 
     wf = DummyWorkflow()
@@ -546,8 +546,8 @@ async def test_workflow_pickle() -> None:
     assert new_handler.ctx
 
     # check that the step count is the same
-    cur_step = await handler.ctx.get("step")
-    new_step = await new_handler.ctx.get("step")
+    cur_step = await handler.ctx.store.get("step")
+    new_step = await new_handler.ctx.store.get("step")
     assert new_step == cur_step
 
     handler = wf.run(ctx=new_handler.ctx)
@@ -555,7 +555,7 @@ async def test_workflow_pickle() -> None:
     _ = await handler
 
     # check that the step count is incremented
-    assert await handler.ctx.get("step") == cur_step + 1
+    assert await handler.ctx.store.get("step") == cur_step + 1
 
 
 @pytest.mark.asyncio
@@ -625,14 +625,14 @@ async def test_workflow_context_to_dict(workflow: Workflow) -> None:
 class HumanInTheLoopWorkflow(Workflow):
     @step
     async def step1(self, ctx: Context, ev: StartEvent) -> InputRequiredEvent:
-        cur_runs = await ctx.get("step1_runs", default=0)
-        await ctx.set("step1_runs", cur_runs + 1)
+        cur_runs = await ctx.store.get("step1_runs", default=0)
+        await ctx.store.set("step1_runs", cur_runs + 1)
         return InputRequiredEvent(prefix="Enter a number: ")  # type:ignore
 
     @step
     async def step2(self, ctx: Context, ev: HumanResponseEvent) -> StopEvent:
-        cur_runs = await ctx.get("step2_runs", default=0)
-        await ctx.set("step2_runs", cur_runs + 1)
+        cur_runs = await ctx.store.get("step2_runs", default=0)
+        await ctx.store.set("step2_runs", cur_runs + 1)
         return StopEvent(result=ev.response)
 
 
@@ -687,8 +687,8 @@ async def test_human_in_the_loop_with_resume() -> None:
     assert final_result == "42"
 
     # ensure the workflow ran each step once
-    step1_runs = await new_handler.ctx.get("step1_runs")  # type:ignore
-    step2_runs = await new_handler.ctx.get("step2_runs")  # type:ignore
+    step1_runs = await new_handler.ctx.store.get("step1_runs")  # type:ignore
+    step2_runs = await new_handler.ctx.store.get("step2_runs")  # type:ignore
     assert step1_runs == 1
     assert step2_runs == 1
 

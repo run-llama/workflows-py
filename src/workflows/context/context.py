@@ -33,7 +33,7 @@ from workflows.service import ServiceManager
 from workflows.types import RunResultT
 
 from .serializers import BaseSerializer, JsonSerializer
-from .state_store import InMemoryStateStore, MODEL_T, DictState
+from .state_store import MODEL_T, DictState, InMemoryStateStore
 
 if TYPE_CHECKING:  # pragma: no cover
     from workflows import Workflow
@@ -261,7 +261,9 @@ class Context(Generic[MODEL_T]):
             msg = "Error creating a Context instance: the provided payload has a wrong or old format."
             raise ContextSerdeError(msg) from e
 
-    async def set(self, key: str, value: Any, make_private: bool = False) -> None:
+    async def set(
+        self, key: str, value: Any, make_private: bool = False
+    ) -> None:  # pragma: no cover
         """
         Store `value` into the Context under `key`.
 
@@ -518,9 +520,9 @@ class Context(Generic[MODEL_T]):
 
         # send the waiter event if it's not already sent
         if waiter_event is not None:
-            is_waiting = await self.get(waiter_id, default=False)
+            is_waiting = await self.store.get(waiter_id, default=False)
             if not is_waiting:
-                await self.set(waiter_id, True)
+                await self.store.set(waiter_id, True)
                 self.write_event_to_stream(waiter_event)
 
         while True:
@@ -536,7 +538,7 @@ class Context(Generic[MODEL_T]):
                     else:
                         continue
             finally:
-                await self.set(waiter_id, False)
+                await self.store.set(waiter_id, False)
 
     def write_event_to_stream(self, ev: Event | None) -> None:
         self._streaming_queue.put_nowait(ev)
