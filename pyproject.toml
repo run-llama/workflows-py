@@ -7,7 +7,8 @@ dev = [
   "pre-commit>=4.2.0",
   "pytest>=8.4.0",
   "pytest-asyncio>=1.0.0",
-  "pytest-cov>=6.1.1"
+  "pytest-cov>=6.1.1",
+  "httpx>=0.25.0"
 ]
 
 [project]
@@ -21,6 +22,12 @@ dependencies = [
   "eval-type-backport>=0.2.2 ; python_full_version < '3.10'",
   "llama-index-instrumentation>=0.1.0",
   "pydantic>=2.11.5"
+]
+
+[project.optional-dependencies]
+server = [
+  "starlette>=0.39.0",
+  "uvicorn>=0.32.0"
 ]
 
 [tool.coverage.run]
