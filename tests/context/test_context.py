@@ -20,7 +20,7 @@ import pytest
 from workflows.context import Context
 from workflows.context.state_store import DictState
 from workflows.decorators import StepConfig, step
-from workflows.errors import ContextSerdeError, WorkflowRuntimeError
+from workflows.errors import WorkflowRuntimeError
 from workflows.events import (
     Event,
     HumanResponseEvent,
@@ -30,7 +30,7 @@ from workflows.events import (
 )
 from workflows.workflow import Workflow
 
-from .conftest import AnotherTestEvent, OneTestEvent
+from ..conftest import AnotherTestEvent, OneTestEvent
 
 
 @pytest.mark.asyncio
@@ -148,6 +148,7 @@ async def test_empty_inprogress_when_workflow_done(workflow: Workflow) -> None:
     _ = await h
 
     # there shouldn't be any in progress events
+    assert h.ctx is not None
     for inprogress_list in h.ctx._in_progress.values():
         assert len(inprogress_list) == 0
 
@@ -205,7 +206,7 @@ async def test_wait_for_event_in_workflow() -> None:
 @pytest.mark.asyncio
 async def test_prompt_and_wait(ctx: Context) -> None:
     prompt_id = "test_prompt_and_wait"
-    prompt_event = InputRequiredEvent(prefix="test_prompt_and_wait")
+    prompt_event = InputRequiredEvent(prefix="test_prompt_and_wait")  # type: ignore
     expected_event = HumanResponseEvent
     requirements = {"waiter_id": "test_prompt_and_wait"}
     timeout = 10
@@ -220,7 +221,7 @@ async def test_prompt_and_wait(ctx: Context) -> None:
         )
     )
     await asyncio.sleep(0.01)
-    ctx.send_event(HumanResponseEvent(response="foo", waiter_id="test_prompt_and_wait"))
+    ctx.send_event(HumanResponseEvent(response="foo", waiter_id="test_prompt_and_wait"))  # type: ignore
 
     result = await waiting_task
     assert result.response == "foo"
@@ -249,7 +250,7 @@ class WaitingWorkflow(Workflow):
 
     @step
     async def waiter_one(self, ctx: Context, ev: Waiter1) -> ResultEvent:
-        ctx.write_event_to_stream(InputRequiredEvent(prefix="waiter_one"))
+        ctx.write_event_to_stream(InputRequiredEvent(prefix="waiter_one"))  # type: ignore
 
         new_ev: HumanResponseEvent = await ctx.wait_for_event(
             HumanResponseEvent,
@@ -259,7 +260,7 @@ class WaitingWorkflow(Workflow):
 
     @step
     async def waiter_two(self, ctx: Context, ev: Waiter2) -> ResultEvent:
-        ctx.write_event_to_stream(InputRequiredEvent(prefix="waiter_two"))
+        ctx.write_event_to_stream(InputRequiredEvent(prefix="waiter_two"))  # type: ignore
 
         new_ev: HumanResponseEvent = await ctx.wait_for_event(
             HumanResponseEvent,
@@ -287,11 +288,11 @@ async def test_wait_for_multiple_events_in_workflow() -> None:
     async for ev in handler.stream_events():
         if isinstance(ev, InputRequiredEvent) and ev.prefix == "waiter_one":
             handler.ctx.send_event(
-                HumanResponseEvent(response="foo", waiter_id="waiter_one")
+                HumanResponseEvent(response="foo", waiter_id="waiter_one")  # type: ignore
             )
         elif isinstance(ev, InputRequiredEvent) and ev.prefix == "waiter_two":
             handler.ctx.send_event(
-                HumanResponseEvent(response="bar", waiter_id="waiter_two")
+                HumanResponseEvent(response="bar", waiter_id="waiter_two")  # type: ignore
             )
 
     result = await handler
@@ -306,11 +307,11 @@ async def test_wait_for_multiple_events_in_workflow() -> None:
     async for ev in handler.stream_events():
         if isinstance(ev, InputRequiredEvent) and ev.prefix == "waiter_one":
             handler.ctx.send_event(
-                HumanResponseEvent(response="fizz", waiter_id="waiter_one")
+                HumanResponseEvent(response="fizz", waiter_id="waiter_one")  # type: ignore
             )
         elif isinstance(ev, InputRequiredEvent) and ev.prefix == "waiter_two":
             handler.ctx.send_event(
-                HumanResponseEvent(response="buzz", waiter_id="waiter_two")
+                HumanResponseEvent(response="buzz", waiter_id="waiter_two")  # type: ignore
             )
 
     result = await handler
@@ -328,24 +329,3 @@ async def test_clear(ctx: Context) -> None:
     await ctx.store.clear()
     res = await ctx.store.get("test_key", default=None)
     assert res is None
-
-
-def test_serialization_roundtrip(ctx: Context, workflow: Workflow) -> None:
-    assert Context.from_dict(workflow, ctx.to_dict())
-
-
-def test_old_serialization(ctx: Context, workflow: Workflow) -> None:
-    old_payload = {
-        "globals": {},
-        "streaming_queue": "[]",
-        "queues": {"test_id": "[]"},
-        "stepwise": False,
-        "events_buffer": {},
-        "in_progress": {},
-        "accepted_events": [],
-        "broker_log": [],
-        "waiter_id": "test_id",
-        "is_running": False,
-    }
-    with pytest.raises(ContextSerdeError):
-        Context.from_dict(workflow, old_payload)

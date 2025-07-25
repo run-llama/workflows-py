@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 
 from workflows.decorators import step
 from workflows.events import Event, StartEvent, StopEvent
-from workflows.resource import Resource
+from workflows.resource import Resource, ResourceManager
 from workflows.workflow import Workflow
 
 
@@ -180,3 +180,10 @@ async def test_non_caching_behavior() -> None:
     await wf_1.run()
     assert cc1 == 1  # type: ignore
     assert cc2 == 1  # type: ignore
+
+
+@pytest.mark.asyncio
+async def test_resource_manager() -> None:
+    m = ResourceManager()
+    await m.set("test_resource", 42)
+    assert m.get_all() == {"test_resource": 42}
