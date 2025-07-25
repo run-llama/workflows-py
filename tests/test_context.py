@@ -64,26 +64,19 @@ async def test_collect_events() -> None:
 @pytest.mark.asyncio
 async def test_get_default(workflow: Workflow) -> None:
     c1: Context[DictState] = Context(workflow)
-    assert await c1.get(key="test_key", default=42) == 42
+    assert await c1.store.get("test_key", default=42) == 42
 
 
 @pytest.mark.asyncio
 async def test_get(ctx: Context) -> None:
-    await ctx.set("foo", 42)
-    assert await ctx.get("foo") == 42
+    await ctx.store.set("foo", 42)
+    assert await ctx.store.get("foo") == 42
 
 
 @pytest.mark.asyncio
 async def test_get_not_found(ctx: Context) -> None:
     with pytest.raises(ValueError):
-        await ctx.get("foo")
-
-
-@pytest.mark.asyncio
-async def test_legacy_data(workflow: Workflow) -> None:
-    c1: Context[DictState] = Context(workflow)
-    await c1.set(key="test_key", value=42)
-    assert await c1.get("test_key") == 42
+        await ctx.store.get("foo")
 
 
 def test_send_event_step_is_none(ctx: Context) -> None:
@@ -147,14 +140,6 @@ def test_get_result(ctx: Context) -> None:
 def test_to_dict_with_events_buffer(ctx: Context) -> None:
     ctx.collect_events(OneTestEvent(), [OneTestEvent, AnotherTestEvent])
     assert json.dumps(ctx.to_dict())
-
-
-@pytest.mark.asyncio
-async def test_deprecated_params(ctx: Context) -> None:
-    with pytest.warns(
-        DeprecationWarning, match="`make_private` is deprecated and will be ignored"
-    ):
-        await ctx.set("foo", 42, make_private=True)
 
 
 @pytest.mark.asyncio
@@ -339,9 +324,9 @@ def test_get_holding_events(ctx: Context) -> None:
 
 @pytest.mark.asyncio
 async def test_clear(ctx: Context) -> None:
-    await ctx.set("test_key", 42)
-    ctx.clear()
-    res = await ctx.get("test_key", default=None)
+    await ctx.store.set("test_key", 42)
+    await ctx.store.clear()
+    res = await ctx.store.get("test_key", default=None)
     assert res is None
 
 

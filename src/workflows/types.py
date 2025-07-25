@@ -7,7 +7,7 @@ from typing import Any, TypeVar
 
 try:
     from typing import Union
-except ImportError:
+except ImportError:  # pragma: no cover
     from typing_extensions import Union
 
 from .events import StopEvent

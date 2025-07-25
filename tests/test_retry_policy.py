@@ -19,7 +19,7 @@ async def test_retry_e2e() -> None:
         # Set a small delay to avoid impacting the CI speed too much
         @step(retry_policy=ConstantDelayRetryPolicy(delay=0.2))
         async def flaky_step(self, ctx: Context, ev: StartEvent) -> StopEvent:
-            count = await ctx.get("counter", default=0)
+            count = await ctx.store.get("counter", default=0)
             ctx.send_event(CountEvent())
             if count < 3:
                 raise ValueError("Something bad happened!")
@@ -27,8 +27,8 @@ async def test_retry_e2e() -> None:
 
         @step
         async def counter(self, ctx: Context, ev: CountEvent) -> None:
-            count = await ctx.get("counter", default=0)
-            await ctx.set("counter", count + 1)
+            count = await ctx.store.get("counter", default=0)
+            await ctx.store.set("counter", count + 1)
 
     workflow = DummyWorkflow(disable_validation=True)
     assert await workflow.run() == "All good!"
