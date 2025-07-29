@@ -18,6 +18,7 @@ from typing import (
     Tuple,
     Type,
     TypeVar,
+    cast,
 )
 
 from workflows.decorators import StepConfig
@@ -109,7 +110,9 @@ class Context(Generic[MODEL_T]):
     def store(self) -> InMemoryStateStore[MODEL_T]:
         # Default to DictState if no state manager is initialized
         if self._state_store is None:
-            self._state_store = InMemoryStateStore(DictState())
+            # DictState is designed to be compatible with any MODEL_T as the default fallback
+            default_store = InMemoryStateStore(DictState())
+            self._state_store = cast(InMemoryStateStore[MODEL_T], default_store)
 
         return self._state_store
 
@@ -228,7 +231,8 @@ class Context(Generic[MODEL_T]):
             elif "globals" in data:
                 # Deserialize legacy globals for backward compatibility
                 globals = context._deserialize_globals(data["globals"], serializer)
-                context._state_store = InMemoryStateStore(DictState(**globals))
+                default_store = InMemoryStateStore(DictState(**globals))
+                context._state_store = cast(InMemoryStateStore[MODEL_T], default_store)
 
             context._streaming_queue = context._deserialize_queue(
                 data["streaming_queue"], serializer
