@@ -148,7 +148,7 @@ class Context(Generic[MODEL_T]):
     def _serialize_queue(self, queue: asyncio.Queue, serializer: BaseSerializer) -> str:
         queue_items = list(queue._queue)  # type: ignore
         queue_objs = [serializer.serialize(obj) for obj in queue_items]
-        return json.dumps(queue_objs)  # type: ignore
+        return json.dumps(queue_objs)
 
     def _deserialize_queue(
         self,
@@ -158,7 +158,7 @@ class Context(Generic[MODEL_T]):
     ) -> asyncio.Queue:
         queue_objs = json.loads(queue_str)
         queue_objs = prefix_queue_objs + queue_objs
-        queue = asyncio.Queue()  # type: ignore
+        queue: asyncio.Queue = asyncio.Queue()
         for obj in queue_objs:
             event_obj = serializer.deserialize(obj)
             queue.put_nowait(event_obj)
