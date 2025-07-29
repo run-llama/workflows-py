@@ -1,10 +1,12 @@
 import asyncio
 import warnings
 from contextlib import asynccontextmanager
-from pydantic import BaseModel, ValidationError
 from typing import Any, AsyncGenerator, Generic, Optional, TypeVar
 
-from workflows.events import Event
+from pydantic import BaseModel, ValidationError
+
+from workflows.events import DictLikeModel
+
 from .serializers import BaseSerializer
 
 MAX_DEPTH = 1000
@@ -19,7 +21,7 @@ class UnserializableKeyWarning(Warning):
 warnings.simplefilter("once", UnserializableKeyWarning)
 
 
-class DictState(Event):
+class DictState(DictLikeModel):
     """
     A dynamic state class that behaves like a dictionary.
 
@@ -27,7 +29,8 @@ class DictState(Event):
     It allows storing arbitrary key-value pairs while still being a Pydantic model.
     """
 
-    pass
+    def __init__(self, **params: Any):
+        super().__init__(**params)
 
 
 class InMemoryStateStore(Generic[MODEL_T]):

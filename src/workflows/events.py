@@ -14,48 +14,12 @@ from pydantic import (
 )
 
 
-class Event(BaseModel):
+class DictLikeModel(BaseModel):
     """
-    Base class for event types that mimics dict interface.
+    Base Pydantic model class that mimics dict interface.
 
     PrivateAttr:
         _data (dict[str, Any]): Underlying Python dict.
-
-    Examples:
-        Basic example usage
-
-        ```python
-        from llama_index.core.workflows.events import Event
-
-        evt = Event(a=1, b=2)
-
-        # can use dot access to get values of `a` and `b`
-        print((evt.a, evt.b))
-
-        # can also set the attrs
-        evt.a = 2
-        ```
-
-        Custom event with additional Fields/PrivateAttr
-
-        ```python
-        from llama_index.core.workflows.events import Event
-        from pydantic import Field, PrivateAttr
-
-        class CustomEvent(Event):
-            field_1: int = Field(description="my custom field")
-            _private_attr_1: int = PrivateAttr()
-
-        evt = CustomEvent(a=1, b=2, field_1=3, _private_attr_1=4)
-
-        # `field_1` and `_private_attr_1` get set as they do with Pydantic BaseModel
-        print(evt.field_1)
-        print(evt._private_attr_1)
-
-        # `a` and `b` get set in the underlying dict, namely `evt._data`
-        print((evt.a, evt.b))
-        ```
-
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -145,6 +109,50 @@ class Event(BaseModel):
         if self._data:
             data["_data"] = self._data
         return data
+
+
+class Event(DictLikeModel):
+    """
+    Base class for event types that mimics dict interface.
+
+    Examples:
+        Basic example usage
+
+        ```python
+        from llama_index.core.workflows.events import Event
+
+        evt = Event(a=1, b=2)
+
+        # can use dot access to get values of `a` and `b`
+        print((evt.a, evt.b))
+
+        # can also set the attrs
+        evt.a = 2
+        ```
+
+        Custom event with additional Fields/PrivateAttr
+
+        ```python
+        from llama_index.core.workflows.events import Event
+        from pydantic import Field, PrivateAttr
+
+        class CustomEvent(Event):
+            field_1: int = Field(description="my custom field")
+            _private_attr_1: int = PrivateAttr()
+
+        evt = CustomEvent(a=1, b=2, field_1=3, _private_attr_1=4)
+
+        # `field_1` and `_private_attr_1` get set as they do with Pydantic BaseModel
+        print(evt.field_1)
+        print(evt._private_attr_1)
+
+        # `a` and `b` get set in the underlying dict, namely `evt._data`
+        print((evt.a, evt.b))
+        ```
+    """
+
+    def __init__(self, **params: Any):
+        super().__init__(**params)
 
 
 class StartEvent(Event):
