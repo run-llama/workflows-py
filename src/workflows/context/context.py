@@ -654,7 +654,7 @@ class Context(Generic[MODEL_T]):
                     # Instantiate the state class and initialize the state manager
                     try:
                         # Try to instantiate the state class
-                        state_instance = config.context_state_type()
+                        state_instance = cast(MODEL_T, config.context_state_type())
                         await self._init_state_store(state_instance)
                     except Exception as e:
                         raise WorkflowRuntimeError(
@@ -664,7 +664,8 @@ class Context(Generic[MODEL_T]):
                         ) from e
                 else:
                     # Initialize state manager with DictState by default
-                    await self._init_state_store(DictState())
+                    dict_state = cast(MODEL_T, DictState())
+                    await self._init_state_store(dict_state)
 
             kwargs: dict[str, Any] = {}
             if config.context_parameter:
