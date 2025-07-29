@@ -18,6 +18,7 @@ from typing import (
     Tuple,
     Type,
     TypeVar,
+    cast,
 )
 
 from workflows.decorators import StepConfig
@@ -109,7 +110,9 @@ class Context(Generic[MODEL_T]):
     def store(self) -> InMemoryStateStore[MODEL_T]:
         # Default to DictState if no state manager is initialized
         if self._state_store is None:
-            self._state_store = InMemoryStateStore(DictState())
+            # DictState is designed to be compatible with any MODEL_T as the default fallback
+            default_store = InMemoryStateStore(DictState())
+            self._state_store = cast(InMemoryStateStore[MODEL_T], default_store)
 
         return self._state_store
 
@@ -145,7 +148,7 @@ class Context(Generic[MODEL_T]):
     def _serialize_queue(self, queue: asyncio.Queue, serializer: BaseSerializer) -> str:
         queue_items = list(queue._queue)  # type: ignore
         queue_objs = [serializer.serialize(obj) for obj in queue_items]
-        return json.dumps(queue_objs)  # type: ignore
+        return json.dumps(queue_objs)
 
     def _deserialize_queue(
         self,
@@ -155,7 +158,7 @@ class Context(Generic[MODEL_T]):
     ) -> asyncio.Queue:
         queue_objs = json.loads(queue_str)
         queue_objs = prefix_queue_objs + queue_objs
-        queue = asyncio.Queue()  # type: ignore
+        queue: asyncio.Queue = asyncio.Queue()
         for obj in queue_objs:
             event_obj = serializer.deserialize(obj)
             queue.put_nowait(event_obj)
@@ -228,7 +231,8 @@ class Context(Generic[MODEL_T]):
             elif "globals" in data:
                 # Deserialize legacy globals for backward compatibility
                 globals = context._deserialize_globals(data["globals"], serializer)
-                context._state_store = InMemoryStateStore(DictState(**globals))
+                default_store = InMemoryStateStore(DictState(**globals))
+                context._state_store = cast(InMemoryStateStore[MODEL_T], default_store)
 
             context._streaming_queue = context._deserialize_queue(
                 data["streaming_queue"], serializer
@@ -650,7 +654,7 @@ class Context(Generic[MODEL_T]):
                     # Instantiate the state class and initialize the state manager
                     try:
                         # Try to instantiate the state class
-                        state_instance = config.context_state_type()
+                        state_instance = cast(MODEL_T, config.context_state_type())
                         await self._init_state_store(state_instance)
                     except Exception as e:
                         raise WorkflowRuntimeError(
@@ -660,7 +664,8 @@ class Context(Generic[MODEL_T]):
                         ) from e
                 else:
                     # Initialize state manager with DictState by default
-                    await self._init_state_store(DictState())
+                    dict_state = cast(MODEL_T, DictState())
+                    await self._init_state_store(dict_state)
 
             kwargs: dict[str, Any] = {}
             if config.context_parameter:
