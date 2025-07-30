@@ -257,7 +257,7 @@ async def test_get_workflow_result_error(
         # Verify the result content
         result_data = response.json()
         assert "error" in result_data
-        assert result_data["error"] == "Error in step 'error_step': Test error"
+        assert result_data["error"] == "Test error"
 
 
 @pytest.mark.asyncio
