@@ -47,6 +47,7 @@ uv run -- pre-commit run -a
 
 ## Notes for Claude
 - Always run tests after making changes: `uv run pytest`
+- Never use classes for tests, only use pytest functions
+- Always annotate with types function arguments and return values
 - The project uses async/await extensively
-- Server tests may require complex async setup - some are marked as skipped
 - Context serialization requires specific JSON format for globals
