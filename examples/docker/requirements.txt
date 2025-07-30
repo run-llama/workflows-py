@@ -1,0 +1,1 @@
+git+https://github.com/run-llama/workflows-py.git@massi/docker#egg=llama-index-workflows[server]
