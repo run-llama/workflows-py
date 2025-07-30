@@ -799,7 +799,9 @@ async def test_custom_stop_event() -> None:
 
     wf = CustomEventsWorkflow()
     assert wf._start_event_class == MyStart
+    assert wf.start_event_class == wf._start_event_class
     assert wf._stop_event_class == MyStop
+    assert wf.stop_event_class == wf._stop_event_class
     result: MyStop = await wf.run(query="foo")
     assert result.outcome == "Workflow completed"
 
