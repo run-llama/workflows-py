@@ -6,6 +6,8 @@ from pathlib import Path
 
 import uvicorn
 
+from workflows.server.server import WorkflowServer
+
 
 def run_server() -> None:
     parser = argparse.ArgumentParser(description="Start the workflows server")
@@ -13,16 +15,17 @@ def run_server() -> None:
     args = parser.parse_args()
 
     if not args.file_path:
-        print("You have to provide a Python script defining a server instance")
+        usage = "Usage: python -m workflows.server <path_to_server_script>"
+        print(usage, file=sys.stderr)
         sys.exit(1)
 
     file_path = Path(args.file_path)
     if not file_path.exists():
-        print(f"Error: File '{file_path}' not found")
+        print(f"Error: File '{file_path}' not found", file=sys.stderr)
         sys.exit(1)
 
     if not file_path.is_file():
-        print(f"Error: '{file_path}' is not a file")
+        print(f"Error: '{file_path}' is not a file", file=sys.stderr)
         sys.exit(1)
 
     file_path = file_path.resolve()
@@ -37,19 +40,27 @@ def run_server() -> None:
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
 
-        # Check if 'server' variable exists
-        if not hasattr(module, "server"):
-            print(f"Error: No 'server' variable found in '{args.file_path}'")
-            sys.exit(1)
+        # Find a variable of type WorkflowServer
+        server = None
+        for attr_name in dir(module):
+            attr_value = getattr(module, attr_name)
+            if isinstance(attr_value, WorkflowServer):
+                server = attr_value
+                break
 
-        server = getattr(module, "server")
+        if server is None:
+            print(
+                f"Error: No WorkflowServer instance found in '{args.file_path}'",
+                file=sys.stderr,
+            )
+            sys.exit(1)
 
         host = os.environ.get("WORKFLOWS_PY_SERVER_HOST", "0.0.0.0")
         port = int(os.environ.get("WORKFLOWS_PY_SERVER_PORT", 8080))
         uvicorn.run(server.app, host=host, port=port)
 
     except Exception as e:
-        print(f"Error loading or running server: {e}")
+        print(f"Error loading or running server: {e}", file=sys.stderr)
         sys.exit(1)
 
 
