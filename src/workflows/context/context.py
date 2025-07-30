@@ -702,9 +702,7 @@ class Context(Generic[MODEL_T]):
                         raise
                     except Exception as e:
                         if config.retry_policy is None:
-                            raise WorkflowRuntimeError(
-                                f"Error in step '{name}': {e!s}"
-                            ) from e
+                            raise
 
                         delay = config.retry_policy.next(
                             retry_start_at + time.time(), attempts, e
