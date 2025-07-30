@@ -145,6 +145,7 @@ class Workflow(metaclass=WorkflowMeta):
 
     @property
     def start_event_class(self) -> type[StartEvent]:
+        """Returns the StartEvent type used in this workflow."""
         return self._start_event_class
 
     def _ensure_stop_event_class(self) -> type[RunResultT]:
@@ -172,6 +173,7 @@ class Workflow(metaclass=WorkflowMeta):
 
     @property
     def stop_event_class(self) -> type[RunResultT]:
+        """Returns the StopEvent type used in this workflow."""
         return self._stop_event_class
 
     async def stream_events(self) -> AsyncGenerator[Event, None]:
