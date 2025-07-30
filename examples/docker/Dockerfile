@@ -13,4 +13,4 @@ RUN pip install -r requirements.txt
 ENV SERVER_HOST=0.0.0.0
 ENV SERVER_PORT=8080
 
-CMD [ "python", "-m", "workflows.server", "workflows.py" ]
+CMD [ "python", "-m", "workflows.server", "app.py" ]
