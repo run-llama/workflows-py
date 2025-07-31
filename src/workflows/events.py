@@ -55,12 +55,11 @@ class DictLikeModel(BaseModel):
         ):
             return super().__getattr__(__name)  # type: ignore
         else:
-            try:
-                return self._data[__name]
-            except KeyError:
+            if __name not in self._data:
                 raise AttributeError(
                     f"'{self.__class__.__name__}' object has no attribute '{__name}'"
                 )
+            return self._data[__name]
 
     def __setattr__(self, name: str, value: Any) -> None:
         if name in self.__private_attributes__ or name in self.__class__.model_fields:
