@@ -708,10 +708,7 @@ class Context(Generic[MODEL_T]):
                             retry_start_at + time.time(), attempts, e
                         )
                         if delay is None:
-                            # We're done retrying
-                            raise WorkflowRuntimeError(
-                                f"Error in step '{name}': {e!s}"
-                            ) from e
+                            raise
 
                         attempts += 1
                         if verbose:
