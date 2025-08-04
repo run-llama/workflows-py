@@ -240,7 +240,16 @@ class Workflow(metaclass=WorkflowMeta):
 
         This method only accepts keyword arguments, and the name of the parameter
         will be used as the name of the workflow.
+
+        DEPRECATED: This method is deprecated and will be removed in a future version.
+        You can create a sub-workflow directly in the step function or in the workflow
+        class constructor.
         """
+        warnings.warn(
+            "add_workflows() is deprecated and will be removed in a future version.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         for name, wf in workflows.items():
             self._service_manager.add(name, wf)
 
