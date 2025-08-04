@@ -306,6 +306,18 @@ class Workflow(metaclass=WorkflowMeta):
         return ctx, run_id
 
     def send_event(self, message: Event, step: str | None = None) -> None:
+        """
+        Send an event to the workflow.
+
+        DEPRECATED: This method is deprecated and will be removed in a future version.
+        """
+        warnings.warn(
+            "send_event() is deprecated and will be removed in a future version. "
+            "There are no alternatives.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
         msg = (
             "Use a Context instance to send events from a step. "
             "Make sure your step method or function takes a parameter of type Context like `ctx: Context` and "
