@@ -1,16 +1,16 @@
 import asyncio
 import warnings
 from contextlib import asynccontextmanager
-from typing import Any, AsyncGenerator, Generic, Optional, TypeVar
+from typing import Any, AsyncGenerator, Generic, Optional
 
 from pydantic import BaseModel, ValidationError
+from typing_extensions import TypeVar
 
 from workflows.events import DictLikeModel
 
 from .serializers import BaseSerializer
 
 MAX_DEPTH = 1000
-MODEL_T = TypeVar("MODEL_T", bound=BaseModel)
 
 
 # Only warn once about unserializable keys
@@ -31,6 +31,10 @@ class DictState(DictLikeModel):
 
     def __init__(self, **params: Any):
         super().__init__(**params)
+
+
+# Default state type is DictState for the generic type
+MODEL_T = TypeVar("MODEL_T", bound=BaseModel, default=DictState)
 
 
 class InMemoryStateStore(Generic[MODEL_T]):
