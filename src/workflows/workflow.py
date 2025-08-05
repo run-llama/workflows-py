@@ -312,8 +312,7 @@ class Workflow(metaclass=WorkflowMeta):
         DEPRECATED: This method is deprecated and will be removed in a future version.
         """
         warnings.warn(
-            "send_event() is deprecated and will be removed in a future version. "
-            "There are no alternatives.",
+            "send_event() is deprecated and will be removed in a future version. Use ctx.send_event() instead.",
             DeprecationWarning,
             stacklevel=2,
         )
