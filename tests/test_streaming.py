@@ -117,6 +117,24 @@ async def test_multiple_sequential_streams() -> None:
 
 
 @pytest.mark.asyncio
+async def test_consume_only_once() -> None:
+    wf = StreamingWorkflow()
+    handler = wf.run()
+
+    async for _ in handler.stream_events():
+        pass
+
+    with pytest.raises(
+        WorkflowRuntimeError,
+        match="All the streamed events have already been consumed.",
+    ):
+        async for _ in handler.stream_events():
+            pass
+
+    await handler
+
+
+@pytest.mark.asyncio
 async def test_multiple_ongoing_streams() -> None:
     wf = StreamingWorkflow()
     stream_1 = wf.run()
