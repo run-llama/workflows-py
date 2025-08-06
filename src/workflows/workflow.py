@@ -378,6 +378,20 @@ class Workflow(metaclass=WorkflowMeta):
         **kwargs: Any,
     ) -> WorkflowHandler:
         """Runs the workflow until completion."""
+        if checkpoint_callback:
+            warnings.warn(
+                "'checkpoint_callback' parameter is deprecated and will be removed in a future version.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+
+        if stepwise:
+            warnings.warn(
+                "'stepwise' execution is deprecated and will be removed in a future version.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+
         # Validate the workflow and determine HITL usage
         uses_hitl = self._validate()
         if uses_hitl and stepwise:
@@ -477,6 +491,12 @@ class Workflow(metaclass=WorkflowMeta):
         The `Context` snapshot contained in the checkpoint is loaded and used
         to execute the `Workflow`.
         """
+        warnings.warn(
+            "WorkflowCheckpointer is deprecated and will be removed in a future version.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
         # load the `Context` from the checkpoint
         ctx_serializer = ctx_serializer or JsonSerializer()
         ctx = Context.from_dict(self, checkpoint.ctx_state, serializer=ctx_serializer)
