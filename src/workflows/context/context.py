@@ -37,7 +37,6 @@ from .state_store import MODEL_T, DictState, InMemoryStateStore
 
 if TYPE_CHECKING:  # pragma: no cover
     from workflows import Workflow
-    from workflows.checkpointer import CheckpointCallback
 
 T = TypeVar("T", bound=Event)
 EventBuffer = dict[str, list[Event]]
@@ -593,7 +592,6 @@ class Context(Generic[MODEL_T]):
         config: StepConfig,
         stepwise: bool,
         verbose: bool,
-        checkpoint_callback: "CheckpointCallback | None",
         run_id: str,
         resource_manager: ResourceManager,
     ) -> None:
@@ -605,7 +603,6 @@ class Context(Generic[MODEL_T]):
                     config=config,
                     stepwise=stepwise,
                     verbose=verbose,
-                    checkpoint_callback=checkpoint_callback,
                     run_id=run_id,
                     resource_manager=resource_manager,
                 ),
@@ -620,7 +617,6 @@ class Context(Generic[MODEL_T]):
         config: StepConfig,
         stepwise: bool,
         verbose: bool,
-        checkpoint_callback: "CheckpointCallback | None",
         run_id: str,
         resource_manager: ResourceManager,
     ) -> None:
@@ -745,30 +741,9 @@ class Context(Generic[MODEL_T]):
                     if new_ev is not None:
                         self.add_holding_event(new_ev)
                     self._step_event_written.notify()  # shares same lock
-
                     await self.remove_from_in_progress(name=name, ev=ev)
-
-                    # for stepwise Checkpoint after handler.run_step() call
-                    if checkpoint_callback:
-                        await checkpoint_callback(
-                            run_id=run_id,
-                            ctx=self,
-                            last_completed_step=name,
-                            input_ev=ev,
-                            output_ev=new_ev,
-                        )
             else:
-                # for regular execution, Checkpoint just before firing the next event
                 await self.remove_from_in_progress(name=name, ev=ev)
-                if checkpoint_callback:
-                    await checkpoint_callback(
-                        run_id=run_id,
-                        ctx=self,
-                        last_completed_step=name,
-                        input_ev=ev,
-                        output_ev=new_ev,
-                    )
-
                 # InputRequiredEvent's are special case and need to be written to the stream
                 # this way, the user can access and respond to the event
                 if isinstance(new_ev, InputRequiredEvent):

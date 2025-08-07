@@ -28,7 +28,6 @@ Generally, the code organization is relatively flat. Here's a quick overview of 
 - **[src/workflows/context/](src/workflows/context/)**: Context management for workflow state and data passing between steps
   - **[src/workflows/context/context.py](src/workflows/context/context.py)**: Main `Context` class that holds workflow state and handles event routing
   - **[src/workflows/context/serializers.py](src/workflows/context/serializers.py)**: Serialization utilities for persisting workflow state
-- **[src/workflows/checkpointer.py](src/workflows/checkpointer.py)**: Workflow checkpointing and resumption functionality
 - **[src/workflows/resource.py](src/workflows/resource.py)**: Management of external resources that workflows can depend on
 - **[src/workflows/retry_policy.py](src/workflows/retry_policy.py)**: Configurable retry logic for failed steps
 - **[src/workflows/errors.py](src/workflows/errors.py)**: Custom exception types for workflow-specific errors
