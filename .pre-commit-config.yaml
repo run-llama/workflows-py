@@ -45,7 +45,11 @@ repos:
             --ignore-missing-imports,
             --python-version=3.11,
           ]
-        # exclude: ^(examples/|e2e_tests/|tests/message_queues/test_aws.py)
+
+  - repo: https://github.com/DetachHead/basedpyright-pre-commit-mirror
+    rev: 1.31.1
+    hooks:
+      - id: basedpyright
 
   - repo: https://github.com/codespell-project/codespell
     rev: v2.3.0

@@ -2,7 +2,7 @@
 # Copyright (c) 2025 LlamaIndex Inc.
 
 import asyncio
-from typing import Any
+from typing import AsyncGenerator
 
 import pytest
 
@@ -18,7 +18,7 @@ from .conftest import OneTestEvent
 class StreamingWorkflow(Workflow):
     @step
     async def chat(self, ctx: Context, ev: StartEvent) -> StopEvent:
-        async def stream_messages() -> Any:
+        async def stream_messages() -> AsyncGenerator[str, None]:
             resp = "Paul Graham is a British-American computer scientist, entrepreneur, vc, and writer."
             for word in resp.split():
                 yield word

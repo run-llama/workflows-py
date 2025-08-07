@@ -28,6 +28,9 @@ dependencies = [
 [project.optional-dependencies]
 server = ["starlette>=0.39.0", "uvicorn>=0.32.0"]
 
+[tool.basedpyright]
+typeCheckingMode = "standard"
+
 [tool.coverage.run]
 omit = ["tests/*"]
 
