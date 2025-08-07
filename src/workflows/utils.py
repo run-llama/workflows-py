@@ -25,35 +25,13 @@ try:
 except ImportError:  # pragma: no cover
     from typing import Union as UnionType  # type: ignore[assignment]
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel
 
 from .errors import WorkflowValidationError
 from .events import Event, EventType
 from .resource import ResourceDefinition
 
 BUSY_WAIT_DELAY = 0.01
-
-
-class ServiceDefinition(BaseModel):
-    """
-    A Pydantic model representing a service definition in a workflow step.
-
-    This class defines a service that can be injected into a workflow step.
-    It is made hashable through Pydantic's ConfigDict to enable its use in collections.
-
-    Attributes:
-        name (str): The name of the service parameter in the step function.
-        service (Any): The type or class of the service to be injected.
-        default_value (Optional[Any]): Default value for the service if not provided.
-
-    """
-
-    # Make the service definition hashable
-    model_config = ConfigDict(frozen=True)
-
-    name: str
-    service: Any
-    default_value: Any | None
 
 
 class StepSignatureSpec(BaseModel):
@@ -63,7 +41,6 @@ class StepSignatureSpec(BaseModel):
     return_types: list[Any]
     context_parameter: str | None
     context_state_type: Any | None
-    requested_services: list[ServiceDefinition] | None
     resources: list[Any]
 
 
@@ -79,7 +56,6 @@ def inspect_signature(fn: Callable) -> StepSignatureSpec:
             - accepted_events: Dictionary mapping parameter names to their event types
             - return_types: List of return type annotations
             - context_parameter: Name of the context parameter if present
-            - requested_services: List of required service definitions
 
     Raises:
         TypeError: If fn is not a callable object
@@ -94,7 +70,6 @@ def inspect_signature(fn: Callable) -> StepSignatureSpec:
     accepted_events: dict[str, list[EventType]] = {}
     context_parameter = None
     context_state_type = None
-    requested_services = []
     resources = []
 
     # Inspect function parameters
@@ -139,23 +114,11 @@ def inspect_signature(fn: Callable) -> StepSignatureSpec:
             accepted_events[name] = param_types
             continue
 
-        # Everything else will be treated as a service request
-        default_value = t.default
-        if default_value is inspect.Parameter.empty:
-            default_value = None
-
-        requested_services.append(
-            ServiceDefinition(
-                name=name, service=param_types[0], default_value=default_value
-            )
-        )
-
     return StepSignatureSpec(
         accepted_events=accepted_events,
         return_types=_get_return_types(fn),
         context_parameter=context_parameter,
         context_state_type=context_state_type,
-        requested_services=requested_services,
         resources=resources,
     )
 

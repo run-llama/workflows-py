@@ -30,7 +30,6 @@ from workflows.errors import (
 )
 from workflows.events import Event, InputRequiredEvent
 from workflows.resource import ResourceManager
-from workflows.service import ServiceManager
 from workflows.types import RunResultT
 
 from .serializers import BaseSerializer, JsonSerializer
@@ -594,7 +593,6 @@ class Context(Generic[MODEL_T]):
         stepwise: bool,
         verbose: bool,
         run_id: str,
-        service_manager: ServiceManager,
         resource_manager: ResourceManager,
     ) -> None:
         self._tasks.add(
@@ -606,7 +604,6 @@ class Context(Generic[MODEL_T]):
                     stepwise=stepwise,
                     verbose=verbose,
                     run_id=run_id,
-                    service_manager=service_manager,
                     resource_manager=resource_manager,
                 ),
                 name=name,
@@ -621,7 +618,6 @@ class Context(Generic[MODEL_T]):
         stepwise: bool,
         verbose: bool,
         run_id: str,
-        service_manager: ServiceManager,
         resource_manager: ResourceManager,
     ) -> None:
         while True:
@@ -666,11 +662,6 @@ class Context(Generic[MODEL_T]):
             kwargs: dict[str, Any] = {}
             if config.context_parameter:
                 kwargs[config.context_parameter] = self
-            for service_definition in config.requested_services:
-                service = service_manager.get(
-                    service_definition.name, service_definition.default_value
-                )
-                kwargs[service_definition.name] = service
             for resource in config.resources:
                 kwargs[resource.name] = await resource_manager.get(
                     resource=resource.resource

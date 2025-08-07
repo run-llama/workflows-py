@@ -102,7 +102,6 @@ def test_send_event_to_wrong_step(ctx: Context) -> None:
         return_types=[],
         context_parameter="",
         num_workers=99,
-        requested_services=[],
         retry_policy=None,
         resources=[],
     )

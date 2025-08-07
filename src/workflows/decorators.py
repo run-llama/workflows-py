@@ -10,7 +10,6 @@ from pydantic import BaseModel, ConfigDict, Field
 from .errors import WorkflowValidationError
 from .resource import ResourceDefinition
 from .utils import (
-    ServiceDefinition,
     inspect_signature,
     is_free_function,
     validate_step_signature,
@@ -29,7 +28,6 @@ class StepConfig(BaseModel):
     return_types: list[Any]
     context_parameter: str | None
     num_workers: int
-    requested_services: list[ServiceDefinition]
     retry_policy: RetryPolicy | None
     resources: list[ResourceDefinition]
     context_state_type: Type[BaseModel] | None = Field(default=None)
@@ -77,7 +75,6 @@ def step(
             context_parameter=spec.context_parameter,
             context_state_type=spec.context_state_type,
             num_workers=num_workers,
-            requested_services=spec.requested_services or [],
             retry_policy=retry_policy,
             resources=spec.resources,
         )

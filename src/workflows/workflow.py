@@ -36,13 +36,8 @@ from .events import (
 )
 from .handler import WorkflowHandler
 from .resource import ResourceManager
-from .service import ServiceManager
 from .types import RunResultT
-from .utils import (
-    ServiceDefinition,
-    get_steps_from_class,
-    get_steps_from_instance,
-)
+from .utils import get_steps_from_class, get_steps_from_instance
 
 dispatcher = get_dispatcher(__name__)
 logger = logging.getLogger()
@@ -74,7 +69,6 @@ class Workflow(metaclass=WorkflowMeta):
         timeout: float | None = 45.0,
         disable_validation: bool = False,
         verbose: bool = False,
-        service_manager: ServiceManager | None = None,
         resource_manager: ResourceManager | None = None,
         num_concurrent_runs: int | None = None,
     ) -> None:
@@ -91,9 +85,6 @@ class Workflow(metaclass=WorkflowMeta):
                 of the problem.
             verbose:
                 Whether or not the workflow should print additional informative messages during execution.
-            service_manager:
-                The instance of the `ServiceManager` used to make nested workflows available to this
-                workflow instance. The default value is the best choice unless you're customizing the workflow runtime.
             num_concurrent_runs:
                 maximum number of .run() executions occurring simultaneously. If set to `None`, there
                 is no limit to this number.
@@ -112,8 +103,6 @@ class Workflow(metaclass=WorkflowMeta):
         # Broker machinery
         self._contexts: WeakSet[Context] = WeakSet()
         self._stepwise_context: Context | None = None
-        # Services management
-        self._service_manager = service_manager or ServiceManager()
         # Resource management
         self._resource_manager = resource_manager or ResourceManager()
         # Instrumentation
@@ -252,25 +241,6 @@ class Workflow(metaclass=WorkflowMeta):
 
         cls._step_functions[func.__name__] = func
 
-    def add_workflows(self, **workflows: "Workflow") -> None:
-        """
-        Adds one or more nested workflows to this workflow.
-
-        This method only accepts keyword arguments, and the name of the parameter
-        will be used as the name of the workflow.
-
-        DEPRECATED: This method is deprecated and will be removed in a future version.
-        You can create a sub-workflow directly in the step function or in the workflow
-        class constructor.
-        """
-        warnings.warn(
-            "add_workflows() is deprecated and will be removed in a future version.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        for name, wf in workflows.items():
-            self._service_manager.add(name, wf)
-
     def _get_steps(self) -> dict[str, Callable]:
         """Returns all the steps, whether defined as methods or free functions."""
         return {**get_steps_from_instance(self), **self._step_functions}  # type: ignore[attr-defined]
@@ -321,7 +291,6 @@ class Workflow(metaclass=WorkflowMeta):
                     stepwise=stepwise,
                     verbose=self._verbose,
                     run_id=run_id,
-                    service_manager=self._service_manager,
                     resource_manager=self._resource_manager,
                 )
 
@@ -513,7 +482,6 @@ class Workflow(metaclass=WorkflowMeta):
 
         produced_events: set[type] = {self._start_event_class}
         consumed_events: set[type] = set()
-        requested_services: set[ServiceDefinition] = set()
 
         # Collect steps that incorrectly accept StopEvent
         steps_accepting_stop_event: list[str] = []
@@ -539,8 +507,6 @@ class Workflow(metaclass=WorkflowMeta):
                     continue
 
                 produced_events.add(event_type)
-
-            requested_services.update(step_config.requested_services)
 
         # Raise error if any steps incorrectly accept StopEvent
         if steps_accepting_stop_event:
@@ -586,17 +552,6 @@ class Workflow(metaclass=WorkflowMeta):
             raise WorkflowValidationError(
                 f"The following events are produced but never consumed: {names}"
             )
-
-        # Check all the requested services are available
-        required_service_names = {
-            sd.name for sd in requested_services if sd.default_value is None
-        }
-        if required_service_names:
-            avail_service_names = set(self._service_manager._services.keys())
-            missing = required_service_names - avail_service_names
-            if missing:
-                msg = f"The following services are not available: {', '.join(str(m) for m in missing)}"
-                raise WorkflowValidationError(msg)
 
         # Check if the workflow uses human-in-the-loop
         return (
