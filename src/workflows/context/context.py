@@ -162,22 +162,6 @@ class Context(Generic[MODEL_T]):
             queue.put_nowait(event_obj)
         return queue
 
-    def _deserialize_globals(
-        self, serialized_globals: dict[str, Any], serializer: BaseSerializer
-    ) -> dict[str, Any]:
-        """
-        DEPRECATED: Kept to support reloading a Context from an old serialized payload.
-
-        This method is deprecated and will be removed in a future version.
-        """
-        deserialized_globals = {}
-        for key, value in serialized_globals.items():
-            try:
-                deserialized_globals[key] = serializer.deserialize(value)
-            except Exception as e:
-                raise ValueError(f"Failed to deserialize value for key {key}: {e}")
-        return deserialized_globals
-
     def to_dict(self, serializer: BaseSerializer | None = None) -> dict[str, Any]:
         serializer = serializer or JsonSerializer()
 
@@ -226,11 +210,6 @@ class Context(Generic[MODEL_T]):
                 context._state_store = InMemoryStateStore.from_dict(
                     data["state"], serializer
                 )
-            elif "globals" in data:
-                # Deserialize legacy globals for backward compatibility
-                globals = context._deserialize_globals(data["globals"], serializer)
-                default_store = InMemoryStateStore(DictState(**globals))
-                context._state_store = cast(InMemoryStateStore[MODEL_T], default_store)
 
             context._streaming_queue = context._deserialize_queue(
                 data["streaming_queue"], serializer
@@ -262,37 +241,6 @@ class Context(Generic[MODEL_T]):
         except KeyError as e:
             msg = "Error creating a Context instance: the provided payload has a wrong or old format."
             raise ContextSerdeError(msg) from e
-
-    async def set(
-        self, key: str, value: Any, make_private: bool = False
-    ) -> None:  # pragma: no cover
-        """
-        Store `value` into the Context under `key`.
-
-        DEPRECATED: Use `await ctx.store.set(key, value)` instead.
-        This method is deprecated and will be removed in a future version.
-
-        Args:
-            key: A unique string to identify the value stored.
-            value: The data to be stored.
-
-        Raises:
-            ValueError: When make_private is True but a key already exists in the global storage.
-
-        """
-        warnings.warn(
-            "Context.set(key, value) is deprecated. Use 'await ctx.store.set(key, value)' instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-
-        if make_private:
-            warnings.warn(
-                "`make_private` is deprecated and will be ignored", DeprecationWarning
-            )
-
-        # Delegate to state manager
-        await self.store.set(key, value)
 
     async def mark_in_progress(self, name: str, ev: Event) -> None:
         """
@@ -333,40 +281,10 @@ class Context(Generic[MODEL_T]):
         async with self.lock:
             return list(self._currently_running_steps)
 
-    async def get(self, key: str, default: Any | None = Ellipsis) -> Any:
-        """
-        Get the value corresponding to `key` from the Context.
-
-        DEPRECATED: Use `await ctx.store.get(key)` instead.
-        This method is deprecated and will be removed in a future version.
-
-        Args:
-            key: A unique string to identify the value stored.
-            default: The value to return when `key` is missing instead of raising an exception.
-
-        Raises:
-            ValueError: When there's not value accessible corresponding to `key`.
-
-        """
-        warnings.warn(
-            "Context.get() is deprecated. Use 'await ctx.store.get()' instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-
-        return await self.store.get(key, default=default)
-
     @property
     def lock(self) -> asyncio.Lock:
         """Returns a mutex to lock the Context."""
         return self._lock
-
-    @property
-    def session(self) -> "Context":  # pragma: no cover
-        """This property is provided for backward compatibility."""
-        msg = "`session` is deprecated, please use the Context instance directly."
-        warnings.warn(msg, DeprecationWarning, stacklevel=2)
-        return self
 
     def _get_full_path(self, ev_type: Type[Event]) -> str:
         return f"{ev_type.__module__}.{ev_type.__name__}"
@@ -552,22 +470,6 @@ class Context(Generic[MODEL_T]):
     @property
     def streaming_queue(self) -> asyncio.Queue:
         return self._streaming_queue
-
-    def clear(self) -> None:
-        """Clear any data stored in the context.
-
-        DEPRECATED: Use `await ctx.store.clear()` instead.
-        This method is deprecated and will be removed in a future version.
-        """
-        warnings.warn(
-            "Context.clear() is deprecated. Use 'await ctx.store.clear()' instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-
-        # Clear the user data storage
-        if self._state_store is not None:
-            self._state_store._state = self._state_store._state.__class__()
 
     async def shutdown(self) -> None:
         """
