@@ -18,8 +18,7 @@ from weakref import WeakSet
 from llama_index_instrumentation import get_dispatcher
 from pydantic import ValidationError
 
-from .checkpointer import Checkpoint, CheckpointCallback
-from .context import BaseSerializer, Context, JsonSerializer
+from .context import Context
 from .decorators import StepConfig, step
 from .errors import (
     WorkflowConfigurationError,
@@ -280,7 +279,6 @@ class Workflow(metaclass=WorkflowMeta):
         self,
         stepwise: bool = False,
         ctx: Context | None = None,
-        checkpoint_callback: CheckpointCallback | None = None,
     ) -> Tuple[Context, str]:
         """
         sets up the queues and tasks for each declared step.
@@ -322,7 +320,6 @@ class Workflow(metaclass=WorkflowMeta):
                     config=step_config,
                     stepwise=stepwise,
                     verbose=self._verbose,
-                    checkpoint_callback=checkpoint_callback,
                     run_id=run_id,
                     service_manager=self._service_manager,
                     resource_manager=self._resource_manager,
@@ -392,18 +389,10 @@ class Workflow(metaclass=WorkflowMeta):
         self,
         ctx: Context | None = None,
         stepwise: bool = False,
-        checkpoint_callback: CheckpointCallback | None = None,
         start_event: StartEvent | None = None,
         **kwargs: Any,
     ) -> WorkflowHandler:
         """Runs the workflow until completion."""
-        if checkpoint_callback:
-            warnings.warn(
-                "'checkpoint_callback' parameter is deprecated and will be removed in a future version.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-
         if stepwise:
             warnings.warn(
                 "'stepwise' execution is deprecated and will be removed in a future version.",
@@ -419,9 +408,7 @@ class Workflow(metaclass=WorkflowMeta):
             )
 
         # Start the machinery in a new Context or use the provided one
-        ctx, run_id = self._start(
-            ctx=ctx, stepwise=stepwise, checkpoint_callback=checkpoint_callback
-        )
+        ctx, run_id = self._start(ctx=ctx, stepwise=stepwise)
 
         result = WorkflowHandler(ctx=ctx, run_id=run_id)
 
@@ -495,45 +482,6 @@ class Workflow(metaclass=WorkflowMeta):
 
         asyncio.create_task(_run_workflow())
         return result
-
-    @dispatcher.span
-    def run_from(
-        self,
-        checkpoint: Checkpoint,
-        ctx_serializer: BaseSerializer | None = None,
-        checkpoint_callback: CheckpointCallback | None = None,
-        **kwargs: Any,
-    ) -> WorkflowHandler:
-        """
-        Run from a specified Checkpoint.
-
-        The `Context` snapshot contained in the checkpoint is loaded and used
-        to execute the `Workflow`.
-        """
-        warnings.warn(
-            "WorkflowCheckpointer is deprecated and will be removed in a future version.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-
-        # load the `Context` from the checkpoint
-        ctx_serializer = ctx_serializer or JsonSerializer()
-        ctx = Context.from_dict(self, checkpoint.ctx_state, serializer=ctx_serializer)
-        handler: WorkflowHandler = self.run(
-            ctx=ctx, checkpoint_callback=checkpoint_callback, **kwargs
-        )
-
-        # only kick off the workflow if there are no in-progress events
-        # in-progress events are already started in self.run()
-        num_in_progress = sum(len(v) for v in ctx._in_progress.values())
-        if (
-            num_in_progress == 0
-            and handler.ctx is not None
-            and checkpoint.output_event is not None
-        ):
-            handler.ctx.send_event(checkpoint.output_event)
-
-        return handler
 
     def is_done(self) -> bool:
         """Checks if the workflow is done."""
