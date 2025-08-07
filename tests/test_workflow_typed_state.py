@@ -38,7 +38,9 @@ async def test_typed_state() -> None:
     _ = await handler
 
     # Check final state
-    state = await handler.ctx.store.get_state()
+    ctx = handler.ctx
+    assert ctx is not None
+    state = await ctx.store.get_state()
     assert state.model_dump() == MyState(name="John", age=31).model_dump()
 
 
