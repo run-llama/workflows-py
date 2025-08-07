@@ -452,9 +452,7 @@ async def test_workflow_task_raises() -> None:
             raise ValueError("The step raised an error!")
 
     workflow = DummyWorkflow()
-    with pytest.raises(
-        WorkflowRuntimeError, match="Error in step 'step': The step raised an error!"
-    ):
+    with pytest.raises(ValueError, match="The step raised an error!"):
         await workflow.run()
 
 
@@ -467,9 +465,7 @@ async def test_workflow_task_raises_step() -> None:
 
     workflow = DummyWorkflow()
     handler = workflow.run(stepwise=True)
-    with pytest.raises(
-        WorkflowRuntimeError, match="Error in step 'step': The step raised an error!"
-    ):
+    with pytest.raises(ValueError, match="The step raised an error!"):
         await handler.run_step()
     assert handler.exception()
 
