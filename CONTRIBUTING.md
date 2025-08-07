@@ -12,7 +12,7 @@ Generally, we're looking for:
 - **Documentation improvements**: Better examples, tutorials, API documentation, or architectural explanations
 - **Testing enhancements**: More comprehensive test coverage, performance tests, or integration tests
 - **Checkpointing and persistence**: Improvements to workflow state management and resumption capabilities
-- **Resource and service management**: Better handling of external resources and service dependencies
+- **Resource management**: Better handling of external resources and dependencies
 - **Bug fixes**: Any issues you've encountered while using the library
 
 Ideas beyond the above are welcome! This list is not exhaustive.
@@ -29,7 +29,7 @@ Generally, the code organization is relatively flat. Here's a quick overview of 
   - **[src/workflows/context/context.py](src/workflows/context/context.py)**: Main `Context` class that holds workflow state and handles event routing
   - **[src/workflows/context/serializers.py](src/workflows/context/serializers.py)**: Serialization utilities for persisting workflow state
 - **[src/workflows/checkpointer.py](src/workflows/checkpointer.py)**: Workflow checkpointing and resumption functionality
-- **[src/workflows/service.py](src/workflows/service.py)** and **[src/workflows/resource.py](src/workflows/resource.py)**: Management of external services and resources that workflows can depend on
+- **[src/workflows/resource.py](src/workflows/resource.py)**: Management of external resources that workflows can depend on
 - **[src/workflows/retry_policy.py](src/workflows/retry_policy.py)**: Configurable retry logic for failed steps
 - **[src/workflows/errors.py](src/workflows/errors.py)**: Custom exception types for workflow-specific errors
 - **[src/workflows/types.py](src/workflows/types.py)**: Type definitions and type variables used throughout the library
