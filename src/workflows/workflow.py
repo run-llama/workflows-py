@@ -180,6 +180,9 @@ class Workflow(metaclass=WorkflowMeta):
         """
         Returns an async generator to consume any event that workflow steps decide to stream.
 
+        DEPRECATED: This method is deprecated and will be removed in a future version.
+        Use `handler.stream_events()` instead, where `handler` is the return value of `workflow.run()`.
+
         To be able to use this generator, the usual pattern is to wrap the `run` call in a background task using
         `asyncio.create_task`, then enter a for loop like this:
 
@@ -190,7 +193,23 @@ class Workflow(metaclass=WorkflowMeta):
                 print(ev)
 
             await r
+
+        New recommended pattern:
+            wf = StreamingWorkflow()
+            handler = wf.run()
+
+            async for ev in handler.stream_events():
+                print(ev)
+
+            await handler
         """
+        warnings.warn(
+            "Workflow.stream_events() is deprecated and will be removed in a future version. "
+            "Use handler.stream_events() instead, where handler is the return value of workflow.run().",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+
         # In the typical streaming use case, `run()` is not awaited but wrapped in a asyncio.Task. Since we'll be
         # consuming events produced by `run()`, we must give its Task the chance to run before entering the dequeueing
         # loop.
