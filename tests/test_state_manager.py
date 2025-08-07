@@ -6,7 +6,7 @@ from pydantic import (
     field_serializer,
     field_validator,
 )
-from typing import Union
+from typing import Union, cast
 
 from workflows.context.serializers import JsonSerializer
 from workflows.context.state_store import DictState, InMemoryStateStore
@@ -157,8 +157,9 @@ async def test_state_manager_custom_serialization(
     assert await custom_state_manager.get("age") == 25
 
     data = custom_state_manager.to_dict(JsonSerializer())
-    new_state_manager: InMemoryStateStore[MyState] = InMemoryStateStore.from_dict(
-        data, JsonSerializer()
+    new_state_manager: InMemoryStateStore[MyState] = cast(
+        InMemoryStateStore[MyState],
+        InMemoryStateStore.from_dict(data, JsonSerializer()),
     )
 
     assert await new_state_manager.get("name") == "Jane"

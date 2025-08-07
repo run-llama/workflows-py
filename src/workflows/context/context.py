@@ -199,7 +199,7 @@ class Context(Generic[MODEL_T]):
         workflow: "Workflow",
         data: dict[str, Any],
         serializer: BaseSerializer | None = None,
-    ) -> "Context":
+    ) -> "Context[MODEL_T]":
         serializer = serializer or JsonSerializer()
 
         try:
@@ -207,8 +207,9 @@ class Context(Generic[MODEL_T]):
 
             # Deserialize state manager using the state manager's method
             if "state" in data:
-                context._state_store = InMemoryStateStore.from_dict(
-                    data["state"], serializer
+                context._state_store = cast(
+                    InMemoryStateStore[MODEL_T],
+                    InMemoryStateStore.from_dict(data["state"], serializer),
                 )
 
             context._streaming_queue = context._deserialize_queue(
