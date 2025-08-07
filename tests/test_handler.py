@@ -25,27 +25,6 @@ async def test_stream_no_context() -> None:
 
 
 @pytest.mark.asyncio
-async def test_run_step_no_context() -> None:
-    h = WorkflowHandler()
-    with pytest.raises(
-        ValueError,
-        match="Context must be set to run a workflow step-wise!",
-    ):
-        await h.run_step()
-
-
-@pytest.mark.asyncio
-async def test_run_step_no_stepwise() -> None:
-    ctx = mock.MagicMock(spec=Context, stepwise=False)
-    h = WorkflowHandler(ctx=ctx)
-    with pytest.raises(
-        ValueError,
-        match="Workflow must be created passing stepwise=True to call this method.",
-    ):
-        await h.run_step()
-
-
-@pytest.mark.asyncio
 async def test_stream_events_consume_only_once() -> None:
     ctx = mock.MagicMock(spec=Context)
 
