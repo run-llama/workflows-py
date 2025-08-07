@@ -299,33 +299,6 @@ class Workflow(metaclass=WorkflowMeta):
 
         return ctx, run_id
 
-    def send_event(self, message: Event, step: str | None = None) -> None:
-        """
-        Send an event to the workflow.
-
-        DEPRECATED: This method is deprecated and will be removed in a future version.
-        """
-        warnings.warn(
-            "send_event() is deprecated and will be removed in a future version. Use ctx.send_event() instead.",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-
-        msg = (
-            "Use a Context instance to send events from a step. "
-            "Make sure your step method or function takes a parameter of type Context like `ctx: Context` and "
-            "replace `self.send_event(...)` with `ctx.send_event(...)` in your code."
-        )
-
-        if len(self._contexts) > 1:
-            # We can't possibly know to what session we should send this event, raise an error.
-            raise WorkflowRuntimeError(msg)
-
-        # Emit a warning as this won't work for multiple run()s.
-        warnings.warn(msg)
-        ctx = next(iter(self._contexts))
-        ctx.send_event(message=message, step=step)
-
     def _get_start_event_instance(
         self, start_event: StartEvent | None, **kwargs: Any
     ) -> StartEvent:

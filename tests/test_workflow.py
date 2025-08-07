@@ -378,24 +378,6 @@ async def test_workflow_multiple_runs() -> None:
     assert set(results) == {6, 84, -198}
 
 
-def test_deprecated_send_event(workflow: Workflow) -> None:
-    ev = StartEvent()
-    ctx_1 = mock.MagicMock()
-
-    # One context, assert step emits a warning
-    workflow._contexts.add(ctx_1)
-    with pytest.warns(UserWarning):
-        workflow.send_event(message=ev)
-    ctx_1.send_event.assert_called_with(message=ev, step=None)
-
-    # Second context, assert step raises an exception
-    ctx_2 = mock.MagicMock()
-    workflow._contexts.add(ctx_2)
-    with pytest.raises(WorkflowRuntimeError):
-        workflow.send_event(message=ev)
-    ctx_2.send_event.assert_not_called()
-
-
 def test_add_step() -> None:
     class TestWorkflow(Workflow):
         @step
