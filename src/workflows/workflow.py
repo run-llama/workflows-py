@@ -9,7 +9,6 @@ import uuid
 import warnings
 from typing import (
     Any,
-    AsyncGenerator,
     Callable,
     Tuple,
 )
@@ -28,7 +27,6 @@ from .errors import (
     WorkflowValidationError,
 )
 from .events import (
-    Event,
     HumanResponseEvent,
     InputRequiredEvent,
     StartEvent,
@@ -163,65 +161,6 @@ class Workflow(metaclass=WorkflowMeta):
     def stop_event_class(self) -> type[RunResultT]:
         """Returns the StopEvent type used in this workflow."""
         return self._stop_event_class
-
-    async def stream_events(self) -> AsyncGenerator[Event, None]:
-        """
-        Returns an async generator to consume any event that workflow steps decide to stream.
-
-        DEPRECATED: This method is deprecated and will be removed in a future version.
-        Use `handler.stream_events()` instead, where `handler` is the return value of `workflow.run()`.
-
-        To be able to use this generator, the usual pattern is to wrap the `run` call in a background task using
-        `asyncio.create_task`, then enter a for loop like this:
-
-            wf = StreamingWorkflow()
-            r = asyncio.create_task(wf.run())
-
-            async for ev in wf.stream_events():
-                print(ev)
-
-            await r
-
-        New recommended pattern:
-            wf = StreamingWorkflow()
-            handler = wf.run()
-
-            async for ev in handler.stream_events():
-                print(ev)
-
-            await handler
-        """
-        warnings.warn(
-            "Workflow.stream_events() is deprecated and will be removed in a future version. "
-            "Use handler.stream_events() instead, where handler is the return value of workflow.run().",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-
-        # In the typical streaming use case, `run()` is not awaited but wrapped in a asyncio.Task. Since we'll be
-        # consuming events produced by `run()`, we must give its Task the chance to run before entering the dequeueing
-        # loop.
-        await asyncio.sleep(0)
-
-        if len(self._contexts) > 1:
-            # We can't possibly know from what session we should stream events, raise an error.
-            msg = (
-                "This workflow has multiple concurrent runs in progress and cannot stream events. "
-                "To be able to stream events, make sure you call `run()` on this workflow only once."
-            )
-            raise WorkflowRuntimeError(msg)
-
-        # Enter the dequeuing loop.
-        ctx = next(iter(self._contexts))
-        while True:
-            ev = await ctx.streaming_queue.get()
-            if isinstance(ev, StopEvent):
-                break
-
-            yield ev
-
-        # remove context to free up room for the next stream_events call
-        self._contexts.remove(ctx)
 
     @classmethod
     def add_step(cls, func: Callable) -> None:

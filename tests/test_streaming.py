@@ -42,19 +42,6 @@ async def test_e2e() -> None:
 
 
 @pytest.mark.asyncio
-async def test_too_many_runs() -> None:
-    wf = StreamingWorkflow()
-    r = asyncio.gather(wf.run(), wf.run())
-    with pytest.raises(
-        WorkflowRuntimeError,
-        match="This workflow has multiple concurrent runs in progress and cannot stream events",
-    ):
-        async for ev in wf.stream_events():
-            pass
-    await r
-
-
-@pytest.mark.asyncio
 async def test_task_raised() -> None:
     class DummyWorkflow(Workflow):
         @step
