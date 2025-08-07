@@ -1,0 +1,29 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "docs"
+version = "0.1.0"
+description = ""
+authors = [{name = "Your Name", email = "you@example.com"}]
+requires-python = ">=3.10"
+readme = "README.md"
+dependencies = [
+  "llama-index-workflows[server]",
+  "mkdocs>=1.6.1,<2",
+  "mkdocstrings[python]>=0.26.1,<1",
+  "mkdocs-include-dir-to-nav>=1.2.0,<2",
+  "mkdocs-material>=9.5.39,<10",
+  "mkdocs-redirects>=1.2.1,<2",
+  "mkdocs-click>=0.8.1,<1",
+  "mkdocs-render-swagger-plugin>=0.1.2,<1",
+  "griffe-fieldz>=0.2.0,<1",
+  "mkdocs-github-admonitions-plugin>=0.0.3,<1"
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+llama-index-workflows = {path = "../", editable = true}

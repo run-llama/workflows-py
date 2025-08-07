@@ -76,7 +76,7 @@ class Workflow(metaclass=WorkflowMeta):
             timeout:
                 Number of seconds after the workflow execution will be halted, raising a `WorkflowTimeoutError`
                 exception. If set to `None`, the timeout will be disabled.
-            disable_validaton:
+            disable_validation:
                 Whether or not the workflow should be validated before running. In case the workflow is
                 misconfigured, a call to `run` will raise a `WorkflowValidationError` exception explaining the details
                 of the problem.
