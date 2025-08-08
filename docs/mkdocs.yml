@@ -21,6 +21,9 @@ nav:
   - Component Guides:
       - Workflows:
           - module_guides/workflow
+  - Understanding:
+      - Workflows:
+          - understanding/workflow
 plugins:
   - search
   - include_dir_to_nav
