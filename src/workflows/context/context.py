@@ -314,8 +314,8 @@ class Context(Generic[MODEL_T]):
             ev (Event): The current event to add to the buffer.
             expected (list[Type[Event]]): list of expected event types to collect.
             buffer_id (str): A unique identifier for the events collected. Ideally this should be
-            the step name, so to avoid any interference between different steps. If not provided,
-            a stable identifier will be created using the list of expected events.
+                the step name, so to avoid any interference between different steps. If not provided,
+                a stable identifier will be created using the list of expected events.
 
         Returns:
             list[Event] | None: list of collected events in the order of expected types if all
