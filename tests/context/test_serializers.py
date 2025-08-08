@@ -19,7 +19,6 @@ def test_old_serialization(ctx: Context, workflow: Workflow) -> None:
         "globals": {},
         "streaming_queue": "[]",
         "queues": {"test_id": "[]"},
-        "stepwise": False,
         "events_buffer": {},
         "in_progress": {},
         "accepted_events": [],

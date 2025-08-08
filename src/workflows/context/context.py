@@ -66,12 +66,7 @@ class Context(Generic[MODEL_T]):
     # are known to be unserializable in some cases.
     known_unserializable_keys = ("memory",)
 
-    def __init__(
-        self,
-        workflow: "Workflow",
-        stepwise: bool = False,
-    ) -> None:
-        self.stepwise = stepwise
+    def __init__(self, workflow: "Workflow") -> None:
         self.is_running = False
         # Store the step configs of this workflow, to be used in send_event
         self._step_configs: dict[str, StepConfig | None] = {}
@@ -176,7 +171,6 @@ class Context(Generic[MODEL_T]):
             "queues": {
                 k: self._serialize_queue(v, serializer) for k, v in self._queues.items()
             },
-            "stepwise": self.stepwise,
             "event_buffers": {
                 k: {
                     inner_k: [serializer.serialize(ev) for ev in inner_v]
@@ -203,7 +197,7 @@ class Context(Generic[MODEL_T]):
         serializer = serializer or JsonSerializer()
 
         try:
-            context = cls(workflow, stepwise=data["stepwise"])
+            context = cls(workflow)
 
             # Deserialize state manager using the state manager's method
             if "state" in data:
@@ -357,25 +351,6 @@ class Context(Generic[MODEL_T]):
 
         return None
 
-    def add_holding_event(self, event: Event) -> None:
-        """
-        Add an event to the list of those collected in current step.
-
-        This is only relevant for stepwise execution.
-        """
-        if self.stepwise:
-            if self._step_events_holding is None:
-                self._step_events_holding = []
-
-            self._step_events_holding.append(event)
-
-    def get_holding_events(self) -> list[Event]:
-        """Returns a copy of the list of events holding the stepwise execution."""
-        if self._step_events_holding is None:
-            return []
-
-        return list(self._step_events_holding)
-
     def send_event(self, message: Event, step: str | None = None) -> None:
         """
         Sends an event to a specific step in the workflow.
@@ -383,8 +358,6 @@ class Context(Generic[MODEL_T]):
         If step is None, the event is sent to all the receivers and we let
         them discard events they don't want.
         """
-        self.add_holding_event(message)
-
         if step is None:
             for queue in self._queues.values():
                 queue.put_nowait(message)
@@ -493,7 +466,6 @@ class Context(Generic[MODEL_T]):
         name: str,
         step: Callable,
         config: StepConfig,
-        stepwise: bool,
         verbose: bool,
         run_id: str,
         resource_manager: ResourceManager,
@@ -504,7 +476,6 @@ class Context(Generic[MODEL_T]):
                     name=name,
                     step=step,
                     config=config,
-                    stepwise=stepwise,
                     verbose=verbose,
                     run_id=run_id,
                     resource_manager=resource_manager,
@@ -518,7 +489,6 @@ class Context(Generic[MODEL_T]):
         name: str,
         step: Callable,
         config: StepConfig,
-        stepwise: bool,
         verbose: bool,
         run_id: str,
         resource_manager: ResourceManager,
@@ -527,14 +497,6 @@ class Context(Generic[MODEL_T]):
             ev = await self._queues[name].get()
             if type(ev) not in config.accepted_events:
                 continue
-
-            # do we need to wait for the step flag?
-            if stepwise:
-                await self._step_flags[name].wait()
-
-                # clear all flags so that we only run one step
-                for flag in self._step_flags.values():
-                    flag.clear()
 
             if verbose and name != "_done":
                 print(f"Running step {name}")
@@ -637,22 +599,13 @@ class Context(Generic[MODEL_T]):
                 msg = f"Step function {name} returned {type(new_ev).__name__} instead of an Event instance."
                 raise WorkflowRuntimeError(msg)
 
-            if stepwise:
-                async with self._step_condition:
-                    await self._step_condition.wait()
-
-                    if new_ev is not None:
-                        self.add_holding_event(new_ev)
-                    self._step_event_written.notify()  # shares same lock
-                    await self.remove_from_in_progress(name=name, ev=ev)
-            else:
-                await self.remove_from_in_progress(name=name, ev=ev)
-                # InputRequiredEvent's are special case and need to be written to the stream
-                # this way, the user can access and respond to the event
-                if isinstance(new_ev, InputRequiredEvent):
-                    self.write_event_to_stream(new_ev)
-                elif new_ev is not None:
-                    self.send_event(new_ev)
+            await self.remove_from_in_progress(name=name, ev=ev)
+            # InputRequiredEvent's are special case and need to be written to the stream
+            # this way, the user can access and respond to the event
+            if isinstance(new_ev, InputRequiredEvent):
+                self.write_event_to_stream(new_ev)
+            elif new_ev is not None:
+                self.send_event(new_ev)
 
     def add_cancel_worker(self) -> None:
         self._tasks.add(asyncio.create_task(self._cancel_worker()))

@@ -317,11 +317,6 @@ async def test_wait_for_multiple_events_in_workflow() -> None:
     assert result == ["fizz", "buzz"]
 
 
-def test_get_holding_events(ctx: Context) -> None:
-    ctx._step_events_holding = None
-    assert ctx.get_holding_events() == []
-
-
 @pytest.mark.asyncio
 async def test_clear(ctx: Context) -> None:
     await ctx.store.set("test_key", 42)

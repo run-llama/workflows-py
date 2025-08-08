@@ -29,7 +29,6 @@ class PostponedAnnotationsWorkflow(Workflow):
 async def test_workflow_postponed_annotations() -> None:
     workflow = PostponedAnnotationsWorkflow()
     result = await workflow.run()
-    assert workflow.is_done()
     assert result == "Handled postponed"
 
 
@@ -46,5 +45,4 @@ async def test_workflow_forward_reference() -> None:
 
     workflow = ForwardRefWorkflow()
     result = await workflow.run()
-    assert workflow.is_done()
     assert result == "Handled forward"

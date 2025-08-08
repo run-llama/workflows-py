@@ -6,7 +6,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
-import warnings
 from typing import (
     Any,
     Callable,
@@ -100,7 +99,6 @@ class Workflow(metaclass=WorkflowMeta):
         )
         # Broker machinery
         self._contexts: WeakSet[Context] = WeakSet()
-        self._stepwise_context: Context | None = None
         # Resource management
         self._resource_manager = resource_manager or ResourceManager()
         # Instrumentation
@@ -186,7 +184,6 @@ class Workflow(metaclass=WorkflowMeta):
 
     def _start(
         self,
-        stepwise: bool = False,
         ctx: Context | None = None,
     ) -> Tuple[Context, str]:
         """
@@ -196,7 +193,7 @@ class Workflow(metaclass=WorkflowMeta):
         """
         run_id = str(uuid.uuid4())
         if ctx is None:
-            ctx = Context(self, stepwise=stepwise)
+            ctx = Context(self)
             self._contexts.add(ctx)
         else:
             # clean up the context from the previous run
@@ -227,7 +224,6 @@ class Workflow(metaclass=WorkflowMeta):
                     name=name,
                     step=step_func,
                     config=step_config,
-                    stepwise=stepwise,
                     verbose=self._verbose,
                     run_id=run_id,
                     resource_manager=self._resource_manager,
@@ -269,27 +265,16 @@ class Workflow(metaclass=WorkflowMeta):
     def run(
         self,
         ctx: Context | None = None,
-        stepwise: bool = False,
         start_event: StartEvent | None = None,
         **kwargs: Any,
     ) -> WorkflowHandler:
         """Runs the workflow until completion."""
-        if stepwise:
-            warnings.warn(
-                "'stepwise' execution is deprecated and will be removed in a future version.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
 
-        # Validate the workflow and determine HITL usage
-        uses_hitl = self._validate()
-        if uses_hitl and stepwise:
-            raise WorkflowRuntimeError(
-                "Human-in-the-loop is not supported with stepwise execution"
-            )
+        # Validate the workflow
+        self._validate()
 
         # Start the machinery in a new Context or use the provided one
-        ctx, run_id = self._start(ctx=ctx, stepwise=stepwise)
+        ctx, run_id = self._start(ctx=ctx)
 
         result = WorkflowHandler(ctx=ctx, run_id=run_id)
 
@@ -363,10 +348,6 @@ class Workflow(metaclass=WorkflowMeta):
 
         asyncio.create_task(_run_workflow())
         return result
-
-    def is_done(self) -> bool:
-        """Checks if the workflow is done."""
-        return self._stepwise_context is None
 
     @step(num_workers=1)
     async def _done(self, ctx: Context, ev: StopEvent) -> None:
