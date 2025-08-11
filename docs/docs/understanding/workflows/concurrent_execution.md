@@ -24,6 +24,29 @@ class ParallelFlow(Workflow):
 
 In this example, our `start` step emits 3 `StepTwoEvent`s. The `step_two` step is decorated with `num_workers=4`, which tells the workflow to run up to 4 instances of this step concurrently (this is the default).
 
+## The `dispatch` method
+
+To simplify the multiple `send_event` calls that we used in the previous examples, we also provide a `dispatch` method within the `Context` itself:
+
+```python
+class ParallelFlow(Workflow):
+    @step
+    async def start(self, ctx: Context, ev: StartEvent) -> StepTwoEvent | None:
+        events = [
+            StepTwoEvent(query="Query 1"),
+            StepTwoEvent(query="Query 2")
+            StepTwoEvent(query="Query 3")
+        ]
+        await ctx.dispatch(events)
+
+    @step(num_workers=4)
+    async def step_two(self, ctx: Context, ev: StepTwoEvent) -> StopEvent:
+        print("Running slow query ", ev.query)
+        await asyncio.sleep(random.randint(1, 5))
+
+        return StopEvent(result=ev.query)
+```
+
 ## Collecting events
 
 If you execute the previous example, you'll note that the workflow stops after whichever query is first to complete. Sometimes that's useful, but other times you'll want to wait for all your slow operations to complete before moving on to another step. You can do this using `collect_events`:
@@ -61,6 +84,42 @@ The `collect_events` method lives on the `Context` and takes the event that trig
 The `step_three` step is fired every time a `StepThreeEvent` is received, but `collect_events` will return `None` until all 3 events have been received. At that point, the step will continue and you can do something with all 3 results together.
 
 The `result` returned from `collect_events` is an array of the events that were collected, in the order that they were received.
+
+## The `receive` method
+
+In order to make the logic expressed with `collect_event` more user-friendly, we also offer you the possibility of combining the `dispatch` method with the `receive` method:
+
+```python
+class ConcurrentFlow(Workflow):
+    @step
+    async def start(self, ctx: Context, ev: StartEvent) -> StepTwoEvent | None:
+        events = [
+            StepTwoEvent(query="Query 1"),
+            StepTwoEvent(query="Query 2")
+            StepTwoEvent(query="Query 3")
+        ]
+        await ctx.dispatch(events)
+
+    @step(num_workers=4)
+    async def step_two(self, ctx: Context, ev: StepTwoEvent) -> StepThreeEvent:
+        print("Running query ", ev.query)
+        await asyncio.sleep(random.randint(1, 5))
+        return StepThreeEvent(result=ev.query)
+
+    @step
+    async def step_three(
+        self, ctx: Context, ev: StepThreeEvent
+    ) -> StopEvent | None:
+        # wait until we receive 3 events
+        result = await ctx.receive(ev, type(ev))
+        if result is None:
+            return None
+
+        # do something with all 3 results together
+        print(result)
+        return StopEvent(result="Done")
+```
+
 
 ## Multiple event types
 
@@ -124,5 +183,51 @@ Note that the order of the event types in the array passed to `collect_events` i
 The visualization of this workflow is quite pleasing:
 
 ![A concurrent workflow](./different_events.png)
+
+Note that it is also possible to dispatch and receive multiple event types using the `dispatch`/`receive` logic we used before:
+
+```python
+class ConcurrentFlow(Workflow):
+    @step
+    async def start(
+        self, ctx: Context, ev: StartEvent
+    ) -> StepAEvent | StepBEvent | StepCEvent | None:
+        events = [
+            StepAEvent(query="Query 1"),
+            StepBEvent(query="Query 2"),
+            StepCEvent(query="Query 3"),
+        ]
+        await ctx.dispatch(events)
+
+    @step
+    async def step_a(self, ctx: Context, ev: StepAEvent) -> StepACompleteEvent:
+        print("Doing something A-ish")
+        return StepACompleteEvent(result=ev.query)
+
+    @step
+    async def step_b(self, ctx: Context, ev: StepBEvent) -> StepBCompleteEvent:
+        print("Doing something B-ish")
+        return StepBCompleteEvent(result=ev.query)
+
+    @step
+    async def step_c(self, ctx: Context, ev: StepCEvent) -> StepCCompleteEvent:
+        print("Doing something C-ish")
+        return StepCCompleteEvent(result=ev.query)
+
+    @step
+    async def step_three(
+        self,
+        ctx: Context,
+        ev: StepACompleteEvent | StepBCompleteEvent | StepCCompleteEvent,
+    ) -> StopEvent:
+        print("Received event ", ev.result)
+
+        # wait until we receive 3 events
+        if await ctx.receive(ev, type(ev)) is None:
+            return None
+
+        # do something with all 3 results together
+        return StopEvent(result="Done")
+```
 
 Now let's look at how we can extend workflows with [subclassing](subclass.md) and other techniques.
