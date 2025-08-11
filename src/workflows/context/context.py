@@ -18,6 +18,7 @@ from typing import (
     Tuple,
     Type,
     TypeVar,
+    Union,
     cast,
 )
 
@@ -374,6 +375,27 @@ class Context(Generic[MODEL_T]):
                 )
 
         self._broker_log.append(message)
+
+    async def dispatch(self, events: list[Event]) -> None:
+        dispatched = cast(dict, await self.store.get("dispatched_events", default={}))
+
+        for event in events:
+            if type(event) in dispatched:
+                dispatched[type(event)] += 1
+            else:
+                dispatched.update({type(event): 1})
+            self.send_event(event)
+
+        await self.store.set("dispatched_events", dispatched)
+
+    async def receive(
+        self, event: Event, event_type: Type[Event]
+    ) -> Union[list[Event], None]:
+        dispatched = cast(dict, await self.store.get("dispatched_events", default={}))
+        to_collect = dispatched.get(event_type, None)
+        if to_collect:
+            return self.collect_events(event, [event_type] * to_collect)
+        return None
 
     async def wait_for_event(
         self,
