@@ -22,7 +22,7 @@ nav:
           - module_guides/workflow
   - Understanding:
       - Workflows:
-          - understanding/workflow
+          - understanding/workflows
 plugins:
   - search
   - include_dir_to_nav

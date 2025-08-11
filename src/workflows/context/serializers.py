@@ -15,6 +15,17 @@ from .utils import get_qualified_name, import_module_from_qualified_name
 
 
 class BaseSerializer(ABC):
+    """
+    Interface for value serialization used by the workflow context and state store.
+
+    Implementations must encode arbitrary Python values into a string and be able
+    to reconstruct the original values from that string.
+
+    See Also:
+        - [JsonSerializer][workflows.context.serializers.JsonSerializer]
+        - [PickleSerializer][workflows.context.serializers.PickleSerializer]
+    """
+
     @abstractmethod
     def serialize(self, value: Any) -> str: ...
 
@@ -23,6 +34,32 @@ class BaseSerializer(ABC):
 
 
 class JsonSerializer(BaseSerializer):
+    """
+    JSON-first serializer that understands Pydantic models and LlamaIndex components.
+
+    Behavior:
+    - Pydantic models are encoded as JSON with their qualified class name so they
+      can be faithfully reconstructed.
+    - LlamaIndex components (objects exposing `class_name` and `to_dict`) are
+      serialized to their dict form alongside the qualified class name.
+    - Dicts and lists are handled recursively.
+
+    Fallback for unsupported objects is to attempt JSON encoding directly; if it
+    fails, a `ValueError` is raised.
+
+    Examples:
+        ```python
+        s = JsonSerializer()
+        payload = s.serialize({"x": 1, "y": [2, 3]})
+        data = s.deserialize(payload)
+        assert data == {"x": 1, "y": [2, 3]}
+        ```
+
+    See Also:
+        - [BaseSerializer][workflows.context.serializers.BaseSerializer]
+        - [PickleSerializer][workflows.context.serializers.PickleSerializer]
+    """
+
     def _serialize_value(self, value: Any) -> Any:
         """Helper to serialize a single value."""
         # Note: to avoid circular dependencies we cannot import BaseComponent from llama_index.core
@@ -52,6 +89,17 @@ class JsonSerializer(BaseSerializer):
         return value
 
     def serialize(self, value: Any) -> str:
+        """Serialize an arbitrary value to a JSON string.
+
+        Args:
+            value (Any): The value to encode.
+
+        Returns:
+            str: JSON string.
+
+        Raises:
+            ValueError: If the value cannot be encoded to JSON.
+        """
         try:
             serialized_value = self._serialize_value(value)
             return json.dumps(serialized_value)
@@ -73,23 +121,69 @@ class JsonSerializer(BaseSerializer):
         return data
 
     def deserialize(self, value: str) -> Any:
+        """Deserialize a JSON string into Python objects.
+
+        Args:
+            value (str): JSON string.
+
+        Returns:
+            Any: The reconstructed value.
+        """
         data = json.loads(value)
         return self._deserialize_value(data)
 
 
 class PickleSerializer(JsonSerializer):
+    """
+    Hybrid serializer: JSON when possible, Pickle as a safe fallback.
+
+    This serializer attempts JSON first for readability and portability, and
+    transparently falls back to Pickle for objects that cannot be represented in
+    JSON. Deserialization prioritizes Pickle and falls back to JSON.
+
+    Warning:
+        Pickle can execute arbitrary code during deserialization. Only
+        deserialize trusted payloads.
+
+    Note: Used to be called `JsonPickleSerializer` but it was renamed to `PickleSerializer`.
+
+    Examples:
+        ```python
+        s = PickleSerializer()
+        class Foo:
+            def __init__(self, x):
+                self.x = x
+        payload = s.serialize(Foo(1))  # will likely use Pickle
+        obj = s.deserialize(payload)
+        assert isinstance(obj, Foo)
+        ```
+    """
+
     def serialize(self, value: Any) -> str:
-        """Serialize while prioritizing JSON, falling back to Pickle."""
+        """Serialize with JSON preference and Pickle fallback.
+
+        Args:
+            value (Any): The value to encode.
+
+        Returns:
+            str: Encoded string (JSON or base64-encoded Pickle bytes).
+        """
         try:
             return super().serialize(value)
         except Exception:
             return base64.b64encode(pickle.dumps(value)).decode("utf-8")
 
     def deserialize(self, value: str) -> Any:
-        """
-        Deserialize while prioritizing Pickle, falling back to JSON.
-        To avoid malicious exploits of the deserialization, deserialize objects
-        only when you deem it safe to do so.
+        """Deserialize with Pickle preference and JSON fallback.
+
+        Args:
+            value (str): Encoded string.
+
+        Returns:
+            Any: The reconstructed value.
+
+        Notes:
+            Use only with trusted payloads due to Pickle security implications.
         """
         try:
             return pickle.loads(base64.b64decode(value))

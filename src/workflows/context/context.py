@@ -52,14 +52,58 @@ warnings.simplefilter("once", UnserializableKeyWarning)
 
 class Context(Generic[MODEL_T]):
     """
-    A global object representing a context for a given workflow run.
+    Global, per-run context and event broker for a `Workflow`.
 
-    The Context object can be used to store data that needs to be available across iterations during a workflow
-    execution, and across multiple workflow runs.
-    Every context instance offers two type of data storage: a global one, that's shared among all the steps within a
-    workflow, and private one, that's only accessible from a single step.
+    The `Context` coordinates event delivery between steps, tracks in-flight work,
+    exposes a global state store, and provides utilities for streaming and
+    synchronization. It is created by a `Workflow` at run time and can be
+    persisted and restored.
 
-    Both `set` and `get` operations on global data are governed by a lock, and considered coroutine-safe.
+    Args:
+        workflow (Workflow): The owning workflow instance. Used to infer
+            step configuration and instrumentation.
+
+    Attributes:
+        is_running (bool): Whether the workflow is currently running.
+        store (InMemoryStateStore[MODEL_T]): Type-safe, async state store shared
+            across steps. See also
+            [InMemoryStateStore][workflows.context.state_store.InMemoryStateStore].
+
+    Examples:
+        Basic usage inside a step:
+
+        ```python
+        from workflows import step
+        from workflows.events import StartEvent, StopEvent
+
+        @step
+        async def start(self, ctx: Context, ev: StartEvent) -> StopEvent:
+            await ctx.store.set("query", ev.topic)
+            ctx.write_event_to_stream(ev)  # surface progress to UI
+            return StopEvent(result="ok")
+        ```
+
+        Persisting the state of a workflow across runs:
+
+        ```python
+        from workflows import Context
+
+        # Create a context and run the workflow with the same context
+        ctx = Context(my_workflow)
+        result_1 = await my_workflow.run(..., ctx=ctx)
+        result_2 = await my_workflow.run(..., ctx=ctx)
+
+        # Serialize the context and restore it
+        ctx_dict = ctx.to_dict()
+        restored_ctx = Context.from_dict(my_workflow, ctx_dict)
+        result_3 = await my_workflow.run(..., ctx=restored_ctx)
+        ```
+
+
+    See Also:
+        - [Workflow][workflows.Workflow]
+        - [Event][workflows.events.Event]
+        - [InMemoryStateStore][workflows.context.state_store.InMemoryStateStore]
     """
 
     # These keys are set by pre-built workflows and
@@ -101,6 +145,14 @@ class Context(Generic[MODEL_T]):
 
     @property
     def store(self) -> InMemoryStateStore[MODEL_T]:
+        """Typed, process-local state store shared across steps.
+
+        If no state was initialized yet, a default
+        [DictState][workflows.context.state_store.DictState] store is created.
+
+        Returns:
+            InMemoryStateStore[MODEL_T]: The state store instance.
+        """
         # Default to DictState if no state manager is initialized
         if self._state_store is None:
             # DictState is designed to be compatible with any MODEL_T as the default fallback
@@ -158,6 +210,35 @@ class Context(Generic[MODEL_T]):
         return queue
 
     def to_dict(self, serializer: BaseSerializer | None = None) -> dict[str, Any]:
+        """Serialize the context to a JSON-serializable dict.
+
+        Persists the global state store, event queues, buffers, accepted events,
+        broker log, and running flag. This payload can be fed to
+        [from_dict][workflows.context.context.Context.from_dict] to resume a run
+        or carry state across runs.
+
+        Args:
+            serializer (BaseSerializer | None): Value serializer used for state
+                and event payloads. Defaults to
+                [JsonSerializer][workflows.context.serializers.JsonSerializer].
+
+        Returns:
+            dict[str, Any]: A dict suitable for JSON encoding and later
+            restoration via `from_dict`.
+
+        See Also:
+            - [InMemoryStateStore.to_dict][workflows.context.state_store.InMemoryStateStore.to_dict]
+
+        Examples:
+            ```python
+            ctx_dict = ctx.to_dict()
+            my_db.set("key", json.dumps(ctx_dict))
+
+            ctx_dict = my_db.get("key")
+            restored_ctx = Context.from_dict(my_workflow, json.loads(ctx_dict))
+            result = await my_workflow.run(..., ctx=restored_ctx)
+            ```
+        """
         serializer = serializer or JsonSerializer()
 
         # Serialize state using the state manager's method
@@ -194,6 +275,34 @@ class Context(Generic[MODEL_T]):
         data: dict[str, Any],
         serializer: BaseSerializer | None = None,
     ) -> "Context[MODEL_T]":
+        """Reconstruct a `Context` from a serialized payload.
+
+        Args:
+            workflow (Workflow): The workflow instance that will own this
+                context.
+            data (dict[str, Any]): Payload produced by
+                [to_dict][workflows.context.context.Context.to_dict].
+            serializer (BaseSerializer | None): Serializer used to decode state
+                and events. Defaults to JSON.
+
+        Returns:
+            Context[MODEL_T]: A context instance initialized with the persisted
+                state and queues.
+
+        Raises:
+            ContextSerdeError: If the payload is missing required fields or is
+                in an incompatible format.
+
+        Examples:
+            ```python
+            ctx_dict = ctx.to_dict()
+            my_db.set("key", json.dumps(ctx_dict))
+
+            ctx_dict = my_db.get("key")
+            restored_ctx = Context.from_dict(my_workflow, json.loads(ctx_dict))
+            result = await my_workflow.run(..., ctx=restored_ctx)
+            ```
+        """
         serializer = serializer or JsonSerializer()
 
         try:
@@ -273,6 +382,11 @@ class Context(Generic[MODEL_T]):
                 del self._currently_running_steps[name]
 
     async def running_steps(self) -> list[str]:
+        """Return the list of currently running step names.
+
+        Returns:
+            list[str]: Names of steps that have at least one active worker.
+        """
         async with self.lock:
             return list(self._currently_running_steps)
 
@@ -304,23 +418,38 @@ class Context(Generic[MODEL_T]):
         self, ev: Event, expected: list[Type[Event]], buffer_id: str | None = None
     ) -> list[Event] | None:
         """
-        Collects events for buffering in workflows.
+        Buffer events until all expected types are available, then return them.
 
-        This method adds the current event to the internal buffer and attempts to collect all
-        expected event types. If all expected events are found, they will be returned in order.
-        Otherwise, it returns None and restores any collected events back to the buffer.
+        This utility is helpful when a step can receive multiple event types
+        and needs to proceed only when it has a full set. The returned list is
+        ordered according to `expected`.
 
         Args:
-            ev (Event): The current event to add to the buffer.
-            expected (list[Type[Event]]): list of expected event types to collect.
-            buffer_id (str): A unique identifier for the events collected. Ideally this should be
-                the step name, so to avoid any interference between different steps. If not provided,
-                a stable identifier will be created using the list of expected events.
+            ev (Event): The incoming event to add to the buffer.
+            expected (list[Type[Event]]): Event types to collect, in order.
+            buffer_id (str | None): Optional stable key to isolate buffers across
+                steps or workers. Defaults to an internal key derived from the
+                task name or expected types.
 
         Returns:
-            list[Event] | None: list of collected events in the order of expected types if all
-                                  expected events are found; otherwise None.
+            list[Event] | None: The events in the requested order when complete,
+            otherwise `None`.
 
+        Examples:
+            ```python
+            @step
+            async def synthesize(
+                self, ctx: Context, ev: QueryEvent | RetrieveEvent
+            ) -> StopEvent | None:
+                events = ctx.collect_events(ev, [QueryEvent, RetrieveEvent])
+                if events is None:
+                    return None
+                query_ev, retrieve_ev = events
+                # ... proceed with both inputs present ...
+            ```
+
+        See Also:
+            - [Event][workflows.events.Event]
         """
         buffer_id = buffer_id or self._get_event_buffer_id(expected)
 
@@ -352,11 +481,42 @@ class Context(Generic[MODEL_T]):
         return None
 
     def send_event(self, message: Event, step: str | None = None) -> None:
-        """
-        Sends an event to a specific step in the workflow.
+        """Dispatch an event to one or all workflow steps.
 
-        If step is None, the event is sent to all the receivers and we let
-        them discard events they don't want.
+        If `step` is omitted, the event is broadcast to all step queues and
+        non-matching steps will ignore it. When `step` is provided, the target
+        step must accept the event type or a
+        [WorkflowRuntimeError][workflows.errors.WorkflowRuntimeError] is raised.
+
+        Args:
+            message (Event): The event to enqueue.
+            step (str | None): Optional step name to target.
+
+        Raises:
+            WorkflowRuntimeError: If the target step does not exist or does not
+                accept the event type.
+
+        Examples:
+            It's common to use this method to fan-out events:
+
+            ```python
+            @step
+            async def my_step(self, ctx: Context, ev: StartEvent) -> WorkerEvent | GatherEvent:
+                for i in range(10):
+                    ctx.send_event(WorkerEvent(msg=i))
+                return GatherEvent()
+            ```
+
+            You also see this method used from the caller side to send events into the workflow:
+
+            ```python
+            handler = my_workflow.run(...)
+            async for ev in handler.stream_events():
+                if isinstance(ev, SomeEvent):
+                    handler.ctx.send_event(SomeOtherEvent(msg="Hello!"))
+
+            result = await handler
+            ```
         """
         if step is None:
             for queue in self._queues.values():
@@ -383,24 +543,41 @@ class Context(Generic[MODEL_T]):
         requirements: dict[str, Any] | None = None,
         timeout: float | None = 2000,
     ) -> T:
-        """
-        Asynchronously wait for a specific event type to be received.
+        """Wait for the next matching event of type `event_type`.
 
-        If provided, `waiter_event` will be written to the event stream to let the caller know that we're waiting for a response.
+        Optionally emits a `waiter_event` to the event stream once per `waiter_id` to
+        inform callers that the workflow is waiting for external input.
+        This helps to prevent duplicate waiter events from being sent to the event stream.
 
         Args:
-            event_type: The type of event to wait for
-            waiter_event: The event to emit to the event stream to let the caller know that we're waiting for a response
-            waiter_id: A unique identifier for this specific wait call. It helps ensure that we only send one `waiter_event` for each `waiter_id`.
-            requirements: Optional dict of requirements the event must match
-            timeout: Optional timeout in seconds. Defaults to 2000s.
+            event_type (type[T]): Concrete event class to wait for.
+            waiter_event (Event | None): Optional event to write to the stream
+                once when the wait begins.
+            waiter_id (str | None): Stable identifier to avoid emitting multiple
+                waiter events for the same logical wait.
+            requirements (dict[str, Any] | None): Key/value filters that must be
+                satisfied by the event via `event.get(key) == value`.
+            timeout (float | None): Max seconds to wait. `None` means no
+                timeout. Defaults to 2000 seconds.
 
         Returns:
-            The event type that was requested.
+            T: The received event instance of the requested type.
 
         Raises:
-            asyncio.TimeoutError: If the timeout is reached before receiving matching event
+            asyncio.TimeoutError: If the timeout elapses.
 
+        Examples:
+            ```python
+            @step
+            async def my_step(self, ctx: Context, ev: StartEvent) -> StopEvent:
+                response = await ctx.wait_for_event(
+                    HumanResponseEvent,
+                    waiter_event=InputRequiredEvent(msg="What's your name?"),
+                    waiter_id="user_name",
+                    timeout=60,
+                )
+                return StopEvent(result=response.response)
+            ```
         """
         requirements = requirements or {}
 
@@ -435,23 +612,47 @@ class Context(Generic[MODEL_T]):
                 await self.store.set(waiter_id, False)
 
     def write_event_to_stream(self, ev: Event | None) -> None:
+        """Enqueue an event for streaming to [WorkflowHandler]](workflows.handler.WorkflowHandler).
+
+        Args:
+            ev (Event | None): The event to stream. `None` can be used as a
+                sentinel in some streaming modes.
+
+        Examples:
+            ```python
+            @step
+            async def my_step(self, ctx: Context, ev: StartEvent) -> StopEvent:
+                ctx.write_event_to_stream(ev)
+                return StopEvent(result="ok")
+            ```
+        """
         self._streaming_queue.put_nowait(ev)
 
     def get_result(self) -> RunResultT:
-        """Returns the result of the workflow."""
+        """Return the final result of the workflow run.
+
+        Examples:
+            ```python
+            result = await my_workflow.run(..., ctx=ctx)
+            result_agent = ctx.get_result()
+            ```
+
+        Returns:
+            RunResultT: The value provided via a `StopEvent`.
+        """
         return self._retval
 
     @property
     def streaming_queue(self) -> asyncio.Queue:
+        """The internal queue used for streaming events to callers."""
         return self._streaming_queue
 
     async def shutdown(self) -> None:
-        """
-        To be called when a workflow ends.
+        """Shut down the workflow run and clean up background tasks.
 
-        We clear all the tasks and set the is_running flag. Note that we
-        don't clear _globals or _queues so that the context can be still
-        used after the shutdown to fetch data or consume leftover events.
+        Cancels all outstanding workers, waits for them to finish, and marks the
+        context as not running. Queues and state remain available so callers can
+        inspect or drain leftover events.
         """
         self.is_running = False
         # Cancel all running tasks
@@ -470,6 +671,16 @@ class Context(Generic[MODEL_T]):
         run_id: str,
         resource_manager: ResourceManager,
     ) -> None:
+        """Spawn a background worker task to process events for a step.
+
+        Args:
+            name (str): Step name.
+            step (Callable): Step function (sync or async).
+            config (StepConfig): Resolved configuration for the step.
+            verbose (bool): If True, print step activity.
+            run_id (str): Run identifier for instrumentation.
+            resource_manager (ResourceManager): Resource injector for the step.
+        """
         self._tasks.add(
             asyncio.create_task(
                 self._step_worker(
@@ -608,6 +819,14 @@ class Context(Generic[MODEL_T]):
                 self.send_event(new_ev)
 
     def add_cancel_worker(self) -> None:
+        """Install a worker that turns a cancel flag into an exception.
+
+        When the cancel flag is set, a `WorkflowCancelledByUser` will be raised
+        internally to abort the run.
+
+        See Also:
+            - [WorkflowCancelledByUser][workflows.errors.WorkflowCancelledByUser]
+        """
         self._tasks.add(asyncio.create_task(self._cancel_worker()))
 
     async def _cancel_worker(self) -> None:

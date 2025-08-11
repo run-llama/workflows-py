@@ -8,34 +8,51 @@ from typing import Protocol, runtime_checkable
 
 @runtime_checkable
 class RetryPolicy(Protocol):
+    """
+    Policy interface to control step retries after failures.
+
+    Implementations decide whether to retry and how long to wait before the next
+    attempt based on elapsed time, number of attempts, and the last error.
+
+    See Also:
+        - [ConstantDelayRetryPolicy][workflows.retry_policy.ConstantDelayRetryPolicy]
+        - [step][workflows.decorators.step]
+    """
+
     def next(
         self, elapsed_time: float, attempts: int, error: Exception
     ) -> float | None:
         """
-        Decides if we should make another retry, returning the number of seconds to wait before the next run.
+        Decide if another retry should occur and the delay before it.
 
         Args:
-            elapsed_time: Time in seconds that passed since the last attempt.
-            attempts: The number of attempts done so far.
-            error: The last error occurred.
+            elapsed_time (float): Seconds since the first failure.
+            attempts (int): Number of attempts made so far.
+            error (Exception): The last exception encountered.
 
         Returns:
-            The amount of seconds to wait before the next attempt, or None if we stop retrying.
-
+            float | None: Seconds to wait before retrying, or `None` to stop.
         """
 
 
 class ConstantDelayRetryPolicy:
-    """A simple policy that retries a step at regular intervals for a number of times."""
+    """Retry at a fixed interval up to a maximum number of attempts.
+
+    Examples:
+        ```python
+        @step(retry_policy=ConstantDelayRetryPolicy(delay=5, maximum_attempts=10))
+        async def flaky(self, ev: StartEvent) -> StopEvent:
+            ...
+        ```
+    """
 
     def __init__(self, maximum_attempts: int = 3, delay: float = 5) -> None:
         """
-        Creates a ConstantDelayRetryPolicy instance.
+        Initialize the policy.
 
         Args:
-            maximum_attempts: How many consecutive times the workflow should try to run the step in case of an error.
-            delay: how much time in seconds must pass before another attempt.
-
+            maximum_attempts (int): Maximum consecutive attempts. Defaults to 3.
+            delay (float): Seconds to wait between attempts. Defaults to 5.
         """
         self.maximum_attempts = maximum_attempts
         self.delay = delay
@@ -43,6 +60,7 @@ class ConstantDelayRetryPolicy:
     def next(
         self, elapsed_time: float, attempts: int, error: Exception
     ) -> float | None:
+        """Return the fixed delay while attempts remain; otherwise `None`."""
         if attempts >= self.maximum_attempts:
             return None
 
