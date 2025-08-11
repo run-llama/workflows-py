@@ -23,10 +23,22 @@ warnings.simplefilter("once", UnserializableKeyWarning)
 
 class DictState(DictLikeModel):
     """
-    A dynamic state class that behaves like a dictionary.
+    Dynamic, dict-like Pydantic model for workflow state.
 
-    This is used as the default state type when no specific state class is provided.
-    It allows storing arbitrary key-value pairs while still being a Pydantic model.
+    Used as the default state model when no typed state is provided. Behaves
+    like a mapping while retaining Pydantic validation and serialization.
+
+    Examples:
+        ```python
+        from workflows.context.state_store import DictState
+
+        state = DictState()
+        state["foo"] = 1
+        state.bar = 2  # attribute-style access works for nested structures
+        ```
+
+    See Also:
+        - [InMemoryStateStore][workflows.context.state_store.InMemoryStateStore]
     """
 
     def __init__(self, **params: Any):
@@ -39,55 +51,44 @@ MODEL_T = TypeVar("MODEL_T", bound=BaseModel, default=DictState)
 
 class InMemoryStateStore(Generic[MODEL_T]):
     """
-    State manager for a workflow that provides type-safe state management.
+    Async, in-memory, type-safe state manager for workflows.
 
-    By using Context[StateType] as the parameter type annotation, the state manager
-    is automatically initialized with the correct type, providing full type safety
-    and IDE autocompletion.
+    This store holds a single Pydantic model instance representing global
+    workflow state. When the generic parameter is omitted, it defaults to
+    [DictState][workflows.context.state_store.DictState] for flexible,
+    dictionary-like usage.
 
-    When no state type is specified (just Context), it defaults to DictState which
-    behaves like a regular dictionary.
+    Thread-safety is ensured with an internal `asyncio.Lock`. Consumers can
+    either perform atomic reads/writes via `get_state` and `set_state`, or make
+    in-place, transactional edits via the `edit_state` context manager.
 
-    Example with typed state:
-    ```python
-    from pydantic import BaseModel
-    from workflows import Workflow, Context, step
-    from workflows.events import StartEvent, StopEvent
+    Examples:
+        Typed state model:
 
-    class MyState(BaseModel):
-        name: str = "Unknown"
-        age: int = 0
+        ```python
+        from pydantic import BaseModel
+        from workflows.context.state_store import InMemoryStateStore
 
-    class MyWorkflow(Workflow):
-        @step
-        async def step_1(self, ctx: Context[MyState], ev: StartEvent) -> StopEvent:
-            # ctx._state.get() is now properly typed as MyState
-            state = await ctx._state.get()
-            state.name = "John"  # Type-safe: IDE knows this is a string
-            state.age = 30       # Type-safe: IDE knows this is an int
-            await ctx._state.set(state)
-            return StopEvent()
-    ```
+        class MyState(BaseModel):
+            count: int = 0
 
-    Example with untyped dict-like state:
-    ```python
-    class MyWorkflow(Workflow):
-        @step
-        async def step_1(self, ctx: Context, ev: StartEvent) -> StopEvent:
-            # ctx._state behaves like a dict
-            state = await ctx._state.get()
-            state.name = "John"     # Works like a dict
-            state.age = 30          # Dynamic assignment
-            await ctx._state.set(state)
-            return StopEvent()
-    ```
+        store = InMemoryStateStore(MyState())
+        async with store.edit_state() as state:
+            state.count += 1
+        ```
 
-    The state manager provides:
-    - Type-safe access to state properties with full IDE support (when typed)
-    - Dict-like behavior for dynamic state management (when untyped)
-    - Automatic state initialization based on the generic type parameter
-    - Thread-safe state access with async locking
-    - Deep path-based state access and modification
+        Dynamic state with `DictState`:
+
+        ```python
+        from workflows.context.state_store import InMemoryStateStore, DictState
+
+        store = InMemoryStateStore(DictState())
+        await store.set("user.profile.name", "Ada")
+        name = await store.get("user.profile.name")
+        ```
+
+    See Also:
+        - [Context.store][workflows.context.context.Context.store]
     """
 
     # These keys are set by pre-built workflows and
@@ -99,11 +100,22 @@ class InMemoryStateStore(Generic[MODEL_T]):
         self._lock = asyncio.Lock()
 
     async def get_state(self) -> MODEL_T:
-        """Get a copy of the current state."""
+        """Return a shallow copy of the current state model.
+
+        Returns:
+            MODEL_T: A `.model_copy()` of the internal Pydantic model.
+        """
         return self._state.model_copy()
 
     async def set_state(self, state: MODEL_T) -> None:
-        """Set the current state."""
+        """Replace the current state model.
+
+        Args:
+            state (MODEL_T): New state of the same type as the existing model.
+
+        Raises:
+            ValueError: If the type differs from the existing state type.
+        """
         if not isinstance(state, type(self._state)):
             raise ValueError(f"State must be of type {type(self._state)}")
 
@@ -111,11 +123,19 @@ class InMemoryStateStore(Generic[MODEL_T]):
             self._state = state
 
     def to_dict(self, serializer: "BaseSerializer") -> dict[str, Any]:
-        """
-        Serialize the state manager's state.
+        """Serialize the state and model metadata for persistence.
 
-        For DictState, uses the BaseSerializer for individual items since they can be arbitrary types.
-        For other Pydantic models, leverages Pydantic's serialization but uses BaseSerializer for complex types.
+        For `DictState`, each individual item is serialized using the provided
+        serializer since values can be arbitrary Python objects. For other
+        Pydantic models, defers to the serializer (e.g. JSON) which can leverage
+        model-aware encoding.
+
+        Args:
+            serializer (BaseSerializer): Strategy used to encode values.
+
+        Returns:
+            dict[str, Any]: A payload suitable for
+            [from_dict][workflows.context.state_store.InMemoryStateStore.from_dict].
         """
         # Special handling for DictState - serialize each item in _data
         if isinstance(self._state, DictState):
@@ -154,8 +174,15 @@ class InMemoryStateStore(Generic[MODEL_T]):
     def from_dict(
         cls, serialized_state: dict[str, Any], serializer: "BaseSerializer"
     ) -> "InMemoryStateStore[MODEL_T]":
-        """
-        Deserialize and restore a state manager.
+        """Restore a state store from a serialized payload.
+
+        Args:
+            serialized_state (dict[str, Any]): The payload produced by
+                [to_dict][workflows.context.state_store.InMemoryStateStore.to_dict].
+            serializer (BaseSerializer): Strategy to decode stored values.
+
+        Returns:
+            InMemoryStateStore[MODEL_T]: A store with the reconstructed model.
         """
         if not serialized_state:
             # Return a default DictState manager
@@ -185,17 +212,13 @@ class InMemoryStateStore(Generic[MODEL_T]):
 
     @asynccontextmanager
     async def edit_state(self) -> AsyncGenerator[MODEL_T, None]:
-        """
-        A context manager for editing the state.
-        The state will be locked while the context manager is active.
-        Any changes made to the state will be saved when the context manager is exited.
+        """Edit state transactionally under a lock.
 
-        Example:
-        ```python
-        async with ctx.store.edit_state() as state:
-            state.name = "John"
-            state.age = 30
-        ```
+        Yields the mutable model and writes it back on exit. This pattern avoids
+        read-modify-write races and keeps updates atomic.
+
+        Yields:
+            MODEL_T: The current state model for in-place mutation.
         """
         async with self._lock:
             state = self._state
@@ -205,9 +228,22 @@ class InMemoryStateStore(Generic[MODEL_T]):
             self._state = state
 
     async def get(self, path: str, default: Optional[Any] = Ellipsis) -> Any:
-        """
-        Return a value from *path*, where path is a dot-separated string.
-        Example: await sm.get("user.profile.name")
+        """Get a nested value using dot-separated paths.
+
+        Supports dict keys, list indices, and attribute access transparently at
+        each segment.
+
+        Args:
+            path (str): Dot-separated path, e.g. "user.profile.name".
+            default (Any): If provided, return this when the path does not
+                exist; otherwise, raise `ValueError`.
+
+        Returns:
+            Any: The resolved value.
+
+        Raises:
+            ValueError: If the path is invalid and no default is provided or if
+                the path depth exceeds limits.
         """
         segments = path.split(".") if path else []
         if len(segments) > MAX_DEPTH:
@@ -228,7 +264,18 @@ class InMemoryStateStore(Generic[MODEL_T]):
         return value
 
     async def set(self, path: str, value: Any) -> None:
-        """Set *value* at the location designated by *path* (dot-separated)."""
+        """Set a nested value using dot-separated paths.
+
+        Intermediate containers are created as needed. Dicts, lists, tuples, and
+        Pydantic models are supported where appropriate.
+
+        Args:
+            path (str): Dot-separated path to write.
+            value (Any): Value to assign.
+
+        Raises:
+            ValueError: If the path is empty or exceeds the maximum depth.
+        """
         if not path:
             raise ValueError("Path cannot be empty")
 
@@ -253,7 +300,12 @@ class InMemoryStateStore(Generic[MODEL_T]):
             self._assign_step(current, segments[-1], value)
 
     async def clear(self) -> None:
-        """Clear the state."""
+        """Reset the state to its type defaults.
+
+        Raises:
+            ValueError: If the model type cannot be instantiated from defaults
+                (i.e., fields missing default values).
+        """
         try:
             await self.set_state(self._state.__class__())
         except ValidationError:
