@@ -85,9 +85,9 @@ The `step_three` step is fired every time a `StepThreeEvent` is received, but `c
 
 The `result` returned from `collect_events` is an array of the events that were collected, in the order that they were received.
 
-## The `gather` method
+## The `receive_events` method
 
-In order to make the logic expressed with `collect_event` more user-friendly, we also offer you the possibility of combining the `send_events` method with the `gather` method:
+In order to make the logic expressed with `collect_event` more user-friendly, we also offer you the possibility of combining the `send_events` method with the `receive_events` method:
 
 ```python
 class ConcurrentFlow(Workflow):
@@ -111,7 +111,7 @@ class ConcurrentFlow(Workflow):
         self, ctx: Context, ev: StepThreeEvent
     ) -> StopEvent | None:
         # wait until we receive 3 events
-        result = ctx.gather(ev, type(ev))
+        result = ctx.receive_events(ev, type(ev))
         if result is None:
             return None
 
@@ -223,7 +223,7 @@ class ConcurrentFlow(Workflow):
         print("Received event ", ev.result)
 
         # wait until we receive 3 events
-        if ctx.gather(ev, type(ev)) is None:
+        if ctx.receive_events(ev, type(ev)) is None:
             return None
 
         # do something with all 3 results together

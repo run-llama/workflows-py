@@ -35,7 +35,6 @@ from workflows.types import RunResultT
 
 from .serializers import BaseSerializer, JsonSerializer
 from .state_store import MODEL_T, DictState, InMemoryStateStore
-from .events_queue import EventsQueue
 
 if TYPE_CHECKING:  # pragma: no cover
     from workflows import Workflow
@@ -84,7 +83,7 @@ class Context(Generic[MODEL_T]):
 
         # instrumentation
         self._dispatcher = workflow._dispatcher
-        self._events_queue = EventsQueue()
+        self._events_queue: defaultdict = defaultdict(int)
 
     async def _init_state_store(self, state_class: MODEL_T) -> None:
         # If a state manager already exists, ensure the requested state type is compatible
@@ -174,7 +173,7 @@ class Context(Generic[MODEL_T]):
             "queues": {
                 k: self._serialize_queue(v, serializer) for k, v in self._queues.items()
             },
-            "events_queue": serializer.serialize(self._events_queue._queue),
+            "events_queue": serializer.serialize(self._events_queue),
             "event_buffers": {
                 k: {
                     inner_k: [serializer.serialize(ev) for ev in inner_v]
@@ -215,8 +214,8 @@ class Context(Generic[MODEL_T]):
             )
 
             if "events_queue" in data:
-                context._events_queue = EventsQueue(
-                    queue=serializer.deserialize(data["events_queue"])
+                context._events_queue = defaultdict(
+                    int, serializer.deserialize(data["events_queue"])
                 )
 
             context._event_buffers = {}
@@ -385,12 +384,15 @@ class Context(Generic[MODEL_T]):
         self._broker_log.append(message)
 
     def send_events(self, events: list[Event]) -> None:
-        self._events_queue.put(events=events)
+        for event in events:
+            self._events_queue[str(type((event)))] += 1
 
         for event in events:
             self.send_event(event)
 
-    def gather(self, event: Event, event_type: Type[Event]) -> Union[list[Event], None]:
+    def receive_events(
+        self, event: Event, event_type: Type[Event]
+    ) -> Union[list[Event], None]:
         to_collect = self._events_queue.get(event_type)
         if to_collect:
             return self.collect_events(event, [event_type] * to_collect)
