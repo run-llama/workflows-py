@@ -24,9 +24,9 @@ class ParallelFlow(Workflow):
 
 In this example, our `start` step emits 3 `StepTwoEvent`s. The `step_two` step is decorated with `num_workers=4`, which tells the workflow to run up to 4 instances of this step concurrently (this is the default).
 
-## The `dispatch` method
+## The `send_events` method
 
-To simplify the multiple `send_event` calls that we used in the previous examples, we also provide a `dispatch` method within the `Context` itself:
+To simplify the multiple `send_event` calls that we used in the previous examples, we also provide a `send_events` method within the `Context` itself:
 
 ```python
 class ParallelFlow(Workflow):
@@ -37,7 +37,7 @@ class ParallelFlow(Workflow):
             StepTwoEvent(query="Query 2")
             StepTwoEvent(query="Query 3")
         ]
-        await ctx.dispatch(events)
+        ctx.send_events(events)
 
     @step(num_workers=4)
     async def step_two(self, ctx: Context, ev: StepTwoEvent) -> StopEvent:
@@ -85,9 +85,9 @@ The `step_three` step is fired every time a `StepThreeEvent` is received, but `c
 
 The `result` returned from `collect_events` is an array of the events that were collected, in the order that they were received.
 
-## The `receive` method
+## The `gather` method
 
-In order to make the logic expressed with `collect_event` more user-friendly, we also offer you the possibility of combining the `dispatch` method with the `receive` method:
+In order to make the logic expressed with `collect_event` more user-friendly, we also offer you the possibility of combining the `send_events` method with the `gather` method:
 
 ```python
 class ConcurrentFlow(Workflow):
@@ -98,7 +98,7 @@ class ConcurrentFlow(Workflow):
             StepTwoEvent(query="Query 2")
             StepTwoEvent(query="Query 3")
         ]
-        await ctx.dispatch(events)
+        ctx.send_events(events)
 
     @step(num_workers=4)
     async def step_two(self, ctx: Context, ev: StepTwoEvent) -> StepThreeEvent:
@@ -111,7 +111,7 @@ class ConcurrentFlow(Workflow):
         self, ctx: Context, ev: StepThreeEvent
     ) -> StopEvent | None:
         # wait until we receive 3 events
-        result = await ctx.receive(ev, type(ev))
+        result = ctx.gather(ev, type(ev))
         if result is None:
             return None
 
@@ -184,7 +184,7 @@ The visualization of this workflow is quite pleasing:
 
 ![A concurrent workflow](./different_events.png)
 
-Note that it is also possible to dispatch and receive multiple event types using the `dispatch`/`receive` logic we used before:
+Note that it is also possible to send_events and receive multiple event types using the `send_events`/`receive` logic we used before:
 
 ```python
 class ConcurrentFlow(Workflow):
@@ -197,7 +197,7 @@ class ConcurrentFlow(Workflow):
             StepBEvent(query="Query 2"),
             StepCEvent(query="Query 3"),
         ]
-        await ctx.dispatch(events)
+        ctx.send_events(events)
 
     @step
     async def step_a(self, ctx: Context, ev: StepAEvent) -> StepACompleteEvent:
@@ -223,7 +223,7 @@ class ConcurrentFlow(Workflow):
         print("Received event ", ev.result)
 
         # wait until we receive 3 events
-        if await ctx.receive(ev, type(ev)) is None:
+        if ctx.gather(ev, type(ev)) is None:
             return None
 
         # do something with all 3 results together
