@@ -645,19 +645,23 @@ You can also decorate and attach steps to a workflow without subclassing it.
 Below is the `JokeFlow` from earlier, but defined without subclassing.
 
 ```python
-from workflows import Workflow, step
-from workflows.events import Event, StartEvent, StopEvent
+from llama_index.core.workflow import (
+    Event,
+    StartEvent,
+    StopEvent,
+    Workflow,
+    step,
+)
 from llama_index.llms.openai import OpenAI
 
 
 class JokeEvent(Event):
     joke: str
 
+class JokeFlow(Workflow):
+    pass
 
-joke_flow = Workflow(timeout=60, verbose=True)
-
-
-@step(workflow=joke_flow)
+@step(workflow=JokeFlow)
 async def generate_joke(ev: StartEvent) -> JokeEvent:
     topic = ev.topic
 
@@ -668,7 +672,7 @@ async def generate_joke(ev: StartEvent) -> JokeEvent:
     return JokeEvent(joke=str(response))
 
 
-@step(workflow=joke_flow)
+@step(workflow=JokeFlow)
 async def critique_joke(ev: JokeEvent) -> StopEvent:
     joke = ev.joke
 
@@ -677,6 +681,9 @@ async def critique_joke(ev: JokeEvent) -> StopEvent:
     )
     response = await llm.acomplete(prompt)
     return StopEvent(result=str(response))
+
+
+joke_flow = JokeFlow(timeout=60, verbose=True)
 ```
 
 ## Maintaining Context Across Runs
