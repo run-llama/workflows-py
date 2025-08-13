@@ -19,6 +19,7 @@ from typing import (
     Type,
     TypeVar,
     Union,
+    Optional,
     cast,
 )
 
@@ -69,7 +70,7 @@ class Context(Generic[MODEL_T]):
 
     def __init__(self, workflow: "Workflow") -> None:
         self.is_running = False
-        # Store the step configs of this workflow, to be used in send_event
+        # Store the step configs of this workflow, to be used in _send_event
         self._step_configs: dict[str, StepConfig | None] = {}
         for step_name, step_func in workflow._get_steps().items():
             self._step_configs[step_name] = getattr(step_func, "__step_config", None)
@@ -308,7 +309,7 @@ class Context(Generic[MODEL_T]):
         # Fall back to creating a stable identifier from expected events
         return ":".join(sorted(self._get_full_path(e_type) for e_type in events))
 
-    def collect_events(
+    def _collect_events(
         self, ev: Event, expected: list[Type[Event]], buffer_id: str | None = None
     ) -> list[Event] | None:
         """
@@ -359,7 +360,7 @@ class Context(Generic[MODEL_T]):
 
         return None
 
-    def send_event(self, message: Event, step: str | None = None) -> None:
+    def _send_event(self, message: Event, step: str | None = None) -> None:
         """
         Sends an event to a specific step in the workflow.
 
@@ -388,14 +389,23 @@ class Context(Generic[MODEL_T]):
             self._events_queue[str(type((event)))] += 1
 
         for event in events:
-            self.send_event(event)
+            self._send_event(event)
 
     def receive_events(
-        self, event: Event, event_type: Type[Event]
+        self, event: Event, event_type: Union[Type[Event], list[Type[Event]]]
     ) -> Union[list[Event], None]:
-        to_collect = self._events_queue.get(event_type)
-        if to_collect:
-            return self.collect_events(event, [event_type] * to_collect)
+        ev_types: list[Type[Event]] = []
+        if isinstance(event_type, list):
+            for ev_type in event_type:
+                to_collect = cast(Optional[int], self._events_queue.get(ev_type))
+                if to_collect:
+                    ev_types.extend([ev_type] * to_collect)
+        else:
+            to_collect = cast(Optional[int], self._events_queue.get(event_type))
+            if to_collect:
+                ev_types.extend([event_type] * to_collect)
+        if ev_types:
+            return self._collect_events(event, ev_types)
         return None
 
     async def wait_for_event(
@@ -628,7 +638,7 @@ class Context(Generic[MODEL_T]):
             if isinstance(new_ev, InputRequiredEvent):
                 self.write_event_to_stream(new_ev)
             elif new_ev is not None:
-                self.send_event(new_ev)
+                self.send_events([new_ev])
 
     def add_cancel_worker(self) -> None:
         self._tasks.add(asyncio.create_task(self._cancel_worker()))

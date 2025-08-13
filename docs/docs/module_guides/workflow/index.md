@@ -425,7 +425,7 @@ Using `ctx.collect_events()` we can buffer and wait for ALL expected events to a
 
 ## Manually Triggering Events
 
-Normally, events are triggered by returning another event during a step. However, events can also be manually dispatched using the `ctx.send_event(event)` method within a workflow.
+Normally, events are triggered by returning another event during a step. However, events can also be manually dispatched using the `ctx.send_events([event])` method within a workflow.
 
 Here is a short toy example showing how this would be used:
 
@@ -452,8 +452,7 @@ class MyWorkflow(Workflow):
     async def dispatch_step(
         self, ctx: Context, ev: StartEvent
     ) -> MyEvent | GatherEvent:
-        ctx.send_event(MyEvent())
-        ctx.send_event(MyEvent())
+        ctx.send_events([MyEvent(), MyEvent()])
 
         return GatherEvent()
 
@@ -466,7 +465,7 @@ class MyWorkflow(Workflow):
         self, ctx: Context, ev: GatherEvent | MyEventResult
     ) -> StopEvent | None:
         # wait for events to finish
-        events = ctx.collect_events(ev, [MyEventResult, MyEventResult])
+        events = ctx.receive_events(ev, MyEventResult)
         if not events:
             return None
 
@@ -589,7 +588,7 @@ async for event in handler.stream_events():
         # this means using input(), websockets, accessing async state, etc.
         # here, we just use input()
         response = input(event.prefix)
-        handler.ctx.send_event(HumanResponseEvent(response=response))
+        handler.ctx.send_events([HumanResponseEvent(response=response)])
 
 final_result = await handler
 ```
@@ -606,7 +605,7 @@ async for event in handler.stream_events():
 
 # now we handle the human response
 response = input(event.prefix)
-handler.ctx.send_event(HumanResponseEvent(response=response))
+handler.ctx.send_events([HumanResponseEvent(response=response)])
 
 # now we resume the workflow streaming
 async for event in handler.stream_events():
@@ -629,9 +628,9 @@ handler = workflow.run(stepwise=True)
 # for the workflow to keep going (we assign them to `produced_events` with the := operator).
 while produced_events := await handler.run_step():
     # If we're here, it means there's at least an event we need to propagate,
-    # let's do it with `send_event`
+    # let's do it with `send_events`
     for ev in produced_events:
-        handler.ctx.send_event(ev)
+        handler.ctx.send_events([ev])
 
 # If we're here, it means the workflow execution completed, and
 # we can now access the final result.

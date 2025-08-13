@@ -287,7 +287,7 @@ class Workflow(metaclass=WorkflowMeta):
                     start_event_instance = self._get_start_event_instance(
                         start_event, **kwargs
                     )
-                    ctx.send_event(start_event_instance)
+                    ctx._send_event(start_event_instance)
 
                     # the context is now running
                     ctx.is_running = True
