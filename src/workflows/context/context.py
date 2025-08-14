@@ -487,7 +487,7 @@ class Context(Generic[MODEL_T]):
             self._event_buffers[buffer_id][e_type_path].append(ev_to_restore)
 
         return None
-      
+
     def _send_event(self, message: Event, step: str | None = None) -> None:
         """
         Sends an event to a specific step in the workflow.
