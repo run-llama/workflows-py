@@ -169,12 +169,12 @@ async def test_workflow_sync_steps_only() -> None:
     class SyncWorkflow(Workflow):
         @step
         def step_one(self, ctx: Context, ev: StartEvent) -> OneTestEvent:
-            ctx.receive_events(ev, StartEvent)
+            ctx.receive_events(ev, [StartEvent])
             return OneTestEvent()
 
         @step
         def step_two(self, ctx: Context, ev: OneTestEvent) -> StopEvent:
-            # ctx.receive_events(ev, OneTestEvent)
+            # ctx.receive_events(ev, [OneTestEvent])
             return StopEvent()
 
     workflow = SyncWorkflow()

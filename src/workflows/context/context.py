@@ -19,7 +19,6 @@ from typing import (
     Type,
     TypeVar,
     Union,
-    Optional,
     cast,
 )
 
@@ -84,7 +83,7 @@ class Context(Generic[MODEL_T]):
 
         # instrumentation
         self._dispatcher = workflow._dispatcher
-        self._events_queue: defaultdict = defaultdict(int)
+        self._events_queue: defaultdict[str, int] = defaultdict(int)
 
     async def _init_state_store(self, state_class: MODEL_T) -> None:
         # If a state manager already exists, ensure the requested state type is compatible
@@ -384,26 +383,63 @@ class Context(Generic[MODEL_T]):
 
         self._broker_log.append(message)
 
-    def send_events(self, events: list[Event]) -> None:
-        for event in events:
-            self._events_queue[str(type((event)))] += 1
+    def send_events(self, events: list[Union[Event, Tuple[Event, str]]]) -> None:
+        """
+        Emit events manually.
 
+        Args:
+            events (list[Union[Event, Tuple[Event, str]]]): a list of Event objects or of tuples containing an Event objects and the string representing the step the event should be sent to. If an Event object is used outside of a tuple, it won't be sent to any specific step.
+
+        Returns:
+            None
+
+        Examples:
+        ```
+        class MultipleEventsWorkflow(Workflow):
+        @step
+        async def send_events(self, ev: InputEvent, ctx: Context):
+            ctx.send_events(events = [(OutputAEvent(), "step_a"), OutputBEvent()])
+        ```
+        """
         for event in events:
-            self._send_event(event)
+            if isinstance(event, tuple):
+                ev, step = event
+                self._events_queue[str(type(ev))] += 1
+                self._send_event(ev, step)
+            else:
+                self._events_queue[str(type(event))] += 1
+                self._send_event(event)
 
     def receive_events(
-        self, event: Event, event_type: Union[Type[Event], list[Type[Event]]]
+        self, event: Event, event_types: list[Type[Event]]
     ) -> Union[list[Event], None]:
+        """
+        Receive events emitted with `send_events`.
+
+        Args:
+            event (Event): The input event for the current step
+            event_types (list[Type[Event]]): List of the types of events to be expected
+
+        Returns:
+            A list of events or None
+
+        Example:
+        ```
+        class MultipleEventsWorkflow(Workflow):
+        @step
+        async def send_events(self, ev: InputEvent, ctx: Context):
+            ctx.send_events(events = [(OutputAEvent(), None), OutputBEvent()])
+        ## rest of the implementation
+        @step
+        async def receive_events(self, ev: ReceiveEvent, ctx: Context):
+            ctx.receive_events(ev, [OutputAEvent, OutputBEvent])
+        ```
+        """
         ev_types: list[Type[Event]] = []
-        if isinstance(event_type, list):
-            for ev_type in event_type:
-                to_collect = cast(Optional[int], self._events_queue.get(ev_type))
-                if to_collect:
-                    ev_types.extend([ev_type] * to_collect)
-        else:
-            to_collect = cast(Optional[int], self._events_queue.get(event_type))
+        for ev_type in event_types:
+            to_collect = self._events_queue.get(str(ev_type))
             if to_collect:
-                ev_types.extend([event_type] * to_collect)
+                ev_types.extend([ev_type] * to_collect)
         if ev_types:
             return self._collect_events(event, ev_types)
         return None

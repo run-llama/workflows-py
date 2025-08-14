@@ -54,7 +54,7 @@ class EmailSenderWorkflow(Workflow):
         events = []
         for contact, content in ev.emails.items():
             events.append(SendEmailEvent(contact=contact, content=content))
-        ctx.send_events(events)
+        ctx.send_events(events)  # type: ignore
         return None
 
     @step
@@ -78,7 +78,7 @@ class EmailSenderWorkflow(Workflow):
         ctx: Context,
         counter: Annotated[EmailCounter, Resource(get_counter)],
     ) -> Union[StopEvent, None]:
-        events = ctx.receive_events(ev, type(ev))
+        events = ctx.receive_events(ev, [type(ev)])
         if events:
             return None
         return StopEvent(result=f"Sent {counter.success} emails; {counter.fail} failed")

@@ -43,7 +43,7 @@ class ConcurrentFlow(Workflow):
         self, ctx: Context, ev: StepThreeEvent
     ) -> StopEvent | None:
         # wait until we receive 3 events
-        result = ctx.receive_events(ev, StepThreeEvent)
+        result = ctx.receive_events(ev, [StepThreeEvent])
         if result is None:
             return None
 
