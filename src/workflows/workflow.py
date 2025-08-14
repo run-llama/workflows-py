@@ -48,17 +48,50 @@ class WorkflowMeta(type):
 
 class Workflow(metaclass=WorkflowMeta):
     """
-    An event-driven abstraction used to orchestrate the execution of different components called "steps".
+    Event-driven orchestrator to define and run application flows using typed steps.
 
-    Each step is responsible for handling certain event types and possibly emitting new events. Steps can be "bound"
-    when they are defined as methods of the `Workflow` class itself, or "unbound" when they are defined as free
-    functions. To define a step, the method or function must be decorated with the `@step` decorator.
+    A `Workflow` is composed of `@step`-decorated callables that accept and emit
+    typed [Event][workflows.events.Event]s. Steps can be declared as instance
+    methods or as free functions registered via the decorator.
 
-    Workflows provide basic validation to catch potential runtime errors as soon as possible. Validation happens once,
-    when the workflow starts, and does not produce much overhead. It can be disabled in any case.
+    Key features:
+    - Validation of step signatures and event graph before running
+    - Typed start/stop events
+    - Streaming of intermediate events
+    - Optional human-in-the-loop events
+    - Retry policies per step
+    - Resource injection
 
-    Use an instance of a `Workflow` class to run a workflow and stream events produced during execution. Workflows
-    can be run step-by-step, by calling the `run_step` function multiple times until completion.
+    Examples:
+        Basic usage:
+
+        ```python
+        from workflows import Workflow, step
+        from workflows.events import StartEvent, StopEvent
+
+        class MyFlow(Workflow):
+            @step
+            async def start(self, ev: StartEvent) -> StopEvent:
+                return StopEvent(result="done")
+
+        result = await MyFlow(timeout=60).run(topic="Pirates")
+        ```
+
+        Custom start/stop events and streaming:
+
+        ```python
+        handler = MyFlow().run()
+        async for ev in handler.stream_events():
+            ...
+        result = await handler
+        ```
+
+    See Also:
+        - [step][workflows.decorators.step]
+        - [Event][workflows.events.Event]
+        - [Context][workflows.context.context.Context]
+        - [WorkflowHandler][workflows.handler.WorkflowHandler]
+        - [RetryPolicy][workflows.retry_policy.RetryPolicy]
     """
 
     def __init__(
@@ -70,22 +103,17 @@ class Workflow(metaclass=WorkflowMeta):
         num_concurrent_runs: int | None = None,
     ) -> None:
         """
-        Create an instance of the workflow.
+        Initialize a workflow instance.
 
         Args:
-            timeout:
-                Number of seconds after the workflow execution will be halted, raising a `WorkflowTimeoutError`
-                exception. If set to `None`, the timeout will be disabled.
-            disable_validation:
-                Whether or not the workflow should be validated before running. In case the workflow is
-                misconfigured, a call to `run` will raise a `WorkflowValidationError` exception explaining the details
-                of the problem.
-            verbose:
-                Whether or not the workflow should print additional informative messages during execution.
-            num_concurrent_runs:
-                maximum number of .run() executions occurring simultaneously. If set to `None`, there
-                is no limit to this number.
-
+            timeout (float | None): Max seconds to wait for completion. `None`
+                disables the timeout.
+            disable_validation (bool): Skip pre-run validation of the event graph
+                (not recommended).
+            verbose (bool): If True, print step activity.
+            resource_manager (ResourceManager | None): Custom resource manager
+                for dependency injection.
+            num_concurrent_runs (int | None): Limit on concurrent `run()` calls.
         """
         # Configuration
         self._timeout = timeout
@@ -129,7 +157,10 @@ class Workflow(metaclass=WorkflowMeta):
 
     @property
     def start_event_class(self) -> type[StartEvent]:
-        """Returns the StartEvent type used in this workflow."""
+        """The `StartEvent` subclass accepted by this workflow.
+
+        Determined by inspecting step input types.
+        """
         return self._start_event_class
 
     def _ensure_stop_event_class(self) -> type[RunResultT]:
@@ -157,7 +188,10 @@ class Workflow(metaclass=WorkflowMeta):
 
     @property
     def stop_event_class(self) -> type[RunResultT]:
-        """Returns the StopEvent type used in this workflow."""
+        """The `StopEvent` subclass produced by this workflow.
+
+        Determined by inspecting step return annotations.
+        """
         return self._stop_event_class
 
     @classmethod
@@ -268,7 +302,52 @@ class Workflow(metaclass=WorkflowMeta):
         start_event: StartEvent | None = None,
         **kwargs: Any,
     ) -> WorkflowHandler:
-        """Runs the workflow until completion."""
+        """Run the workflow and return a handler for results and streaming.
+
+        This schedules the workflow execution in the background and returns a
+        [WorkflowHandler][workflows.handler.WorkflowHandler] that can be awaited
+        for the final result or used to stream intermediate events.
+
+        You may pass either a concrete `start_event` instance or keyword
+        arguments that will be used to construct the inferred
+        [StartEvent][workflows.events.StartEvent] subclass.
+
+        Args:
+            ctx (Context | None): Optional context to resume or share state
+                across runs. If omitted, a fresh context is created.
+            start_event (StartEvent | None): Optional explicit start event.
+            **kwargs (Any): Keyword args to initialize the start event when
+                `start_event` is not provided.
+
+        Returns:
+            WorkflowHandler: A future-like object to await the final result and
+            stream events.
+
+        Raises:
+            WorkflowValidationError: If validation fails and validation is
+                enabled.
+            WorkflowRuntimeError: If the start event cannot be created from kwargs.
+            WorkflowTimeoutError: If execution exceeds the configured timeout.
+
+        Examples:
+            ```python
+            # Create and run with kwargs
+            handler = MyFlow().run(topic="Pirates")
+
+            # Stream events
+            async for ev in handler.stream_events():
+                ...
+
+            # Await final result
+            result = await handler
+            ```
+
+            If you subclassed the start event, you can also directly pass it in:
+
+            ```python
+            result = await my_workflow.run(start_event=MyStartEvent(topic="Pirates"))
+            ```
+        """
 
         # Validate the workflow
         self._validate()

@@ -40,20 +40,47 @@ def step(
     retry_policy: RetryPolicy | None = None,
 ) -> Callable:
     """
-    Decorator used to mark methods and functions as workflow steps.
+    Decorate a callable to declare it as a workflow step.
 
-    Decorators are evaluated at import time, but we need to wait for
-    starting the communication channels until runtime. For this reason,
-    we temporarily store the list of events that will be consumed by this
-    step in the function object itself.
+    The decorator inspects the function signature to infer the accepted event
+    type, return event types, optional `Context` parameter (optionally with a
+    typed state model), and any resource injections via `typing.Annotated`.
+
+    When applied to free functions, provide the workflow class via
+    `workflow=MyWorkflow`. For instance methods, the association is automatic.
 
     Args:
-        workflow: Workflow class to which the decorated step will be added. Only needed when using the
-            decorator on free functions instead of class methods.
-        num_workers: The number of workers that will process events for the decorated step. The default
-            value works most of the times.
-        retry_policy: The policy used to retry a step that encountered an error while running.
+        workflow (type[Workflow] | None): Workflow class to attach the free
+            function step to. Not required for methods.
+        num_workers (int): Number of workers for this step. Defaults to 4.
+        retry_policy (RetryPolicy | None): Optional retry policy for failures.
 
+    Returns:
+        Callable: The original function, annotated with internal step metadata.
+
+    Raises:
+        WorkflowValidationError: If signature validation fails or when decorating
+            a free function without specifying `workflow`.
+
+    Examples:
+        Method step:
+
+        ```python
+        class MyFlow(Workflow):
+            @step
+            async def start(self, ev: StartEvent) -> StopEvent:
+                return StopEvent(result="done")
+        ```
+
+        Free function step:
+
+        ```python
+        class MyWorkflow(Workflow):
+            pass
+
+        @step(workflow=MyWorkflow)
+        async def generate(ev: StartEvent) -> NextEvent: ...
+        ```
     """
 
     def decorator(func: Callable) -> Callable:

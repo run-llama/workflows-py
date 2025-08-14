@@ -16,10 +16,15 @@ from pydantic import (
 
 class DictLikeModel(BaseModel):
     """
-    Base Pydantic model class that mimics dict interface.
+    Base Pydantic model class that mimics a dict interface for dynamic fields.
+
+    Known, typed fields behave like regular Pydantic attributes. Any extra
+    keyword arguments are stored in an internal dict and can be accessed through
+    both attribute and mapping semantics. This hybrid model enables flexible
+    event payloads while preserving validation for declared fields.
 
     PrivateAttr:
-        _data (dict[str, Any]): Underlying Python dict.
+        _data (dict[str, Any]): Underlying Python dict for dynamic fields.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
@@ -112,42 +117,29 @@ class DictLikeModel(BaseModel):
 
 class Event(DictLikeModel):
     """
-    Base class for event types that mimics dict interface.
+    Base class for all workflow events.
+
+    Events are light-weight, serializable payloads passed between steps.
+    They support both attribute and mapping access to dynamic fields.
 
     Examples:
-        Basic example usage
+        Subclassing with typed fields:
 
         ```python
-        from llama_index.core.workflows.events import Event
+        from pydantic import Field
 
-        evt = Event(a=1, b=2)
+        class CustomEv(Event):
+            score: int = Field(ge=0)
 
-        # can use dot access to get values of `a` and `b`
-        print((evt.a, evt.b))
-
-        # can also set the attrs
-        evt.a = 2
+        e = CustomEv(score=10)
+        print(e.score)
         ```
 
-        Custom event with additional Fields/PrivateAttr
-
-        ```python
-        from llama_index.core.workflows.events import Event
-        from pydantic import Field, PrivateAttr
-
-        class CustomEvent(Event):
-            field_1: int = Field(description="my custom field")
-            _private_attr_1: int = PrivateAttr()
-
-        evt = CustomEvent(a=1, b=2, field_1=3, _private_attr_1=4)
-
-        # `field_1` and `_private_attr_1` get set as they do with Pydantic BaseModel
-        print(evt.field_1)
-        print(evt._private_attr_1)
-
-        # `a` and `b` get set in the underlying dict, namely `evt._data`
-        print((evt.a, evt.b))
-        ```
+    See Also:
+        - [StartEvent][workflows.events.StartEvent]
+        - [StopEvent][workflows.events.StopEvent]
+        - [InputRequiredEvent][workflows.events.InputRequiredEvent]
+        - [HumanResponseEvent][workflows.events.HumanResponseEvent]
     """
 
     def __init__(self, **params: Any):
@@ -155,11 +147,32 @@ class Event(DictLikeModel):
 
 
 class StartEvent(Event):
-    """StartEvent is implicitly sent when a workflow runs."""
+    """Implicit entry event sent to kick off a `Workflow.run()`."""
 
 
 class StopEvent(Event):
-    """EndEvent signals the workflow to stop."""
+    """Terminal event that signals the workflow has completed.
+
+    The `result` property contains the return value of the workflow run. When a
+    custom stop event subclass is used, the workflow result is that event
+    instance itself.
+
+    Examples:
+        ```python
+        # default stop event: result holds the value
+        return StopEvent(result={"answer": 42})
+        ```
+
+        Subclassing to provide a custom result:
+
+        ```python
+        class MyStopEv(StopEvent):
+            pass
+
+        @step
+        async def my_step(self, ctx: Context, ev: StartEvent) -> MyStopEv:
+            return MyStopEv(result={"answer": 42})
+    """
 
     _result: Any = PrivateAttr(default=None)
 
@@ -177,11 +190,53 @@ class StopEvent(Event):
 
 
 class InputRequiredEvent(Event):
-    """InputRequiredEvent is sent when an input is required for a step."""
+    """Emitted when human input is required to proceed.
+
+    Automatically written to the event stream if returned from a step.
+
+    If returned from a step, it does not need to be consumed by other steps and will pass validation.
+    It's expected that the caller will respond to this event and send back a [HumanResponseEvent][workflows.events.HumanResponseEvent].
+
+    Use this directly or subclass it.
+
+    Typical flow: a step returns `InputRequiredEvent`, callers consume it from
+    the stream and send back a [HumanResponseEvent][workflows.events.HumanResponseEvent].
+
+    Examples:
+        ```python
+        from workflows.events import InputRequiredEvent, HumanResponseEvent
+
+        class HITLWorkflow(Workflow):
+            @step
+            async def my_step(self, ev: StartEvent) -> InputRequiredEvent:
+                return InputRequiredEvent(prefix="What's your name? ")
+
+            @step
+            async def my_step(self, ev: HumanResponseEvent) -> StopEvent:
+                return StopEvent(result=ev.response)
+        ```
+    """
 
 
 class HumanResponseEvent(Event):
-    """HumanResponseEvent is sent when a human response is required for a step."""
+    """Carries a human's response for a prior input request.
+
+    If consumed by a step and not returned by another, it will still pass validation.
+
+    Examples:
+        ```python
+        from workflows.events import InputRequiredEvent, HumanResponseEvent
+
+        class HITLWorkflow(Workflow):
+            @step
+            async def my_step(self, ev: StartEvent) -> InputRequiredEvent:
+                return InputRequiredEvent(prefix="What's your name? ")
+
+            @step
+            async def my_step(self, ev: HumanResponseEvent) -> StopEvent:
+                return StopEvent(result=ev.response)
+        ```
+    """
 
 
 EventType = Type[Event]
