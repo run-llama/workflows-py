@@ -86,6 +86,6 @@ Our imports are the same as before, but we've created 4 new event types. `start`
 
 ![A simple branch](./branching.png)
 
-You can of course combine branches and loops in any order to fulfill the needs of your application. Later in this tutorial you'll learn how to run multiple branches in parallel using `send_event` and synchronize them using `collect_events`.
+You can of course combine branches and loops in any order to fulfill the needs of your application. Later in this tutorial you'll learn how to run multiple branches in parallel using `send_events` and synchronize them using `receive_events`.
 
 Up next we'll learn about [maintaining state](state.md) with Context.

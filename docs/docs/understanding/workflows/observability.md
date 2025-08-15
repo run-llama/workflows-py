@@ -26,9 +26,7 @@ class ConcurrentFlow(Workflow):
     async def start(
         self, ctx: Context, ev: StartEvent
     ) -> StepAEvent | StepBEvent | StepCEvent:
-        ctx.send_event(StepAEvent(query="Query 1"))
-        ctx.send_event(StepBEvent(query="Query 2"))
-        ctx.send_event(StepCEvent(query="Query 3"))
+        ctx.send_events([StepAEvent(query="Query 1"), StepBEvent(query="Query 2"), StepCEvent(query="Query 3")])
 
     @step
     async def step_a(self, ctx: Context, ev: StepAEvent) -> StepACompleteEvent:
@@ -55,7 +53,7 @@ class ConcurrentFlow(Workflow):
 
         # wait until we receive 3 events
         if (
-            ctx.collect_events(
+            ctx.receive_events(
                 ev,
                 [StepCCompleteEvent, StepACompleteEvent, StepBCompleteEvent],
             )
@@ -112,9 +110,9 @@ handler = w.run(stepwise=True)
 # for the workflow to keep going (we assign them to `produced_events` with the := operator).
 while produced_events := await handler.run_step():
     # If we're here, it means there's at least an event we need to propagate,
-    # let's do it with `send_event`
+    # let's do it with `send_events`
     for ev in produced_events:
-        handler.ctx.send_event(ev)
+        handler.ctx.send_events([ev])
 
 # If we're here, it means the workflow execution completed, and
 # we can now access the final result.

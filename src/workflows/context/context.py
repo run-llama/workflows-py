@@ -15,9 +15,11 @@ from typing import (
     Callable,
     DefaultDict,
     Generic,
+    Optional,
     Tuple,
     Type,
     TypeVar,
+    Union,
     cast,
 )
 
@@ -112,7 +114,7 @@ class Context(Generic[MODEL_T]):
 
     def __init__(self, workflow: "Workflow") -> None:
         self.is_running = False
-        # Store the step configs of this workflow, to be used in send_event
+        # Store the step configs of this workflow, to be used in _send_event
         self._step_configs: dict[str, StepConfig | None] = {}
         for step_name, step_func in workflow._get_steps().items():
             self._step_configs[step_name] = getattr(step_func, "__step_config", None)
@@ -126,6 +128,7 @@ class Context(Generic[MODEL_T]):
 
         # instrumentation
         self._dispatcher = workflow._dispatcher
+        self._events_queue: defaultdict[str, int] = defaultdict(int)
 
     async def _init_state_store(self, state_class: MODEL_T) -> None:
         # If a state manager already exists, ensure the requested state type is compatible
@@ -252,6 +255,7 @@ class Context(Generic[MODEL_T]):
             "queues": {
                 k: self._serialize_queue(v, serializer) for k, v in self._queues.items()
             },
+            "events_queue": serializer.serialize(self._events_queue),
             "event_buffers": {
                 k: {
                     inner_k: [serializer.serialize(ev) for ev in inner_v]
@@ -318,6 +322,11 @@ class Context(Generic[MODEL_T]):
             context._streaming_queue = context._deserialize_queue(
                 data["streaming_queue"], serializer
             )
+
+            if "events_queue" in data:
+                context._events_queue = defaultdict(
+                    int, serializer.deserialize(data["events_queue"])
+                )
 
             context._event_buffers = {}
             for buffer_id, type_events_map in data["event_buffers"].items():
@@ -414,7 +423,7 @@ class Context(Generic[MODEL_T]):
         # Fall back to creating a stable identifier from expected events
         return ":".join(sorted(self._get_full_path(e_type) for e_type in events))
 
-    def collect_events(
+    def _collect_events(
         self, ev: Event, expected: list[Type[Event]], buffer_id: str | None = None
     ) -> list[Event] | None:
         """
@@ -480,17 +489,9 @@ class Context(Generic[MODEL_T]):
 
         return None
 
-    def send_event(self, message: Event, step: str | None = None) -> None:
-        """Dispatch an event to one or all workflow steps.
-
-        If `step` is omitted, the event is broadcast to all step queues and
-        non-matching steps will ignore it. When `step` is provided, the target
-        step must accept the event type or a
-        [WorkflowRuntimeError][workflows.errors.WorkflowRuntimeError] is raised.
-
-        Args:
-            message (Event): The event to enqueue.
-            step (str | None): Optional step name to target.
+    def _send_event(self, message: Event, step: str | None = None) -> None:
+        """
+        Sends an event to a specific step in the workflow.
 
         Raises:
             WorkflowRuntimeError: If the target step does not exist or does not
@@ -534,6 +535,66 @@ class Context(Generic[MODEL_T]):
                 )
 
         self._broker_log.append(message)
+
+    def send_events(self, events: list[Event], step: Optional[str] = None) -> None:
+        """
+        Emit events manually.
+
+        Args:
+            events (list[Event]): a list of Event objects to be sent
+            step (Optional[str]): a string representing the target step to which events should be sent. Defaults to None if not set.
+
+        Returns:
+            None
+
+        Examples:
+        ```
+        class MultipleEventsWorkflow(Workflow):
+        @step
+        async def send_events(self, ev: InputEvent, ctx: Context):
+            ctx.send_events(events = [OutputAEvent(), OutputBEvent()], step="step_a")
+        ```
+        """
+        for event in events:
+            self._events_queue[str(type(event))] += 1
+            if not step:
+                self._send_event(event)
+            else:
+                self._send_event(event, step)
+
+    def receive_events(
+        self, event: Event, event_types: list[Type[Event]]
+    ) -> Union[list[Event], None]:
+        """
+        Receive events emitted with `send_events`.
+
+        Args:
+            event (Event): The input event for the current step
+            event_types (list[Type[Event]]): List of the types of events to be expected
+
+        Returns:
+            A list of events or None
+
+        Example:
+        ```
+        class MultipleEventsWorkflow(Workflow):
+        @step
+        async def send_events(self, ev: InputEvent, ctx: Context):
+            ctx.send_events(events = [(OutputAEvent(), None), OutputBEvent()])
+        ## rest of the implementation
+        @step
+        async def receive_events(self, ev: ReceiveEvent, ctx: Context):
+            ctx.receive_events(ev, [OutputAEvent, OutputBEvent])
+        ```
+        """
+        ev_types: list[Type[Event]] = []
+        for ev_type in event_types:
+            to_collect = self._events_queue.get(str(ev_type))
+            if to_collect:
+                ev_types.extend([ev_type] * to_collect)
+        if ev_types:
+            return self._collect_events(event, ev_types)
+        return None
 
     async def wait_for_event(
         self,
@@ -816,7 +877,7 @@ class Context(Generic[MODEL_T]):
             if isinstance(new_ev, InputRequiredEvent):
                 self.write_event_to_stream(new_ev)
             elif new_ev is not None:
-                self.send_event(new_ev)
+                self.send_events([new_ev])
 
     def add_cancel_worker(self) -> None:
         """Install a worker that turns a cancel flag into an exception.
