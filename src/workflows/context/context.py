@@ -15,6 +15,7 @@ from typing import (
     Callable,
     DefaultDict,
     Generic,
+    Optional,
     Tuple,
     Type,
     TypeVar,
@@ -535,12 +536,13 @@ class Context(Generic[MODEL_T]):
 
         self._broker_log.append(message)
 
-    def send_events(self, events: list[Union[Event, Tuple[Event, str]]]) -> None:
+    def send_events(self, events: list[Event], step: Optional[str] = None) -> None:
         """
         Emit events manually.
 
         Args:
-            events (list[Union[Event, Tuple[Event, str]]]): a list of Event objects or of tuples containing an Event objects and the string representing the step the event should be sent to. If an Event object is used outside of a tuple, it won't be sent to any specific step.
+            events (list[Event]): a list of Event objects to be sent
+            step (Optional[str]): a string representing the target step to which events should be sent. Defaults to None if not set.
 
         Returns:
             None
@@ -550,17 +552,15 @@ class Context(Generic[MODEL_T]):
         class MultipleEventsWorkflow(Workflow):
         @step
         async def send_events(self, ev: InputEvent, ctx: Context):
-            ctx.send_events(events = [(OutputAEvent(), "step_a"), OutputBEvent()])
+            ctx.send_events(events = [OutputAEvent(), OutputBEvent()], step="step_a")
         ```
         """
         for event in events:
-            if isinstance(event, tuple):
-                ev, step = event
-                self._events_queue[str(type(ev))] += 1
-                self._send_event(ev, step)
-            else:
-                self._events_queue[str(type(event))] += 1
+            self._events_queue[str(type(event))] += 1
+            if not step:
                 self._send_event(event)
+            else:
+                self._send_event(event, step)
 
     def receive_events(
         self, event: Event, event_types: list[Type[Event]]
