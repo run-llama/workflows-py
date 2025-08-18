@@ -5,7 +5,7 @@ Resources are external dependencies you can inject into the steps of a workflow.
 As a simple example, look at `memory` in the following workflow:
 
 ```python
-from llama_index.core.workflow.resource import Resource
+from workflows.resource import Resource
 from llama_index.core.memory import Memory
 
 

@@ -13,7 +13,7 @@ To set a policy for a specific step, all you have to do is passing a policy obje
 
 
 ```python
-from llama_index.core.workflow.retry_policy import ConstantDelayRetryPolicy
+from workflows.retry_policy import ConstantDelayRetryPolicy
 
 
 class MyWorkflow(Workflow):

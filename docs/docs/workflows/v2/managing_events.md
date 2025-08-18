@@ -40,7 +40,12 @@ Normally, events are triggered by returning another event during a step. However
 Here is a short toy example showing how this would be used:
 
 ```python
-from llama_index.core.workflow import step, Context, Event, Workflow
+from workflows import Workflow, step
+from workflows.events import (
+    Event,
+    StartEvent,
+    StopEvent,
+)
 
 
 class MyEvent(Event):
@@ -117,7 +122,7 @@ Since workflows are so flexible, there are many possible ways to implement human
 The easiest way to implement a human-in-the-loop is to use the `InputRequiredEvent` and `HumanResponseEvent` events during event streaming.
 
 ```python
-from llama_index.core.workflow import InputRequiredEvent, HumanResponseEvent
+from workflows.events import InputRequiredEvent, HumanResponseEvent
 
 
 class HumanInTheLoopWorkflow(Workflow):

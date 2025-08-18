@@ -52,12 +52,11 @@ class MyState(BaseModel):
 Then, simply annotate your workflow state with the state model:
 
 ```python
-from llama_index.core.workflow import (
-    Context,
+from workflows import Workflow, step
+from workflows.events import (
+    Event,
     StartEvent,
     StopEvent,
-    Workflow,
-    step,
 )
 
 

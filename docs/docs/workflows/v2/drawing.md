@@ -31,7 +31,7 @@ draw_most_recent_execution(w, filename="joke_flow_recent.html")
 Optionally, you can choose to use global context between steps. For example, maybe multiple steps access the original `query` input from the user. You can store this in global context so that every step has access.
 
 ```python
-from llama_index.core.workflow import Context
+from workflows import Context
 
 
 @step

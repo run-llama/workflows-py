@@ -14,7 +14,7 @@ To be able to use a custom start event, the first step is creating a custom clas
 ```python
 from pathlib import Path
 
-from llama_index.core.workflow import StartEvent
+from workflows.events import StartEvent
 from llama_index.indices.managed.llama_cloud import LlamaCloudIndex
 from llama_index.llms.openai import OpenAI
 
@@ -75,7 +75,7 @@ dictionary that we then assign to `StopEvent.result`.
 First step to support custom stop events, we need to create a subclass of `StopEvent`:
 
 ```python
-from llama_index.core.workflow import StopEvent
+from workflows.events import StopEvent
 
 
 class MyStopEvent(StopEvent):
