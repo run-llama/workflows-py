@@ -773,6 +773,9 @@ class Context(Generic[MODEL_T]):
             if verbose and name != "_done":
                 print(f"Running step {name}")
 
+            if config.gather is not None:
+                self.receive_events(ev, config.gather)
+
             # run step
             # Initialize state manager if needed
             if self._state_store is None:

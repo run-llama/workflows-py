@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, Callable, Type
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from .events import Event
 from .errors import WorkflowValidationError
 from .resource import ResourceDefinition
 from .utils import (
@@ -30,6 +31,7 @@ class StepConfig(BaseModel):
     num_workers: int
     retry_policy: RetryPolicy | None
     resources: list[ResourceDefinition]
+    gather: list[Type[Event]] | None
     context_state_type: Type[BaseModel] | None = Field(default=None)
 
 
@@ -37,6 +39,7 @@ def step(
     *args: Any,
     workflow: Type["Workflow"] | None = None,
     num_workers: int = 4,
+    gather: list[Type[Event]] | None = None,
     retry_policy: RetryPolicy | None = None,
 ) -> Callable:
     """
@@ -54,6 +57,7 @@ def step(
             function step to. Not required for methods.
         num_workers (int): Number of workers for this step. Defaults to 4.
         retry_policy (RetryPolicy | None): Optional retry policy for failures.
+        gather (list[Type[Event]] | None): Optional list of events to gather in the step.
 
     Returns:
         Callable: The original function, annotated with internal step metadata.
@@ -104,6 +108,7 @@ def step(
             num_workers=num_workers,
             retry_policy=retry_policy,
             resources=spec.resources,
+            gather=gather,
         )
 
         # If this is a free function, call add_step() explicitly.
