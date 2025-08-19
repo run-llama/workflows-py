@@ -9,6 +9,7 @@ import json
 import time
 import warnings
 from collections import defaultdict
+from deprecated import deprecated
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -414,6 +415,10 @@ class Context(Generic[MODEL_T]):
         # Fall back to creating a stable identifier from expected events
         return ":".join(sorted(self._get_full_path(e_type) for e_type in events))
 
+    @deprecated(
+        reason="This function is deprecated and will be removed in version 2",
+        version="1.3.1",
+    )
     def collect_events(
         self, ev: Event, expected: list[Type[Event]], buffer_id: str | None = None
     ) -> list[Event] | None:
@@ -480,6 +485,10 @@ class Context(Generic[MODEL_T]):
 
         return None
 
+    @deprecated(
+        reason="This function is deprecated and will be removed in version 2",
+        version="1.3.1",
+    )
     def send_event(self, message: Event, step: str | None = None) -> None:
         """Dispatch an event to one or all workflow steps.
 
