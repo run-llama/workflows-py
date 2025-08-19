@@ -9,6 +9,7 @@ import json
 import time
 import warnings
 from collections import defaultdict
+from deprecated import deprecated
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -562,7 +563,31 @@ class Context(Generic[MODEL_T]):
             else:
                 self._send_event(event, step)
 
-    def receive_events(
+    @deprecated(
+        reason="This method is deprecated and will be replaced by send_events in following releases."
+    )
+    def send_event(self, events: list[Event], step: Optional[str] = None) -> None:
+        """
+        Emit events manually.
+
+        Args:
+            events (list[Event]): a list of Event objects to be sent
+            step (Optional[str]): a string representing the target step to which events should be sent. Defaults to None if not set.
+
+        Returns:
+            None
+
+        Examples:
+        ```
+        class MultipleEventsWorkflow(Workflow):
+        @step
+        async def send_event(self, ev: InputEvent, ctx: Context):
+            ctx.send_event(events = [OutputAEvent(), OutputBEvent()], step="step_a")
+        ```
+        """
+        return self.send_events(events, step)
+
+    def gather_events(
         self, event: Event, event_types: list[Type[Event]]
     ) -> Union[list[Event], None]:
         """
@@ -595,6 +620,11 @@ class Context(Generic[MODEL_T]):
         if ev_types:
             return self._collect_events(event, ev_types)
         return None
+
+    collect_events = gather_events
+    collect_events = deprecated(
+        reason="This method is deprecated and will be replaced by gather_events in following releases."
+    )(collect_events)
 
     async def wait_for_event(
         self,

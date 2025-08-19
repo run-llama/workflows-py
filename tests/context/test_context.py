@@ -137,7 +137,7 @@ def test_get_result(ctx: Context) -> None:
 
 
 def test_to_dict_with_events_buffer(ctx: Context) -> None:
-    ctx.receive_events(OneTestEvent(), [OneTestEvent, AnotherTestEvent])
+    ctx.gather_events(OneTestEvent(), [OneTestEvent, AnotherTestEvent])
     assert json.dumps(ctx.to_dict())
 
 
