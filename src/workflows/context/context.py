@@ -566,12 +566,12 @@ class Context(Generic[MODEL_T]):
     @deprecated(
         reason="This method is deprecated and will be replaced by send_events in following releases."
     )
-    def send_event(self, events: list[Event], step: Optional[str] = None) -> None:
+    def send_event(self, message: Event, step: Optional[str] = None) -> None:
         """
         Emit events manually.
 
         Args:
-            events (list[Event]): a list of Event objects to be sent
+            message (Event): the Event object to be sent
             step (Optional[str]): a string representing the target step to which events should be sent. Defaults to None if not set.
 
         Returns:
@@ -582,10 +582,10 @@ class Context(Generic[MODEL_T]):
         class MultipleEventsWorkflow(Workflow):
         @step
         async def send_event(self, ev: InputEvent, ctx: Context):
-            ctx.send_event(events = [OutputAEvent(), OutputBEvent()], step="step_a")
+            ctx.send_event(OutputEvent(), step="step_a")
         ```
         """
-        return self.send_events(events, step)
+        return self.send_events([message], step)
 
     def gather_events(
         self, event: Event, event_types: list[Type[Event]]
@@ -608,8 +608,8 @@ class Context(Generic[MODEL_T]):
             ctx.send_events(events = [(OutputAEvent(), None), OutputBEvent()])
         ## rest of the implementation
         @step
-        async def receive_events(self, ev: ReceiveEvent, ctx: Context):
-            ctx.receive_events(ev, [OutputAEvent, OutputBEvent])
+        async def gather_events(self, ev: ReceiveEvent, ctx: Context):
+            ctx.gather_events(ev, [OutputAEvent, OutputBEvent])
         ```
         """
         ev_types: list[Type[Event]] = []
@@ -621,10 +621,36 @@ class Context(Generic[MODEL_T]):
             return self._collect_events(event, ev_types)
         return None
 
-    collect_events = gather_events
-    collect_events = deprecated(
+    @deprecated(
         reason="This method is deprecated and will be replaced by gather_events in following releases."
-    )(collect_events)
+    )
+    def collect_events(
+        self, ev: Event, expected: list[Type[Event]], buffer_id: str | None = None
+    ) -> Optional[list[Event]]:
+        """
+        Receive events emitted with `send_events`.
+
+        Args:
+            event (Event): The input event for the current step
+            expected (list[Type[Event]]): List of the types of events to be expected
+            buffer_id (str | None): `deprecated` Optional stable key to isolate buffers across steps or workers. Defaults to an internal key derived from the task name or expected types.
+
+        Returns:
+            A list of events or None
+
+        Example:
+        ```
+        class MultipleEventsWorkflow(Workflow):
+        @step
+        async def send_events(self, ev: InputEvent, ctx: Context):
+            ctx.send_events(events = [(OutputAEvent(), None), OutputBEvent()])
+        ## rest of the implementation
+        @step
+        async def collect_events(self, ev: ReceiveEvent, ctx: Context):
+            ctx.collect_events(ev, [OutputAEvent, OutputBEvent])
+        ```
+        """
+        return self.gather_events(ev, expected)
 
     async def wait_for_event(
         self,
