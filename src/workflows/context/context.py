@@ -551,9 +551,9 @@ class Context(Generic[MODEL_T]):
         Examples:
         ```
         class MultipleEventsWorkflow(Workflow):
-        @step
-        async def send_events(self, ev: InputEvent, ctx: Context):
-            ctx.send_events(events = [OutputAEvent(), OutputBEvent()], step="step_a")
+            @step
+            async def send_events(self, ev: InputEvent, ctx: Context):
+                ctx.send_events(OutputAEvent(), OutputBEvent()])
         ```
         """
         for event in events:
@@ -580,9 +580,9 @@ class Context(Generic[MODEL_T]):
         Examples:
         ```
         class MultipleEventsWorkflow(Workflow):
-        @step
-        async def send_event(self, ev: InputEvent, ctx: Context):
-            ctx.send_event(OutputEvent(), step="step_a")
+            @step
+            async def send_event(self, ev: InputEvent, ctx: Context):
+                ctx.send_event(OutputEvent())
         ```
         """
         return self.send_events([message], step)
@@ -591,7 +591,7 @@ class Context(Generic[MODEL_T]):
         self, event: Event, event_types: list[Type[Event]]
     ) -> Union[list[Event], None]:
         """
-        Receive events emitted with `send_events`.
+        Receive events emitted with `send_events`. Will wait for all pending events of the specified type(s).
 
         Args:
             event (Event): The input event for the current step
@@ -603,13 +603,15 @@ class Context(Generic[MODEL_T]):
         Example:
         ```
         class MultipleEventsWorkflow(Workflow):
-        @step
-        async def send_events(self, ev: InputEvent, ctx: Context):
-            ctx.send_events(events = [(OutputAEvent(), None), OutputBEvent()])
-        ## rest of the implementation
-        @step
-        async def gather_events(self, ev: ReceiveEvent, ctx: Context):
-            ctx.gather_events(ev, [OutputAEvent, OutputBEvent])
+            @step
+            async def send_events(self, ev: InputEvent, ctx: Context):
+                ctx.send_events([OutputAEvent(), OutputBEvent()])
+
+            ...
+
+            @step
+            async def gather_events(self, ev: ReceiveEvent, ctx: Context):
+                ctx.gather_events(ev, [OutputAEvent, OutputBEvent])
         ```
         """
         ev_types: list[Type[Event]] = []
@@ -641,13 +643,15 @@ class Context(Generic[MODEL_T]):
         Example:
         ```
         class MultipleEventsWorkflow(Workflow):
-        @step
-        async def send_events(self, ev: InputEvent, ctx: Context):
-            ctx.send_events(events = [(OutputAEvent(), None), OutputBEvent()])
-        ## rest of the implementation
-        @step
-        async def collect_events(self, ev: ReceiveEvent, ctx: Context):
-            ctx.collect_events(ev, [OutputAEvent, OutputBEvent])
+            @step
+            async def send_events(self, ev: InputEvent, ctx: Context):
+                ctx.send_events([OutputAEvent(), OutputBEvent()])
+
+            ...
+
+            @step
+            async def collect_events(self, ev: ReceiveEvent, ctx: Context):
+                ctx.collect_events(ev, [OutputAEvent, OutputBEvent])
         ```
         """
         return self.gather_events(ev, expected)
