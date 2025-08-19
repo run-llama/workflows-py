@@ -17,12 +17,16 @@ nav:
   - API Reference:
       - Workflows:
           - api_reference/workflow
-  - Component Guides:
-      - Workflows:
-          - module_guides/workflow
-  - Understanding:
-      - Workflows:
-          - understanding/workflows
+  - Workflows:
+      - v2:
+          - ./workflows/v2/index.md
+          - ./workflows/v2/customizing_entry_exit_points.md
+          - ./workflows/v2/drawing.md
+          - ./workflows/v2/managing_events.md
+          - ./workflows/v2/managing_state.md
+          - ./workflows/v2/retry_steps.md
+          - ./workflows/v2/resources.md
+          - ./workflows/v2/deployment.md
 plugins:
   - search
   - include_dir_to_nav
