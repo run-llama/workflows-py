@@ -102,13 +102,96 @@ class WorkflowServer:
     #
 
     async def _health_check(self, request: Request) -> JSONResponse:
+        """
+        ---
+        summary: Health check
+        description: Returns the server health status.
+        responses:
+          200:
+            description: Successful health check
+            content:
+              application/json:
+                schema:
+                  type: object
+                  properties:
+                    status:
+                      type: string
+                      example: healthy
+                  required: [status]
+        """
         return JSONResponse({"status": "healthy"})
 
     async def _list_workflows(self, request: Request) -> JSONResponse:
+        """
+        ---
+        summary: List workflows
+        description: Returns the list of registered workflow names.
+        responses:
+          200:
+            description: List of workflows
+            content:
+              application/json:
+                schema:
+                  type: object
+                  properties:
+                    workflows:
+                      type: array
+                      items:
+                        type: string
+                  required: [workflows]
+        """
         workflow_names = list(self._workflows.keys())
         return JSONResponse({"workflows": workflow_names})
 
     async def _run_workflow(self, request: Request) -> JSONResponse:
+        """
+        ---
+        summary: Run workflow (wait)
+        description: |
+          Runs the specified workflow synchronously and returns the final result.
+          The request body may include an optional serialized start event, an optional
+          context object, and optional keyword arguments passed to the workflow run.
+        parameters:
+          - in: path
+            name: name
+            required: true
+            schema:
+              type: string
+            description: Registered workflow name.
+        requestBody:
+          required: false
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  start_event:
+                    type: string
+                    description: Serialized StartEvent in JSON.
+                  context:
+                    type: object
+                    description: Serialized workflow Context.
+                  kwargs:
+                    type: object
+                    description: Additional keyword arguments for the workflow.
+        responses:
+          200:
+            description: Workflow completed successfully
+            content:
+              application/json:
+                schema:
+                  type: object
+                  properties:
+                    result:
+                      description: Workflow result value
+                  required: [result]
+          400:
+            description: Invalid start_event payload
+          404:
+            description: Workflow not found
+          500:
+            description: Error running workflow or invalid request body
+        """
         workflow = self._extract_workflow(request)
         context, start_event, run_kwargs = await self._extract_run_params(
             request, workflow
@@ -123,6 +206,54 @@ class WorkflowServer:
             raise HTTPException(detail=f"Error running workflow: {e}", status_code=500)
 
     async def _run_workflow_nowait(self, request: Request) -> JSONResponse:
+        """
+        ---
+        summary: Run workflow (no-wait)
+        description: |
+          Starts the specified workflow asynchronously and returns a handler identifier
+          which can be used to query results or stream events.
+        parameters:
+          - in: path
+            name: name
+            required: true
+            schema:
+              type: string
+            description: Registered workflow name.
+        requestBody:
+          required: false
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  start_event:
+                    type: string
+                    description: Serialized StartEvent in JSON.
+                  context:
+                    type: object
+                    description: Serialized workflow Context.
+                  kwargs:
+                    type: object
+                    description: Additional keyword arguments for the workflow.
+        responses:
+          200:
+            description: Workflow started
+            content:
+              application/json:
+                schema:
+                  type: object
+                  properties:
+                    handler_id:
+                      type: string
+                    status:
+                      type: string
+                      enum: [started]
+                  required: [handler_id, status]
+          400:
+            description: Invalid start_event payload
+          404:
+            description: Workflow not found
+        """
         workflow = self._extract_workflow(request)
         context, start_event, run_kwargs = await self._extract_run_params(
             request, workflow
@@ -135,6 +266,39 @@ class WorkflowServer:
         return JSONResponse({"handler_id": handler_id, "status": "started"})
 
     async def _get_workflow_result(self, request: Request) -> JSONResponse:
+        """
+        ---
+        summary: Get workflow result
+        description: Returns the final result of an asynchronously started workflow, if available
+        parameters:
+          - in: path
+            name: handler_id
+            required: true
+            schema:
+              type: string
+            description: Workflow run identifier returned from the no-wait run endpoint.
+        responses:
+          200:
+            description: Result is available
+            content:
+              application/json:
+                schema:
+                  type: object
+                  properties:
+                    result:
+                      description: Workflow result value
+                  required: [result]
+          202:
+            description: Result not ready yet
+            content:
+              application/json:
+                schema:
+                  type: object
+          404:
+            description: Handler not found
+          500:
+            description: Error computing result
+        """
         handler_id = request.path_params["handler_id"]
 
         # Immediately return the result if available
@@ -157,6 +321,48 @@ class WorkflowServer:
             return JSONResponse({"error": str(e)}, status_code=500)
 
     async def _stream_events(self, request: Request) -> StreamingResponse:
+        """
+        ---
+        summary: Stream workflow events
+        description: |
+          Streams events produced by a workflow execution. Events are emitted as
+          newline-delimited JSON by default, or as Server-Sent Events when `sse=true`.
+          Event data is formatted according to llama-index's json serializer. For
+          pydantic serializable python types, it returns:
+          {
+            "__is_pydantic": True,
+            "value": <pydantic serialized value>,
+            "qualified_name": <python path to pydantic class>
+          }
+        parameters:
+          - in: path
+            name: handler_id
+            required: true
+            schema:
+              type: string
+            description: Identifier returned from the no-wait run endpoint.
+          - in: query
+            name: sse
+            required: false
+            schema:
+              type: boolean
+              default: false
+            description: If true, stream as text/event-stream instead of NDJSON.
+        responses:
+          200:
+            description: Streaming started
+            content:
+              application/x-ndjson:
+                schema:
+                  type: string
+                  description: Newline-delimited JSON stream of events.
+              text/event-stream:
+                schema:
+                  type: string
+                  description: Server-Sent Events stream of event data.
+          404:
+            description: Handler not found
+        """
         handler_id = request.path_params["handler_id"]
         handler = self._handlers.get(handler_id)
         if handler is None:
