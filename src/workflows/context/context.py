@@ -654,7 +654,7 @@ class Context(Generic[MODEL_T]):
                 ctx.collect_events(ev, [OutputAEvent, OutputBEvent])
         ```
         """
-        return self._collect_events(ev, expected, buffer_id)
+        return self.gather_events(ev, expected)
 
     async def wait_for_event(
         self,
