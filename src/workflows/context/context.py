@@ -31,10 +31,10 @@ from workflows.errors import (
 from workflows.events import (
     Event,
     InputRequiredEvent,
-    InternalDispatchEvent,
     _InProgressStepEvent,
     _QueueStateEvent,
     _RunningStepEvent,
+    _StateModificationEvent,
 )
 from workflows.resource import ResourceManager
 from workflows.types import RunResultT
@@ -364,9 +364,7 @@ class Context(Generic[MODEL_T]):
         """
         async with self.lock:
             self.write_event_to_stream(
-                InternalDispatchEvent(
-                    data=_InProgressStepEvent(name=name, ev=ev, in_progress=True)
-                )
+                _InProgressStepEvent(name=name, ev=ev, in_progress=True)
             )
             self._in_progress[name].append(ev)
 
@@ -381,25 +379,19 @@ class Context(Generic[MODEL_T]):
         """
         async with self.lock:
             self.write_event_to_stream(
-                InternalDispatchEvent(
-                    data=_InProgressStepEvent(name=name, ev=ev, in_progress=False)
-                )
+                _InProgressStepEvent(name=name, ev=ev, in_progress=False)
             )
             events = [e for e in self._in_progress[name] if e != ev]
             self._in_progress[name] = events
 
     async def add_running_step(self, name: str) -> None:
         async with self.lock:
-            self.write_event_to_stream(
-                InternalDispatchEvent(data=_RunningStepEvent(name=name, running=True))
-            )
+            self.write_event_to_stream(_RunningStepEvent(name=name, running=True))
             self._currently_running_steps[name] += 1
 
     async def remove_running_step(self, name: str) -> None:
         async with self.lock:
-            self.write_event_to_stream(
-                InternalDispatchEvent(data=_RunningStepEvent(name=name, running=False))
-            )
+            self.write_event_to_stream(_RunningStepEvent(name=name, running=False))
             self._currently_running_steps[name] -= 1
             if self._currently_running_steps[name] == 0:
                 del self._currently_running_steps[name]
@@ -545,9 +537,7 @@ class Context(Generic[MODEL_T]):
             for name, queue in self._queues.items():
                 queue.put_nowait(message)
                 self.write_event_to_stream(
-                    InternalDispatchEvent(
-                        data=_QueueStateEvent(queue_name=name, queue_size=queue.qsize())
-                    )
+                    _QueueStateEvent(queue_name=name, queue_size=queue.qsize())
                 )
         else:
             if step not in self._step_configs:
@@ -557,10 +547,8 @@ class Context(Generic[MODEL_T]):
             if step_config and type(message) in step_config.accepted_events:
                 self._queues[step].put_nowait(message)
                 self.write_event_to_stream(
-                    InternalDispatchEvent(
-                        data=_QueueStateEvent(
-                            queue_name=step, queue_size=self._queues[step].qsize()
-                        )
+                    _QueueStateEvent(
+                        queue_name=step, queue_size=self._queues[step].qsize()
                     )
                 )
             else:
@@ -624,10 +612,8 @@ class Context(Generic[MODEL_T]):
         if waiter_id not in self._queues:
             self._queues[waiter_id] = asyncio.Queue()
             self.write_event_to_stream(
-                InternalDispatchEvent(
-                    data=_QueueStateEvent(
-                        queue_name=waiter_id, queue_size=self._queues[waiter_id].qsize()
-                    )
+                _QueueStateEvent(
+                    queue_name=waiter_id, queue_size=self._queues[waiter_id].qsize()
                 )
             )
 
@@ -651,11 +637,9 @@ class Context(Generic[MODEL_T]):
                     else:
                         continue
                 self.write_event_to_stream(
-                    InternalDispatchEvent(
-                        data=_QueueStateEvent(
-                            queue_name=waiter_id,
-                            queue_size=self._queues[waiter_id].qsize(),
-                        )
+                    _QueueStateEvent(
+                        queue_name=waiter_id,
+                        queue_size=self._queues[waiter_id].qsize(),
                     )
                 )
             finally:
@@ -799,6 +783,7 @@ class Context(Generic[MODEL_T]):
 
             # - check if its async or not
             # - if not async, run it in an executor
+            start_state = await self.store.get_state()
             if asyncio.iscoroutinefunction(step):
                 retry_start_at = time.time()
                 attempts = 0
@@ -845,6 +830,13 @@ class Context(Generic[MODEL_T]):
                 except Exception as e:
                     raise WorkflowRuntimeError(f"Error in step '{name}': {e!s}") from e
 
+            end_state = await self.store.get_state()
+            if start_state != end_state:
+                self.write_event_to_stream(
+                    _StateModificationEvent(
+                        previous_state=start_state, current_state=end_state
+                    )
+                )
             if verbose and name != "_done":
                 if new_ev is not None:
                     print(f"Step {name} produced event {type(new_ev).__name__}")

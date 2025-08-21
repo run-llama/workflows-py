@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from _collections_abc import dict_items, dict_keys, dict_values
-from typing import Any, Type, Union, Optional, List, Tuple
+from typing import Any, Type, Optional, Set, Tuple
 from typing_extensions import Self
 
 from pydantic import (
@@ -257,15 +257,10 @@ class InternalDispatchEvent(Event):
         ```
     """
 
-    data: Union[
-        _InProgressStepEvent,
-        _RunningStepEvent,
-        _StateModificationEvent,
-        _QueueStateEvent,
-    ]
+    pass
 
 
-class _InProgressStepEvent(Event):
+class _InProgressStepEvent(InternalDispatchEvent):
     ev: Event = Field(description="Event related to the step progression")
     name: str = Field(description="Name of the step")
     in_progress: bool = Field(
@@ -273,17 +268,17 @@ class _InProgressStepEvent(Event):
     )
 
 
-class _RunningStepEvent(Event):
+class _RunningStepEvent(InternalDispatchEvent):
     name: str = Field(description="Name of the step")
     running: bool = Field(
         description="True when step is marked as running, False when step is removed from running steps."
     )
 
 
-class _StateModificationEvent(Event):
+class _StateModificationEvent(InternalDispatchEvent):
     previous_state: Any  # avoids circular import by importing from state_store
     current_state: Any
-    diff: Optional[List[Tuple[Any, Any]]] = Field(
+    diff: Optional[Set[Tuple[Any, Any]]] = Field(
         default=None,
         description="Difference between the current and the previous state, represented as a list of dictionary items (as tuples)",
     )
@@ -294,12 +289,13 @@ class _StateModificationEvent(Event):
             return self
         else:
             self.diff = (
-                self.current_state.model_dump() - self.previous_state.model_dump()
+                self.current_state.model_dump().items()
+                - self.previous_state.model_dump().items()
             )
             return self
 
 
-class _QueueStateEvent(Event):
+class _QueueStateEvent(InternalDispatchEvent):
     queue_name: str
     queue_size: int
 
