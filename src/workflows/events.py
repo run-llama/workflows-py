@@ -4,13 +4,16 @@
 from __future__ import annotations
 
 from _collections_abc import dict_items, dict_keys, dict_values
-from typing import Any, Type
+from typing import Any, Type, Union, Optional, List, Tuple
+from typing_extensions import Self
 
 from pydantic import (
     BaseModel,
     ConfigDict,
+    Field,
     PrivateAttr,
     model_serializer,
+    model_validator,
 )
 
 
@@ -237,6 +240,68 @@ class HumanResponseEvent(Event):
                 return StopEvent(result=ev.response)
         ```
     """
+
+
+class InternalDispatchEvent(Event):
+    """
+    InternalDispatchEvent is a special event type that exposes processes running inside workflow, even if the user did not explicitly expose them by setting, e.g., `ctx.write_event_to_stream(`.
+
+    Examples:
+        ```python
+        wf = ExampleWorkflow()
+        handler = wf.run(message="Hello, who are you?")
+
+        async for ev in handler.stream_event(expose_internal=True):
+            if isinstance(ev, InternalDispatchEvent):
+                print(ev.data)
+        ```
+    """
+
+    data: Union[
+        _InProgressStepEvent,
+        _RunningStepEvent,
+        _StateModificationEvent,
+        _QueueStateEvent,
+    ]
+
+
+class _InProgressStepEvent(Event):
+    ev: Event = Field(description="Event related to the step progression")
+    name: str = Field(description="Name of the step")
+    in_progress: bool = Field(
+        description="True when step is marked as in progress, False when step is removed from in progress steps."
+    )
+
+
+class _RunningStepEvent(Event):
+    name: str = Field(description="Name of the step")
+    running: bool = Field(
+        description="True when step is marked as running, False when step is removed from running steps."
+    )
+
+
+class _StateModificationEvent(Event):
+    previous_state: Any  # avoids circular import by importing from state_store
+    current_state: Any
+    diff: Optional[List[Tuple[Any, Any]]] = Field(
+        default=None,
+        description="Difference between the current and the previous state, represented as a list of dictionary items (as tuples)",
+    )
+
+    @model_validator(mode="after")
+    def state_mod_validation(self) -> Self:
+        if self.diff:
+            return self
+        else:
+            self.diff = (
+                self.current_state.model_dump() - self.previous_state.model_dump()
+            )
+            return self
+
+
+class _QueueStateEvent(Event):
+    queue_name: str
+    queue_size: int
 
 
 EventType = Type[Event]

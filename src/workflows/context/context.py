@@ -28,7 +28,14 @@ from workflows.errors import (
     WorkflowDone,
     WorkflowRuntimeError,
 )
-from workflows.events import Event, InputRequiredEvent
+from workflows.events import (
+    Event,
+    InputRequiredEvent,
+    InternalDispatchEvent,
+    _InProgressStepEvent,
+    _QueueStateEvent,
+    _RunningStepEvent,
+)
 from workflows.resource import ResourceManager
 from workflows.types import RunResultT
 
@@ -356,6 +363,11 @@ class Context(Generic[MODEL_T]):
 
         """
         async with self.lock:
+            self.write_event_to_stream(
+                InternalDispatchEvent(
+                    data=_InProgressStepEvent(name=name, ev=ev, in_progress=True)
+                )
+            )
             self._in_progress[name].append(ev)
 
     async def remove_from_in_progress(self, name: str, ev: Event) -> None:
@@ -368,15 +380,26 @@ class Context(Generic[MODEL_T]):
 
         """
         async with self.lock:
+            self.write_event_to_stream(
+                InternalDispatchEvent(
+                    data=_InProgressStepEvent(name=name, ev=ev, in_progress=False)
+                )
+            )
             events = [e for e in self._in_progress[name] if e != ev]
             self._in_progress[name] = events
 
     async def add_running_step(self, name: str) -> None:
         async with self.lock:
+            self.write_event_to_stream(
+                InternalDispatchEvent(data=_RunningStepEvent(name=name, running=True))
+            )
             self._currently_running_steps[name] += 1
 
     async def remove_running_step(self, name: str) -> None:
         async with self.lock:
+            self.write_event_to_stream(
+                InternalDispatchEvent(data=_RunningStepEvent(name=name, running=False))
+            )
             self._currently_running_steps[name] -= 1
             if self._currently_running_steps[name] == 0:
                 del self._currently_running_steps[name]
@@ -519,8 +542,13 @@ class Context(Generic[MODEL_T]):
             ```
         """
         if step is None:
-            for queue in self._queues.values():
+            for name, queue in self._queues.items():
                 queue.put_nowait(message)
+                self.write_event_to_stream(
+                    InternalDispatchEvent(
+                        data=_QueueStateEvent(queue_name=name, queue_size=queue.qsize())
+                    )
+                )
         else:
             if step not in self._step_configs:
                 raise WorkflowRuntimeError(f"Step {step} does not exist")
@@ -528,6 +556,13 @@ class Context(Generic[MODEL_T]):
             step_config = self._step_configs[step]
             if step_config and type(message) in step_config.accepted_events:
                 self._queues[step].put_nowait(message)
+                self.write_event_to_stream(
+                    InternalDispatchEvent(
+                        data=_QueueStateEvent(
+                            queue_name=step, queue_size=self._queues[step].qsize()
+                        )
+                    )
+                )
             else:
                 raise WorkflowRuntimeError(
                     f"Step {step} does not accept event of type {type(message)}"
@@ -588,6 +623,13 @@ class Context(Generic[MODEL_T]):
 
         if waiter_id not in self._queues:
             self._queues[waiter_id] = asyncio.Queue()
+            self.write_event_to_stream(
+                InternalDispatchEvent(
+                    data=_QueueStateEvent(
+                        queue_name=waiter_id, queue_size=self._queues[waiter_id].qsize()
+                    )
+                )
+            )
 
         # send the waiter event if it's not already sent
         if waiter_event is not None:
@@ -608,6 +650,14 @@ class Context(Generic[MODEL_T]):
                         return event
                     else:
                         continue
+                self.write_event_to_stream(
+                    InternalDispatchEvent(
+                        data=_QueueStateEvent(
+                            queue_name=waiter_id,
+                            queue_size=self._queues[waiter_id].qsize(),
+                        )
+                    )
+                )
             finally:
                 await self.store.set(waiter_id, False)
 
