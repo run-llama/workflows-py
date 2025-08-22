@@ -8,6 +8,7 @@ from workflows.events import (
     _QueueStateEvent,
     _RunningStepEvent,
     _StateModificationEvent,
+    _StepEmitEvent,
     Event,
     StartEvent,
     StopEvent,
@@ -68,6 +69,8 @@ async def test_internal_events(wf: ExampleWorkflow) -> None:
     assert _InProgressStepEvent in evs
     assert _RunningStepEvent in evs
     assert _QueueStateEvent in evs
+    assert _StepEmitEvent in evs
+    assert evs.count(_StepEmitEvent) == 2
 
 
 @pytest.mark.asyncio

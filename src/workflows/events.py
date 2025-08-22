@@ -300,4 +300,10 @@ class _QueueStateEvent(InternalDispatchEvent):
     queue_size: int
 
 
+class _StepEmitEvent(InternalDispatchEvent):
+    step_name: str
+    input_event: Event
+    output_event: Event
+
+
 EventType = Type[Event]

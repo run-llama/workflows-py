@@ -35,6 +35,7 @@ from workflows.events import (
     _QueueStateEvent,
     _RunningStepEvent,
     _StateModificationEvent,
+    _StepEmitEvent,
 )
 from workflows.resource import ResourceManager
 from workflows.types import RunResultT
@@ -853,6 +854,9 @@ class Context(Generic[MODEL_T]):
                 raise WorkflowRuntimeError(msg)
 
             await self.remove_from_in_progress(name=name, ev=ev)
+            self.write_event_to_stream(
+                _StepEmitEvent(step_name=name, input_event=ev, output_event=new_ev)
+            )
             # InputRequiredEvent's are special case and need to be written to the stream
             # this way, the user can access and respond to the event
             if isinstance(new_ev, InputRequiredEvent):
