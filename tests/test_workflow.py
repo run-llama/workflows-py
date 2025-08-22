@@ -169,12 +169,12 @@ async def test_workflow_sync_steps_only() -> None:
     class SyncWorkflow(Workflow):
         @step
         def step_one(self, ctx: Context, ev: StartEvent) -> OneTestEvent:
-            ctx.collect_events(ev, [StartEvent])
+            ctx.gather_events(ev, [StartEvent])
             return OneTestEvent()
 
         @step
         def step_two(self, ctx: Context, ev: OneTestEvent) -> StopEvent:
-            # ctx.collect_events(ev, [OneTestEvent])
+            # ctx.gather_events(ev, [OneTestEvent])
             return StopEvent()
 
     workflow = SyncWorkflow()
@@ -188,14 +188,11 @@ async def test_workflow_num_workers() -> None:
         async def original_step(
             self, ctx: Context, ev: StartEvent
         ) -> Union[OneTestEvent, LastEvent]:
-            await ctx.store.set("num_to_collect", 3)
-            ctx.send_event(OneTestEvent(test_param="test1"))
-            ctx.send_event(OneTestEvent(test_param="test2"))
-            ctx.send_event(OneTestEvent(test_param="test3"))
+            ctx._send_event(OneTestEvent(test_param="test1"))
+            ctx._send_event(OneTestEvent(test_param="test2"))
+            ctx._send_event(OneTestEvent(test_param="test3"))
 
-            # send one extra event
-            ctx.send_event(AnotherTestEvent(another_test_param="test4"))
-
+            ctx._send_event(AnotherTestEvent(another_test_param="test4"))
             return LastEvent()
 
         @step(num_workers=3)
@@ -207,8 +204,7 @@ async def test_workflow_num_workers() -> None:
         async def final_step(
             self, ctx: Context, ev: Union[AnotherTestEvent, LastEvent]
         ) -> StopEvent:
-            n = await ctx.store.get("num_to_collect")
-            events = ctx.collect_events(ev, [AnotherTestEvent] * n)
+            events = ctx._collect_events(ev, [AnotherTestEvent] * 3)
             if events is None:
                 return None  # type: ignore
             return StopEvent(result=[ev.another_test_param for ev in events])
@@ -244,7 +240,7 @@ async def test_workflow_step_send_event() -> None:
     class StepSendEventWorkflow(Workflow):
         @step
         async def step1(self, ctx: Context, ev: StartEvent) -> OneTestEvent:
-            ctx.send_event(OneTestEvent(), step="step2")
+            ctx._send_event(OneTestEvent(), step="step2")
             return None  # type: ignore
 
         @step
@@ -268,7 +264,7 @@ async def test_workflow_step_send_event_to_None() -> None:
     class StepSendEventToNoneWorkflow(Workflow):
         @step
         async def step1(self, ctx: Context, ev: StartEvent) -> OneTestEvent:
-            ctx.send_event(OneTestEvent(), step=None)
+            ctx._send_event(OneTestEvent(), step=None)
             return  # type:ignore
 
         @step
@@ -450,7 +446,7 @@ async def test_workflow_context_to_dict(workflow: Workflow) -> None:
     handler = workflow.run()
     ctx = handler.ctx
 
-    ctx.send_event(EventWithName(name="test"))  # type:ignore
+    ctx._send_event(EventWithName(name="test"))  # type:ignore
 
     # get the context dict
     data = ctx.to_dict()  # type:ignore
@@ -494,7 +490,7 @@ async def test_human_in_the_loop() -> None:
     async for event in handler.stream_events():
         if isinstance(event, InputRequiredEvent):
             assert event.prefix == "Enter a number: "
-            handler.ctx.send_event(HumanResponseEvent(response="42"))  # type:ignore
+            handler.ctx.send_events([HumanResponseEvent(response="42")])  # type:ignore
 
     final_result = await handler
     assert final_result == "42"
@@ -519,7 +515,7 @@ async def test_human_in_the_loop_with_resume() -> None:
     assert handler.exception()
 
     new_handler = workflow.run(ctx=Context.from_dict(workflow, ctx_dict))  # type:ignore
-    new_handler.ctx.send_event(HumanResponseEvent(response="42"))  # type:ignore
+    new_handler.ctx.send_events([HumanResponseEvent(response="42")])  # type:ignore
 
     final_result = await new_handler
     assert final_result == "42"
