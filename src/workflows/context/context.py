@@ -31,7 +31,15 @@ from workflows.errors import (
     WorkflowDone,
     WorkflowRuntimeError,
 )
-from workflows.events import Event, InputRequiredEvent
+from workflows.events import (
+    Event,
+    InputRequiredEvent,
+    _InProgressStepEvent,
+    _QueueStateEvent,
+    _RunningStepEvent,
+    _StateModificationEvent,
+    _StepEmitEvent,
+)
 from workflows.resource import ResourceManager
 from workflows.types import RunResultT
 
@@ -366,6 +374,9 @@ class Context(Generic[MODEL_T]):
 
         """
         async with self.lock:
+            self.write_event_to_stream(
+                _InProgressStepEvent(name=name, ev=ev, in_progress=True)
+            )
             self._in_progress[name].append(ev)
 
     async def remove_from_in_progress(self, name: str, ev: Event) -> None:
@@ -378,15 +389,20 @@ class Context(Generic[MODEL_T]):
 
         """
         async with self.lock:
+            self.write_event_to_stream(
+                _InProgressStepEvent(name=name, ev=ev, in_progress=False)
+            )
             events = [e for e in self._in_progress[name] if e != ev]
             self._in_progress[name] = events
 
     async def add_running_step(self, name: str) -> None:
         async with self.lock:
+            self.write_event_to_stream(_RunningStepEvent(name=name, running=True))
             self._currently_running_steps[name] += 1
 
     async def remove_running_step(self, name: str) -> None:
         async with self.lock:
+            self.write_event_to_stream(_RunningStepEvent(name=name, running=False))
             self._currently_running_steps[name] -= 1
             if self._currently_running_steps[name] == 0:
                 del self._currently_running_steps[name]
@@ -521,8 +537,11 @@ class Context(Generic[MODEL_T]):
             ```
         """
         if step is None:
-            for queue in self._queues.values():
+            for name, queue in self._queues.items():
                 queue.put_nowait(message)
+                self.write_event_to_stream(
+                    _QueueStateEvent(queue_name=name, queue_size=queue.qsize())
+                )
         else:
             if step not in self._step_configs:
                 raise WorkflowRuntimeError(f"Step {step} does not exist")
@@ -530,6 +549,11 @@ class Context(Generic[MODEL_T]):
             step_config = self._step_configs[step]
             if step_config and type(message) in step_config.accepted_events:
                 self._queues[step].put_nowait(message)
+                self.write_event_to_stream(
+                    _QueueStateEvent(
+                        queue_name=step, queue_size=self._queues[step].qsize()
+                    )
+                )
             else:
                 raise WorkflowRuntimeError(
                     f"Step {step} does not accept event of type {type(message)}"
@@ -709,6 +733,11 @@ class Context(Generic[MODEL_T]):
 
         if waiter_id not in self._queues:
             self._queues[waiter_id] = asyncio.Queue()
+            self.write_event_to_stream(
+                _QueueStateEvent(
+                    queue_name=waiter_id, queue_size=self._queues[waiter_id].qsize()
+                )
+            )
 
         # send the waiter event if it's not already sent
         if waiter_event is not None:
@@ -729,6 +758,12 @@ class Context(Generic[MODEL_T]):
                         return event
                     else:
                         continue
+                self.write_event_to_stream(
+                    _QueueStateEvent(
+                        queue_name=waiter_id,
+                        queue_size=self._queues[waiter_id].qsize(),
+                    )
+                )
             finally:
                 await self.store.set(waiter_id, False)
 
@@ -870,6 +905,7 @@ class Context(Generic[MODEL_T]):
 
             # - check if its async or not
             # - if not async, run it in an executor
+            start_state = await self.store.get_state()
             if asyncio.iscoroutinefunction(step):
                 retry_start_at = time.time()
                 attempts = 0
@@ -916,6 +952,13 @@ class Context(Generic[MODEL_T]):
                 except Exception as e:
                     raise WorkflowRuntimeError(f"Error in step '{name}': {e!s}") from e
 
+            end_state = await self.store.get_state()
+            if start_state != end_state:
+                self.write_event_to_stream(
+                    _StateModificationEvent(
+                        previous_state=start_state, current_state=end_state
+                    )
+                )
             if verbose and name != "_done":
                 if new_ev is not None:
                     print(f"Step {name} produced event {type(new_ev).__name__}")
@@ -932,6 +975,9 @@ class Context(Generic[MODEL_T]):
                 raise WorkflowRuntimeError(msg)
 
             await self.remove_from_in_progress(name=name, ev=ev)
+            self.write_event_to_stream(
+                _StepEmitEvent(step_name=name, input_event=ev, output_event=new_ev)
+            )
             # InputRequiredEvent's are special case and need to be written to the stream
             # this way, the user can access and respond to the event
             if isinstance(new_ev, InputRequiredEvent):
