@@ -303,7 +303,7 @@ class _QueueStateEvent(InternalDispatchEvent):
 class _StepEmitEvent(InternalDispatchEvent):
     step_name: str
     input_event: Event
-    output_event: Event
+    output_event: Optional[Event]
 
 
 EventType = Type[Event]
