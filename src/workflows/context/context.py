@@ -831,7 +831,7 @@ class Context(Generic[MODEL_T]):
                 continue
 
             if config.gather:
-                self.collect_events(ev, config.gather)
+                self.gather_events(ev, config.gather)
 
             if verbose and name != "_done":
                 print(f"Running step {name}")

@@ -15,11 +15,12 @@ def test_decorated_config(workflow: Workflow) -> None:
     def f(self, ev: Event) -> Event:  # type: ignore
         return Event()
 
-    res = step(workflow=workflow.__class__)(f)
+    res = step(workflow=workflow.__class__, gather=[Event])(f)
     config = getattr(res, "__step_config")
     assert config.accepted_events == [Event]
     assert config.event_name == "ev"
     assert config.return_types == [Event]
+    assert config.gather == [Event]
 
 
 def test_decorate_method() -> None:
