@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .errors import WorkflowValidationError
 from .resource import ResourceDefinition
+from .events import EventType
 from .utils import (
     inspect_signature,
     is_free_function,
@@ -31,12 +32,14 @@ class StepConfig(BaseModel):
     retry_policy: RetryPolicy | None
     resources: list[ResourceDefinition]
     context_state_type: Type[BaseModel] | None = Field(default=None)
+    gather: list[EventType] | None = Field(default=None)
 
 
 def step(
     *args: Any,
     workflow: Type["Workflow"] | None = None,
     num_workers: int = 4,
+    gather: list[EventType] | None = None,
     retry_policy: RetryPolicy | None = None,
 ) -> Callable:
     """
@@ -104,6 +107,7 @@ def step(
             num_workers=num_workers,
             retry_policy=retry_policy,
             resources=spec.resources,
+            gather=gather,
         )
 
         # If this is a free function, call add_step() explicitly.

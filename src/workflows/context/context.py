@@ -830,6 +830,9 @@ class Context(Generic[MODEL_T]):
             if type(ev) not in config.accepted_events:
                 continue
 
+            if config.gather:
+                self.collect_events(ev, config.gather)
+
             if verbose and name != "_done":
                 print(f"Running step {name}")
 
