@@ -71,16 +71,13 @@ class EmailSenderWorkflow(Workflow):
         counter.update(success=sent)
         return ProcessEmailEvent(sent=sent, time=time.time())
 
-    @step
+    @step(gather=[ProcessEmailEvent])
     async def output(
         self,
         ev: ProcessEmailEvent,
         ctx: Context,
         counter: Annotated[EmailCounter, Resource(get_counter)],
     ) -> Union[StopEvent, None]:
-        events = ctx.gather_events(ev, [type(ev)])
-        if events:
-            return None
         return StopEvent(result=f"Sent {counter.success} emails; {counter.fail} failed")
 
 
