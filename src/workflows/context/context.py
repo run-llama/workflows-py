@@ -521,7 +521,7 @@ class Context(Generic[MODEL_T]):
             ```
         """
         if step is None:
-            for queue in self._queues.values():
+            for name, queue in self._queues.items():
                 queue.put_nowait(message)
         else:
             if step not in self._step_configs:
@@ -830,11 +830,17 @@ class Context(Generic[MODEL_T]):
             if type(ev) not in config.accepted_events:
                 continue
 
+            gathered_evs: Optional[list[Event]] = []
+
             if config.gather:
-                self.gather_events(ev, config.gather)
+                gathered_evs = self.gather_events(ev, config.gather)
+                if not gathered_evs:
+                    continue
 
             if verbose and name != "_done":
                 print(f"Running step {name}")
+
+            events_to_process = gathered_evs if gathered_evs and config.gather else [ev]
 
             # run step
             # Initialize state manager if needed
@@ -859,88 +865,94 @@ class Context(Generic[MODEL_T]):
                     dict_state = cast(MODEL_T, DictState())
                     await self._init_state_store(dict_state)
 
-            kwargs: dict[str, Any] = {}
-            if config.context_parameter:
-                kwargs[config.context_parameter] = self
-            for resource in config.resources:
-                kwargs[resource.name] = await resource_manager.get(
-                    resource=resource.resource
-                )
-            kwargs[config.event_name] = ev
+            # Process each event
+            for current_event in events_to_process:
+                kwargs: dict[str, Any] = {}
+                if config.context_parameter:
+                    kwargs[config.context_parameter] = self
+                for resource in config.resources:
+                    kwargs[resource.name] = await resource_manager.get(
+                        resource=resource.resource
+                    )
+                kwargs[config.event_name] = current_event
 
-            # wrap the step with instrumentation
-            instrumented_step = self._dispatcher.span(step)
+                # wrap the step with instrumentation
+                instrumented_step = self._dispatcher.span(step)
 
-            # - check if its async or not
-            # - if not async, run it in an executor
-            if asyncio.iscoroutinefunction(step):
-                retry_start_at = time.time()
-                attempts = 0
-                while True:
-                    await self.mark_in_progress(name=name, ev=ev)
-                    await self.add_running_step(name)
+                # - check if its async or not
+                # - if not async, run it in an executor
+                if asyncio.iscoroutinefunction(step):
+                    retry_start_at = time.time()
+                    attempts = 0
+                    while True:
+                        await self.mark_in_progress(name=name, ev=current_event)
+                        await self.add_running_step(name)
+                        try:
+                            new_ev = await instrumented_step(**kwargs)
+                            kwargs.clear()
+                            break  # exit the retrying loop
+
+                        except WorkflowDone:
+                            await self.remove_from_in_progress(
+                                name=name, ev=current_event
+                            )
+                            raise
+                        except Exception as e:
+                            if config.retry_policy is None:
+                                raise
+
+                            delay = config.retry_policy.next(
+                                retry_start_at + time.time(), attempts, e
+                            )
+                            if delay is None:
+                                raise
+
+                            attempts += 1
+                            if verbose:
+                                print(
+                                    f"Step {name} produced an error, retry in {delay} seconds"
+                                )
+                            await asyncio.sleep(delay)
+                        finally:
+                            await self.remove_running_step(name)
+
+                else:
                     try:
-                        new_ev = await instrumented_step(**kwargs)
+                        run_task = functools.partial(instrumented_step, **kwargs)
                         kwargs.clear()
-                        break  # exit the retrying loop
-
+                        new_ev = await asyncio.get_event_loop().run_in_executor(
+                            None, run_task
+                        )
                     except WorkflowDone:
-                        await self.remove_from_in_progress(name=name, ev=ev)
+                        await self.remove_from_in_progress(name=name, ev=current_event)
                         raise
                     except Exception as e:
-                        if config.retry_policy is None:
-                            raise
+                        raise WorkflowRuntimeError(
+                            f"Error in step '{name}': {e!s}"
+                        ) from e
 
-                        delay = config.retry_policy.next(
-                            retry_start_at + time.time(), attempts, e
-                        )
-                        if delay is None:
-                            raise
+                if verbose and name != "_done":
+                    if new_ev is not None:
+                        print(f"Step {name} produced event {type(new_ev).__name__}")
+                    else:
+                        print(f"Step {name} produced no event")
 
-                        attempts += 1
-                        if verbose:
-                            print(
-                                f"Step {name} produced an error, retry in {delay} seconds"
-                            )
-                        await asyncio.sleep(delay)
-                    finally:
-                        await self.remove_running_step(name)
-
-            else:
-                try:
-                    run_task = functools.partial(instrumented_step, **kwargs)
-                    kwargs.clear()
-                    new_ev = await asyncio.get_event_loop().run_in_executor(
-                        None, run_task
-                    )
-                except WorkflowDone:
-                    await self.remove_from_in_progress(name=name, ev=ev)
-                    raise
-                except Exception as e:
-                    raise WorkflowRuntimeError(f"Error in step '{name}': {e!s}") from e
-
-            if verbose and name != "_done":
+                # Store the accepted event for the drawing operations
                 if new_ev is not None:
-                    print(f"Step {name} produced event {type(new_ev).__name__}")
-                else:
-                    print(f"Step {name} produced no event")
+                    self._accepted_events.append((name, type(current_event).__name__))
 
-            # Store the accepted event for the drawing operations
-            if new_ev is not None:
-                self._accepted_events.append((name, type(ev).__name__))
+                # Fail if the step returned something that's not an event
+                if new_ev is not None and not isinstance(new_ev, Event):
+                    msg = f"Step function {name} returned {type(new_ev).__name__} instead of an Event instance."
+                    raise WorkflowRuntimeError(msg)
 
-            # Fail if the step returned something that's not an event
-            if new_ev is not None and not isinstance(new_ev, Event):
-                msg = f"Step function {name} returned {type(new_ev).__name__} instead of an Event instance."
-                raise WorkflowRuntimeError(msg)
-
-            await self.remove_from_in_progress(name=name, ev=ev)
-            # InputRequiredEvent's are special case and need to be written to the stream
-            # this way, the user can access and respond to the event
-            if isinstance(new_ev, InputRequiredEvent):
-                self.write_event_to_stream(new_ev)
-            elif new_ev is not None:
-                self.send_events([new_ev])
+                await self.remove_from_in_progress(name=name, ev=current_event)
+                # InputRequiredEvent's are special case and need to be written to the stream
+                # this way, the user can access and respond to the event
+                if isinstance(new_ev, InputRequiredEvent):
+                    self.write_event_to_stream(new_ev)
+                elif new_ev is not None:
+                    self.send_events([new_ev])
 
     def add_cancel_worker(self) -> None:
         """Install a worker that turns a cancel flag into an exception.
