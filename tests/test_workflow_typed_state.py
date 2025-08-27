@@ -65,7 +65,8 @@ class ParallelWorkflow(Workflow):
     async def init(
         self, ctx: Context[SomeState], ev: StartEvent
     ) -> Union[WorkerEvent, GatherEvent]:
-        ctx.send_events([WorkerEvent()] * 10)
+        for _ in range(10):
+            ctx.send_event(WorkerEvent())
 
         return GatherEvent()
 
@@ -83,7 +84,7 @@ class ParallelWorkflow(Workflow):
     async def gather(
         self, ctx: Context[SomeState], ev: Union[GatherEvent, ResultEvent]
     ) -> Optional[StopEvent]:
-        results = ctx._collect_events(ev, [ResultEvent] * 10)
+        results = ctx.collect_events(ev, [ResultEvent] * 10)
         if not results:
             return None
 

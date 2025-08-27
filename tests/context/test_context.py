@@ -51,7 +51,7 @@ async def test_collect_events() -> None:
         async def step3(
             self, ctx: Context, ev: Union[OneTestEvent, AnotherTestEvent]
         ) -> Optional[StopEvent]:
-            events = ctx._collect_events(ev, [OneTestEvent, AnotherTestEvent])
+            events = ctx.collect_events(ev, [OneTestEvent, AnotherTestEvent])
             if events is None:
                 return None
             return StopEvent(result=events)
@@ -82,7 +82,7 @@ async def test_get_not_found(ctx: Context) -> None:
 def test_send_event_step_is_none(ctx: Context) -> None:
     ctx._queues = {"step1": mock.MagicMock(), "step2": mock.MagicMock()}
     ev = Event(foo="bar")
-    ctx._send_event(ev)
+    ctx.send_event(ev)
     for q in ctx._queues.values():
         q.put_nowait.assert_called_with(ev)  # type: ignore
     assert ctx._broker_log == [ev]
@@ -92,7 +92,7 @@ def test_send_event_to_non_existent_step(ctx: Context) -> None:
     with pytest.raises(
         WorkflowRuntimeError, match="Step does_not_exist does not exist"
     ):
-        ctx._send_event(Event(), "does_not_exist")
+        ctx.send_event(Event(), "does_not_exist")
 
 
 def test_send_event_to_wrong_step(ctx: Context) -> None:
@@ -110,7 +110,7 @@ def test_send_event_to_wrong_step(ctx: Context) -> None:
         WorkflowRuntimeError,
         match="Step step does not accept event of type <class 'workflows.events.Event'>",
     ):
-        ctx._send_event(Event(), "step")
+        ctx.send_event(Event(), "step")
 
 
 def test_send_event_to_step(workflow: Workflow) -> None:
@@ -125,7 +125,7 @@ def test_send_event_to_step(workflow: Workflow) -> None:
     ctx._queues = {"step1": mock.MagicMock(), "step2": mock.MagicMock()}
 
     ev = Event(foo="bar")
-    ctx._send_event(ev, "step2")
+    ctx.send_event(ev, "step2")
 
     ctx._queues["step1"].put_nowait.assert_not_called()  # type: ignore
     ctx._queues["step2"].put_nowait.assert_called_with(ev)  # type: ignore
@@ -137,7 +137,7 @@ def test_get_result(ctx: Context) -> None:
 
 
 def test_to_dict_with_events_buffer(ctx: Context) -> None:
-    ctx.gather_events(OneTestEvent(), [OneTestEvent, AnotherTestEvent])
+    ctx.collect_events(OneTestEvent(), [OneTestEvent, AnotherTestEvent])
     assert json.dumps(ctx.to_dict())
 
 
@@ -160,7 +160,7 @@ async def test_wait_for_event(ctx: Context) -> None:
 
     wait_job = asyncio.create_task(ctx.wait_for_event(Event))
     await asyncio.sleep(0.01)
-    ctx.send_events([Event(msg="foo")])
+    ctx.send_event(Event(msg="foo"))
     ev = await wait_job
     assert ev.msg == "foo"
 
@@ -175,7 +175,8 @@ async def test_wait_for_event_with_requirements(ctx: Context) -> None:
         ctx.wait_for_event(Event, requirements={"msg": "foo"})
     )
     await asyncio.sleep(0.01)
-    ctx.send_events([Event(msg="bar"), Event(msg="foo")])
+    ctx.send_event(Event(msg="bar"))
+    ctx.send_event(Event(msg="foo"))
     ev = await wait_job
     assert ev.msg == "foo"
 
@@ -194,7 +195,7 @@ async def test_wait_for_event_in_workflow() -> None:
     assert handler.ctx
     async for ev in handler.stream_events():
         if isinstance(ev, Event) and ev.msg == "foo":
-            handler.ctx.send_events([Event(msg="bar")])
+            handler.ctx.send_event(Event(msg="bar"))
             break
 
     result = await handler
@@ -219,9 +220,7 @@ async def test_prompt_and_wait(ctx: Context) -> None:
         )
     )
     await asyncio.sleep(0.01)
-    ctx.send_events(
-        [HumanResponseEvent(response="foo", waiter_id="test_prompt_and_wait")]  # type: ignore
-    )
+    ctx.send_event(HumanResponseEvent(response="foo", waiter_id="test_prompt_and_wait"))  # type: ignore
 
     result = await waiting_task
     assert result.response == "foo"
@@ -244,8 +243,8 @@ class WaitingWorkflow(Workflow):
     async def spawn_waiters(
         self, ctx: Context, ev: StartEvent
     ) -> Union[Waiter1, Waiter2]:
-        ctx._send_event(Waiter1(msg="foo"))
-        ctx._send_event(Waiter2(msg="bar"))
+        ctx.send_event(Waiter1(msg="foo"))
+        ctx.send_event(Waiter2(msg="bar"))
         return None  # type: ignore
 
     @step
@@ -270,7 +269,7 @@ class WaitingWorkflow(Workflow):
 
     @step
     async def collect_waiters(self, ctx: Context, ev: ResultEvent) -> StopEvent:
-        events: list[ResultEvent] | None = ctx._collect_events(  # type: ignore
+        events: list[ResultEvent] | None = ctx.collect_events(  # type: ignore
             ev, [ResultEvent, ResultEvent]
         )
         if events is None:
@@ -287,12 +286,12 @@ async def test_wait_for_multiple_events_in_workflow() -> None:
 
     async for ev in handler.stream_events():
         if isinstance(ev, InputRequiredEvent) and ev.prefix == "waiter_one":
-            handler.ctx.send_events(
-                [HumanResponseEvent(response="foo", waiter_id="waiter_one")]  # type: ignore
+            handler.ctx.send_event(
+                HumanResponseEvent(response="foo", waiter_id="waiter_one")  # type: ignore
             )
         elif isinstance(ev, InputRequiredEvent) and ev.prefix == "waiter_two":
-            handler.ctx.send_events(
-                [HumanResponseEvent(response="bar", waiter_id="waiter_two")]  # type: ignore
+            handler.ctx.send_event(
+                HumanResponseEvent(response="bar", waiter_id="waiter_two")  # type: ignore
             )
 
     result = await handler
@@ -306,12 +305,12 @@ async def test_wait_for_multiple_events_in_workflow() -> None:
 
     async for ev in handler.stream_events():
         if isinstance(ev, InputRequiredEvent) and ev.prefix == "waiter_one":
-            handler.ctx.send_events(
-                [HumanResponseEvent(response="fizz", waiter_id="waiter_one")]  # type: ignore
+            handler.ctx.send_event(
+                HumanResponseEvent(response="fizz", waiter_id="waiter_one")  # type: ignore
             )
         elif isinstance(ev, InputRequiredEvent) and ev.prefix == "waiter_two":
-            handler.ctx.send_events(
-                [HumanResponseEvent(response="buzz", waiter_id="waiter_two")]  # type: ignore
+            handler.ctx.send_event(
+                HumanResponseEvent(response="buzz", waiter_id="waiter_two")  # type: ignore
             )
 
     result = await handler

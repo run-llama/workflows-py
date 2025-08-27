@@ -20,7 +20,7 @@ async def test_retry_e2e() -> None:
         @step(retry_policy=ConstantDelayRetryPolicy(delay=0.2))
         async def flaky_step(self, ctx: Context, ev: StartEvent) -> StopEvent:
             count = await ctx.store.get("counter", default=0)
-            ctx.send_events([CountEvent()])
+            ctx.send_event(CountEvent())
             if count < 3:
                 raise ValueError("Something bad happened!")
             return StopEvent(result="All good!")
