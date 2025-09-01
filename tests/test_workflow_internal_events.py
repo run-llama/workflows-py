@@ -2,7 +2,7 @@ import pytest
 import asyncio
 
 from workflows import Workflow, Context, step
-from typing import List
+from typing import List, Union
 from workflows.events import (
     InternalDispatchEvent,
     InProgressStepEvent,
@@ -62,7 +62,7 @@ class ExampleWorkflowDictState(Workflow):
 
 class ExampleWorkflowMultiWorkers(Workflow):
     @step
-    async def first_step(self, ev: StartEvent, ctx: Context) -> SomeEvent | None:
+    async def first_step(self, ev: StartEvent, ctx: Context) -> Union[SomeEvent, None]:
         for _ in range(10):
             ctx.send_event(SomeEvent(data=ev.message))
         return None
