@@ -4,8 +4,7 @@
 from __future__ import annotations
 
 from _collections_abc import dict_items, dict_keys, dict_values
-from typing import Any, Type, Optional, Set, Tuple
-from typing_extensions import Self
+from typing import Any, Type, Optional, Literal
 
 from pydantic import (
     BaseModel,
@@ -13,7 +12,6 @@ from pydantic import (
     Field,
     PrivateAttr,
     model_serializer,
-    model_validator,
 )
 
 
@@ -260,7 +258,7 @@ class InternalDispatchEvent(Event):
     pass
 
 
-class _InProgressStepEvent(InternalDispatchEvent):
+class InProgressStepEvent(InternalDispatchEvent):
     ev: Event = Field(description="Event related to the step progression")
     name: str = Field(description="Name of the step")
     in_progress: bool = Field(
@@ -268,39 +266,24 @@ class _InProgressStepEvent(InternalDispatchEvent):
     )
 
 
-class _RunningStepEvent(InternalDispatchEvent):
+class RunningStepEvent(InternalDispatchEvent):
     name: str = Field(description="Name of the step")
+    run_id: str = Field(description="Run ID of the step for better distinction")
     running: bool = Field(
         description="True when step is marked as running, False when step is removed from running steps."
     )
 
 
-class _StateModificationEvent(InternalDispatchEvent):
-    previous_state: Any  # avoids circular import by importing from state_store
-    current_state: Any
-    diff: Optional[Set[Tuple[Any, Any]]] = Field(
-        default=None,
-        description="Difference between the current and the previous state, represented as a list of dictionary items (as tuples)",
-    )
-
-    @model_validator(mode="after")
-    def state_mod_validation(self) -> Self:
-        if self.diff:
-            return self
-        else:
-            self.diff = (
-                self.current_state.model_dump().items()
-                - self.previous_state.model_dump().items()
-            )
-            return self
+class StateModificationEvent(InternalDispatchEvent):
+    modification_type: Literal["updated_state"]
 
 
-class _QueueStateEvent(InternalDispatchEvent):
+class QueueStateEvent(InternalDispatchEvent):
     queue_name: str
     queue_size: int
 
 
-class _StepEmitEvent(InternalDispatchEvent):
+class StepEmitEvent(InternalDispatchEvent):
     step_name: str
     input_event: Event
     output_event: Optional[Event]

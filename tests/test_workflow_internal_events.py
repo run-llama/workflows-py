@@ -1,14 +1,15 @@
 import pytest
+import asyncio
 
 from workflows import Workflow, Context, step
 from typing import List
 from workflows.events import (
     InternalDispatchEvent,
-    _InProgressStepEvent,
-    _QueueStateEvent,
-    _RunningStepEvent,
-    _StateModificationEvent,
-    _StepEmitEvent,
+    InProgressStepEvent,
+    QueueStateEvent,
+    RunningStepEvent,
+    StateModificationEvent,
+    StepEmitEvent,
     Event,
     StartEvent,
     StopEvent,
@@ -47,6 +48,32 @@ class ExampleWorkflowState(Workflow):
         return StopEvent(result=ev.data)
 
 
+class ExampleWorkflowDictState(Workflow):
+    @step
+    async def first_step(self, ev: StartEvent, ctx: Context) -> SomeEvent:
+        async with ctx.store.edit_state() as state:
+            state.test = "Test"
+        return SomeEvent(data=ev.message)
+
+    @step
+    async def second_step(self, ev: SomeEvent, ctx: Context) -> StopEvent:
+        return StopEvent(result=ev.data)
+
+
+class ExampleWorkflowMultiWorkers(Workflow):
+    @step
+    async def first_step(self, ev: StartEvent, ctx: Context) -> SomeEvent | None:
+        for _ in range(10):
+            ctx.send_event(SomeEvent(data=ev.message))
+        return None
+
+    @step(num_workers=10)
+    async def second_step(self, ev: SomeEvent, ctx: Context) -> StopEvent:
+        # allow for each worker to process each event
+        await asyncio.sleep(0.1)
+        return StopEvent(result=ev.data)
+
+
 @pytest.fixture()
 def wf() -> ExampleWorkflow:
     return ExampleWorkflow()
@@ -55,6 +82,16 @@ def wf() -> ExampleWorkflow:
 @pytest.fixture()
 def wf_state() -> ExampleWorkflowState:
     return ExampleWorkflowState()
+
+
+@pytest.fixture()
+def wf_workers() -> ExampleWorkflowMultiWorkers:
+    return ExampleWorkflowMultiWorkers()
+
+
+@pytest.fixture()
+def wf_dict_state() -> ExampleWorkflowDictState:
+    return ExampleWorkflowDictState()
 
 
 @pytest.mark.asyncio
@@ -66,11 +103,11 @@ async def test_internal_events(wf: ExampleWorkflow) -> None:
             evs.append(type(ev))
     await handler
     assert len(evs) > 0
-    assert _InProgressStepEvent in evs
-    assert _RunningStepEvent in evs
-    assert _QueueStateEvent in evs
-    assert _StepEmitEvent in evs
-    assert evs.count(_StepEmitEvent) == 2
+    assert InProgressStepEvent in evs
+    assert RunningStepEvent in evs
+    assert QueueStateEvent in evs
+    assert StepEmitEvent in evs
+    assert evs.count(StepEmitEvent) == 2
 
 
 @pytest.mark.asyncio
@@ -83,5 +120,40 @@ async def test_internal_events_state(wf_state: ExampleWorkflowState) -> None:
             evs.append(type(ev))
     await handler
     assert len(evs) > 0
-    assert _StateModificationEvent in evs
-    assert evs.count(_StateModificationEvent) == 1
+    assert StateModificationEvent in evs
+    assert evs.count(StateModificationEvent) == 1
+
+
+@pytest.mark.asyncio
+async def test_internal_events_dict_state(
+    wf_dict_state: ExampleWorkflowDictState,
+) -> None:
+    # prove that state modification works also with DictState
+    handler = wf_dict_state.run(message="hello")
+    evs: List[EventType] = []
+    async for ev in handler.stream_events(expose_internal=True):
+        if isinstance(ev, InternalDispatchEvent):
+            print(f"Event {type(ev)}: {ev}")
+            evs.append(type(ev))
+    await handler
+    assert len(evs) > 0
+    assert StateModificationEvent in evs
+    assert evs.count(StateModificationEvent) == 1
+
+
+@pytest.mark.asyncio
+async def test_internal_events_multiple_workers(
+    wf_workers: ExampleWorkflowMultiWorkers,
+) -> None:
+    handler = wf_workers.run(message="hello")
+    run_ids = []
+    async for ev in handler.stream_events(expose_internal=True):
+        if isinstance(ev, RunningStepEvent):
+            # avoid duplication of the run_ids and exclude the "_done" step
+            if ev.running and ev.name != "_done":
+                run_ids.append(ev.run_id)
+    await handler
+    assert len(run_ids) == 11
+    assert (
+        len(set(run_ids)) == 11
+    )  # this check proves that we can differentiate among the same steps when they are run by different workers
