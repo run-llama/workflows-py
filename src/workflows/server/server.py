@@ -27,6 +27,19 @@ logger = logging.getLogger()
 
 
 class WorkflowServer:
+    """
+    A server that exposes workflows as a REST API.
+
+    This class provides a Starlette-based web server to manage and run `Workflow`
+    objects. It exposes endpoints to list available workflows, run them
+    synchronously or asynchronously, retrieve results, and stream events.
+
+    Args:
+        middleware (list[Middleware] | None): A list of Starlette middleware to
+            be applied to the application. If None, a default CORS middleware
+            allowing all origins, methods, and headers is used.
+    """
+
     def __init__(self, middleware: list[Middleware] | None = None):
         self._workflows: dict[str, Workflow] = {}
         self._contexts: dict[str, Context] = {}

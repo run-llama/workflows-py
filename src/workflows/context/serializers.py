@@ -22,8 +22,8 @@ class BaseSerializer(ABC):
     to reconstruct the original values from that string.
 
     See Also:
-        - [JsonSerializer][workflows.context.serializers.JsonSerializer]
-        - [PickleSerializer][workflows.context.serializers.PickleSerializer]
+        - #JsonSerializer
+        - #PickleSerializer
     """
 
     @abstractmethod
@@ -48,16 +48,16 @@ class JsonSerializer(BaseSerializer):
     fails, a `ValueError` is raised.
 
     Examples:
-        ```python
-        s = JsonSerializer()
-        payload = s.serialize({"x": 1, "y": [2, 3]})
-        data = s.deserialize(payload)
-        assert data == {"x": 1, "y": [2, 3]}
-        ```
+    ```python
+    s = JsonSerializer()
+    payload = s.serialize({"x": 1, "y": [2, 3]})
+    data = s.deserialize(payload)
+    assert data == {"x": 1, "y": [2, 3]}
+    ```
 
     See Also:
-        - [BaseSerializer][workflows.context.serializers.BaseSerializer]
-        - [PickleSerializer][workflows.context.serializers.PickleSerializer]
+        - #BaseSerializer
+        - #PickleSerializer
     """
 
     def _serialize_value(self, value: Any) -> Any:
@@ -148,15 +148,15 @@ class PickleSerializer(JsonSerializer):
     Note: Used to be called `JsonPickleSerializer` but it was renamed to `PickleSerializer`.
 
     Examples:
-        ```python
-        s = PickleSerializer()
-        class Foo:
-            def __init__(self, x):
-                self.x = x
-        payload = s.serialize(Foo(1))  # will likely use Pickle
-        obj = s.deserialize(payload)
-        assert isinstance(obj, Foo)
-        ```
+    ```python
+    s = PickleSerializer()
+    class Foo:
+        def __init__(self, x):
+            self.x = x
+    payload = s.serialize(Foo(1))  # will likely use Pickle
+    obj = s.deserialize(payload)
+    assert isinstance(obj, Foo)
+    ```
     """
 
     def serialize(self, value: Any) -> str:

@@ -19,8 +19,30 @@ dependencies = [
   "mkdocs-click>=0.8.1,<1",
   "mkdocs-render-swagger-plugin>=0.1.2,<1",
   "griffe-fieldz>=0.2.0,<1",
-  "mkdocs-github-admonitions-plugin>=0.0.3,<1"
+  "mkdocs-github-admonitions-plugin>=0.0.3,<1",
+  "pydoc-markdown>=4.8.2"
 ]
+
+[[tool.pydoc-markdown.loaders]]
+type = "python"
+search_path = ["../src"]
+
+[[tool.pydoc-markdown.processors]]
+type = "filter"
+documented_only = true
+exclude_private = true
+
+[[tool.pydoc-markdown.processors]]
+type = "smart"
+
+[[tool.pydoc-markdown.processors]]
+type = "crossref"
+
+[tool.pydoc-markdown.renderer]
+type = "markdown"
+filename = "docs/workflows/v2/api_reference.md"
+render_module_header = false
+descriptive_class_title = false
 
 [tool.uv]
 package = false

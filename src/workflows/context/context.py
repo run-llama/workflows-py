@@ -67,43 +67,43 @@ class Context(Generic[MODEL_T]):
         is_running (bool): Whether the workflow is currently running.
         store (InMemoryStateStore[MODEL_T]): Type-safe, async state store shared
             across steps. See also
-            [InMemoryStateStore][workflows.context.state_store.InMemoryStateStore].
+            [InMemoryStateStore](#workflows.context.state_store.InMemoryStateStore).
 
     Examples:
-        Basic usage inside a step:
+    Basic usage inside a step:
 
-        ```python
-        from workflows import step
-        from workflows.events import StartEvent, StopEvent
+    ```python
+    from workflows import step
+    from workflows.events import StartEvent, StopEvent
 
-        @step
-        async def start(self, ctx: Context, ev: StartEvent) -> StopEvent:
-            await ctx.store.set("query", ev.topic)
-            ctx.write_event_to_stream(ev)  # surface progress to UI
-            return StopEvent(result="ok")
-        ```
+    @step
+    async def start(self, ctx: Context, ev: StartEvent) -> StopEvent:
+        await ctx.store.set("query", ev.topic)
+        ctx.write_event_to_stream(ev)  # surface progress to UI
+        return StopEvent(result="ok")
+    ```
 
-        Persisting the state of a workflow across runs:
+    Persisting the state of a workflow across runs:
 
-        ```python
-        from workflows import Context
+    ```python
+    from workflows import Context
 
-        # Create a context and run the workflow with the same context
-        ctx = Context(my_workflow)
-        result_1 = await my_workflow.run(..., ctx=ctx)
-        result_2 = await my_workflow.run(..., ctx=ctx)
+    # Create a context and run the workflow with the same context
+    ctx = Context(my_workflow)
+    result_1 = await my_workflow.run(..., ctx=ctx)
+    result_2 = await my_workflow.run(..., ctx=ctx)
 
-        # Serialize the context and restore it
-        ctx_dict = ctx.to_dict()
-        restored_ctx = Context.from_dict(my_workflow, ctx_dict)
-        result_3 = await my_workflow.run(..., ctx=restored_ctx)
-        ```
+    # Serialize the context and restore it
+    ctx_dict = ctx.to_dict()
+    restored_ctx = Context.from_dict(my_workflow, ctx_dict)
+    result_3 = await my_workflow.run(..., ctx=restored_ctx)
+    ```
 
 
     See Also:
-        - [Workflow][workflows.Workflow]
-        - [Event][workflows.events.Event]
-        - [InMemoryStateStore][workflows.context.state_store.InMemoryStateStore]
+        - [Workflow](#workflows.workflow.Workflow)
+        - [Event](#workflows.events.Event)
+        - [InMemoryStateStore](#workflows.context.state_store.InMemoryStateStore)
     """
 
     # These keys are set by pre-built workflows and
@@ -148,7 +148,7 @@ class Context(Generic[MODEL_T]):
         """Typed, process-local state store shared across steps.
 
         If no state was initialized yet, a default
-        [DictState][workflows.context.state_store.DictState] store is created.
+        [DictState](#workflows.context.state_store.DictState) store is created.
 
         Returns:
             InMemoryStateStore[MODEL_T]: The state store instance.
@@ -214,30 +214,29 @@ class Context(Generic[MODEL_T]):
 
         Persists the global state store, event queues, buffers, accepted events,
         broker log, and running flag. This payload can be fed to
-        [from_dict][workflows.context.context.Context.from_dict] to resume a run
+        [from_dict](#workflows.context.context.Context.from_dict) to resume a run
         or carry state across runs.
 
         Args:
             serializer (BaseSerializer | None): Value serializer used for state
                 and event payloads. Defaults to
-                [JsonSerializer][workflows.context.serializers.JsonSerializer].
+                [JsonSerializer](#workflows.context.serializers.JsonSerializer).
 
         Returns:
-            dict[str, Any]: A dict suitable for JSON encoding and later
-            restoration via `from_dict`.
+            dict: A dict suitable for JSON encoding and later restoration via `from_dict`.
 
         See Also:
-            - [InMemoryStateStore.to_dict][workflows.context.state_store.InMemoryStateStore.to_dict]
+            - [InMemoryStateStore.to_dict](#workflows.context.state_store.InMemoryStateStore.to_dict)
 
         Examples:
-            ```python
-            ctx_dict = ctx.to_dict()
-            my_db.set("key", json.dumps(ctx_dict))
+        ```python
+        ctx_dict = ctx.to_dict()
+        my_db.set("key", json.dumps(ctx_dict))
 
-            ctx_dict = my_db.get("key")
-            restored_ctx = Context.from_dict(my_workflow, json.loads(ctx_dict))
-            result = await my_workflow.run(..., ctx=restored_ctx)
-            ```
+        ctx_dict = my_db.get("key")
+        restored_ctx = Context.from_dict(my_workflow, json.loads(ctx_dict))
+        result = await my_workflow.run(..., ctx=restored_ctx)
+        ```
         """
         serializer = serializer or JsonSerializer()
 
@@ -281,7 +280,7 @@ class Context(Generic[MODEL_T]):
             workflow (Workflow): The workflow instance that will own this
                 context.
             data (dict[str, Any]): Payload produced by
-                [to_dict][workflows.context.context.Context.to_dict].
+                [to_dict](#workflows.context.context.Context.to_dict).
             serializer (BaseSerializer | None): Serializer used to decode state
                 and events. Defaults to JSON.
 
@@ -294,14 +293,14 @@ class Context(Generic[MODEL_T]):
                 in an incompatible format.
 
         Examples:
-            ```python
-            ctx_dict = ctx.to_dict()
-            my_db.set("key", json.dumps(ctx_dict))
+        ```python
+        ctx_dict = ctx.to_dict()
+        my_db.set("key", json.dumps(ctx_dict))
 
-            ctx_dict = my_db.get("key")
-            restored_ctx = Context.from_dict(my_workflow, json.loads(ctx_dict))
-            result = await my_workflow.run(..., ctx=restored_ctx)
-            ```
+        ctx_dict = my_db.get("key")
+        restored_ctx = Context.from_dict(my_workflow, json.loads(ctx_dict))
+        result = await my_workflow.run(..., ctx=restored_ctx)
+        ```
         """
         serializer = serializer or JsonSerializer()
 
@@ -432,24 +431,24 @@ class Context(Generic[MODEL_T]):
                 task name or expected types.
 
         Returns:
-            list[Event] | None: The events in the requested order when complete,
+            list | None: The list of events in the requested order when complete,
             otherwise `None`.
 
         Examples:
-            ```python
-            @step
-            async def synthesize(
-                self, ctx: Context, ev: QueryEvent | RetrieveEvent
-            ) -> StopEvent | None:
-                events = ctx.collect_events(ev, [QueryEvent, RetrieveEvent])
-                if events is None:
-                    return None
-                query_ev, retrieve_ev = events
-                # ... proceed with both inputs present ...
-            ```
+        ```python
+        @step
+        async def synthesize(
+            self, ctx: Context, ev: QueryEvent | RetrieveEvent
+        ) -> StopEvent | None:
+            events = ctx.collect_events(ev, [QueryEvent, RetrieveEvent])
+            if events is None:
+                return None
+            query_ev, retrieve_ev = events
+            # ... proceed with both inputs present ...
+        ```
 
         See Also:
-            - [Event][workflows.events.Event]
+            - [Event](#workflows.events.Event)
         """
         buffer_id = buffer_id or self._get_event_buffer_id(expected)
 
@@ -486,7 +485,7 @@ class Context(Generic[MODEL_T]):
         If `step` is omitted, the event is broadcast to all step queues and
         non-matching steps will ignore it. When `step` is provided, the target
         step must accept the event type or a
-        [WorkflowRuntimeError][workflows.errors.WorkflowRuntimeError] is raised.
+        [WorkflowRuntimeError](#workflows.errors.WorkflowRuntimeError) is raised.
 
         Args:
             message (Event): The event to enqueue.
@@ -497,26 +496,26 @@ class Context(Generic[MODEL_T]):
                 accept the event type.
 
         Examples:
-            It's common to use this method to fan-out events:
+        It's common to use this method to fan-out events:
 
-            ```python
-            @step
-            async def my_step(self, ctx: Context, ev: StartEvent) -> WorkerEvent | GatherEvent:
-                for i in range(10):
-                    ctx.send_event(WorkerEvent(msg=i))
-                return GatherEvent()
-            ```
+        ```python
+        @step
+        async def my_step(self, ctx: Context, ev: StartEvent) -> WorkerEvent | GatherEvent:
+            for i in range(10):
+                ctx.send_event(WorkerEvent(msg=i))
+            return GatherEvent()
+        ```
 
-            You also see this method used from the caller side to send events into the workflow:
+        You also see this method used from the caller side to send events into the workflow:
 
-            ```python
-            handler = my_workflow.run(...)
-            async for ev in handler.stream_events():
-                if isinstance(ev, SomeEvent):
-                    handler.ctx.send_event(SomeOtherEvent(msg="Hello!"))
+        ```python
+        handler = my_workflow.run(...)
+        async for ev in handler.stream_events():
+            if isinstance(ev, SomeEvent):
+                handler.ctx.send_event(SomeOtherEvent(msg="Hello!"))
 
-            result = await handler
-            ```
+        result = await handler
+        ```
         """
         if step is None:
             for queue in self._queues.values():
@@ -567,17 +566,17 @@ class Context(Generic[MODEL_T]):
             asyncio.TimeoutError: If the timeout elapses.
 
         Examples:
-            ```python
-            @step
-            async def my_step(self, ctx: Context, ev: StartEvent) -> StopEvent:
-                response = await ctx.wait_for_event(
-                    HumanResponseEvent,
-                    waiter_event=InputRequiredEvent(msg="What's your name?"),
-                    waiter_id="user_name",
-                    timeout=60,
-                )
-                return StopEvent(result=response.response)
-            ```
+        ```python
+        @step
+        async def my_step(self, ctx: Context, ev: StartEvent) -> StopEvent:
+            response = await ctx.wait_for_event(
+                HumanResponseEvent,
+                waiter_event=InputRequiredEvent(msg="What's your name?"),
+                waiter_id="user_name",
+                timeout=60,
+            )
+            return StopEvent(result=response.response)
+        ```
         """
         requirements = requirements or {}
 
@@ -619,12 +618,12 @@ class Context(Generic[MODEL_T]):
                 sentinel in some streaming modes.
 
         Examples:
-            ```python
-            @step
-            async def my_step(self, ctx: Context, ev: StartEvent) -> StopEvent:
-                ctx.write_event_to_stream(ev)
-                return StopEvent(result="ok")
-            ```
+        ```python
+        @step
+        async def my_step(self, ctx: Context, ev: StartEvent) -> StopEvent:
+            ctx.write_event_to_stream(ev)
+            return StopEvent(result="ok")
+        ```
         """
         self._streaming_queue.put_nowait(ev)
 
@@ -632,10 +631,10 @@ class Context(Generic[MODEL_T]):
         """Return the final result of the workflow run.
 
         Examples:
-            ```python
-            result = await my_workflow.run(..., ctx=ctx)
-            result_agent = ctx.get_result()
-            ```
+        ```python
+        result = await my_workflow.run(..., ctx=ctx)
+        result_agent = ctx.get_result()
+        ```
 
         Returns:
             RunResultT: The value provided via a `StopEvent`.
@@ -825,7 +824,7 @@ class Context(Generic[MODEL_T]):
         internally to abort the run.
 
         See Also:
-            - [WorkflowCancelledByUser][workflows.errors.WorkflowCancelledByUser]
+            - [WorkflowCancelledByUser](#workflows.errors.WorkflowCancelledByUser)
         """
         self._tasks.add(asyncio.create_task(self._cancel_worker()))
 
