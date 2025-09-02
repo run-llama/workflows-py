@@ -793,7 +793,10 @@ class Context(Generic[MODEL_T]):
                 if isinstance(start_state, DictState)
                 else start_state.model_dump().copy()
             )
-            start_state_hash = self.store.get_state_hash()
+            try:
+                start_state_hash = self.store.get_state_hash()
+            except TypeError:  # unserializable types
+                start_state_hash = ""
             if asyncio.iscoroutinefunction(step):
                 retry_start_at = time.time()
                 attempts = 0
@@ -841,7 +844,10 @@ class Context(Generic[MODEL_T]):
                     raise WorkflowRuntimeError(f"Error in step '{name}': {e!s}") from e
 
             end_state = await self.store.get_state()
-            end_state_hash = self.store.get_state_hash()
+            try:
+                end_state_hash = self.store.get_state_hash()
+            except TypeError:  # unserializable types
+                end_state_hash = ""
             if start_state_hash != end_state_hash:
                 end_state_dict = (
                     end_state._data
