@@ -6,6 +6,8 @@ from pydantic import (
     field_serializer,
     field_validator,
 )
+import hashlib
+import json
 from typing import Union, cast
 
 from workflows.context.serializers import JsonSerializer
@@ -89,6 +91,10 @@ async def test_state_manager_defaults(
     assert full_state.name == "John"
     assert full_state.age == 30
     assert full_state.nested["a"] == "c"
+    assert (
+        hashlib.md5(json.dumps(full_state._data, sort_keys=True).encode()).hexdigest()
+        == default_state_manager.get_state_hash()
+    )
 
 
 @pytest.mark.asyncio
@@ -137,6 +143,12 @@ async def test_custom_state_manager(
     assert full_state.age == 25
     assert full_state.my_obj.name == "llama-index"
     assert full_state.pydantic_obj.name == "llama-index"
+    assert (
+        hashlib.md5(
+            json.dumps(full_state.model_dump(), sort_keys=True).encode()
+        ).hexdigest()
+        == custom_state_manager.get_state_hash()
+    )
 
     # Ensure pydantic is providing type safety
     with pytest.raises(ValidationError):

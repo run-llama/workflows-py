@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from _collections_abc import dict_items, dict_keys, dict_values
-from typing import Any, Type, Optional, Literal
+from typing import Any, Type, Optional
 
 from pydantic import (
     BaseModel,
@@ -13,6 +13,7 @@ from pydantic import (
     PrivateAttr,
     model_serializer,
 )
+from .context.utils import StateModificationType
 
 
 class DictLikeModel(BaseModel):
@@ -259,7 +260,6 @@ class InternalDispatchEvent(Event):
 
 
 class InProgressStepEvent(InternalDispatchEvent):
-    ev: Event = Field(description="Event related to the step progression")
     name: str = Field(description="Name of the step")
     in_progress: bool = Field(
         description="True when step is marked as in progress, False when step is removed from in progress steps."
@@ -275,18 +275,22 @@ class RunningStepEvent(InternalDispatchEvent):
 
 
 class StateModificationEvent(InternalDispatchEvent):
-    modification_type: Literal["updated_state"]
+    modification_type: StateModificationType
 
 
 class QueueStateEvent(InternalDispatchEvent):
-    queue_name: str
-    queue_size: int
+    name: str = Field(description="Name of the queue")
+    size: int = Field(description="Size of the queue")
 
 
 class StepEmitEvent(InternalDispatchEvent):
-    step_name: str
-    input_event: Event
-    output_event: Optional[Event]
+    step_name: str = Field(description="Name of the step receiving/emitting events")
+    input_event_name: str = Field(
+        description="Name of the input event for the current step"
+    )
+    output_event_name: Optional[str] = Field(
+        description="Name of the output event for the current step"
+    )
 
 
 EventType = Type[Event]

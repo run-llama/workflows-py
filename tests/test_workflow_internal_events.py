@@ -15,6 +15,7 @@ from workflows.events import (
     StopEvent,
     EventType,
 )
+from workflows.context.utils import StateModificationType
 from pydantic import BaseModel
 
 
@@ -57,6 +58,8 @@ class ExampleWorkflowDictState(Workflow):
 
     @step
     async def second_step(self, ev: SomeEvent, ctx: Context) -> StopEvent:
+        async with ctx.store.edit_state() as state:
+            del state._data["test"]
         return StopEvent(result=ev.data)
 
 
@@ -113,15 +116,13 @@ async def test_internal_events(wf: ExampleWorkflow) -> None:
 @pytest.mark.asyncio
 async def test_internal_events_state(wf_state: ExampleWorkflowState) -> None:
     handler = wf_state.run(message="hello")
-    evs: List[EventType] = []
+    evs: List[StateModificationEvent] = []
     async for ev in handler.stream_events(expose_internal=True):
-        if isinstance(ev, InternalDispatchEvent):
-            print(f"Event {type(ev)}: {ev}")
-            evs.append(type(ev))
+        if isinstance(ev, StateModificationEvent):
+            evs.append(ev)
     await handler
-    assert len(evs) > 0
-    assert StateModificationEvent in evs
-    assert evs.count(StateModificationEvent) == 1
+    assert len(evs) == 1
+    assert evs[0].modification_type == StateModificationType.UPDATED_PROPERTY
 
 
 @pytest.mark.asyncio
@@ -130,15 +131,14 @@ async def test_internal_events_dict_state(
 ) -> None:
     # prove that state modification works also with DictState
     handler = wf_dict_state.run(message="hello")
-    evs: List[EventType] = []
+    evs: List[StateModificationEvent] = []
     async for ev in handler.stream_events(expose_internal=True):
-        if isinstance(ev, InternalDispatchEvent):
-            print(f"Event {type(ev)}: {ev}")
-            evs.append(type(ev))
+        if isinstance(ev, StateModificationEvent):
+            evs.append(ev)
     await handler
-    assert len(evs) > 0
-    assert StateModificationEvent in evs
-    assert evs.count(StateModificationEvent) == 1
+    assert len(evs) == 2
+    assert evs[0].modification_type == StateModificationType.ADDED_PROPERTY
+    assert evs[1].modification_type == StateModificationType.DELETED_PROPERTY
 
 
 @pytest.mark.asyncio

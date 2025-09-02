@@ -9,7 +9,6 @@ import json
 import time
 import warnings
 from collections import defaultdict
-from pydantic import BaseModel
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -43,6 +42,7 @@ from workflows.types import RunResultT
 
 from .serializers import BaseSerializer, JsonSerializer
 from .state_store import MODEL_T, DictState, InMemoryStateStore
+from .utils import compare_states
 
 if TYPE_CHECKING:  # pragma: no cover
     from workflows import Workflow
@@ -365,9 +365,7 @@ class Context(Generic[MODEL_T]):
 
         """
         async with self.lock:
-            self.write_event_to_stream(
-                InProgressStepEvent(name=name, ev=ev, in_progress=True)
-            )
+            self.write_event_to_stream(InProgressStepEvent(name=name, in_progress=True))
             self._in_progress[name].append(ev)
 
     async def remove_from_in_progress(self, name: str, ev: Event) -> None:
@@ -381,7 +379,7 @@ class Context(Generic[MODEL_T]):
         """
         async with self.lock:
             self.write_event_to_stream(
-                InProgressStepEvent(name=name, ev=ev, in_progress=False)
+                InProgressStepEvent(name=name, in_progress=False)
             )
             events = [e for e in self._in_progress[name] if e != ev]
             self._in_progress[name] = events
@@ -543,7 +541,7 @@ class Context(Generic[MODEL_T]):
             for name, queue in self._queues.items():
                 queue.put_nowait(message)
                 self.write_event_to_stream(
-                    QueueStateEvent(queue_name=name, queue_size=queue.qsize())
+                    QueueStateEvent(name=name, size=queue.qsize())
                 )
         else:
             if step not in self._step_configs:
@@ -553,9 +551,7 @@ class Context(Generic[MODEL_T]):
             if step_config and type(message) in step_config.accepted_events:
                 self._queues[step].put_nowait(message)
                 self.write_event_to_stream(
-                    QueueStateEvent(
-                        queue_name=step, queue_size=self._queues[step].qsize()
-                    )
+                    QueueStateEvent(name=step, size=self._queues[step].qsize())
                 )
             else:
                 raise WorkflowRuntimeError(
@@ -618,9 +614,7 @@ class Context(Generic[MODEL_T]):
         if waiter_id not in self._queues:
             self._queues[waiter_id] = asyncio.Queue()
             self.write_event_to_stream(
-                QueueStateEvent(
-                    queue_name=waiter_id, queue_size=self._queues[waiter_id].qsize()
-                )
+                QueueStateEvent(name=waiter_id, size=self._queues[waiter_id].qsize())
             )
 
         # send the waiter event if it's not already sent
@@ -644,8 +638,8 @@ class Context(Generic[MODEL_T]):
                         continue
                 self.write_event_to_stream(
                     QueueStateEvent(
-                        queue_name=waiter_id,
-                        queue_size=self._queues[waiter_id].qsize(),
+                        name=waiter_id,
+                        size=self._queues[waiter_id].qsize(),
                     )
                 )
             finally:
@@ -709,7 +703,7 @@ class Context(Generic[MODEL_T]):
         config: StepConfig,
         verbose: bool,
         run_id: str,
-        step_run_id: str,
+        worker_id: str,
         resource_manager: ResourceManager,
     ) -> None:
         """Spawn a background worker task to process events for a step.
@@ -720,7 +714,7 @@ class Context(Generic[MODEL_T]):
             config (StepConfig): Resolved configuration for the step.
             verbose (bool): If True, print step activity.
             run_id (str): Run identifier for instrumentation.
-            step_run_id (str): Run ID for the specific step
+            worker_id (str): ID of the worker running the step
             resource_manager (ResourceManager): Resource injector for the step.
         """
         self._tasks.add(
@@ -731,7 +725,7 @@ class Context(Generic[MODEL_T]):
                     config=config,
                     verbose=verbose,
                     run_id=run_id,
-                    step_run_id=step_run_id,
+                    worker_id=worker_id,
                     resource_manager=resource_manager,
                 ),
                 name=name,
@@ -745,7 +739,7 @@ class Context(Generic[MODEL_T]):
         config: StepConfig,
         verbose: bool,
         run_id: str,
-        step_run_id: str,
+        worker_id: str,
         resource_manager: ResourceManager,
     ) -> None:
         while True:
@@ -794,17 +788,18 @@ class Context(Generic[MODEL_T]):
             # - check if its async or not
             # - if not async, run it in an executor
             start_state = await self.store.get_state()
-            initial_state: dict | BaseModel = (
+            start_state_dict = (
                 start_state._data.copy()
                 if isinstance(start_state, DictState)
-                else start_state.model_copy()
+                else start_state.model_dump().copy()
             )
+            start_state_hash = self.store.get_state_hash()
             if asyncio.iscoroutinefunction(step):
                 retry_start_at = time.time()
                 attempts = 0
                 while True:
                     await self.mark_in_progress(name=name, ev=ev)
-                    await self.add_running_step(name, run_id=step_run_id)
+                    await self.add_running_step(name, run_id=worker_id)
                     try:
                         new_ev = await instrumented_step(**kwargs)
                         kwargs.clear()
@@ -830,7 +825,7 @@ class Context(Generic[MODEL_T]):
                             )
                         await asyncio.sleep(delay)
                     finally:
-                        await self.remove_running_step(name, run_id=step_run_id)
+                        await self.remove_running_step(name, run_id=worker_id)
 
             else:
                 try:
@@ -846,14 +841,19 @@ class Context(Generic[MODEL_T]):
                     raise WorkflowRuntimeError(f"Error in step '{name}': {e!s}") from e
 
             end_state = await self.store.get_state()
-            final_state: dict | BaseModel = (
-                end_state._data.copy()
-                if isinstance(end_state, DictState)
-                else end_state.model_copy()
-            )
-            if initial_state != final_state:
+            end_state_hash = self.store.get_state_hash()
+            if start_state_hash != end_state_hash:
+                end_state_dict = (
+                    end_state._data
+                    if isinstance(end_state, DictState)
+                    else end_state.model_dump()
+                )
                 self.write_event_to_stream(
-                    StateModificationEvent(modification_type="updated_state")
+                    StateModificationEvent(
+                        modification_type=compare_states(
+                            start=start_state_dict, end=end_state_dict
+                        )
+                    )
                 )
             if verbose and name != "_done":
                 if new_ev is not None:
@@ -872,7 +872,11 @@ class Context(Generic[MODEL_T]):
 
             await self.remove_from_in_progress(name=name, ev=ev)
             self.write_event_to_stream(
-                StepEmitEvent(step_name=name, input_event=ev, output_event=new_ev)
+                StepEmitEvent(
+                    step_name=name,
+                    input_event_name=str(type(ev)),
+                    output_event_name=(str(type(new_ev)) if new_ev else None),
+                )
             )
             # InputRequiredEvent's are special case and need to be written to the stream
             # this way, the user can access and respond to the event

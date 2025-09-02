@@ -1,5 +1,7 @@
 import asyncio
 import warnings
+import json
+import hashlib
 from contextlib import asynccontextmanager
 from typing import Any, AsyncGenerator, Generic, Optional
 
@@ -98,6 +100,13 @@ class InMemoryStateStore(Generic[MODEL_T]):
     def __init__(self, initial_state: MODEL_T):
         self._state = initial_state
         self._lock = asyncio.Lock()
+
+    def get_state_hash(self) -> str:
+        if isinstance(self._state, DictState):
+            data = self._state._data
+        else:
+            data = self._state.model_dump()
+        return hashlib.md5(json.dumps(data, sort_keys=True).encode()).hexdigest()
 
     async def get_state(self) -> MODEL_T:
         """Return a shallow copy of the current state model.
