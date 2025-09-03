@@ -5,17 +5,15 @@ from workflows import Workflow, Context, step
 from typing import List, Union
 from workflows.events import (
     InternalDispatchEvent,
-    InProgressStepEvent,
-    QueueStateEvent,
-    RunningStepEvent,
-    StateModificationEvent,
-    StepEmitEvent,
+    QueueState,
+    StepStateChanged,
+    StepState,
+    StateModification,
     Event,
     StartEvent,
     StopEvent,
     EventType,
 )
-from workflows.context.utils import StateModificationType
 from pydantic import BaseModel
 
 
@@ -106,23 +104,21 @@ async def test_internal_events(wf: ExampleWorkflow) -> None:
             evs.append(type(ev))
     await handler
     assert len(evs) > 0
-    assert InProgressStepEvent in evs
-    assert RunningStepEvent in evs
-    assert QueueStateEvent in evs
-    assert StepEmitEvent in evs
-    assert evs.count(StepEmitEvent) == 2
+    assert all(ev == StepStateChanged or ev == QueueState for ev in evs)
 
 
 @pytest.mark.asyncio
 async def test_internal_events_state(wf_state: ExampleWorkflowState) -> None:
     handler = wf_state.run(message="hello")
-    evs: List[StateModificationEvent] = []
+    evs: List[StateModification] = []
     async for ev in handler.stream_events(expose_internal=True):
-        if isinstance(ev, StateModificationEvent):
+        if isinstance(ev, StateModification):
             evs.append(ev)
     await handler
     assert len(evs) == 1
-    assert evs[0].modification_type == StateModificationType.UPDATED_PROPERTY
+    assert evs[0].added_properties == []
+    assert evs[0].deleted_properties == []
+    assert evs[0].updated_properties == ["test"]
 
 
 @pytest.mark.asyncio
@@ -131,14 +127,14 @@ async def test_internal_events_dict_state(
 ) -> None:
     # prove that state modification works also with DictState
     handler = wf_dict_state.run(message="hello")
-    evs: List[StateModificationEvent] = []
+    evs: List[StateModification] = []
     async for ev in handler.stream_events(expose_internal=True):
-        if isinstance(ev, StateModificationEvent):
+        if isinstance(ev, StateModification):
             evs.append(ev)
     await handler
     assert len(evs) == 2
-    assert evs[0].modification_type == StateModificationType.ADDED_PROPERTY
-    assert evs[1].modification_type == StateModificationType.DELETED_PROPERTY
+    assert evs[0].added_properties == ["test"]
+    assert evs[1].deleted_properties == ["test"]
 
 
 @pytest.mark.asyncio
@@ -148,10 +144,10 @@ async def test_internal_events_multiple_workers(
     handler = wf_workers.run(message="hello")
     run_ids = []
     async for ev in handler.stream_events(expose_internal=True):
-        if isinstance(ev, RunningStepEvent):
+        if isinstance(ev, StepStateChanged):
             # avoid duplication of the run_ids and exclude the "_done" step
-            if ev.running and ev.name != "_done":
-                run_ids.append(ev.run_id)
+            if ev.state == StepState.RUNNING and ev.name != "_done":
+                run_ids.append(ev.worker_id)
     await handler
     assert len(run_ids) == 11
     assert (

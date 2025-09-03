@@ -4,7 +4,6 @@ from workflows.context.utils import (
     get_qualified_name,
     import_module_from_qualified_name,
     compare_states,
-    StateModificationType,
 )
 
 
@@ -41,25 +40,25 @@ def test_import_module_from_qualified_name_wrong_module() -> None:
 
 
 @pytest.fixture
-def state_test_cases() -> list[tuple[dict, dict, StateModificationType]]:
+def state_test_cases() -> list[tuple[dict, dict, tuple[list, list, list]]]:
     return [
-        ({"a": 1, "b": 2}, {"a": 1, "b": 3}, StateModificationType.UPDATED_PROPERTY),
+        ({"a": 1, "b": 2}, {"a": 1, "b": 3}, ([], [], ["b"])),
         (
             {"a": 1, "b": 2, "c": 3},
             {"a": 1, "b": 3},
-            StateModificationType.DELETED_PROPERTY,
+            (["c"], [], ["b"]),
         ),
         (
             {"a": 1, "b": 2},
             {"a": 1, "b": 2, "c": 3},
-            StateModificationType.ADDED_PROPERTY,
+            ([], ["c"], []),
         ),
-        ({"a": 1, "c": 2}, {"a": 1, "b": 2}, StateModificationType.UPDATED_STATE),
+        ({"a": 1, "c": 2}, {"a": 2, "b": 2}, (["c"], ["b"], ["a"])),
     ]
 
 
 def test_compare_states(
-    state_test_cases: list[tuple[dict, dict, StateModificationType]],
+    state_test_cases: list[tuple[dict, dict, tuple[list, list, list]]],
 ) -> None:
     for tc in state_test_cases:
         assert compare_states(tc[0], tc[1]) == tc[2]

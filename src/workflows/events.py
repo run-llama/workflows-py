@@ -13,7 +13,7 @@ from pydantic import (
     PrivateAttr,
     model_serializer,
 )
-from .context.utils import StateModificationType
+from enum import Enum
 
 
 class DictLikeModel(BaseModel):
@@ -252,45 +252,79 @@ class InternalDispatchEvent(Event):
 
         async for ev in handler.stream_event(expose_internal=True):
             if isinstance(ev, InternalDispatchEvent):
-                print(ev.data)
+                print(type(ev), ev)
         ```
     """
 
     pass
 
 
-class InProgressStepEvent(InternalDispatchEvent):
+class StepState(Enum):
+    RUNNING = "running"
+    IN_PROGRESS = "in_progress"
+    NOT_RUNNING = "not_running"
+    NOT_IN_PROGRESS = "not_in_progress"
+    EXITED = "exited"
+
+
+class StepStateChanged(InternalDispatchEvent):
+    """
+    StepStateChanged is a special event type that exposes internal changes in the state of the event, including whether the step is running or in progress, what worker it is running on and what events it takes as input and output.
+
+    Attributes:
+        name (str): Name of the step
+        state (StepState): State of the step ("running", "not_running", "in_progress", "not_in_progress", "exited")
+        worker_id (str): ID of the worker that the step is running on
+        input_event_name (str): Name of the input event
+        output_event_name (Optional[str]): Name of the output event
+    """
+
     name: str = Field(description="Name of the step")
-    in_progress: bool = Field(
-        description="True when step is marked as in progress, False when step is removed from in progress steps."
+    state: StepState = Field(
+        description="State of the step ('running', 'not_running', 'in_progress', 'not_in_progress', 'exited')"
+    )
+    worker_id: str = Field(description="ID of the worker that the step is running on")
+    input_event_name: str = Field(description="Name of the input event")
+    output_event_name: Optional[str] = Field(
+        description="Name of the output event", default=None
     )
 
 
-class RunningStepEvent(InternalDispatchEvent):
-    name: str = Field(description="Name of the step")
-    run_id: str = Field(description="Run ID of the step for better distinction")
-    running: bool = Field(
-        description="True when step is marked as running, False when step is removed from running steps."
+class StateModification(InternalDispatchEvent):
+    """
+    A special event types that reports modifications in the internal state.
+
+    Note:
+        This event is only emitted when the internal state is serializable
+
+    Attributes:
+        added_properties (list[str]): Properties added to the state
+        deleted_properties (list[str]): Properties removed from the state
+        updated_properies (list[str]): Properties updated within the state
+    """
+
+    added_properties: list[str] = Field(
+        default_factory=list, description="Properties added to the state"
+    )
+    deleted_properties: list[str] = Field(
+        default_factory=list, description="Properties removed from the state"
+    )
+    updated_properties: list[str] = Field(
+        default_factory=list, description="Properties updated within the state"
     )
 
 
-class StateModificationEvent(InternalDispatchEvent):
-    modification_type: StateModificationType
+class QueueState(InternalDispatchEvent):
+    """
+    A special event that reports the state of internal queues.
 
+    Attributes:
+        name (str): Name of the queue
+        size (int): Size of the queue
+    """
 
-class QueueStateEvent(InternalDispatchEvent):
     name: str = Field(description="Name of the queue")
     size: int = Field(description="Size of the queue")
-
-
-class StepEmitEvent(InternalDispatchEvent):
-    step_name: str = Field(description="Name of the step receiving/emitting events")
-    input_event_name: str = Field(
-        description="Name of the input event for the current step"
-    )
-    output_event_name: Optional[str] = Field(
-        description="Name of the output event for the current step"
-    )
 
 
 EventType = Type[Event]
