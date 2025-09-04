@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2025 LlamaIndex Inc.
 
-from starlette.schemas import SchemaGenerator
 from workflows import Workflow
 
 from workflows.server import WorkflowServer
@@ -10,19 +9,7 @@ from workflows.server import WorkflowServer
 def test_openapi_schema_includes_all_routes(simple_test_workflow: Workflow) -> None:
     server = WorkflowServer()
     server.add_workflow("test", simple_test_workflow)
-
-    app = server.app
-    gen = SchemaGenerator(
-        {
-            "openapi": "3.0.0",
-            "info": {
-                "title": "Workflows API",
-                "version": "1.0.0",
-            },
-        }
-    )
-
-    schema = gen.get_schema(app.routes)
+    schema = server.openapi_schema()
 
     assert "paths" in schema
     paths = schema["paths"]
