@@ -267,6 +267,11 @@ class StepState(Enum):
     EXITED = "exited"
 
 
+class SnapshotTime(Enum):
+    ON_STEP_START = "on_step_start"
+    ON_STEP_END = "on_step_end"
+
+
 class StepStateChanged(InternalDispatchEvent):
     """
     StepStateChanged is a special event type that exposes internal changes in the state of the event, including whether the step is running or in progress, what worker it is running on and what events it takes as input and output.
@@ -290,31 +295,27 @@ class StepStateChanged(InternalDispatchEvent):
     )
 
 
-class StateModification(InternalDispatchEvent):
+class StateSnapshot(InternalDispatchEvent):
     """
-    A special event types that reports modifications in the internal state.
+    A special event type that reports the state snapshot at a given moment.
 
     Note:
         This event is only emitted when the internal state is serializable
 
     Attributes:
-        added_properties (list[str]): Properties added to the state
-        deleted_properties (list[str]): Properties removed from the state
-        updated_properies (list[str]): Properties updated within the state
+        state (str): Serialized snapshot of the current workflow state
+        snapshot_time (SnapshotTime): When was the snapshot captured
+        step_name (str): Name of the step during which the state snapshot was captured
     """
 
-    added_properties: list[str] = Field(
-        default_factory=list, description="Properties added to the state"
-    )
-    deleted_properties: list[str] = Field(
-        default_factory=list, description="Properties removed from the state"
-    )
-    updated_properties: list[str] = Field(
-        default_factory=list, description="Properties updated within the state"
+    state: dict[str, Any] = Field(description="Snapshot of the current workflow state")
+    snapshot_time: SnapshotTime = Field(description="When was the snapshot captured")
+    step_name: str = Field(
+        description="Name of the step during which the state snapshot was captured"
     )
 
 
-class QueueState(InternalDispatchEvent):
+class EventsQueueChanged(InternalDispatchEvent):
     """
     A special event that reports the state of internal queues.
 

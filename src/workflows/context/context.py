@@ -31,17 +31,17 @@ from workflows.errors import (
 from workflows.events import (
     Event,
     InputRequiredEvent,
-    QueueState,
+    EventsQueueChanged,
+    SnapshotTime,
     StepStateChanged,
     StepState,
-    StateModification,
+    StateSnapshot,
 )
 from workflows.resource import ResourceManager
 from workflows.types import RunResultT
 
 from .serializers import BaseSerializer, JsonSerializer
 from .state_store import MODEL_T, DictState, InMemoryStateStore
-from .utils import compare_states
 
 if TYPE_CHECKING:  # pragma: no cover
     from workflows import Workflow
@@ -547,7 +547,9 @@ class Context(Generic[MODEL_T]):
         if step is None:
             for name, queue in self._queues.items():
                 queue.put_nowait(message)
-                self.write_event_to_stream(QueueState(name=name, size=queue.qsize()))
+                self.write_event_to_stream(
+                    EventsQueueChanged(name=name, size=queue.qsize())
+                )
         else:
             if step not in self._step_configs:
                 raise WorkflowRuntimeError(f"Step {step} does not exist")
@@ -556,7 +558,7 @@ class Context(Generic[MODEL_T]):
             if step_config and type(message) in step_config.accepted_events:
                 self._queues[step].put_nowait(message)
                 self.write_event_to_stream(
-                    QueueState(name=step, size=self._queues[step].qsize())
+                    EventsQueueChanged(name=step, size=self._queues[step].qsize())
                 )
             else:
                 raise WorkflowRuntimeError(
@@ -619,7 +621,7 @@ class Context(Generic[MODEL_T]):
         if waiter_id not in self._queues:
             self._queues[waiter_id] = asyncio.Queue()
             self.write_event_to_stream(
-                QueueState(name=waiter_id, size=self._queues[waiter_id].qsize())
+                EventsQueueChanged(name=waiter_id, size=self._queues[waiter_id].qsize())
             )
 
         # send the waiter event if it's not already sent
@@ -642,7 +644,7 @@ class Context(Generic[MODEL_T]):
                     else:
                         continue
                 self.write_event_to_stream(
-                    QueueState(
+                    EventsQueueChanged(
                         name=waiter_id,
                         size=self._queues[waiter_id].qsize(),
                     )
@@ -792,16 +794,13 @@ class Context(Generic[MODEL_T]):
 
             # - check if its async or not
             # - if not async, run it in an executor
-            start_state = await self.store.get_state()
-            start_state_dict = (
-                start_state._data.copy()
-                if isinstance(start_state, DictState)
-                else start_state.model_dump().copy()
+            self.write_event_to_stream(
+                StateSnapshot(
+                    state=self.store.to_dict_snapshot(JsonSerializer()),
+                    snapshot_time=SnapshotTime.ON_STEP_START,
+                    step_name=name,
+                )
             )
-            try:
-                start_state_hash = self.store.get_state_hash()
-            except TypeError:  # unserializable types
-                start_state_hash = ""
             if asyncio.iscoroutinefunction(step):
                 retry_start_at = time.time()
                 attempts = 0
@@ -868,27 +867,13 @@ class Context(Generic[MODEL_T]):
                 except Exception as e:
                     raise WorkflowRuntimeError(f"Error in step '{name}': {e!s}") from e
 
-            end_state = await self.store.get_state()
-            try:
-                end_state_hash = self.store.get_state_hash()
-            except TypeError:  # unserializable types
-                end_state_hash = ""
-            if start_state_hash != end_state_hash:
-                end_state_dict = (
-                    end_state._data
-                    if isinstance(end_state, DictState)
-                    else end_state.model_dump()
+            self.write_event_to_stream(
+                StateSnapshot(
+                    state=self.store.to_dict_snapshot(JsonSerializer()),
+                    snapshot_time=SnapshotTime.ON_STEP_END,
+                    step_name=name,
                 )
-                deleted, added, updated = compare_states(
-                    start=start_state_dict, end=end_state_dict
-                )
-                self.write_event_to_stream(
-                    StateModification(
-                        deleted_properties=deleted,
-                        added_properties=added,
-                        updated_properties=updated,
-                    )
-                )
+            )
             if verbose and name != "_done":
                 if new_ev is not None:
                     print(f"Step {name} produced event {type(new_ev).__name__}")

@@ -5,10 +5,11 @@ from workflows import Workflow, Context, step
 from typing import List, Union
 from workflows.events import (
     InternalDispatchEvent,
-    QueueState,
+    EventsQueueChanged,
     StepStateChanged,
     StepState,
-    StateModification,
+    StateSnapshot,
+    SnapshotTime,
     Event,
     StartEvent,
     StopEvent,
@@ -104,21 +105,32 @@ async def test_internal_events(wf: ExampleWorkflow) -> None:
             evs.append(type(ev))
     await handler
     assert len(evs) > 0
-    assert all(ev == StepStateChanged or ev == QueueState for ev in evs)
+    assert all(
+        ev == StepStateChanged or ev == EventsQueueChanged or ev == StateSnapshot
+        for ev in evs
+    )
 
 
 @pytest.mark.asyncio
 async def test_internal_events_state(wf_state: ExampleWorkflowState) -> None:
     handler = wf_state.run(message="hello")
-    evs: List[StateModification] = []
+    evs: List[StateSnapshot] = []
     async for ev in handler.stream_events(expose_internal=True):
-        if isinstance(ev, StateModification):
+        if isinstance(ev, StateSnapshot) and ev.step_name != "_done":
             evs.append(ev)
     await handler
-    assert len(evs) == 1
-    assert evs[0].added_properties == []
-    assert evs[0].deleted_properties == []
-    assert evs[0].updated_properties == ["test"]
+    assert len(evs) == 4
+    for i, ev in enumerate(evs):
+        if i < 2:
+            assert ev.step_name == "first_step"
+        else:
+            assert ev.step_name == "second_step"
+        if i % 2 == 0:
+            assert ev.snapshot_time == SnapshotTime.ON_STEP_START
+        else:
+            assert ev.snapshot_time == SnapshotTime.ON_STEP_END
+    assert evs[0].state["state_data"] == {"test": '""'}
+    assert all(ev.state["state_data"] == {"test": '"Test"'} for ev in evs[1:])
 
 
 @pytest.mark.asyncio
@@ -127,14 +139,25 @@ async def test_internal_events_dict_state(
 ) -> None:
     # prove that state modification works also with DictState
     handler = wf_dict_state.run(message="hello")
-    evs: List[StateModification] = []
+    evs: List[StateSnapshot] = []
     async for ev in handler.stream_events(expose_internal=True):
-        if isinstance(ev, StateModification):
+        if isinstance(ev, StateSnapshot) and ev.step_name != "_done":
             evs.append(ev)
     await handler
-    assert len(evs) == 2
-    assert evs[0].added_properties == ["test"]
-    assert evs[1].deleted_properties == ["test"]
+    assert len(evs) == 4
+    for i, ev in enumerate(evs):
+        if i < 2:
+            assert ev.step_name == "first_step"
+        else:
+            assert ev.step_name == "second_step"
+        if i % 2 == 0:
+            assert ev.snapshot_time == SnapshotTime.ON_STEP_START
+        else:
+            assert ev.snapshot_time == SnapshotTime.ON_STEP_END
+    assert evs[0].state["state_data"] == {}
+    assert evs[1].state["state_data"] == {"test": '"Test"'}
+    assert evs[2].state["state_data"] == {"test": '"Test"'}
+    assert evs[3].state["state_data"] == {}
 
 
 @pytest.mark.asyncio

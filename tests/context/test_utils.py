@@ -3,7 +3,6 @@ import pytest
 from workflows.context.utils import (
     get_qualified_name,
     import_module_from_qualified_name,
-    compare_states,
 )
 
 
@@ -37,28 +36,3 @@ def test_import_module_from_qualified_name_wrong_module() -> None:
         match="Attribute doesntexist not found in module typing: module 'typing' has no attribute 'doesntexist'",
     ):
         import_module_from_qualified_name("typing.doesntexist")
-
-
-@pytest.fixture
-def state_test_cases() -> list[tuple[dict, dict, tuple[list, list, list]]]:
-    return [
-        ({"a": 1, "b": 2}, {"a": 1, "b": 3}, ([], [], ["b"])),
-        (
-            {"a": 1, "b": 2, "c": 3},
-            {"a": 1, "b": 3},
-            (["c"], [], ["b"]),
-        ),
-        (
-            {"a": 1, "b": 2},
-            {"a": 1, "b": 2, "c": 3},
-            ([], ["c"], []),
-        ),
-        ({"a": 1, "c": 2}, {"a": 2, "b": 2}, (["c"], ["b"], ["a"])),
-    ]
-
-
-def test_compare_states(
-    state_test_cases: list[tuple[dict, dict, tuple[list, list, list]]],
-) -> None:
-    for tc in state_test_cases:
-        assert compare_states(tc[0], tc[1]) == tc[2]

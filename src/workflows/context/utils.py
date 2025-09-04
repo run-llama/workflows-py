@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import warnings
 from importlib import import_module
 from typing import (
     Any,
@@ -59,33 +58,3 @@ def import_module_from_qualified_name(qualified_name: str) -> Any:
         raise AttributeError(
             f"Attribute {module_path[1]} not found in module {module_path[0]}: {e}"
         )
-
-
-def compare_states(start: dict, end: dict) -> tuple[list[str], list[str], list[str]]:
-    """
-    Compared two different workflow states and return what type of change occurred between them.
-
-    Args:
-        start (dict): Initial state (as dictionary)
-        end (dict): Final state (as dictionary)
-
-    Returns:
-        Three lists of strings corresponding, respectively, to the deleted, added and updated properties
-    """
-    # assumption: start and end are two different dictionaries (checked with hashing)
-    deleted_properties = list(start.keys() - end.keys())
-    added_properties = list(end.keys() - start.keys())
-    try:
-        diff_end_start = end.items() - start.items()
-    except TypeError:
-        warnings.warn(
-            UserWarning(
-                "Start and end state have some unashable values: skipping comparison for updated keys..."
-            )
-        )
-        return deleted_properties, added_properties, []
-    updated_properties = []
-    for item in diff_end_start:
-        if item[0] not in added_properties:
-            updated_properties.append(item[0])
-    return deleted_properties, added_properties, updated_properties
