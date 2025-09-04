@@ -8,7 +8,9 @@ dev = [
   "pytest>=8.4.0",
   "pytest-asyncio>=1.0.0",
   "pytest-cov>=6.1.1",
-  "httpx>=0.25.0"
+  "httpx>=0.25.0",
+  "hatch>=1.14.1",
+  "pyyaml>=6.0.2"
 ]
 
 [project]
@@ -36,3 +38,9 @@ omit = ["tests/*"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/workflows"]
+
+[tool.hatch.envs.server]
+features = ["server"]
+
+[tool.hatch.envs.server.scripts]
+openapi = "python -m workflows.server.server --output openapi.json"

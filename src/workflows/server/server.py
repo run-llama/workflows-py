@@ -15,12 +15,13 @@ from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, StreamingResponse
 from starlette.routing import Route
+from starlette.schemas import SchemaGenerator
 
 from workflows import Context, Workflow
 from workflows.context.serializers import JsonSerializer
 from workflows.events import StopEvent
 from workflows.handler import WorkflowHandler
-
+from importlib.metadata import version
 from .utils import nanoid
 
 logger = logging.getLogger()
@@ -435,3 +436,33 @@ class WorkflowServer:
             raise HTTPException(
                 detail=f"Error processing request body: {e}", status_code=500
             )
+
+    def openapi_schema(self) -> dict:
+        app = self.app
+        gen = SchemaGenerator(
+            {
+                "openapi": "3.0.0",
+                "info": {
+                    "title": "Workflows API",
+                    "version": version("llama-index-workflows"),
+                },
+            }
+        )
+
+        return gen.get_schema(app.routes)
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Generate OpenAPI schema")
+    parser.add_argument(
+        "--output", type=str, default="openapi.json", help="Output file path"
+    )
+    args = parser.parse_args()
+
+    server = WorkflowServer()
+    dict_schema = server.openapi_schema()
+    with open(args.output, "w") as f:
+        json.dump(dict_schema, indent=2, fp=f)
+    print(f"OpenAPI schema written to {args.output}")
