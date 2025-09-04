@@ -21,7 +21,7 @@ from workflows import Context, Workflow
 from workflows.context.serializers import JsonSerializer
 from workflows.events import StopEvent
 from workflows.handler import WorkflowHandler
-
+from importlib.metadata import version
 from .utils import nanoid
 
 logger = logging.getLogger()
@@ -444,7 +444,7 @@ class WorkflowServer:
                 "openapi": "3.0.0",
                 "info": {
                     "title": "Workflows API",
-                    "version": "1.0.0",
+                    "version": version("llama-index-workflows"),
                 },
             }
         )
