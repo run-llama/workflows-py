@@ -465,4 +465,4 @@ if __name__ == "__main__":
     dict_schema = server.openapi_schema()
     with open(args.output, "w") as f:
         json.dump(dict_schema, indent=2, fp=f)
-    # dump file
+    print(f"OpenAPI schema written to {args.output}")
