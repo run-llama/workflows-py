@@ -260,6 +260,7 @@ class Workflow(metaclass=WorkflowMeta):
                     config=step_config,
                     verbose=self._verbose,
                     run_id=run_id,
+                    worker_id=str(uuid.uuid4()),
                     resource_manager=self._resource_manager,
                 )
 
