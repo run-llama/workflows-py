@@ -1,34 +1,240 @@
-name: Publish to PyPI and GitHub
+name: Publish Release
 
 on:
   workflow_dispatch:
+    inputs:
+      publish_python:
+        description: 'Publish Python package to PyPI'
+        required: false
+        default: true
+        type: boolean
+      publish_sdk:
+        description: 'Publish TypeScript SDK to npm'
+        required: false
+        default: true
+        type: boolean
   push:
     tags:
       - "v*"
 
 jobs:
-  build-n-publish:
-    name: Build and publish to PyPI
+  # Job 1: Validate versions
+  validate-version:
+    name: Validate Version Consistency
     if: github.repository == 'run-llama/workflows-py'
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Extract and validate version
+        id: version
+        run: |
+          # Extract version from pyproject.toml (single source of truth)
+          PYPROJECT_VERSION=$(grep '^version' pyproject.toml | cut -d'"' -f2)
+          echo "version=$PYPROJECT_VERSION" >> $GITHUB_OUTPUT
+          echo "PyProject version: $PYPROJECT_VERSION"
+          
+          # If this is a tag push, validate it matches
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+            echo "tag=$TAG" >> $GITHUB_OUTPUT
+            
+            # Remove 'v' prefix if present for comparison
+            TAG_VERSION="${TAG#v}"
+            
+            echo "Git tag: $TAG (version: $TAG_VERSION)"
+            
+            # Validate that tag matches pyproject.toml version
+            if [ "$PYPROJECT_VERSION" != "$TAG_VERSION" ]; then
+              echo "❌ Error: Tag version ($TAG_VERSION) does not match pyproject.toml version ($PYPROJECT_VERSION)"
+              echo "Please ensure the Git tag matches the version in pyproject.toml"
+              exit 1
+            fi
+            
+            echo "✅ Version validation passed: $PYPROJECT_VERSION"
+          else
+            echo "Manual workflow dispatch - using version from pyproject.toml"
+            echo "tag=" >> $GITHUB_OUTPUT
+          fi
+
+  # Job 2: Build and publish Python package
+  publish-python:
+    name: Publish Python Package to PyPI
+    needs: validate-version
+    if: |
+      github.repository == 'run-llama/workflows-py' &&
+      (github.event_name == 'push' || github.event.inputs.publish_python == 'true')
     runs-on: ubuntu-latest
     permissions:
       contents: write
-
+    
     steps:
       - uses: actions/checkout@v4
-
+      
       - name: Install uv
         uses: astral-sh/setup-uv@v6
-
-      - name: Build and publish
+      
+      - name: Build Python package
+        run: uv build
+      
+      - name: Publish to PyPI
         env:
           UV_PUBLISH_TOKEN: ${{ secrets.PYPI_TOKEN }}
-        run: |
-          uv build
-          uv publish
+        run: uv publish
+      
+      - name: Upload Python artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-dist
+          path: dist/
 
+  # Job 3: Build and publish TypeScript SDK
+  publish-sdk:
+    name: Publish TypeScript SDK to npm
+    needs: validate-version
+    if: |
+      github.repository == 'run-llama/workflows-py' &&
+      (github.event_name == 'push' || github.event.inputs.publish_sdk == 'true')
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write  # For npm provenance
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          registry-url: 'https://registry.npmjs.org'
+      
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      
+      - name: Install Python dependencies with uv
+        run: |
+          uv sync --extra server
+      
+      - name: Update SDK version
+        run: |
+          cd client-sdk
+          # Update package.json version to match Python version from validation job
+          npm pkg set version="${{ needs.validate-version.outputs.version }}"
+      
+      - name: Generate TypeScript SDK
+        run: |
+          uv run hatch run server:sdk-generate
+      
+      - name: Build and validate SDK
+        run: |
+          cd client-sdk
+          # Type check first
+          pnpm run typecheck
+          # Clean and build
+          pnpm run clean
+          pnpm run build
+      
+      - name: Publish to npm
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+        working-directory: client-sdk
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          # Check if this version already exists on npm
+          if npm view @llamaindex/workflows-client@${{ needs.validate-version.outputs.version }} > /dev/null 2>&1; then
+            echo "Version ${{ needs.validate-version.outputs.version }} already exists on npm, skipping publish"
+          else
+            pnpm publish --access public --provenance
+          fi
+      
+      - name: Create SDK tarball
+        run: |
+          cd client-sdk
+          pnpm pack
+          mv *.tgz ../sdk-package.tgz
+      
+      - name: Upload SDK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sdk-package
+          path: sdk-package.tgz
+
+  # Job 4: Create GitHub Release with all artifacts
+  create-release:
+    name: Create GitHub Release
+    needs: [validate-version, publish-python, publish-sdk]
+    # Only create release if jobs succeeded/skipped and it's a tag push
+    if: |
+      always() &&
+      github.repository == 'run-llama/workflows-py' &&
+      startsWith(github.ref, 'refs/tags/') &&
+      !contains(needs.*.result, 'failure') &&
+      !contains(needs.*.result, 'cancelled')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Download Python artifacts
+        if: needs.publish-python.result == 'success'
+        uses: actions/download-artifact@v4
+        with:
+          name: python-dist
+          path: dist/
+      
+      - name: Download SDK artifact
+        if: needs.publish-sdk.result == 'success'
+        uses: actions/download-artifact@v4
+        with:
+          name: sdk-package
+      
+      - name: Determine release artifacts
+        id: artifacts
+        run: |
+          ARTIFACTS=""
+          if [ -d "dist" ]; then
+            ARTIFACTS="dist/*"
+          fi
+          if [ -f "sdk-package.tgz" ]; then
+            if [ -n "$ARTIFACTS" ]; then
+              ARTIFACTS="${ARTIFACTS},sdk-package.tgz"
+            else
+              ARTIFACTS="sdk-package.tgz"
+            fi
+          fi
+          echo "artifacts=$ARTIFACTS" >> $GITHUB_OUTPUT
+      
       - name: Create GitHub Release
         uses: ncipollo/release-action@v1
         with:
-          artifacts: "dist/*"
+          artifacts: ${{ steps.artifacts.outputs.artifacts }}
           generateReleaseNotes: true
+          name: ${{ needs.validate-version.outputs.tag }}
+          body: |
+            ## 📦 Release Artifacts
+            
+            ### Python Package
+            - PyPI: `pip install llama-index-workflows`
+            - Install specific version: `pip install llama-index-workflows==${{ needs.validate-version.outputs.version }}`
+            
+            ### TypeScript SDK  
+            - npm: `pnpm add @llamaindex/workflows-client`
+            - Install specific version: `pnpm add @llamaindex/workflows-client@${{ needs.validate-version.outputs.version }}`
+            
+            ### Downloads
+            - Python wheel and source distribution attached below (if published)
+            - TypeScript SDK tarball attached below (if published)
+            
+            ---
+            See changelog below for what's new in this release.

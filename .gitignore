@@ -144,3 +144,6 @@ cython_debug/
 .claude/
 .cursorignore
 .cursorindexingignore
+
+# Generated files
+openapi.json

@@ -28,7 +28,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-server = ["starlette>=0.39.0", "uvicorn>=0.32.0"]
+server = ["starlette>=0.39.0", "uvicorn>=0.32.0", "pyyaml>=6.0.2"]
 
 [tool.basedpyright]
 typeCheckingMode = "standard"
@@ -44,3 +44,4 @@ features = ["server"]
 
 [tool.hatch.envs.server.scripts]
 openapi = "python -m workflows.server.server --output openapi.json"
+sdk-generate = "python scripts/generate_sdk.py"

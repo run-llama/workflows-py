@@ -1,0 +1,124 @@
+name: SDK CI
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'src/workflows/server/**'
+      - 'scripts/generate_sdk.py'
+      - 'client-sdk/**'
+      - 'pyproject.toml'
+      - '.github/workflows/sdk-ci.yml'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'src/workflows/server/**'
+      - 'scripts/generate_sdk.py'
+      - 'client-sdk/**'
+      - 'pyproject.toml'
+      - '.github/workflows/sdk-ci.yml'
+
+jobs:
+  validate-sdk-generation:
+    name: Validate SDK Generation
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+      
+      - name: Install Python dependencies
+        run: |
+          uv sync --extra server
+      
+      - name: Generate SDK
+        run: |
+          uv run hatch run server:sdk-generate
+      
+      - name: Validate SDK build
+        run: |
+          cd client-sdk
+          # Clean and build to ensure everything works
+          pnpm run clean
+          pnpm run build
+      
+      - name: Check generated files exist
+        run: |
+          test -f client-sdk/src/generated/index.ts
+          test -f client-sdk/src/generated/sdk.gen.ts
+          test -f client-sdk/src/generated/types.gen.ts
+          test -f client-sdk/dist/index.js
+          test -f client-sdk/dist/index.mjs
+          test -f client-sdk/dist/index.d.ts
+      
+      - name: Upload SDK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: generated-sdk-${{ github.sha }}
+          path: |
+            client-sdk/src/generated/
+            client-sdk/dist/
+          retention-days: 7
+      
+      - name: Version consistency check
+        run: |
+          # Check that version in pyproject.toml matches package.json
+          PYTHON_VERSION=$(grep '^version' pyproject.toml | cut -d'"' -f2)
+          SDK_VERSION=$(node -p "require('./client-sdk/package.json').version")
+          
+          echo "Python version: $PYTHON_VERSION"
+          echo "SDK version: $SDK_VERSION"
+          
+          if [ "$PYTHON_VERSION" != "$SDK_VERSION" ]; then
+            echo "⚠️ Warning: Version mismatch between Python ($PYTHON_VERSION) and SDK ($SDK_VERSION)"
+            echo "This is expected in development, but should match in releases."
+          else
+            echo "✅ Versions match: $PYTHON_VERSION"
+          fi
+      
+      - name: SDK size check
+        run: |
+          # Check that the generated SDK isn't too large
+          SDK_SIZE=$(du -sk client-sdk/dist | cut -f1)
+          echo "SDK dist size: ${SDK_SIZE}KB"
+          
+          # Warn if SDK is larger than 1MB
+          if [ $SDK_SIZE -gt 1024 ]; then
+            echo "⚠️ Warning: SDK size is larger than 1MB"
+          fi
+      
+      - name: Summary
+        run: |
+          echo "## 📦 SDK CI Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ SDK generated successfully" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ TypeScript compilation passed" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ All expected files present" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Generated Files" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          ls -la client-sdk/src/generated/ >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Build Output" >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY
+          ls -la client-sdk/dist/ >> $GITHUB_STEP_SUMMARY
+          echo "\`\`\`" >> $GITHUB_STEP_SUMMARY

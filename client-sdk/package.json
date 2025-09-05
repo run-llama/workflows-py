@@ -13,6 +13,7 @@
     "generate": "pnpx @hey-api/openapi-ts",
     "build": "tsup",
     "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit",
     "clean": "rm -rf dist src/generated",
     "prepublishOnly": "pnpm run build"
   },
