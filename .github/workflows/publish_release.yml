@@ -130,6 +130,11 @@ jobs:
           # Update package.json version to match Python version from validation job
           npm pkg set version="${{ needs.validate-version.outputs.version }}"
 
+      - name: Clean
+        run: |
+          cd client-sdk
+          pnpm run clean
+
       - name: Generate TypeScript SDK
         run: |
           uv run hatch run server:sdk-generate
@@ -137,10 +142,7 @@ jobs:
       - name: Build and validate SDK
         run: |
           cd client-sdk
-          # Type check first
           pnpm run typecheck
-          # Clean and build
-          pnpm run clean
           pnpm run build
 
       - name: Publish to npm
