@@ -28,7 +28,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-server = ["starlette>=0.39.0", "uvicorn>=0.32.0", "pyyaml>=6.0.2"]
+server = ["starlette>=0.39.0", "uvicorn>=0.32.0"]
 
 [tool.basedpyright]
 typeCheckingMode = "standard"
