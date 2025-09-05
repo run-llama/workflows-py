@@ -47,7 +47,7 @@ jobs:
 
       - name: Install Python dependencies
         run: |
-          uv sync --extra server
+          uv sync --all-extras
 
       - name: Generate SDK
         run: |
