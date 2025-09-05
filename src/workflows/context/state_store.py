@@ -29,16 +29,16 @@ class DictState(DictLikeModel):
     like a mapping while retaining Pydantic validation and serialization.
 
     Examples:
-        ```python
-        from workflows.context.state_store import DictState
+    ```python
+    from workflows.context.state_store import DictState
 
-        state = DictState()
-        state["foo"] = 1
-        state.bar = 2  # attribute-style access works for nested structures
-        ```
+    state = DictState()
+    state["foo"] = 1
+    state.bar = 2  # attribute-style access works for nested structures
+    ```
 
     See Also:
-        - [InMemoryStateStore][workflows.context.state_store.InMemoryStateStore]
+        - #InMemoryStateStore
     """
 
     def __init__(self, **params: Any):
@@ -55,40 +55,39 @@ class InMemoryStateStore(Generic[MODEL_T]):
 
     This store holds a single Pydantic model instance representing global
     workflow state. When the generic parameter is omitted, it defaults to
-    [DictState][workflows.context.state_store.DictState] for flexible,
-    dictionary-like usage.
+    #DictState for flexible, dictionary-like usage.
 
     Thread-safety is ensured with an internal `asyncio.Lock`. Consumers can
-    either perform atomic reads/writes via `get_state` and `set_state`, or make
-    in-place, transactional edits via the `edit_state` context manager.
+    either perform atomic reads/writes via #get_state and #set_state, or make
+    in-place, transactional edits via the #edit_state context manager.
 
     Examples:
-        Typed state model:
+    Typed state model:
 
-        ```python
-        from pydantic import BaseModel
-        from workflows.context.state_store import InMemoryStateStore
+    ```python
+    from pydantic import BaseModel
+    from workflows.context.state_store import InMemoryStateStore
 
-        class MyState(BaseModel):
-            count: int = 0
+    class MyState(BaseModel):
+        count: int = 0
 
-        store = InMemoryStateStore(MyState())
-        async with store.edit_state() as state:
-            state.count += 1
-        ```
+    store = InMemoryStateStore(MyState())
+    async with store.edit_state() as state:
+        state.count += 1
+    ```
 
-        Dynamic state with `DictState`:
+    Dynamic state with `DictState`:
 
-        ```python
-        from workflows.context.state_store import InMemoryStateStore, DictState
+    ```python
+    from workflows.context.state_store import InMemoryStateStore, DictState
 
-        store = InMemoryStateStore(DictState())
-        await store.set("user.profile.name", "Ada")
-        name = await store.get("user.profile.name")
-        ```
+    store = InMemoryStateStore(DictState())
+    await store.set("user.profile.name", "Ada")
+    name = await store.get("user.profile.name")
+    ```
 
     See Also:
-        - [Context.store][workflows.context.context.Context.store]
+        - [Context.store](#workflows.context.context.Context.store)
     """
 
     # These keys are set by pre-built workflows and
@@ -134,8 +133,7 @@ class InMemoryStateStore(Generic[MODEL_T]):
             serializer (BaseSerializer): Strategy used to encode values.
 
         Returns:
-            dict[str, Any]: A payload suitable for
-            [from_dict][workflows.context.state_store.InMemoryStateStore.from_dict].
+            dict: A payload suitable for #from_dict.
         """
         # Special handling for DictState - serialize each item in _data
         if isinstance(self._state, DictState):
@@ -177,8 +175,7 @@ class InMemoryStateStore(Generic[MODEL_T]):
         """Restore a state store from a serialized payload.
 
         Args:
-            serialized_state (dict[str, Any]): The payload produced by
-                [to_dict][workflows.context.state_store.InMemoryStateStore.to_dict].
+            serialized_state (dict[str, Any]): The payload produced by #to_dict.
             serializer (BaseSerializer): Strategy to decode stored values.
 
         Returns:

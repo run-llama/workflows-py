@@ -206,7 +206,7 @@ like looping and state management using simple workflows. It's usually a great p
 simple workflow that performs both ingestion and querying.
 - [Citation Query Engine](../../examples/workflow/citation_query_engine.ipynb) similar to RAG + Reranking, the
 notebook focuses on how to implement intermediate steps in between retrieval and generation. A good example of how to
-use the [`Context`](#working-with-global-context-state) object in a workflow.
+use the `Context` object in a workflow.
 - [Corrective RAG](../../examples/workflow/corrective_rag_pack.ipynb) adds some more complexity on top of a RAG
 workflow, showcasing how to query a web search engine after an evaluation step.
 - [Utilizing Concurrency](../../examples/workflow/parallel_execution.ipynb) explains how to manage the parallel

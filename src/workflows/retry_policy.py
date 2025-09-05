@@ -15,8 +15,8 @@ class RetryPolicy(Protocol):
     attempt based on elapsed time, number of attempts, and the last error.
 
     See Also:
-        - [ConstantDelayRetryPolicy][workflows.retry_policy.ConstantDelayRetryPolicy]
-        - [step][workflows.decorators.step]
+        - [ConstantDelayRetryPolicy](#workflows.retry_policy.ConstantDelayRetryPolicy)
+        - [step](#workflows.decorators.step)
     """
 
     def next(
@@ -39,11 +39,11 @@ class ConstantDelayRetryPolicy:
     """Retry at a fixed interval up to a maximum number of attempts.
 
     Examples:
-        ```python
-        @step(retry_policy=ConstantDelayRetryPolicy(delay=5, maximum_attempts=10))
-        async def flaky(self, ev: StartEvent) -> StopEvent:
-            ...
-        ```
+    ```python
+    @step(retry_policy=ConstantDelayRetryPolicy(delay=5, maximum_attempts=10))
+    async def flaky(self, ev: StartEvent) -> StopEvent:
+        ...
+    ```
     """
 
     def __init__(self, maximum_attempts: int = 3, delay: float = 5) -> None:

@@ -63,24 +63,24 @@ def step(
             a free function without specifying `workflow`.
 
     Examples:
-        Method step:
+    Method step:
 
-        ```python
-        class MyFlow(Workflow):
-            @step
-            async def start(self, ev: StartEvent) -> StopEvent:
-                return StopEvent(result="done")
-        ```
+    ```python
+    class MyFlow(Workflow):
+        @step
+        async def start(self, ev: StartEvent) -> StopEvent:
+            return StopEvent(result="done")
+    ```
 
-        Free function step:
+    Free function step:
 
-        ```python
-        class MyWorkflow(Workflow):
-            pass
+    ```python
+    class MyWorkflow(Workflow):
+        pass
 
-        @step(workflow=MyWorkflow)
-        async def generate(ev: StartEvent) -> NextEvent: ...
-        ```
+    @step(workflow=MyWorkflow)
+    async def generate(ev: StartEvent) -> NextEvent: ...
+    ```
     """
 
     def decorator(func: Callable) -> Callable:

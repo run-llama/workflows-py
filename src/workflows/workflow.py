@@ -51,7 +51,7 @@ class Workflow(metaclass=WorkflowMeta):
     Event-driven orchestrator to define and run application flows using typed steps.
 
     A `Workflow` is composed of `@step`-decorated callables that accept and emit
-    typed [Event][workflows.events.Event]s. Steps can be declared as instance
+    typed [Event](#workflows.events.Event)s. Steps can be declared as instance
     methods or as free functions registered via the decorator.
 
     Key features:
@@ -63,35 +63,35 @@ class Workflow(metaclass=WorkflowMeta):
     - Resource injection
 
     Examples:
-        Basic usage:
+    Basic usage:
 
-        ```python
-        from workflows import Workflow, step
-        from workflows.events import StartEvent, StopEvent
+    ```python
+    from workflows import Workflow, step
+    from workflows.events import StartEvent, StopEvent
 
-        class MyFlow(Workflow):
-            @step
-            async def start(self, ev: StartEvent) -> StopEvent:
-                return StopEvent(result="done")
+    class MyFlow(Workflow):
+        @step
+        async def start(self, ev: StartEvent) -> StopEvent:
+            return StopEvent(result="done")
 
-        result = await MyFlow(timeout=60).run(topic="Pirates")
-        ```
+    result = await MyFlow(timeout=60).run(topic="Pirates")
+    ```
 
-        Custom start/stop events and streaming:
+    Custom start/stop events and streaming:
 
-        ```python
-        handler = MyFlow().run()
-        async for ev in handler.stream_events():
-            ...
-        result = await handler
-        ```
+    ```python
+    handler = MyFlow().run()
+    async for ev in handler.stream_events():
+        ...
+    result = await handler
+    ```
 
     See Also:
-        - [step][workflows.decorators.step]
-        - [Event][workflows.events.Event]
-        - [Context][workflows.context.context.Context]
-        - [WorkflowHandler][workflows.handler.WorkflowHandler]
-        - [RetryPolicy][workflows.retry_policy.RetryPolicy]
+        - [step](#workflows.decorators.step)
+        - [Event](#workflows.events.Event)
+        - [Context](#workflows.context.context.Context)
+        - [WorkflowHandler](#workflows.handler.WorkflowHandler)
+        - [RetryPolicy](#workflows.retry_policy.RetryPolicy)
     """
 
     def __init__(
@@ -305,12 +305,12 @@ class Workflow(metaclass=WorkflowMeta):
         """Run the workflow and return a handler for results and streaming.
 
         This schedules the workflow execution in the background and returns a
-        [WorkflowHandler][workflows.handler.WorkflowHandler] that can be awaited
+        [WorkflowHandler](#workflows.handler.WorkflowHandler) that can be awaited
         for the final result or used to stream intermediate events.
 
         You may pass either a concrete `start_event` instance or keyword
         arguments that will be used to construct the inferred
-        [StartEvent][workflows.events.StartEvent] subclass.
+        [StartEvent](#workflows.events.StartEvent) subclass.
 
         Args:
             ctx (Context | None): Optional context to resume or share state
@@ -330,23 +330,23 @@ class Workflow(metaclass=WorkflowMeta):
             WorkflowTimeoutError: If execution exceeds the configured timeout.
 
         Examples:
-            ```python
-            # Create and run with kwargs
-            handler = MyFlow().run(topic="Pirates")
+        ```python
+        # Create and run with kwargs
+        handler = MyFlow().run(topic="Pirates")
 
-            # Stream events
-            async for ev in handler.stream_events():
-                ...
+        # Stream events
+        async for ev in handler.stream_events():
+            ...
 
-            # Await final result
-            result = await handler
-            ```
+        # Await final result
+        result = await handler
+        ```
 
-            If you subclassed the start event, you can also directly pass it in:
+        If you subclassed the start event, you can also directly pass it in:
 
-            ```python
-            result = await my_workflow.run(start_event=MyStartEvent(topic="Pirates"))
-            ```
+        ```python
+        result = await my_workflow.run(start_event=MyStartEvent(topic="Pirates"))
+        ```
         """
 
         # Validate the workflow

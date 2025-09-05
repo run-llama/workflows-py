@@ -53,9 +53,9 @@ def inspect_signature(fn: Callable) -> StepSignatureSpec:
 
     Returns:
         StepSignatureSpec: A specification object containing:
-            - accepted_events: Dictionary mapping parameter names to their event types
-            - return_types: List of return type annotations
-            - context_parameter: Name of the context parameter if present
+            - `accepted_events` - Dictionary mapping parameter names to their event types
+            - `return_types` - List of return type annotations
+            - `context_parameter` - Name of the context parameter if present
 
     Raises:
         TypeError: If fn is not a callable object

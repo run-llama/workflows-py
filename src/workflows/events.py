@@ -32,7 +32,7 @@ class DictLikeModel(BaseModel):
 
     def __init__(self, **params: Any):
         """
-        __init__.
+        Class constructor.
 
         NOTE: fields and private_attrs are pulled from params by name.
         """
@@ -123,23 +123,23 @@ class Event(DictLikeModel):
     They support both attribute and mapping access to dynamic fields.
 
     Examples:
-        Subclassing with typed fields:
+    Subclassing with typed fields:
 
-        ```python
-        from pydantic import Field
+    ```python
+    from pydantic import Field
 
-        class CustomEv(Event):
-            score: int = Field(ge=0)
+    class CustomEv(Event):
+        score: int = Field(ge=0)
 
-        e = CustomEv(score=10)
-        print(e.score)
-        ```
+    e = CustomEv(score=10)
+    print(e.score)
+    ```
 
     See Also:
-        - [StartEvent][workflows.events.StartEvent]
-        - [StopEvent][workflows.events.StopEvent]
-        - [InputRequiredEvent][workflows.events.InputRequiredEvent]
-        - [HumanResponseEvent][workflows.events.HumanResponseEvent]
+        - [StartEvent](#workflows.events.StartEvent)
+        - [StopEvent](#workflows.events.StopEvent)
+        - [InputRequiredEvent](#workflows.events.InputRequiredEvent)
+        - [HumanResponseEvent](#workflows.events.HumanResponseEvent)
     """
 
     def __init__(self, **params: Any):
@@ -158,20 +158,21 @@ class StopEvent(Event):
     instance itself.
 
     Examples:
-        ```python
-        # default stop event: result holds the value
-        return StopEvent(result={"answer": 42})
-        ```
+    ```python
+    # default stop event: result holds the value
+    return StopEvent(result={"answer": 42})
+    ```
 
-        Subclassing to provide a custom result:
+    Subclassing to provide a custom result:
 
-        ```python
-        class MyStopEv(StopEvent):
-            pass
+    ```python
+    class MyStopEv(StopEvent):
+        pass
 
-        @step
-        async def my_step(self, ctx: Context, ev: StartEvent) -> MyStopEv:
-            return MyStopEv(result={"answer": 42})
+    @step
+    async def my_step(self, ctx: Context, ev: StartEvent) -> MyStopEv:
+        return MyStopEv(result={"answer": 42})
+    ```
     """
 
     _result: Any = PrivateAttr(default=None)
@@ -195,26 +196,26 @@ class InputRequiredEvent(Event):
     Automatically written to the event stream if returned from a step.
 
     If returned from a step, it does not need to be consumed by other steps and will pass validation.
-    It's expected that the caller will respond to this event and send back a [HumanResponseEvent][workflows.events.HumanResponseEvent].
+    It's expected that the caller will respond to this event and send back a [HumanResponseEvent](#workflows.events.HumanResponseEvent).
 
     Use this directly or subclass it.
 
     Typical flow: a step returns `InputRequiredEvent`, callers consume it from
-    the stream and send back a [HumanResponseEvent][workflows.events.HumanResponseEvent].
+    the stream and send back a [HumanResponseEvent](#workflows.events.HumanResponseEvent).
 
     Examples:
-        ```python
-        from workflows.events import InputRequiredEvent, HumanResponseEvent
+    ```python
+    from workflows.events import InputRequiredEvent, HumanResponseEvent
 
-        class HITLWorkflow(Workflow):
-            @step
-            async def my_step(self, ev: StartEvent) -> InputRequiredEvent:
-                return InputRequiredEvent(prefix="What's your name? ")
+    class HITLWorkflow(Workflow):
+        @step
+        async def my_step(self, ev: StartEvent) -> InputRequiredEvent:
+            return InputRequiredEvent(prefix="What's your name? ")
 
-            @step
-            async def my_step(self, ev: HumanResponseEvent) -> StopEvent:
-                return StopEvent(result=ev.response)
-        ```
+        @step
+        async def my_step(self, ev: HumanResponseEvent) -> StopEvent:
+            return StopEvent(result=ev.response)
+    ```
     """
 
 
@@ -224,18 +225,18 @@ class HumanResponseEvent(Event):
     If consumed by a step and not returned by another, it will still pass validation.
 
     Examples:
-        ```python
-        from workflows.events import InputRequiredEvent, HumanResponseEvent
+    ```python
+    from workflows.events import InputRequiredEvent, HumanResponseEvent
 
-        class HITLWorkflow(Workflow):
-            @step
-            async def my_step(self, ev: StartEvent) -> InputRequiredEvent:
-                return InputRequiredEvent(prefix="What's your name? ")
+    class HITLWorkflow(Workflow):
+        @step
+        async def my_step(self, ev: StartEvent) -> InputRequiredEvent:
+            return InputRequiredEvent(prefix="What's your name? ")
 
-            @step
-            async def my_step(self, ev: HumanResponseEvent) -> StopEvent:
-                return StopEvent(result=ev.response)
-        ```
+        @step
+        async def my_step(self, ev: HumanResponseEvent) -> StopEvent:
+            return StopEvent(result=ev.response)
+    ```
     """
 
 

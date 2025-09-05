@@ -67,35 +67,29 @@ def Resource(factory: Callable[..., T], cache: bool = True) -> _Resource[T]:
         _Resource[T]: A resource descriptor to be used in `typing.Annotated`.
 
     Examples:
-        ```python
-        from typing import Annotated
-        from workflows.resource import Resource
+    ```python
+    from typing import Annotated
+    from workflows.resource import Resource
 
-        def get_memory(**kwargs) -> Memory:
-            return Memory.from_defaults("user123", token_limit=60000)
+    def get_memory(**kwargs) -> Memory:
+        return Memory.from_defaults("user123", token_limit=60000)
 
-        class MyWorkflow(Workflow):
-            @step
-            async def first(
-                self,
-                ev: StartEvent,
-                memory: Annotated[Memory, Resource(get_memory)],
-            ) -> StopEvent:
-                await memory.aput(...)
-                return StopEvent(result="ok")
-        ```
+    class MyWorkflow(Workflow):
+        @step
+        async def first(
+            self,
+            ev: StartEvent,
+            memory: Annotated[Memory, Resource(get_memory)],
+        ) -> StopEvent:
+            await memory.aput(...)
+            return StopEvent(result="ok")
+    ```
     """
     return _Resource(factory, cache)
 
 
 class ResourceManager:
-    """Manage resource lifecycles and caching across workflow steps.
-
-    Methods:
-        set: Manually set a resource by name.
-        get: Produce or retrieve a resource via its descriptor.
-        get_all: Return the internal name->resource map.
-    """
+    """Manage resource lifecycles and caching across workflow steps."""
 
     def __init__(self) -> None:
         self.resources: dict[str, Any] = {}
