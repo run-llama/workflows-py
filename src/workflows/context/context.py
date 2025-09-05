@@ -32,10 +32,8 @@ from workflows.events import (
     Event,
     InputRequiredEvent,
     EventsQueueChanged,
-    SnapshotTime,
     StepStateChanged,
     StepState,
-    StateSnapshot,
 )
 from workflows.resource import ResourceManager
 from workflows.types import RunResultT
@@ -366,7 +364,7 @@ class Context(Generic[MODEL_T]):
         async with self.lock:
             self.write_event_to_stream(
                 StepStateChanged(
-                    state=StepState.IN_PROGRESS,
+                    step_state=StepState.IN_PROGRESS,
                     name=name,
                     input_event_name=(str(type(ev))),
                     worker_id=worker_id,
@@ -388,7 +386,7 @@ class Context(Generic[MODEL_T]):
         async with self.lock:
             self.write_event_to_stream(
                 StepStateChanged(
-                    state=StepState.NOT_IN_PROGRESS,
+                    step_state=StepState.NOT_IN_PROGRESS,
                     name=name,
                     input_event_name=(str(type(ev))),
                     worker_id=worker_id,
@@ -795,10 +793,12 @@ class Context(Generic[MODEL_T]):
             # - check if its async or not
             # - if not async, run it in an executor
             self.write_event_to_stream(
-                StateSnapshot(
-                    state=self.store.to_dict_snapshot(JsonSerializer()),
-                    snapshot_time=SnapshotTime.ON_STEP_START,
-                    step_name=name,
+                StepStateChanged(
+                    name=name,
+                    step_state=StepState.PREPARING,
+                    worker_id=worker_id,
+                    input_event_name=str(type(ev)),
+                    context_state=self.store.to_dict_snapshot(JsonSerializer()),
                 )
             )
             if asyncio.iscoroutinefunction(step):
@@ -810,7 +810,7 @@ class Context(Generic[MODEL_T]):
                     self.write_event_to_stream(
                         StepStateChanged(
                             name=name,
-                            state=StepState.RUNNING,
+                            step_state=StepState.RUNNING,
                             worker_id=worker_id,
                             input_event_name=str(type(ev)),
                         )
@@ -846,7 +846,7 @@ class Context(Generic[MODEL_T]):
                         self.write_event_to_stream(
                             StepStateChanged(
                                 name=name,
-                                state=StepState.NOT_RUNNING,
+                                step_state=StepState.NOT_RUNNING,
                                 worker_id=worker_id,
                                 input_event_name=str(type(ev)),
                             )
@@ -868,10 +868,12 @@ class Context(Generic[MODEL_T]):
                     raise WorkflowRuntimeError(f"Error in step '{name}': {e!s}") from e
 
             self.write_event_to_stream(
-                StateSnapshot(
-                    state=self.store.to_dict_snapshot(JsonSerializer()),
-                    snapshot_time=SnapshotTime.ON_STEP_END,
-                    step_name=name,
+                StepStateChanged(
+                    name=name,
+                    step_state=StepState.NOT_IN_PROGRESS,
+                    worker_id=worker_id,
+                    input_event_name=str(type(ev)),
+                    context_state=self.store.to_dict_snapshot(JsonSerializer()),
                 )
             )
             if verbose and name != "_done":
@@ -893,7 +895,7 @@ class Context(Generic[MODEL_T]):
             self.write_event_to_stream(
                 StepStateChanged(
                     name=name,
-                    state=StepState.EXITED,
+                    step_state=StepState.EXITED,
                     worker_id=worker_id,
                     input_event_name=str(type(ev)),
                     output_event_name=str(type(new_ev)),

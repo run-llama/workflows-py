@@ -260,6 +260,7 @@ class InternalDispatchEvent(Event):
 
 
 class StepState(Enum):
+    PREPARING = "preparing"
     RUNNING = "running"
     IN_PROGRESS = "in_progress"
     NOT_RUNNING = "not_running"
@@ -267,25 +268,21 @@ class StepState(Enum):
     EXITED = "exited"
 
 
-class SnapshotTime(Enum):
-    ON_STEP_START = "on_step_start"
-    ON_STEP_END = "on_step_end"
-
-
 class StepStateChanged(InternalDispatchEvent):
     """
-    StepStateChanged is a special event type that exposes internal changes in the state of the event, including whether the step is running or in progress, what worker it is running on and what events it takes as input and output.
+    StepStateChanged is a special event type that exposes internal changes in the state of the event, including whether the step is running or in progress, what worker it is running on and what events it takes as input and output, as well as changes in the workflow state.
 
     Attributes:
         name (str): Name of the step
-        state (StepState): State of the step ("running", "not_running", "in_progress", "not_in_progress", "exited")
+        step_state (StepState): State of the step ("running", "not_running", "in_progress", "not_in_progress", "exited")
         worker_id (str): ID of the worker that the step is running on
         input_event_name (str): Name of the input event
         output_event_name (Optional[str]): Name of the output event
+        context_state (dict[str, Any]): Snapshot of the current workflow state
     """
 
     name: str = Field(description="Name of the step")
-    state: StepState = Field(
+    step_state: StepState = Field(
         description="State of the step ('running', 'not_running', 'in_progress', 'not_in_progress', 'exited')"
     )
     worker_id: str = Field(description="ID of the worker that the step is running on")
@@ -293,25 +290,8 @@ class StepStateChanged(InternalDispatchEvent):
     output_event_name: Optional[str] = Field(
         description="Name of the output event", default=None
     )
-
-
-class StateSnapshot(InternalDispatchEvent):
-    """
-    A special event type that reports the state snapshot at a given moment.
-
-    Note:
-        This event is only emitted when the internal state is serializable
-
-    Attributes:
-        state (str): Serialized snapshot of the current workflow state
-        snapshot_time (SnapshotTime): When was the snapshot captured
-        step_name (str): Name of the step during which the state snapshot was captured
-    """
-
-    state: dict[str, Any] = Field(description="Snapshot of the current workflow state")
-    snapshot_time: SnapshotTime = Field(description="When was the snapshot captured")
-    step_name: str = Field(
-        description="Name of the step during which the state snapshot was captured"
+    context_state: Optional[dict[str, Any]] = Field(
+        description="Snapshot of the current workflow state", default=None
     )
 
 
