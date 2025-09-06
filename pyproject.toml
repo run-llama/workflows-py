@@ -44,4 +44,3 @@ features = ["server"]
 
 [tool.hatch.envs.server.scripts]
 openapi = "python -m workflows.server.server --output openapi.json"
-sdk-generate = "python scripts/generate_sdk.py"

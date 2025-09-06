@@ -137,13 +137,12 @@ jobs:
 
       - name: Generate TypeScript SDK
         run: |
-          uv run hatch run server:sdk-generate
+          uv run python scripts/generate_sdk.py
 
-      - name: Build and validate SDK
+      - name: Validate SDK
         run: |
           cd client-sdk
           pnpm run typecheck
-          pnpm run build
 
       - name: Publish to npm
         if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'

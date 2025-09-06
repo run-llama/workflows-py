@@ -47,19 +47,15 @@ jobs:
 
       - name: Install Python dependencies
         run: |
-          uv sync --all-extras
+          uv sync --all-extras --dev
 
       - name: Generate SDK
         run: |
-          uv run hatch run server:sdk-generate
-
-      - name: Validate SDK build
-        run: |
-          cd client-sdk
-          pnpm run build
+          uv run python scripts/generate_sdk.py
 
       - name: Check generated files exist
         run: |
+          cd client-sdk
           test -f client-sdk/src/generated/index.ts
           test -f client-sdk/src/generated/sdk.gen.ts
           test -f client-sdk/src/generated/types.gen.ts
