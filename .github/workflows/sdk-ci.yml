@@ -55,7 +55,6 @@ jobs:
 
       - name: Check generated files exist
         run: |
-          cd client-sdk
           test -f client-sdk/src/generated/index.ts
           test -f client-sdk/src/generated/sdk.gen.ts
           test -f client-sdk/src/generated/types.gen.ts
