@@ -4,18 +4,9 @@
 import os
 import subprocess
 import sys
-from typing import Optional, Tuple
+from typing import Optional
 
-
-def parse_version(version_str: str) -> Tuple[int, int, int]:
-    """Parse semantic version string to tuple of integers."""
-    # Remove 'v' prefix if present
-    version = version_str.lstrip("v")
-    parts = version.split(".")
-    if len(parts) != 3:
-        raise ValueError(f"Invalid semantic version: {version_str}")
-    major, minor, patch = map(int, parts)
-    return (major, minor, patch)
+from packaging.version import Version
 
 
 def get_previous_tag() -> Optional[str]:
@@ -53,8 +44,25 @@ def detect_change_type(current_version: str, previous_version: Optional[str]) ->
         return "major"
 
     try:
-        curr_major, curr_minor, curr_patch = parse_version(current_version)
-        prev_major, prev_minor, prev_patch = parse_version(previous_version)
+        # Remove 'v' prefix if present
+        current_clean = current_version.lstrip("v")
+        previous_clean = previous_version.lstrip("v")
+
+        curr_version = Version(current_clean)
+        prev_version = Version(previous_clean)
+
+        # Compare versions using packaging.version
+        if curr_version <= prev_version:
+            # Same or lower version (shouldn't happen in normal flow)
+            return "none"
+
+        # Extract major.minor.patch components for semantic comparison
+        curr_release = curr_version.release
+        prev_release = prev_version.release
+
+        # Ensure we have at least 3 components (major, minor, patch)
+        curr_major, curr_minor, curr_patch = (curr_release + (0, 0, 0))[:3]
+        prev_major, prev_minor, prev_patch = (prev_release + (0, 0, 0))[:3]
 
         if curr_major > prev_major:
             return "major"
@@ -63,9 +71,9 @@ def detect_change_type(current_version: str, previous_version: Optional[str]) ->
         elif curr_patch > prev_patch:
             return "patch"
         else:
-            # Same or lower version (shouldn't happen in normal flow)
-            return "none"
-    except ValueError:
+            # This shouldn't happen if curr_version > prev_version
+            return "minor"
+    except Exception:
         # If we can't parse versions, default to minor
         return "minor"
 

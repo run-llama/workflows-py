@@ -6,6 +6,8 @@ import re
 import sys
 from pathlib import Path
 
+from packaging.version import Version
+
 
 def get_pyproject_version() -> str:
     """Extract version from pyproject.toml."""
@@ -44,14 +46,21 @@ def main() -> None:
     tag = github_ref.replace("refs/tags/", "")
     tag_version = tag[1:] if tag.startswith("v") else tag
 
-    # Validate versions match
-    if pyproject_version != tag_version:
-        print(
-            f"Error: Tag {tag} doesn't match pyproject.toml version {pyproject_version}"
-        )
-        sys.exit(1)
+    # Validate versions match using packaging.version for robust comparison
+    try:
+        pyproject_ver = Version(pyproject_version)
+        tag_ver = Version(tag_version)
 
-    print(f"✅ Version validated: {pyproject_version} (tag: {tag})")
+        if pyproject_ver != tag_ver:
+            print(
+                f"Error: Tag {tag} (version {tag_version}) doesn't match pyproject.toml version {pyproject_version}"
+            )
+            sys.exit(1)
+
+        print(f"✅ Version validated: {pyproject_version} (tag: {tag})")
+    except Exception as e:
+        print(f"Error: Invalid version format - {e}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
