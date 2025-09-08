@@ -1,6 +1,6 @@
 import inspect
 
-from typing import AsyncContextManager, Any, Callable, TYPE_CHECKING
+from typing import AsyncContextManager, Any, Callable, Optional, TYPE_CHECKING
 from types import TracebackType
 from collections import Counter
 
@@ -18,10 +18,10 @@ class WorkflowTestRunner(AsyncContextManager["WorkflowTestRunner"]):
 
     async def __aexit__(
         self,
-        exc_type: type[BaseException] | None,
-        exc_val: BaseException | None,
-        exc_tb: TracebackType | None,
-    ) -> bool | None:
+        exc_type: Optional[type[BaseException]],
+        exc_val: Optional[BaseException],
+        exc_tb: Optional[TracebackType],
+    ) -> Optional[bool]:
         """Called when exiting the 'async with' block"""
         return not exc_type and not exc_val and not exc_tb
 
@@ -29,7 +29,7 @@ class WorkflowTestRunner(AsyncContextManager["WorkflowTestRunner"]):
         self,
         start_event: StartEvent,
         expose_internal: bool = True,
-        exclude_events: list[EventType] | None = None,
+        exclude_events: Optional[list[EventType]] = None,
     ) -> tuple[list[Event], dict[EventType, int], Any]:
         """
         Run a workflow end-to-end and collect the events that are streamed during its execution.
@@ -83,7 +83,7 @@ class WorkflowTestRunner(AsyncContextManager["WorkflowTestRunner"]):
                 assert output_event.message == "I printed: 'hello'"
             ```
         """
-        step_fn: Callable | None = self._workflow._get_steps().get(step, None)
+        step_fn: Optional[Callable] = self._workflow._get_steps().get(step, None)
         if not step_fn:
             raise ValueError(f"Step {step} is not part of the workflow you are testing")
         if inspect.iscoroutinefunction(step_fn):
