@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from importlib.metadata import version
+from pathlib import Path
 from typing import Any, AsyncGenerator
 
 import uvicorn
@@ -13,7 +15,7 @@ from starlette.exceptions import HTTPException
 from starlette.middleware import Middleware
 from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
-from starlette.responses import JSONResponse, StreamingResponse
+from starlette.responses import HTMLResponse, JSONResponse, StreamingResponse
 from starlette.routing import Route
 from starlette.schemas import SchemaGenerator
 
@@ -21,7 +23,7 @@ from workflows import Context, Workflow
 from workflows.context.serializers import JsonSerializer
 from workflows.events import StopEvent
 from workflows.handler import WorkflowHandler
-from importlib.metadata import version
+
 from .utils import nanoid
 
 logger = logging.getLogger()
@@ -33,6 +35,7 @@ class WorkflowServer:
         self._contexts: dict[str, Context] = {}
         self._handlers: dict[str, WorkflowHandler] = {}
         self._results: dict[str, StopEvent] = {}
+        self._ui_assets_path = Path(__file__).parent / "ui"
 
         self._middleware = middleware or [
             Middleware(
@@ -74,6 +77,12 @@ class WorkflowServer:
                 self._health_check,
                 methods=["GET"],
             ),
+            Route(
+                "/",
+                self._ui,
+                methods=["GET"],
+                include_in_schema=False,
+            ),
         ]
 
         self.app = Starlette(routes=self._routes, middleware=self._middleware)
@@ -101,6 +110,25 @@ class WorkflowServer:
     #
     # HTTP endpoints
     #
+
+    async def _ui(self, request: Request) -> HTMLResponse:
+        """
+        ---
+        summary: Workflow User Interface
+        description: Serves the admin HTML page.
+        responses:
+          200:
+            description: Workflow HTML User Interface
+            content:
+              text/html: {}
+        """
+        index_path = self._ui_assets_path / "index.html"
+        if not index_path.is_file():
+            return HTMLResponse(
+                content="<html><body><h1>Admin interface not found</h1></body></html>",
+                status_code=404,
+            )
+        return HTMLResponse(content=index_path.read_text())
 
     async def _health_check(self, request: Request) -> JSONResponse:
         """
@@ -376,7 +404,7 @@ class WorkflowServer:
         async def event_stream(handler: WorkflowHandler) -> AsyncGenerator[str, None]:
             serializer = JsonSerializer()
 
-            async for event in handler.stream_events():
+            async for event in handler.stream_events(expose_internal=True):
                 serialized_event = serializer.serialize(event)
                 if sse:
                     # need to convert back to str to use SSE
