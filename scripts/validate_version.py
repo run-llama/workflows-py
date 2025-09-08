@@ -4,19 +4,23 @@
 import os
 import sys
 from pathlib import Path
+import tomllib
+
+def get_pyproject_version() -> str:
+    """Extract version from pyproject.toml."""
+    pyproject_path = Path(__file__).parent.parent / "pyproject.toml"
+    with open(pyproject_path, "rb") as f:
+        data = tomllib.load(f)
+        return data["project"]["version"]
 
 
 def main() -> None:
     # Get pyproject.toml version
-    pyproject_path = Path(__file__).parent.parent / "pyproject.toml"
-    with open(pyproject_path) as f:
-        for line in f:
-            if line.startswith("version"):
-                pyproject_version = line.split('"')[1]
-                break
-        else:
-            print("Error: Version not found in pyproject.toml")
-            sys.exit(1)
+    try:
+        pyproject_version = get_pyproject_version()
+    except Exception as e:
+        print(f"Error: {e}")
+        sys.exit(1)
     
     # Get tag from GitHub ref
     github_ref = os.environ.get("GITHUB_REF", "")
