@@ -2,6 +2,21 @@ name: Publish to PyPI and GitHub
 
 on:
   workflow_dispatch:
+    inputs:
+      server_change_type:
+        description: 'Server/API change type, this will be used to generate the client SDK'
+        required: false
+        default: 'none'
+        type: choice
+        options:
+          - none
+          - patch
+          - minor
+          - major
+      change_description:
+        description: 'Description of server/API changes (optional), this will be used to generate the client SDK'
+        required: false
+        type: string
   push:
     tags:
       - "v*"
@@ -16,9 +31,19 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Need full history for tag comparison
 
       - name: Install uv
         uses: astral-sh/setup-uv@v6
+
+      - name: Validate version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: uv run python scripts/validate_version.py
+
+      - name: Set version output
+        id: version
+        run: echo "version=$(uv run python -c "from importlib.metadata import version; print(version('llama-index-workflows'))")" >> $GITHUB_OUTPUT
 
       - name: Build and publish
         env:
@@ -27,8 +52,38 @@ jobs:
           uv build
           uv publish
 
+      - name: Generate OpenAPI spec
+        run: |
+          uv sync --extra server
+          uv run hatch run server:openapi
+
       - name: Create GitHub Release
         uses: ncipollo/release-action@v1
         with:
-          artifacts: "dist/*"
+          artifacts: "dist/*,openapi.json"
           generateReleaseNotes: true
+
+      - name: Detect change type for tags
+        id: detect_change
+        if: startsWith(github.ref, 'refs/tags/')
+        run: uv run python scripts/detect_change_type.py
+
+      - name: Set SDK trigger parameters
+        id: sdk_params
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "change_type=${{ github.event.inputs.server_change_type }}" >> $GITHUB_OUTPUT
+            echo "change_description=${{ github.event.inputs.change_description }}" >> $GITHUB_OUTPUT
+          else
+            echo "change_type=${{ steps.detect_change.outputs.change_type }}" >> $GITHUB_OUTPUT
+            echo "change_description=" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Trigger SDK Update
+        if: steps.sdk_params.outputs.change_type != 'none' && steps.sdk_params.outputs.change_type != ''
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.LLAMA_UI_DISPATCH_TOKEN }}
+          repository: run-llama/llama-ui
+          event-type: workflows-sdk-update
+          client-payload: '{"version": "${{ steps.version.outputs.version }}", "openapi_url": "https://github.com/run-llama/workflows-py/releases/download/v${{ steps.version.outputs.version }}/openapi.json", "change_type": "${{ steps.sdk_params.outputs.change_type }}", "change_description": "${{ steps.sdk_params.outputs.change_description }}"}'

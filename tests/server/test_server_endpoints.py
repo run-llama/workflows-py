@@ -32,6 +32,15 @@ async def async_client(
     transport = ASGITransport(app=server.app)
     yield AsyncClient(transport=transport, base_url="http://test")
 
+    # Clean up any running workflows to avoid event loop warnings
+    for handler_id, handler in list(server._handlers.items()):
+        if not handler.done():
+            handler.cancel()
+            try:
+                await handler
+            except asyncio.CancelledError:
+                pass
+
 
 @pytest.mark.asyncio
 async def test_health_check(async_client: AsyncClient) -> None:
