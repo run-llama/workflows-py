@@ -2,17 +2,29 @@
 """Validate that release tag matches pyproject.toml version."""
 
 import os
+import re
 import sys
 from pathlib import Path
-import tomllib
 
 
 def get_pyproject_version() -> str:
     """Extract version from pyproject.toml."""
     pyproject_path = Path(__file__).parent.parent / "pyproject.toml"
-    with open(pyproject_path, "rb") as f:
-        data = tomllib.load(f)
-        return data["project"]["version"]
+    with open(pyproject_path, "r") as f:
+        content = f.read()
+        # Look for version = "x.x.x" in the [project] section
+        # First find the [project] section
+        project_match = re.search(r"\[project\]", content)
+        if not project_match:
+            raise ValueError("Could not find [project] section in pyproject.toml")
+
+        # Then find the version line after [project]
+        version_pattern = r'version\s*=\s*["\']([^"\']+)["\']'
+        version_match = re.search(version_pattern, content[project_match.start() :])
+        if not version_match:
+            raise ValueError("Could not find version in pyproject.toml")
+
+        return version_match.group(1)
 
 
 def main() -> None:
