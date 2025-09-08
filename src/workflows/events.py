@@ -4,14 +4,16 @@
 from __future__ import annotations
 
 from _collections_abc import dict_items, dict_keys, dict_values
-from typing import Any, Type
+from typing import Any, Type, Optional
 
 from pydantic import (
     BaseModel,
     ConfigDict,
+    Field,
     PrivateAttr,
     model_serializer,
 )
+from enum import Enum
 
 
 class DictLikeModel(BaseModel):
@@ -237,6 +239,73 @@ class HumanResponseEvent(Event):
                 return StopEvent(result=ev.response)
         ```
     """
+
+
+class InternalDispatchEvent(Event):
+    """
+    InternalDispatchEvent is a special event type that exposes processes running inside workflow, even if the user did not explicitly expose them by setting, e.g., `ctx.write_event_to_stream(`.
+
+    Examples:
+        ```python
+        wf = ExampleWorkflow()
+        handler = wf.run(message="Hello, who are you?")
+
+        async for ev in handler.stream_event(expose_internal=True):
+            if isinstance(ev, InternalDispatchEvent):
+                print(type(ev), ev)
+        ```
+    """
+
+    pass
+
+
+class StepState(Enum):
+    PREPARING = "preparing"
+    RUNNING = "running"
+    IN_PROGRESS = "in_progress"
+    NOT_RUNNING = "not_running"
+    NOT_IN_PROGRESS = "not_in_progress"
+    EXITED = "exited"
+
+
+class StepStateChanged(InternalDispatchEvent):
+    """
+    StepStateChanged is a special event type that exposes internal changes in the state of the event, including whether the step is running or in progress, what worker it is running on and what events it takes as input and output, as well as changes in the workflow state.
+
+    Attributes:
+        name (str): Name of the step
+        step_state (StepState): State of the step ("running", "not_running", "in_progress", "not_in_progress", "exited")
+        worker_id (str): ID of the worker that the step is running on
+        input_event_name (str): Name of the input event
+        output_event_name (Optional[str]): Name of the output event
+        context_state (dict[str, Any]): Snapshot of the current workflow state
+    """
+
+    name: str = Field(description="Name of the step")
+    step_state: StepState = Field(
+        description="State of the step ('running', 'not_running', 'in_progress', 'not_in_progress', 'exited')"
+    )
+    worker_id: str = Field(description="ID of the worker that the step is running on")
+    input_event_name: str = Field(description="Name of the input event")
+    output_event_name: Optional[str] = Field(
+        description="Name of the output event", default=None
+    )
+    context_state: Optional[dict[str, Any]] = Field(
+        description="Snapshot of the current workflow state", default=None
+    )
+
+
+class EventsQueueChanged(InternalDispatchEvent):
+    """
+    A special event that reports the state of internal queues.
+
+    Attributes:
+        name (str): Name of the queue
+        size (int): Size of the queue
+    """
+
+    name: str = Field(description="Name of the queue")
+    size: int = Field(description="Size of the queue")
 
 
 EventType = Type[Event]

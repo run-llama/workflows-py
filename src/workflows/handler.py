@@ -8,7 +8,7 @@ from typing import Any, AsyncGenerator
 
 from .context import Context
 from .errors import WorkflowRuntimeError
-from .events import Event, StopEvent
+from .events import Event, StopEvent, InternalDispatchEvent
 from .types import RunResultT
 
 
@@ -49,7 +49,9 @@ class WorkflowHandler(asyncio.Future[RunResultT]):
         """Return True when the workflow has completed."""
         return self.done()
 
-    async def stream_events(self) -> AsyncGenerator[Event, None]:
+    async def stream_events(
+        self, expose_internal: bool = False
+    ) -> AsyncGenerator[Event, None]:
         """
         Stream events from the workflow execution as they occur.
 
@@ -100,6 +102,8 @@ class WorkflowHandler(asyncio.Future[RunResultT]):
         while True:
             ev = await self.ctx.streaming_queue.get()
 
+            if isinstance(ev, InternalDispatchEvent) and not expose_internal:
+                continue
             yield ev
 
             if isinstance(ev, StopEvent):

@@ -28,7 +28,13 @@ from workflows.errors import (
     WorkflowDone,
     WorkflowRuntimeError,
 )
-from workflows.events import Event, InputRequiredEvent
+from workflows.events import (
+    Event,
+    InputRequiredEvent,
+    EventsQueueChanged,
+    StepStateChanged,
+    StepState,
+)
 from workflows.resource import ResourceManager
 from workflows.types import RunResultT
 
@@ -346,7 +352,7 @@ class Context(Generic[MODEL_T]):
             msg = "Error creating a Context instance: the provided payload has a wrong or old format."
             raise ContextSerdeError(msg) from e
 
-    async def mark_in_progress(self, name: str, ev: Event) -> None:
+    async def mark_in_progress(self, name: str, ev: Event, worker_id: str = "") -> None:
         """
         Add input event to in_progress dict.
 
@@ -356,9 +362,19 @@ class Context(Generic[MODEL_T]):
 
         """
         async with self.lock:
+            self.write_event_to_stream(
+                StepStateChanged(
+                    step_state=StepState.IN_PROGRESS,
+                    name=name,
+                    input_event_name=(str(type(ev))),
+                    worker_id=worker_id,
+                )
+            )
             self._in_progress[name].append(ev)
 
-    async def remove_from_in_progress(self, name: str, ev: Event) -> None:
+    async def remove_from_in_progress(
+        self, name: str, ev: Event, worker_id: str = ""
+    ) -> None:
         """
         Remove input event from active steps.
 
@@ -368,6 +384,14 @@ class Context(Generic[MODEL_T]):
 
         """
         async with self.lock:
+            self.write_event_to_stream(
+                StepStateChanged(
+                    step_state=StepState.NOT_IN_PROGRESS,
+                    name=name,
+                    input_event_name=(str(type(ev))),
+                    worker_id=worker_id,
+                )
+            )
             events = [e for e in self._in_progress[name] if e != ev]
             self._in_progress[name] = events
 
@@ -519,8 +543,11 @@ class Context(Generic[MODEL_T]):
             ```
         """
         if step is None:
-            for queue in self._queues.values():
+            for name, queue in self._queues.items():
                 queue.put_nowait(message)
+                self.write_event_to_stream(
+                    EventsQueueChanged(name=name, size=queue.qsize())
+                )
         else:
             if step not in self._step_configs:
                 raise WorkflowRuntimeError(f"Step {step} does not exist")
@@ -528,6 +555,9 @@ class Context(Generic[MODEL_T]):
             step_config = self._step_configs[step]
             if step_config and type(message) in step_config.accepted_events:
                 self._queues[step].put_nowait(message)
+                self.write_event_to_stream(
+                    EventsQueueChanged(name=step, size=self._queues[step].qsize())
+                )
             else:
                 raise WorkflowRuntimeError(
                     f"Step {step} does not accept event of type {type(message)}"
@@ -588,6 +618,9 @@ class Context(Generic[MODEL_T]):
 
         if waiter_id not in self._queues:
             self._queues[waiter_id] = asyncio.Queue()
+            self.write_event_to_stream(
+                EventsQueueChanged(name=waiter_id, size=self._queues[waiter_id].qsize())
+            )
 
         # send the waiter event if it's not already sent
         if waiter_event is not None:
@@ -608,6 +641,12 @@ class Context(Generic[MODEL_T]):
                         return event
                     else:
                         continue
+                self.write_event_to_stream(
+                    EventsQueueChanged(
+                        name=waiter_id,
+                        size=self._queues[waiter_id].qsize(),
+                    )
+                )
             finally:
                 await self.store.set(waiter_id, False)
 
@@ -669,6 +708,7 @@ class Context(Generic[MODEL_T]):
         config: StepConfig,
         verbose: bool,
         run_id: str,
+        worker_id: str,
         resource_manager: ResourceManager,
     ) -> None:
         """Spawn a background worker task to process events for a step.
@@ -679,6 +719,7 @@ class Context(Generic[MODEL_T]):
             config (StepConfig): Resolved configuration for the step.
             verbose (bool): If True, print step activity.
             run_id (str): Run identifier for instrumentation.
+            worker_id (str): ID of the worker running the step
             resource_manager (ResourceManager): Resource injector for the step.
         """
         self._tasks.add(
@@ -689,6 +730,7 @@ class Context(Generic[MODEL_T]):
                     config=config,
                     verbose=verbose,
                     run_id=run_id,
+                    worker_id=worker_id,
                     resource_manager=resource_manager,
                 ),
                 name=name,
@@ -702,6 +744,7 @@ class Context(Generic[MODEL_T]):
         config: StepConfig,
         verbose: bool,
         run_id: str,
+        worker_id: str,
         resource_manager: ResourceManager,
     ) -> None:
         while True:
@@ -749,19 +792,38 @@ class Context(Generic[MODEL_T]):
 
             # - check if its async or not
             # - if not async, run it in an executor
+            self.write_event_to_stream(
+                StepStateChanged(
+                    name=name,
+                    step_state=StepState.PREPARING,
+                    worker_id=worker_id,
+                    input_event_name=str(type(ev)),
+                    context_state=self.store.to_dict_snapshot(JsonSerializer()),
+                )
+            )
             if asyncio.iscoroutinefunction(step):
                 retry_start_at = time.time()
                 attempts = 0
                 while True:
-                    await self.mark_in_progress(name=name, ev=ev)
+                    await self.mark_in_progress(name=name, ev=ev, worker_id=worker_id)
                     await self.add_running_step(name)
+                    self.write_event_to_stream(
+                        StepStateChanged(
+                            name=name,
+                            step_state=StepState.RUNNING,
+                            worker_id=worker_id,
+                            input_event_name=str(type(ev)),
+                        )
+                    )
                     try:
                         new_ev = await instrumented_step(**kwargs)
                         kwargs.clear()
                         break  # exit the retrying loop
 
                     except WorkflowDone:
-                        await self.remove_from_in_progress(name=name, ev=ev)
+                        await self.remove_from_in_progress(
+                            name=name, ev=ev, worker_id=worker_id
+                        )
                         raise
                     except Exception as e:
                         if config.retry_policy is None:
@@ -781,6 +843,14 @@ class Context(Generic[MODEL_T]):
                         await asyncio.sleep(delay)
                     finally:
                         await self.remove_running_step(name)
+                        self.write_event_to_stream(
+                            StepStateChanged(
+                                name=name,
+                                step_state=StepState.NOT_RUNNING,
+                                worker_id=worker_id,
+                                input_event_name=str(type(ev)),
+                            )
+                        )
 
             else:
                 try:
@@ -790,11 +860,22 @@ class Context(Generic[MODEL_T]):
                         None, run_task
                     )
                 except WorkflowDone:
-                    await self.remove_from_in_progress(name=name, ev=ev)
+                    await self.remove_from_in_progress(
+                        name=name, ev=ev, worker_id=worker_id
+                    )
                     raise
                 except Exception as e:
                     raise WorkflowRuntimeError(f"Error in step '{name}': {e!s}") from e
 
+            self.write_event_to_stream(
+                StepStateChanged(
+                    name=name,
+                    step_state=StepState.NOT_IN_PROGRESS,
+                    worker_id=worker_id,
+                    input_event_name=str(type(ev)),
+                    context_state=self.store.to_dict_snapshot(JsonSerializer()),
+                )
+            )
             if verbose and name != "_done":
                 if new_ev is not None:
                     print(f"Step {name} produced event {type(new_ev).__name__}")
@@ -810,7 +891,16 @@ class Context(Generic[MODEL_T]):
                 msg = f"Step function {name} returned {type(new_ev).__name__} instead of an Event instance."
                 raise WorkflowRuntimeError(msg)
 
-            await self.remove_from_in_progress(name=name, ev=ev)
+            await self.remove_from_in_progress(name=name, ev=ev, worker_id=worker_id)
+            self.write_event_to_stream(
+                StepStateChanged(
+                    name=name,
+                    step_state=StepState.EXITED,
+                    worker_id=worker_id,
+                    input_event_name=str(type(ev)),
+                    output_event_name=str(type(new_ev)),
+                )
+            )
             # InputRequiredEvent's are special case and need to be written to the stream
             # this way, the user can access and respond to the event
             if isinstance(new_ev, InputRequiredEvent):
