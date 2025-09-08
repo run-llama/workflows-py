@@ -40,7 +40,7 @@ jobs:
       - name: Validate version
         if: startsWith(github.ref, 'refs/tags/')
         run: uv run python scripts/validate_version.py
-      
+
       - name: Set version output
         id: version
         run: echo "version=$(uv run python -c "from importlib.metadata import version; print(version('llama-index-workflows'))")" >> $GITHUB_OUTPUT

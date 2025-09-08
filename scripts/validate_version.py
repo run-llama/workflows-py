@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 import tomllib
 
+
 def get_pyproject_version() -> str:
     """Extract version from pyproject.toml."""
     pyproject_path = Path(__file__).parent.parent / "pyproject.toml"
@@ -21,21 +22,23 @@ def main() -> None:
     except Exception as e:
         print(f"Error: {e}")
         sys.exit(1)
-    
+
     # Get tag from GitHub ref
     github_ref = os.environ.get("GITHUB_REF", "")
     if not github_ref.startswith("refs/tags/"):
         print("Error: Not a tag push")
         sys.exit(1)
-    
+
     tag = github_ref.replace("refs/tags/", "")
     tag_version = tag[1:] if tag.startswith("v") else tag
-    
+
     # Validate versions match
     if pyproject_version != tag_version:
-        print(f"Error: Tag {tag} doesn't match pyproject.toml version {pyproject_version}")
+        print(
+            f"Error: Tag {tag} doesn't match pyproject.toml version {pyproject_version}"
+        )
         sys.exit(1)
-    
+
     print(f"✅ Version validated: {pyproject_version} (tag: {tag})")
 
 
