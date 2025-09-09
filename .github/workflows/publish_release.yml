@@ -53,7 +53,7 @@ jobs:
           UV_PUBLISH_TOKEN: ${{ secrets.PYPI_TOKEN }}
         run: |
           uv build
-      #     uv publish
+          uv publish
 
       - name: Generate OpenAPI spec
         run: |
