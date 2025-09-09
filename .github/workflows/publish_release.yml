@@ -57,7 +57,7 @@ jobs:
 
       - name: Generate OpenAPI spec
         run: |
-          uv sync --all-extras --dev
+          uv sync --all-extras
           uv run hatch run server:openapi
 
       - name: Create GitHub Release
