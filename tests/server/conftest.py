@@ -42,6 +42,18 @@ class StreamingWorkflow(Workflow):
         return StopEvent(result=f"completed_{count}_events")
 
 
+class ExternalEvent(Event):
+    message: str
+
+
+class InteractiveWorkflow(Workflow):
+    @step
+    async def start(self, ctx: Context, ev: StartEvent) -> StopEvent:
+        # Wait for an external event
+        external_event = await ctx.wait_for_event(ExternalEvent)
+        return StopEvent(result=f"received: {external_event.message}")
+
+
 @pytest.fixture
 def simple_test_workflow() -> Workflow:
     return SimpleTestWorkflow()
@@ -55,3 +67,8 @@ def error_workflow() -> Workflow:
 @pytest.fixture
 def streaming_workflow() -> Workflow:
     return StreamingWorkflow()
+
+
+@pytest.fixture
+def interactive_workflow() -> Workflow:
+    return InteractiveWorkflow()

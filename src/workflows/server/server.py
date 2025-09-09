@@ -70,8 +70,18 @@ class WorkflowServer:
                 methods=["GET"],
             ),
             Route(
+                "/events/{handler_id}",
+                self._post_event,
+                methods=["POST"],
+            ),
+            Route(
                 "/health",
                 self._health_check,
+                methods=["GET"],
+            ),
+            Route(
+                "/tasks",
+                self._get_tasks,
                 methods=["GET"],
             ),
         ]
@@ -388,6 +398,137 @@ class WorkflowServer:
                 await asyncio.sleep(0)
 
         return StreamingResponse(event_stream(handler), media_type=media_type)
+
+    async def _get_tasks(self, request: Request) -> JSONResponse:
+        """
+        ---
+        summary: Get running tasks
+        description: Returns all currently running workflow tasks.
+        responses:
+          200:
+            description: List of running tasks
+            content:
+              application/json:
+                schema:
+                  type: object
+                  properties:
+                    tasks:
+                      type: array
+                      items:
+                        type: object
+                        properties:
+                          handler_id:
+                            type: string
+                          status:
+                            type: string
+                            enum: [running]
+                  required: [tasks]
+        """
+        tasks = []
+        for handler_id in self._handlers.keys():
+            task = {
+                "handler_id": handler_id,
+                "status": "running"
+            }
+            tasks.append(task)
+        
+        return JSONResponse({"tasks": tasks})
+
+    async def _post_event(self, request: Request) -> JSONResponse:
+        """
+        ---
+        summary: Send event to workflow
+        description: Sends an event to a running workflow's context.
+        parameters:
+          - in: path
+            name: handler_id
+            required: true
+            schema:
+              type: string
+            description: Workflow handler identifier.
+        requestBody:
+          required: true
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  event:
+                    type: string
+                    description: Serialized event in JSON format.
+                  step:
+                    type: string
+                    description: Optional target step name. If not provided, event is sent to all steps.
+                required: [event]
+        responses:
+          200:
+            description: Event sent successfully
+            content:
+              application/json:
+                schema:
+                  type: object
+                  properties:
+                    status:
+                      type: string
+                      enum: [sent]
+                  required: [status]
+          400:
+            description: Invalid event data
+          404:
+            description: Handler not found
+          409:
+            description: Workflow already completed
+        """
+        handler_id = request.path_params["handler_id"]
+        
+        # Check if handler exists
+        handler = self._handlers.get(handler_id)
+        if handler is None:
+            raise HTTPException(detail="Handler not found", status_code=404)
+        
+        # Check if workflow is still running
+        if handler.done():
+            raise HTTPException(detail="Workflow already completed", status_code=409)
+        
+        # Get the context
+        ctx = handler.ctx
+        if ctx is None:
+            raise HTTPException(detail="Context not available", status_code=500)
+        
+        # Parse request body
+        try:
+            body = await request.json()
+            event_str = body.get("event")
+            step = body.get("step")
+            
+            if not event_str:
+                raise HTTPException(detail="Event data is required", status_code=400)
+            
+            # Deserialize the event
+            serializer = JsonSerializer()
+            try:
+                event = serializer.deserialize(event_str)
+            except Exception as e:
+                raise HTTPException(
+                    detail=f"Failed to deserialize event: {e}", status_code=400
+                )
+            
+            # Send the event to the context
+            try:
+                ctx.send_event(event, step=step)
+            except Exception as e:
+                raise HTTPException(
+                    detail=f"Failed to send event: {e}", status_code=400
+                )
+            
+            return JSONResponse({"status": "sent"})
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(
+                detail=f"Error processing request: {e}", status_code=500
+            )
 
     #
     # Private methods
