@@ -43,7 +43,10 @@ jobs:
 
       - name: Set version output
         id: version
-        run: echo "version=$(uv run python -c "from importlib.metadata import version; print(version('llama-index-workflows'))")" >> $GITHUB_OUTPUT
+        run: |
+          VERSION=$(uv run python -c "from importlib.metadata import version; print(version('llama-index-workflows'))")
+          echo "Version: $VERSION"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
 
       - name: Build and publish
         env:
@@ -54,7 +57,7 @@ jobs:
 
       - name: Generate OpenAPI spec
         run: |
-          uv sync --extra server
+          uv sync --all-extras
           uv run hatch run server:openapi
 
       - name: Create GitHub Release
