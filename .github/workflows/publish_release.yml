@@ -43,7 +43,10 @@ jobs:
 
       - name: Set version output
         id: version
-        run: echo "version=$(uv run python -c "from importlib.metadata import version; print(version('llama-index-workflows'))")" >> $GITHUB_OUTPUT
+        run: |
+          VERSION=$(uv run python -c "from importlib.metadata import version; print(version('llama-index-workflows'))")
+          echo "Version: $VERSION"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
 
       - name: Build and publish
         env:
@@ -54,7 +57,7 @@ jobs:
 
       - name: Generate OpenAPI spec
         run: |
-          uv sync --extra server
+          uv sync --all-extras
           uv run hatch run server:openapi
 
       - name: Create GitHub Release
@@ -79,11 +82,19 @@ jobs:
             echo "change_description=" >> $GITHUB_OUTPUT
           fi
 
+      - name: Generate GitHub App Token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.CI_BOT_APP_ID }}
+          private-key: ${{ secrets.CI_BOT_PRIVATE_KEY }}
+          owner: run-llama
+
       - name: Trigger SDK Update
         if: steps.sdk_params.outputs.change_type != 'none' && steps.sdk_params.outputs.change_type != ''
         uses: peter-evans/repository-dispatch@v3
         with:
-          token: ${{ secrets.LLAMA_UI_DISPATCH_TOKEN }}
+          token: ${{ steps.app-token.outputs.token }}
           repository: run-llama/llama-ui
           event-type: workflows-sdk-update
           client-payload: '{"version": "${{ steps.version.outputs.version }}", "openapi_url": "https://github.com/run-llama/workflows-py/releases/download/v${{ steps.version.outputs.version }}/openapi.json", "change_type": "${{ steps.sdk_params.outputs.change_type }}", "change_description": "${{ steps.sdk_params.outputs.change_description }}"}'

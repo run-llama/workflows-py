@@ -16,7 +16,7 @@ dev = [
 
 [project]
 name = "llama-index-workflows"
-version = "2.0.0"
+version = "2.0.1"
 description = "An event-driven, async-first, step-based way to control the execution flow of AI applications like Agents."
 readme = "README.md"
 license = "MIT"
@@ -42,6 +42,7 @@ packages = ["src/workflows"]
 
 [tool.hatch.envs.server]
 features = ["server"]
+dependencies = ["pyyaml>=6.0.2"]
 
 [tool.hatch.envs.server.scripts]
 openapi = "python -m workflows.server.server --output openapi.json"
