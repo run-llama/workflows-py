@@ -431,7 +431,7 @@ async def test_get_tasks_with_running_workflows(async_client: AsyncClient) -> No
         # Start multiple workflows
         response1 = await client.post("/workflows/test/run-nowait", json={})
         handler_id1 = response1.json()["handler_id"]
-        
+
         response2 = await client.post("/workflows/test/run-nowait", json={})
         handler_id2 = response2.json()["handler_id"]
 
@@ -439,19 +439,19 @@ async def test_get_tasks_with_running_workflows(async_client: AsyncClient) -> No
         response = await client.get("/tasks")
         assert response.status_code == 200
         tasks = response.json()["tasks"]
-        
+
         # Should have 2 running tasks
         assert len(tasks) == 2
         handler_ids = {task["handler_id"] for task in tasks}
         assert handler_id1 in handler_ids
         assert handler_id2 in handler_ids
-        
+
         # Check all required fields are present
         for task in tasks:
             assert "handler_id" in task
             assert "status" in task
             assert task["status"] == "running"
-            
+
         # Wait for workflows to complete to avoid warnings
         for handler_id in [handler_id1, handler_id2]:
             response = await client.get(f"/results/{handler_id}")
@@ -467,26 +467,23 @@ async def test_post_event_to_running_workflow(async_client: AsyncClient) -> None
         response = await client.post("/workflows/interactive/run-nowait", json={})
         assert response.status_code == 200
         handler_id = response.json()["handler_id"]
-        
+
         # Wait a bit for workflow to start
         await asyncio.sleep(0.1)
-        
+
         # Prepare the event to send
         from workflows.context.serializers import JsonSerializer
         from tests.server.conftest import ExternalEvent
-        
+
         serializer = JsonSerializer()
         event = ExternalEvent(message="Hello from test")
         event_str = serializer.serialize(event)
-        
+
         # Send the event
-        response = await client.post(
-            f"/events/{handler_id}",
-            json={"event": event_str}
-        )
+        response = await client.post(f"/events/{handler_id}", json={"event": event_str})
         assert response.status_code == 200
         assert response.json() == {"status": "sent"}
-        
+
         # Wait for workflow to complete
         response = await client.get(f"/results/{handler_id}")
         max_attempts = 50
@@ -495,7 +492,7 @@ async def test_post_event_to_running_workflow(async_client: AsyncClient) -> None
             await asyncio.sleep(0.1)
             response = await client.get(f"/results/{handler_id}")
             attempts += 1
-        
+
         assert response.status_code == 200
         assert response.json()["result"] == "received: Hello from test"
 
@@ -504,8 +501,7 @@ async def test_post_event_to_running_workflow(async_client: AsyncClient) -> None
 async def test_post_event_handler_not_found(async_client: AsyncClient) -> None:
     async with async_client as client:
         response = await client.post(
-            "/events/nonexistent_handler",
-            json={"event": "{}"}
+            "/events/nonexistent_handler", json={"event": "{}"}
         )
         assert response.status_code == 404
         assert "Handler not found" in response.text
@@ -517,18 +513,15 @@ async def test_post_event_to_completed_workflow(async_client: AsyncClient) -> No
         # Start and wait for a simple workflow to complete
         response = await client.post("/workflows/test/run-nowait", json={})
         handler_id = response.json()["handler_id"]
-        
+
         # Wait for workflow to complete
         response = await client.get(f"/results/{handler_id}")
         while response.status_code == 202:
             await asyncio.sleep(0.01)
             response = await client.get(f"/results/{handler_id}")
-        
+
         # Try to send event to completed workflow
-        response = await client.post(
-            f"/events/{handler_id}",
-            json={"event": "{}"}
-        )
+        response = await client.post(f"/events/{handler_id}", json={"event": "{}"})
         assert response.status_code == 409
         assert "Workflow already completed" in response.text
 
@@ -539,29 +532,25 @@ async def test_post_event_invalid_event_data(async_client: AsyncClient) -> None:
         # Start an interactive workflow
         response = await client.post("/workflows/interactive/run-nowait", json={})
         handler_id = response.json()["handler_id"]
-        
+
         # Send invalid event data
         response = await client.post(
-            f"/events/{handler_id}",
-            json={"event": "invalid json"}
+            f"/events/{handler_id}", json={"event": "invalid json"}
         )
         assert response.status_code == 400
         assert "Failed to deserialize event" in response.text
-        
+
         # Clean up - wait for workflow to be cancelled
         # Send a valid event to unblock it
         from workflows.context.serializers import JsonSerializer
         from tests.server.conftest import ExternalEvent
-        
+
         serializer = JsonSerializer()
         event = ExternalEvent(message="cleanup")
         event_str = serializer.serialize(event)
-        
-        await client.post(
-            f"/events/{handler_id}",
-            json={"event": event_str}
-        )
-        
+
+        await client.post(f"/events/{handler_id}", json={"event": event_str})
+
         # Wait for completion
         response = await client.get(f"/results/{handler_id}")
         while response.status_code == 202:
@@ -575,28 +564,22 @@ async def test_post_event_missing_event_data(async_client: AsyncClient) -> None:
         # Start an interactive workflow
         response = await client.post("/workflows/interactive/run-nowait", json={})
         handler_id = response.json()["handler_id"]
-        
+
         # Send request without event data
-        response = await client.post(
-            f"/events/{handler_id}",
-            json={}
-        )
+        response = await client.post(f"/events/{handler_id}", json={})
         assert response.status_code == 400
         assert "Event data is required" in response.text
-        
+
         # Clean up
         from workflows.context.serializers import JsonSerializer
         from tests.server.conftest import ExternalEvent
-        
+
         serializer = JsonSerializer()
         event = ExternalEvent(message="cleanup")
         event_str = serializer.serialize(event)
-        
-        await client.post(
-            f"/events/{handler_id}",
-            json={"event": event_str}
-        )
-        
+
+        await client.post(f"/events/{handler_id}", json={"event": event_str})
+
         # Wait for completion
         response = await client.get(f"/results/{handler_id}")
         while response.status_code == 202:

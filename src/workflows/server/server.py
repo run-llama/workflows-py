@@ -426,12 +426,9 @@ class WorkflowServer:
         """
         tasks = []
         for handler_id in self._handlers.keys():
-            task = {
-                "handler_id": handler_id,
-                "status": "running"
-            }
+            task = {"handler_id": handler_id, "status": "running"}
             tasks.append(task)
-        
+
         return JSONResponse({"tasks": tasks})
 
     async def _post_event(self, request: Request) -> JSONResponse:
@@ -480,30 +477,30 @@ class WorkflowServer:
             description: Workflow already completed
         """
         handler_id = request.path_params["handler_id"]
-        
+
         # Check if handler exists
         handler = self._handlers.get(handler_id)
         if handler is None:
             raise HTTPException(detail="Handler not found", status_code=404)
-        
+
         # Check if workflow is still running
         if handler.done():
             raise HTTPException(detail="Workflow already completed", status_code=409)
-        
+
         # Get the context
         ctx = handler.ctx
         if ctx is None:
             raise HTTPException(detail="Context not available", status_code=500)
-        
+
         # Parse request body
         try:
             body = await request.json()
             event_str = body.get("event")
             step = body.get("step")
-            
+
             if not event_str:
                 raise HTTPException(detail="Event data is required", status_code=400)
-            
+
             # Deserialize the event
             serializer = JsonSerializer()
             try:
@@ -512,7 +509,7 @@ class WorkflowServer:
                 raise HTTPException(
                     detail=f"Failed to deserialize event: {e}", status_code=400
                 )
-            
+
             # Send the event to the context
             try:
                 ctx.send_event(event, step=step)
@@ -520,9 +517,9 @@ class WorkflowServer:
                 raise HTTPException(
                     detail=f"Failed to send event: {e}", status_code=400
                 )
-            
+
             return JSONResponse({"status": "sent"})
-            
+
         except HTTPException:
             raise
         except Exception as e:
