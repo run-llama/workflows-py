@@ -81,7 +81,7 @@ jobs:
             echo "change_type=${{ steps.detect_change.outputs.change_type }}" >> $GITHUB_OUTPUT
             echo "change_description=" >> $GITHUB_OUTPUT
           fi
-      
+
       - name: Generate GitHub App Token
         id: app-token
         uses: actions/create-github-app-token@v1
