@@ -1,6 +1,4 @@
-import inspect
-
-from typing import AsyncContextManager, Any, Callable, Optional, TYPE_CHECKING
+from typing import AsyncContextManager, Any, Optional, TYPE_CHECKING
 from types import TracebackType
 from collections import Counter
 
@@ -25,7 +23,7 @@ class WorkflowTestRunner(AsyncContextManager["WorkflowTestRunner"]):
         """Called when exiting the 'async with' block"""
         return not exc_type and not exc_val and not exc_tb
 
-    async def run_and_collect(
+    async def run(
         self,
         start_event: StartEvent,
         expose_internal: bool = True,
@@ -44,8 +42,10 @@ class WorkflowTestRunner(AsyncContextManager["WorkflowTestRunner"]):
 
         Example:
             ```
-            async with wf.run_test() as test_runner:
-                collected, ev_types, result = await test_runner.run_and_collect(start_event=StartEvent(name="Adam", greeting="hello"))
+            wf = GreetingWorkflow()
+
+            async with WorkflowTestRunner(wf) as test_runner:
+                collected, ev_types, result = await test_runner.run(start_event=StartEvent(name="Adam", greeting="hello"))
                 assert len(collected) == 22
                 assert ev_types.get(StepStateChanged, 0) == 8
                 assert str(result) == "hello Adam!"
@@ -62,30 +62,3 @@ class WorkflowTestRunner(AsyncContextManager["WorkflowTestRunner"]):
             Counter([type(ev) for ev in collected_events])
         )
         return collected_events, event_freqs, result
-
-    async def send_test_event(self, step: str, event: Event, **kwargs: Any) -> Event:
-        """
-        Send a test event to a specific step and collect the resulting output event.
-
-        Args:
-            step (str): Name of the step to send the event to
-            event (Event): Event to send
-            kwargs (Any): All necessary keyword arguments to be passed to the step (context, resources...)
-
-        Returns:
-            Output event of the step
-
-        Example:
-            ```
-            async with wf.run_test() as test_runner:
-                output_event = await test_runner.send_test_event("say_hello", SayHelloEvent(greeting="hello"), ctx=Context(wf))
-                assert isinstance(output_event, PrintHelloEvent)
-                assert output_event.message == "I printed: 'hello'"
-            ```
-        """
-        step_fn: Optional[Callable] = self._workflow._get_steps().get(step, None)
-        if not step_fn:
-            raise ValueError(f"Step {step} is not part of the workflow you are testing")
-        if inspect.iscoroutinefunction(step_fn):
-            return await step_fn(event, **kwargs)
-        return step_fn(event, **kwargs)

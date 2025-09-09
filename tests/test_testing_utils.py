@@ -33,9 +33,9 @@ class SimpleWf(Workflow):
 @pytest.mark.asyncio
 async def test_testing_utils() -> None:
     wf = SimpleWf()
-    async with wf.run_test() as test_runner:
+    async with WorkflowTestRunner(wf) as test_runner:
         assert isinstance(test_runner, WorkflowTestRunner)
-        collected, freqs, res = await test_runner.run_and_collect(
+        collected, freqs, res = await test_runner.run(
             start_event=StartEvent(message="hi"),  # type: ignore
             exclude_events=[EventsQueueChanged],
         )
@@ -47,10 +47,3 @@ async def test_testing_utils() -> None:
             freqs.get(SecondEvent, 0) + freqs.get(StopEvent, 0)
         )
         assert str(res) == "done"
-        output_event = await test_runner.send_test_event(
-            step="step_one",
-            event=StartEvent(message="hello"),  # type: ignore
-            ctx=Context(wf),
-        )
-        assert isinstance(output_event, SecondEvent)
-        assert output_event.greeting == "hello"

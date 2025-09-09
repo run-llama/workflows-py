@@ -35,7 +35,6 @@ from .handler import WorkflowHandler
 from .resource import ResourceManager
 from .types import RunResultT
 from .utils import get_steps_from_class, get_steps_from_instance
-from .testing import WorkflowTestRunner
 
 dispatcher = get_dispatcher(__name__)
 logger = logging.getLogger()
@@ -532,21 +531,3 @@ class Workflow(metaclass=WorkflowMeta):
             InputRequiredEvent in produced_events
             or HumanResponseEvent in consumed_events
         )
-
-    def run_test(self) -> WorkflowTestRunner:
-        """
-        Create and return a WorkflowTestRunner for testing this workflow.
-
-        Returns:
-            WorkflowTestRunner: An async context manager for testing the workflow
-
-        Example:
-            ```python
-            async with workflow.run_test() as test_runner:
-                collected, ev_types = await test_runner.run_and_collect(
-                    start_event=StartEvent(name="Adam", greeting="hello")
-                )
-                assert len(collected) == 22
-            ```
-        """
-        return WorkflowTestRunner(self)  # type: ignore
