@@ -80,8 +80,8 @@ class WorkflowServer:
                 methods=["GET"],
             ),
             Route(
-                "/tasks",
-                self._get_tasks,
+                "/handlers",
+                self._get_handlers,
                 methods=["GET"],
             ),
         ]
@@ -399,37 +399,59 @@ class WorkflowServer:
 
         return StreamingResponse(event_stream(handler), media_type=media_type)
 
-    async def _get_tasks(self, request: Request) -> JSONResponse:
+    async def _get_handlers(self, request: Request) -> JSONResponse:
         """
         ---
-        summary: Get running tasks
+        summary: Get running handlers
         description: Returns all currently running workflow tasks.
         responses:
           200:
-            description: List of running tasks
+            description: List of running handlers
             content:
               application/json:
                 schema:
                   type: object
                   properties:
-                    tasks:
+                    handlers:
                       type: array
                       items:
                         type: object
                         properties:
                           handler_id:
                             type: string
+                          result:
+                            type: object
+                          error:
+                            type: object
                           status:
                             type: string
-                            enum: [running]
-                  required: [tasks]
+                            enum: [running, completed, failed]
+                  required: [handlers]
         """
-        tasks = []
+        handlers = []
         for handler_id in self._handlers.keys():
-            task = {"handler_id": handler_id, "status": "running"}
-            tasks.append(task)
+            handler = self._handlers[handler_id]
+            status = "running"
+            result = None
+            error = None
 
-        return JSONResponse({"tasks": tasks})
+            if handler.done():
+                try:
+                    result = handler.result()
+                    status = "completed"
+                except Exception as e:
+                    error = str(e)
+                    status = "failed"
+
+            handler_json = {
+                "handler_id": handler_id,
+                "status": status,
+                "result": result,
+                "error": error,
+            }
+            handlers.append(handler_json)
+
+        return JSONResponse({"handlers": handlers})
 
     async def _post_event(self, request: Request) -> JSONResponse:
         """

@@ -418,15 +418,15 @@ async def test_stream_events_no_events(async_client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_tasks_empty(async_client: AsyncClient) -> None:
+async def test_get_handlers_empty(async_client: AsyncClient) -> None:
     async with async_client as client:
-        response = await client.get("/tasks")
+        response = await client.get("/handlers")
         assert response.status_code == 200
-        assert response.json() == {"tasks": []}
+        assert response.json() == {"handlers": []}
 
 
 @pytest.mark.asyncio
-async def test_get_tasks_with_running_workflows(async_client: AsyncClient) -> None:
+async def test_get_handlers_with_running_workflows(async_client: AsyncClient) -> None:
     async with async_client as client:
         # Start multiple workflows
         response1 = await client.post("/workflows/test/run-nowait", json={})
@@ -435,22 +435,26 @@ async def test_get_tasks_with_running_workflows(async_client: AsyncClient) -> No
         response2 = await client.post("/workflows/test/run-nowait", json={})
         handler_id2 = response2.json()["handler_id"]
 
-        # Get tasks
-        response = await client.get("/tasks")
+        # Get handlers
+        response = await client.get("/handlers")
         assert response.status_code == 200
-        tasks = response.json()["tasks"]
+        handlers = response.json()["handlers"]
 
-        # Should have 2 running tasks
-        assert len(tasks) == 2
-        handler_ids = {task["handler_id"] for task in tasks}
+        # Should have 2 handlers
+        assert len(handlers) == 2
+        handler_ids = {handler["handler_id"] for handler in handlers}
         assert handler_id1 in handler_ids
         assert handler_id2 in handler_ids
 
         # Check all required fields are present
-        for task in tasks:
-            assert "handler_id" in task
-            assert "status" in task
-            assert task["status"] == "running"
+        for handler in handlers:
+            assert "handler_id" in handler
+            assert "status" in handler
+            assert "result" in handler
+            assert "error" in handler
+            assert handler["status"] == "running"
+            assert handler["result"] is None  # Running workflows don't have results yet
+            assert handler["error"] is None  # Running workflows don't have errors
 
         # Wait for workflows to complete to avoid warnings
         for handler_id in [handler_id1, handler_id2]:
@@ -458,6 +462,63 @@ async def test_get_tasks_with_running_workflows(async_client: AsyncClient) -> No
             while response.status_code == 202:
                 await asyncio.sleep(0.01)
                 response = await client.get(f"/results/{handler_id}")
+
+
+@pytest.mark.asyncio
+async def test_get_handlers_with_completed_workflow(async_client: AsyncClient) -> None:
+    async with async_client as client:
+        # Start a workflow and wait for it to complete
+        response = await client.post("/workflows/test/run-nowait", json={})
+        handler_id = response.json()["handler_id"]
+
+        # Wait for workflow to complete
+        response = await client.get(f"/results/{handler_id}")
+        while response.status_code == 202:
+            await asyncio.sleep(0.01)
+            response = await client.get(f"/results/{handler_id}")
+
+        # Get handlers
+        response = await client.get("/handlers")
+        assert response.status_code == 200
+        handlers = response.json()["handlers"]
+
+        # Find our handler
+        handler = next(h for h in handlers if h["handler_id"] == handler_id)
+        assert handler["status"] == "completed"
+        assert handler["result"] == "processed: default"
+        assert handler["error"] is None
+
+
+@pytest.mark.asyncio
+async def test_get_handlers_with_failed_workflow(async_client: AsyncClient) -> None:
+    async with async_client as client:
+        # Start an error workflow
+        response = await client.post("/workflows/error/run-nowait", json={})
+        handler_id = response.json()["handler_id"]
+
+        # Wait a bit for workflow to fail
+        await asyncio.sleep(0.1)
+
+        # Try to get result (should fail)
+        response = await client.get(f"/results/{handler_id}")
+        max_attempts = 20
+        attempts = 0
+        while response.status_code == 202 and attempts < max_attempts:
+            await asyncio.sleep(0.01)
+            response = await client.get(f"/results/{handler_id}")
+            attempts += 1
+
+        # Get handlers
+        response = await client.get("/handlers")
+        assert response.status_code == 200
+        handlers = response.json()["handlers"]
+
+        # Find our handler
+        handler = next(h for h in handlers if h["handler_id"] == handler_id)
+        assert handler["status"] == "failed"
+        assert handler["error"] is not None  # Should have an error
+        assert "Test error" in handler["error"]  # Check error message
+        assert handler["result"] is None  # Failed workflows don't have results
 
 
 @pytest.mark.asyncio
