@@ -64,6 +64,11 @@ class WorkflowServer:
                 methods=["POST"],
             ),
             Route(
+                "/workflows/{name}/start-event",
+                self._get_start_event_schema,
+                methods=["GET"],
+            ),
+            Route(
                 "/results/{handler_id}",
                 self._get_workflow_result,
                 methods=["GET"],
@@ -214,6 +219,47 @@ class WorkflowServer:
         except Exception as e:
             raise HTTPException(detail=f"Error running workflow: {e}", status_code=500)
 
+    async def _get_start_event_schema(self, request: Request) -> JSONResponse:
+        """
+        ---
+        summary: Get JSON schema for start event
+        description: |
+          Gets the JSON schema of the start event from the specified workflow and returns it under "result"
+        parameters:
+          - in: path
+            name: name
+            required: true
+            schema:
+              type: string
+            description: Registered workflow name.
+        requestBody:
+          required: false
+        responses:
+          200:
+            description: JSON schema successfully retrieved for start event
+            content:
+              application/json:
+                schema:
+                  type: object
+                  properties:
+                    result:
+                      description: JSON schema for the start event
+                  required: [result]
+          404:
+            description: Workflow not found
+          500:
+            description: Error while getting the JSON schema for start event
+        """
+        workflow = self._extract_workflow(request)
+        try:
+            start_event_class = workflow.start_event_class
+            return JSONResponse({"result": start_event_class.model_json_schema()})
+        except Exception as e:
+            raise HTTPException(
+                detail=f"Error getting schema of start event for workflow: {e}",
+                status_code=500,
+            )
+
     async def _run_workflow_nowait(self, request: Request) -> JSONResponse:
         """
         ---
@@ -270,7 +316,9 @@ class WorkflowServer:
         handler_id = nanoid()
 
         self._handlers[handler_id] = workflow.run(
-            ctx=context, start_event=start_event, **run_kwargs
+            ctx=context,
+            start_event=workflow.start_event_class.model_validate(start_event),
+            **run_kwargs,
         )
         return JSONResponse({"handler_id": handler_id, "status": "started"})
 

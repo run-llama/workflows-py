@@ -63,11 +63,28 @@
                 <label for="workflow-select" class="form-label">Workflow</label>
                 <select id="workflow-select" class="form-select"></select>
             </div>
-            <div class="mb-3">
-                <label for="workflow-input" class="form-label">Input (JSON)</label>
-                <textarea id="workflow-input" class="form-control" rows="5" placeholder='''{"start_event": "...", "context": {}, "kwargs": {}}'''></textarea>
+            <!-- Dynamic Form Container -->
+            <div id="dynamic-form-container">
+                <!-- Loading state -->
+                <div id="loading-indicator" class="text-center d-none">
+                    <div class="spinner-border" role="status">
+                        <span class="visually-hidden">Loading...</span>
+                    </div>
+                    <p>Fetching schema...</p>
+                </div>
+
+                <!-- Error state -->
+                <div id="error-message" class="alert alert-danger d-none"></div>
+
+                <!-- Dynamic form will be inserted here -->
+                <div id="form-fields"></div>
             </div>
             <button id="run-button" class="btn btn-primary">Run</button>
+            <div class="mt-4">
+                <h5>Generated JSON Preview:</h5>
+                <pre id="json-preview" class="bg-light p-3 border rounded"></pre>
+            </div>
+
         </div>
 
         <div class="row mt-4">
