@@ -133,7 +133,16 @@ document.addEventListener('DOMContentLoaded', () => {
                             if (line.trim() === '') continue;
                             try {
                                 const eventData = JSON.parse(line);
-                                const formattedEvent = `<strong>Event:</strong> ${eventData.qualified_name}<br><strong>Data:</strong> ${JSON.stringify(eventData.value, null, 2)}`;
+                                var eventDetails = "";
+                                for (const key in eventData.value) {
+                                    const value = eventData.value[key];
+                                    if (!value || value.toString().trim() === '') {
+                                        eventDetails += `<details><summary class="detailsSummary">${key}</summary><p class="detailsP">No data</p></details>`;
+                                    } else {
+                                        eventDetails += `<details class="details"><summary class="detailsSummary">${key}</summary><p class="detailsP">${value}</p></details>`;
+                                    }
+                                }
+                                const formattedEvent = `<strong>Event:</strong> ${eventData.qualified_name}<br><strong>Data:</strong> ${eventDetails}`;
                                 eventStreams[handlerId].push(formattedEvent);
 
                                 if (handlerId === activeRunId) {
