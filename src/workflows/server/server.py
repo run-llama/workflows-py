@@ -402,11 +402,11 @@ class WorkflowServer:
     async def _get_handlers(self, request: Request) -> JSONResponse:
         """
         ---
-        summary: Get running handlers
-        description: Returns all currently running workflow tasks.
+        summary: Get handlers
+        description: Returns all workflow handlers.
         responses:
           200:
-            description: List of running handlers
+            description: List of handlers
             content:
               application/json:
                 schema:
