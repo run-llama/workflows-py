@@ -701,6 +701,20 @@ class WorkflowServer:
                     )
                 if not isinstance(event, InternalDispatchEvent):
                     queue.put_nowait(event)
+            # done when stream events are complete
+            if handler.ctx is None:
+                logger.warning(
+                    f"Context is None for handler {handler_id}. This is not expected."
+                )
+                return
+            await self._workflow_store.update(
+                PersistentHandler(
+                    handler_id=handler_id,
+                    workflow_name=workflow_name,
+                    completed=True,
+                    ctx=handler.ctx.to_dict(),
+                )
+            )
 
         task = asyncio.create_task(_stream_events())
         self._handlers[handler_id] = _WorkflowHandler(handler, queue, task)
