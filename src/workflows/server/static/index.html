@@ -3,8 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Workflow Server</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+        <title>Workflow UI</title>
+    <script src="https://cdn.tailwindcss.com"></script>
     <style>
         body {
             padding: 20px;
@@ -53,15 +53,24 @@
         }
     </style>
 </head>
-<body>
-    <div class="container">
-        <h1>Workflow UI</h1>
+<body class="bg-gray-100 p-4 md:p-8">
+    <div class="max-w-6xl mx-auto">
+        <h1 class="text-3xl font-bold mb-6 text-gray-800">Workflow UI</h1>
 
-        <div class="controls p-3 border rounded bg-light">
-            <h2>Run Workflow</h2>
-            <div class="mb-3">
-                <label for="workflow-select" class="form-label">Workflow</label>
-                <select id="workflow-select" class="form-select"></select>
+        <div class="bg-white shadow-xl rounded-lg mb-8">
+            <div class="p-6">
+                <h2 class="text-2xl font-bold mb-4 text-gray-700">Run Workflow</h2>
+                <div class="mb-4">
+                    <label for="workflow-select" class="block text-sm font-medium text-gray-700">Workflow</label>
+                    <select id="workflow-select" class="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm rounded-md"></select>
+                </div>
+                <div class="mb-4">
+                    <label for="workflow-input" class="block text-sm font-medium text-gray-700">Input (JSON)</label>
+                    <textarea id="workflow-input" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm h-24 font-mono" placeholder='''{"start_event": "...", "context": {}, "kwargs": {}}'''></textarea>
+                </div>
+                <div class="flex justify-end">
+                    <button id="run-button" class="bg-blue-600 text-white font-semibold py-2 px-4 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">Run</button>
+                </div>
             </div>
             <!-- Dynamic Form Container -->
             <div id="dynamic-form-container">
@@ -84,17 +93,20 @@
                 <h5>Generated JSON Preview:</h5>
                 <pre id="json-preview" class="bg-light p-3 border rounded"></pre>
             </div>
-
         </div>
 
-        <div class="row mt-4">
-            <div class="col-md-6">
-                <h2>Runs</h2>
-                <div id="runs"></div>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
+            <div class="bg-white shadow-xl rounded-lg">
+                <div class="p-6">
+                    <h2 class="text-2xl font-bold mb-4 text-gray-700">Runs</h2>
+                    <div id="runs" class="h-96 overflow-y-auto font-mono text-sm border border-gray-200 rounded-md p-2 bg-gray-50"></div>
+                </div>
             </div>
-            <div class="col-md-6">
-                <h2>Event Stream</h2>
-                <div id="event-stream"></div>
+            <div class="bg-white shadow-xl rounded-lg">
+                <div class="p-6">
+                    <h2 class="text-2xl font-bold mb-4 text-gray-700">Event Stream</h2>
+                    <div id="event-stream" class="h-96 overflow-y-auto font-mono text-sm border border-gray-200 rounded-md p-2 bg-gray-50"></div>
+                </div>
             </div>
         </div>
     </div>

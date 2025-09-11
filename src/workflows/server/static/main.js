@@ -8,33 +8,33 @@ document.addEventListener('DOMContentLoaded', () => {
             const eventStreams = {};
             let currentSchema = null;
 
-            // Fetch workflows on page load
-            fetch('/workflows')
-                .then(response => response.json())
-                .then(data => {
-                    if (data.workflows && data.workflows.length > 0) {
-                        data.workflows.forEach(name => {
-                            const option = document.createElement('option');
-                            option.value = name;
-                            option.textContent = name;
-                            workflowSelect.appendChild(option);
-                        });
-                    } else {
-                        const option = document.createElement('option');
-                        option.textContent = "No workflows found";
-                        option.disabled = true;
-                        workflowSelect.appendChild(option);
-                        runButton.disabled = true;
-                    }
-                })
-                .catch(err => {
-                    console.error("Error fetching workflows:", err);
+    // Fetch workflows on page load
+    fetch('/workflows')
+        .then(response => response.json())
+        .then(data => {
+            if (data.workflows && data.workflows.length > 0) {
+                data.workflows.forEach(name => {
                     const option = document.createElement('option');
-                    option.textContent = "Error loading workflows";
-                    option.disabled = true;
+                    option.value = name;
+                    option.textContent = name;
                     workflowSelect.appendChild(option);
-                    runButton.disabled = true;
                 });
+            } else {
+                const option = document.createElement('option');
+                option.textContent = "No workflows found";
+                option.disabled = true;
+                workflowSelect.appendChild(option);
+                runButton.disabled = true;
+            }
+        })
+        .catch(err => {
+            console.error("Error fetching workflows:", err);
+            const option = document.createElement('option');
+            option.textContent = "Error loading workflows";
+            option.disabled = true;
+            workflowSelect.appendChild(option);
+            runButton.disabled = true;
+        });
 
             runButton.addEventListener('click', () => {
                 const workflowName = workflowSelect.value;
@@ -46,81 +46,91 @@ document.addEventListener('DOMContentLoaded', () => {
                 const startEvent = collectFormData()
                 const body = {"start_event": JSON.stringify(startEvent), "context": {}, "kwargs": {}}
 
-                fetch(`/workflows/${workflowName}/run-nowait`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify(body),
-                })
-                .then(response => response.json())
-                .then(data => {
-                    if (data.handler_id) {
-                        addRun(data.handler_id, workflowName);
-                        streamEvents(data.handler_id);
-                    } else {
-                        alert('Failed to start workflow.');
-                    }
-                })
-                .catch(error => {
-                    console.error('Error starting workflow:', error);
-                    alert('Error starting workflow.');
-                });
+        let body = {};
+        try {
+            if (workflowInput.value.trim()) {
+                body = JSON.parse(workflowInput.value);
+            }
+        } catch (e) {
+            alert('Invalid JSON input.');
+            return;
+        }
+
+        fetch(`/workflows/${workflowName}/run-nowait`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(body),
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.handler_id) {
+                addRun(data.handler_id, workflowName);
+                streamEvents(data.handler_id);
+            } else {
+                alert('Failed to start workflow.');
+            }
+        })
+        .catch(error => {
+            console.error('Error starting workflow:', error);
+            alert('Error starting workflow.');
+        });
+    });
+
+    function addRun(handlerId, workflowName) {
+        const runItem = document.createElement('div');
+        runItem.className = 'p-2 border-b border-gray-200 cursor-pointer hover:bg-gray-100';
+        runItem.textContent = `${workflowName} - ${handlerId}`;
+        runItem.dataset.handlerId = handlerId;
+
+        runItem.addEventListener('click', () => {
+            setActiveRun(handlerId);
+        });
+
+        runsContainer.prepend(runItem);
+        setActiveRun(handlerId);
+    }
+
+    function setActiveRun(handlerId) {
+        activeRunId = handlerId;
+
+        Array.from(runsContainer.children).forEach(child => {
+            if (child.dataset.handlerId === handlerId) {
+                child.classList.add('bg-blue-600', 'text-white');
+            } else {
+                child.classList.remove('bg-blue-600', 'text-white');
+            }
+        });
+
+        eventStreamContainer.innerHTML = '';
+        if (eventStreams[handlerId]) {
+            eventStreams[handlerId].forEach(eventHTML => {
+                eventStreamContainer.innerHTML += eventHTML;
             });
+            eventStreamContainer.scrollTop = eventStreamContainer.scrollHeight;
+        }
+    }
 
-            function addRun(handlerId, workflowName) {
-                const runItem = document.createElement('div');
-                runItem.className = 'run-item';
-                runItem.textContent = `${workflowName} - ${handlerId}`;
-                runItem.dataset.handlerId = handlerId;
-
-                runItem.addEventListener('click', () => {
-                    setActiveRun(handlerId);
-                });
-
-                runsContainer.prepend(runItem);
-                setActiveRun(handlerId);
+    async function streamEvents(handlerId) {
+        eventStreams[handlerId] = [];
+        try {
+            const response = await fetch(`/events/${handlerId}`);
+            if (!response.ok) {
+                throw new Error(`HTTP error! status: ${response.status}`);
             }
+            const reader = response.body.getReader();
+            const decoder = new TextDecoder();
+            let buffer = '';
 
-            function setActiveRun(handlerId) {
-                activeRunId = handlerId;
-
-                Array.from(runsContainer.children).forEach(child => {
-                    if (child.dataset.handlerId === handlerId) {
-                        child.classList.add('active');
-                    } else {
-                        child.classList.remove('active');
-                    }
-                });
-
-                eventStreamContainer.innerHTML = '';
-                if (eventStreams[handlerId]) {
-                    eventStreams[handlerId].forEach(event => {
-                        eventStreamContainer.innerHTML += event + '<hr>';
-                    });
-                    eventStreamContainer.scrollTop = eventStreamContainer.scrollHeight;
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) {
+                    break;
                 }
-            }
-
-            async function streamEvents(handlerId) {
-                eventStreams[handlerId] = [];
-                try {
-                    const response = await fetch(`/events/${handlerId}`);
-                    if (!response.ok) {
-                        throw new Error(`HTTP error! status: ${response.status}`);
-                    }
-                    const reader = response.body.getReader();
-                    const decoder = new TextDecoder();
-                    let buffer = '';
-
-                    while (true) {
-                        const { done, value } = await reader.read();
-                        if (done) {
-                            break;
-                        }
-                        buffer += decoder.decode(value, { stream: true });
-                        const lines = buffer.split('\n');
-                        buffer = lines.pop(); // Keep incomplete line in buffer
+                buffer += decoder.decode(value, { stream: true });
+                const lines = buffer.split('\n');
+                buffer = lines.pop(); // Keep incomplete line in buffer
 
                         for (const line of lines) {
                             if (line.trim() === '') continue;
@@ -138,21 +148,12 @@ document.addEventListener('DOMContentLoaded', () => {
                                 const formattedEvent = `<strong>Event:</strong> ${eventData.qualified_name}<br><strong>Data:</strong> ${eventDetails}`;
                                 eventStreams[handlerId].push(formattedEvent);
 
-                                if (handlerId === activeRunId) {
-                                    eventStreamContainer.innerHTML += formattedEvent + '<hr>';
-                                    eventStreamContainer.scrollTop = eventStreamContainer.scrollHeight;
-                                }
-                            } catch (e) {
-                                console.error('Error parsing event line:', line, e);
-                            }
+                        if (handlerId === activeRunId) {
+                            eventStreamContainer.innerHTML += formattedEvent;
+                            eventStreamContainer.scrollTop = eventStreamContainer.scrollHeight;
                         }
-                    }
-                } catch (error) {
-                    console.error('Streaming failed:', error);
-                    const errorMsg = 'Event stream closed or failed.';
-                    eventStreams[handlerId].push(errorMsg);
-                    if (handlerId === activeRunId) {
-                        eventStreamContainer.innerHTML += errorMsg + '<hr>';
+                    } catch (e) {
+                        console.error('Error parsing event line:', line, e);
                     }
                 }
             }
