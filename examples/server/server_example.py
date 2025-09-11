@@ -17,10 +17,16 @@ class GreetingInput(StartEvent):
     formal: bool
 
 
+class GreetingOutput(StopEvent):
+    full_greeting: str
+    is_formal: bool
+    length: int
+
+
 # Define a simple workflow
 class GreetingWorkflow(Workflow):
     @step
-    async def greet(self, ctx: Context, ev: GreetingInput) -> StopEvent:
+    async def greet(self, ctx: Context, ev: GreetingInput) -> GreetingOutput:
         for i in range(3):
             ctx.write_event_to_stream(StreamEvent(sequence=i))
             await asyncio.sleep(0.3)
@@ -32,7 +38,11 @@ class GreetingWorkflow(Workflow):
         if formal:
             greeting = "Good Morning Your Honor"
         name = name + "!" * excl_marks
-        return StopEvent(result=f"{greeting}, {name}")
+        return GreetingOutput(
+            full_greeting=f"{greeting}, {name}",
+            length=len(f"{greeting}, {name}"),
+            is_formal=formal,
+        )
 
 
 class ProgressEvent(Event):

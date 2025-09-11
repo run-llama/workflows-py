@@ -5,53 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>Workflow UI</title>
     <script src="https://cdn.tailwindcss.com"></script>
-    <style>
-        body {
-            padding: 20px;
-        }
-        #runs, #event-stream {
-            margin-top: 20px;
-            border: 1px solid #ccc;
-            padding: 10px;
-            height: 300px;
-            overflow-y: scroll;
-            font-family: monospace;
-            white-space: pre;
-            background-color: #f8f9fa;
-        }
-        .run-item {
-            cursor: pointer;
-            padding: 5px;
-            border-bottom: 1px solid #eee;
-        }
-        .run-item:hover {
-            background-color: #f1f1f1;
-        }
-        .run-item.active {
-            background-color: #e9ecef;
-            font-weight: bold;
-        }
-        hr {
-            margin: 5px 0;
-        }
-
-        details {
-            white-space: normal;
-            margin: 0;
-            padding: 0;
-
-        }
-
-        .detailsSummary {
-            padding: 6px 6px;
-            margin: 0;
-        }
-
-        .detailsP {
-            padding: 2px 6px 12px 12px;
-            margin: 0;
-        }
-    </style>
 </head>
 <body class="bg-gray-100 p-4 md:p-8">
     <div class="max-w-6xl mx-auto">
@@ -63,36 +16,26 @@
                 <div class="mb-4">
                     <label for="workflow-select" class="block text-sm font-medium text-gray-700">Workflow</label>
                     <select id="workflow-select" class="mt-1 block w-full pl-3 pr-10 py-2 text-base border-gray-300 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm rounded-md"></select>
-                </div>
-                <div class="mb-4">
-                    <label for="workflow-input" class="block text-sm font-medium text-gray-700">Input (JSON)</label>
-                    <textarea id="workflow-input" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm h-24 font-mono" placeholder='''{"start_event": "...", "context": {}, "kwargs": {}}'''></textarea>
-                </div>
-                <div class="flex justify-end">
-                    <button id="run-button" class="bg-blue-600 text-white font-semibold py-2 px-4 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">Run</button>
-                </div>
             </div>
             <!-- Dynamic Form Container -->
             <div id="dynamic-form-container">
                 <!-- Loading state -->
-                <div id="loading-indicator" class="text-center d-none">
-                    <div class="spinner-border" role="status">
-                        <span class="visually-hidden">Loading...</span>
-                    </div>
-                    <p>Fetching schema...</p>
+                <div id="loading-indicator" class="text-center hidden">
+                    <div class="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"></div>
+                    <p class="mt-2 text-gray-600">Fetching schema...</p>
                 </div>
-
                 <!-- Error state -->
-                <div id="error-message" class="alert alert-danger d-none"></div>
+                <div id="error-message" class="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded hidden"></div>
 
                 <!-- Dynamic form will be inserted here -->
                 <div id="form-fields"></div>
             </div>
-            <button id="run-button" class="btn btn-primary">Run</button>
             <div class="mt-4">
                 <h5>Generated JSON Preview:</h5>
-                <pre id="json-preview" class="bg-light p-3 border rounded"></pre>
+                <pre id="json-preview" class="bg-gray-50 p-3 border border-gray-200 rounded font-mono text-sm overflow-auto"></pre>
             </div>
+            <br>
+            <button id="run-button" class="bg-blue-600 text-white font-semibold py-2 px-4 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 w-full">Run</button>
         </div>
 
         <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
@@ -108,6 +51,25 @@
                     <div id="event-stream" class="h-96 overflow-y-auto font-mono text-sm border border-gray-200 rounded-md p-2 bg-gray-50"></div>
                 </div>
             </div>
+        </div>
+
+        <br>
+
+        <div id="dynamic-output-container">
+                <!-- Loading state -->
+                <div id="output-loading-indicator" class="text-center hidden">
+                    <div class="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600"></div>
+                    <p class="mt-2 text-gray-600">Fetching schema...</p>
+                </div>
+                <!-- Error state -->
+                <div id="output-error-message" class="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded hidden"></div>
+
+                <div class="text-center font-bold text-lg text-grey-600">
+                    <h3>Workflow Output:</h3>
+                </div>
+
+                <!-- Dynamic output will be inserted here -->
+                <div id="output-fields" class="mt-8 p-6 bg-white rounded-lg shadow-sm"></div>
         </div>
     </div>
 
