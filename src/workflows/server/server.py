@@ -211,10 +211,13 @@ class WorkflowServer:
             request, workflow
         )
 
+        if start_event is not None:
+            input_ev = workflow.start_event_class.model_validate(start_event)
+        else:
+            input_ev = None
+
         try:
-            result = await workflow.run(
-                ctx=context, start_event=start_event, **run_kwargs
-            )
+            result = await workflow.run(ctx=context, start_event=input_ev, **run_kwargs)
             return JSONResponse({"result": result})
         except Exception as e:
             raise HTTPException(detail=f"Error running workflow: {e}", status_code=500)
@@ -315,9 +318,14 @@ class WorkflowServer:
         )
         handler_id = nanoid()
 
+        if start_event is not None:
+            input_ev = workflow.start_event_class.model_validate(start_event)
+        else:
+            input_ev = None
+
         self._handlers[handler_id] = workflow.run(
             ctx=context,
-            start_event=workflow.start_event_class.model_validate(start_event),
+            start_event=input_ev,
             **run_kwargs,
         )
         return JSONResponse({"handler_id": handler_id, "status": "started"})
