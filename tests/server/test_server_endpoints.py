@@ -3,7 +3,8 @@
 
 import asyncio
 import json
-from typing import AsyncGenerator
+import time
+from typing import Any, AsyncGenerator, Awaitable, Callable, TypeVar
 
 import pytest
 import pytest_asyncio
@@ -12,6 +13,10 @@ from httpx import ASGITransport, AsyncClient
 from workflows import Context
 from workflows.server import WorkflowServer
 from workflows.workflow import Workflow
+
+# Prepare the event to send
+from workflows.context.serializers import JsonSerializer
+from tests.server.conftest import ExternalEvent
 
 
 @pytest.fixture
@@ -33,15 +38,7 @@ async def async_client(
     server.add_workflow("interactive", interactive_workflow)
     transport = ASGITransport(app=server.app)
     yield AsyncClient(transport=transport, base_url="http://test")
-
-    # Clean up any running workflows to avoid event loop warnings
-    for handler_id, handler in list(server._handlers.items()):
-        if not handler.done():
-            handler.cancel()
-            try:
-                await handler
-            except asyncio.CancelledError:
-                pass
+    await server._close()
 
 
 @pytest.mark.asyncio
@@ -464,6 +461,31 @@ async def test_get_handlers_with_running_workflows(async_client: AsyncClient) ->
                 response = await client.get(f"/results/{handler_id}")
 
 
+T = TypeVar("T")
+
+
+async def _wait_for_passing(
+    func: Callable[[], Awaitable[T]],
+    max_duration: float = 5.0,
+    interval: float = 0.05,
+) -> T:
+    start_time = time.time()
+    last_exception = None
+    while time.time() - start_time < max_duration:
+        remaining_duration = max_duration - (time.time() - start_time)
+        try:
+            return await asyncio.wait_for(func(), timeout=remaining_duration)
+        except Exception as e:
+            last_exception = e
+            await asyncio.sleep(interval)
+    if last_exception:
+        raise last_exception
+    else:
+        raise TimeoutError(
+            f"Function {func.__name__} timed out after {max_duration} seconds"
+        )
+
+
 @pytest.mark.asyncio
 async def test_get_handlers_with_completed_workflow(async_client: AsyncClient) -> None:
     async with async_client as client:
@@ -471,12 +493,12 @@ async def test_get_handlers_with_completed_workflow(async_client: AsyncClient) -
         response = await client.post("/workflows/test/run-nowait", json={})
         handler_id = response.json()["handler_id"]
 
-        # Wait for workflow to complete
-        response = await client.get(f"/results/{handler_id}")
-        while response.status_code == 202:
-            await asyncio.sleep(0.01)
+        async def get_result() -> Any:
             response = await client.get(f"/results/{handler_id}")
+            assert response.status_code == 200
+            return response.json()
 
+        await _wait_for_passing(get_result)
         # Get handlers
         response = await client.get("/handlers")
         assert response.status_code == 200
@@ -500,13 +522,13 @@ async def test_get_handlers_with_failed_workflow(async_client: AsyncClient) -> N
         await asyncio.sleep(0.1)
 
         # Try to get result (should fail)
-        response = await client.get(f"/results/{handler_id}")
-        max_attempts = 20
-        attempts = 0
-        while response.status_code == 202 and attempts < max_attempts:
-            await asyncio.sleep(0.01)
+        async def get_failed_result() -> Any:
             response = await client.get(f"/results/{handler_id}")
-            attempts += 1
+            assert response.status_code == 500
+            return response.json()
+
+        result = await _wait_for_passing(get_failed_result)
+        assert result["error"] == "Test error"
 
         # Get handlers
         response = await client.get("/handlers")
@@ -532,10 +554,6 @@ async def test_post_event_to_running_workflow(async_client: AsyncClient) -> None
         # Wait a bit for workflow to start
         await asyncio.sleep(0.1)
 
-        # Prepare the event to send
-        from workflows.context.serializers import JsonSerializer
-        from tests.server.conftest import ExternalEvent
-
         serializer = JsonSerializer()
         event = ExternalEvent(message="Hello from test")
         event_str = serializer.serialize(event)
@@ -546,16 +564,57 @@ async def test_post_event_to_running_workflow(async_client: AsyncClient) -> None
         assert response.json() == {"status": "sent"}
 
         # Wait for workflow to complete
-        response = await client.get(f"/results/{handler_id}")
-        max_attempts = 50
-        attempts = 0
-        while response.status_code == 202 and attempts < max_attempts:
-            await asyncio.sleep(0.1)
+        async def get_result() -> Any:
             response = await client.get(f"/results/{handler_id}")
-            attempts += 1
+            assert response.status_code == 200
+            return response.json()
 
+        result = await _wait_for_passing(get_result)
+
+        assert result["result"] == "received: Hello from test"
+
+
+@pytest.mark.asyncio
+async def test_get_workflow_result_returns_202_when_pending(
+    async_client: AsyncClient,
+) -> None:
+    async with async_client as client:
+        # Start workflow that waits for an external event and thus remains pending
+        response = await client.post("/workflows/interactive/run-nowait", json={})
         assert response.status_code == 200
-        assert response.json()["result"] == "received: Hello from test"
+        handler_id = response.json()["handler_id"]
+
+        # Immediately request result; should be pending deterministically
+        response = await client.get(f"/results/{handler_id}")
+        assert response.status_code == 202
+
+
+@pytest.mark.asyncio
+async def test_get_workflow_result_uses_cached_value(
+    async_client: AsyncClient,
+) -> None:
+    async with async_client as client:
+        # Start and wait for completion
+        response = await client.post(
+            "/workflows/test/run-nowait", json={"kwargs": {"message": "cache-me"}}
+        )
+        assert response.status_code == 200
+        handler_id = response.json()["handler_id"]
+
+        # First fetch populates cache
+        while True:
+            first = await client.get(f"/results/{handler_id}")
+            if first.status_code == 200:
+                break
+            await asyncio.sleep(0.01)
+        assert first.status_code == 200
+        payload = first.json()
+        assert payload["result"] == "processed: cache-me"
+
+        # Second fetch should return immediately from cache with same payload
+        second = await client.get(f"/results/{handler_id}")
+        assert second.status_code == 200
+        assert second.json() == payload
 
 
 @pytest.mark.asyncio
@@ -601,22 +660,49 @@ async def test_post_event_invalid_event_data(async_client: AsyncClient) -> None:
         assert response.status_code == 400
         assert "Failed to deserialize event" in response.text
 
-        # Clean up - wait for workflow to be cancelled
-        # Send a valid event to unblock it
-        from workflows.context.serializers import JsonSerializer
-        from tests.server.conftest import ExternalEvent
 
-        serializer = JsonSerializer()
-        event = ExternalEvent(message="cleanup")
-        event_str = serializer.serialize(event)
+@pytest.mark.asyncio
+async def test_post_event_context_not_available(
+    async_client: AsyncClient, server: WorkflowServer
+) -> None:
+    async with async_client as client:
+        # Inject a dummy handler with no context to trigger 500 path
+        class _DummyInner:
+            def done(self) -> bool:
+                return False
 
-        await client.post(f"/events/{handler_id}", json={"event": event_str})
+            ctx = None
 
-        # Wait for completion
-        response = await client.get(f"/results/{handler_id}")
-        while response.status_code == 202:
-            await asyncio.sleep(0.01)
-            response = await client.get(f"/results/{handler_id}")
+        class _Wrapper:
+            handler = _DummyInner()
+
+        handler_id = "noctx-1"
+        server._handlers[handler_id] = _Wrapper()  # type: ignore[assignment]
+
+        try:
+            response = await client.post(f"/events/{handler_id}", json={"event": "{}"})
+            assert response.status_code == 500
+            assert "Context not available" in response.text
+        finally:
+            server._handlers.pop(handler_id, None)
+
+
+@pytest.mark.asyncio
+async def test_post_event_body_parsing_error(async_client: AsyncClient) -> None:
+    async with async_client as client:
+        # Start interactive workflow which waits for an event (keeps running)
+        response = await client.post("/workflows/interactive/run-nowait", json={})
+        assert response.status_code == 200
+        handler_id = response.json()["handler_id"]
+
+        # Send invalid JSON body (not JSON), triggers 500 from body parsing
+        response = await client.post(
+            f"/events/{handler_id}",
+            content="not json",
+            headers={"Content-Type": "application/json"},
+        )
+        assert response.status_code == 500
+        assert "Error processing request" in response.text
 
 
 @pytest.mark.asyncio
@@ -630,19 +716,3 @@ async def test_post_event_missing_event_data(async_client: AsyncClient) -> None:
         response = await client.post(f"/events/{handler_id}", json={})
         assert response.status_code == 400
         assert "Event data is required" in response.text
-
-        # Clean up
-        from workflows.context.serializers import JsonSerializer
-        from tests.server.conftest import ExternalEvent
-
-        serializer = JsonSerializer()
-        event = ExternalEvent(message="cleanup")
-        event_str = serializer.serialize(event)
-
-        await client.post(f"/events/{handler_id}", json={"event": event_str})
-
-        # Wait for completion
-        response = await client.get(f"/results/{handler_id}")
-        while response.status_code == 202:
-            await asyncio.sleep(0.01)
-            response = await client.get(f"/results/{handler_id}")
