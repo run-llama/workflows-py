@@ -12,9 +12,5 @@ Workflows are also automatically instrumented, so you get observability into eac
     The Workflows library can be installed standalone, via `pip install llama-index-workflows`. However,
     `llama-index-core` comes with a stable version of Workflows included.
 
-    When installing `llama-index-core` or the `llama-index` umbrella package, Workflows can be accessed with the import
-    path `llama_index.core.workflow`. In order to maintain the `llama_index` API stable and avoid breaking changes,
-    the Workflows library version included is usually older than the latest version of `llama-index-workflows`.
-
-    At the moment, the latest version of `llama-index-workflows` is 2.0 while the one shipped with `llama-index` is
-    1.3
+    In order to maintain the `llama_index` API stable and avoid breaking changes, when installing `llama-index-core` or
+    the `llama-index` umbrella package, Workflows can be accessed with the import path `llama_index.core.workflow`.
