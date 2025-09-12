@@ -190,8 +190,8 @@ class WorkflowServer:
                 type: object
                 properties:
                   start_event:
-                    type: string
-                    description: Serialized StartEvent in JSON.
+                    type: object
+                    description: 'Plain JSON object representing the start event (e.g., {"message": "..."}).'
                   context:
                     type: object
                     description: Serialized workflow Context.
@@ -305,8 +305,8 @@ class WorkflowServer:
                 type: object
                 properties:
                   start_event:
-                    type: string
-                    description: Serialized StartEvent in JSON.
+                    type: object
+                    description: 'Plain JSON object representing the start event (e.g., {"message": "..."}).'
                   context:
                     type: object
                     description: Serialized workflow Context.
@@ -645,17 +645,32 @@ class WorkflowServer:
             body = await request.json()
             context_data = body.get("context")
             run_kwargs = body.get("kwargs", {})
-            start_event_str = body.get("start_event")
+            start_event_data = body.get("start_event")
 
             # Extract custom StartEvent if present
             start_event = None
-            if start_event_str:
+            if start_event_data:
                 serializer = JsonSerializer()
                 try:
-                    start_event = serializer.deserialize(start_event_str)
+                    start_event = (
+                        serializer.deserialize(start_event_data)
+                        if isinstance(start_event_data, str)
+                        else serializer.deserialize_value(start_event_data)
+                    )
+                    if isinstance(start_event, dict):
+                        start_event = workflow.start_event_class.model_validate(
+                            start_event
+                        )
                 except Exception as e:
                     raise HTTPException(
                         detail=f"Validation error for 'start_event': {e}",
+                        status_code=400,
+                    )
+                if start_event is not None and not isinstance(
+                    start_event, workflow.start_event_class
+                ):
+                    raise HTTPException(
+                        detail=f"Start event must be an instance of {workflow.start_event_class}",
                         status_code=400,
                     )
 

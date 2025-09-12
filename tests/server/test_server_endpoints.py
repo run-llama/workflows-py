@@ -44,6 +44,80 @@ async def async_client(
                 pass
 
 
+# Add a test for:
+# - passing in a start event as a string, without the __is_pydantic and qualified_name fields
+# - passing in a start event as a dict, with the __is_pydantic and qualified_name fields
+# - passing in a start event as a dict, without the __is_pydantic and qualified_name fields
+# - passing in an event type that does not conform to the workflow's start event class
+
+
+@pytest.mark.asyncio
+async def test_run_workflow_with_start_event_str_plain(
+    async_client: AsyncClient,
+) -> None:
+    async with async_client as client:
+        # Provide start_event as a plain JSON string (no discriminators)
+        start_event_json = json.dumps({"message": "plain string start"})
+        response = await client.post(
+            "/workflows/test/run", json={"start_event": start_event_json}
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["result"] == "processed: plain string start"
+
+
+@pytest.mark.asyncio
+async def test_run_workflow_with_start_event_dict_with_discriminators(
+    async_client: AsyncClient,
+) -> None:
+    async with async_client as client:
+        # Provide start_event as a dict with pydantic discriminators
+        start_event_dict = {
+            "__is_pydantic": True,
+            "value": {"_data": {"message": "dict with discriminators"}},
+            "qualified_name": "workflows.events.StartEvent",
+        }
+        response = await client.post(
+            "/workflows/test/run", json={"start_event": start_event_dict}
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["result"] == "processed: dict with discriminators"
+
+
+@pytest.mark.asyncio
+async def test_run_workflow_with_start_event_dict_plain(
+    async_client: AsyncClient,
+) -> None:
+    async with async_client as client:
+        # Provide start_event as a plain dict (no discriminators)
+        start_event_dict = {"message": "plain dict start"}
+        response = await client.post(
+            "/workflows/test/run", json={"start_event": start_event_dict}
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["result"] == "processed: plain dict start"
+
+
+@pytest.mark.asyncio
+async def test_run_workflow_with_nonconforming_start_event_type(
+    async_client: AsyncClient,
+) -> None:
+    async with async_client as client:
+        # Provide start_event of a different event type than the workflow's StartEvent
+        wrong_event_dict = {
+            "__is_pydantic": True,
+            "value": {"_data": {"message": "should fail"}},
+            "qualified_name": "workflows.events.StopEvent",
+        }
+        response = await client.post(
+            "/workflows/test/run", json={"start_event": wrong_event_dict}
+        )
+        assert response.status_code == 400
+        assert "Start event must be an instance of" in response.text
+
+
 @pytest.mark.asyncio
 async def test_health_check(async_client: AsyncClient) -> None:
     async with async_client as client:
