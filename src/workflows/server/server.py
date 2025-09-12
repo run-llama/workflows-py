@@ -641,8 +641,10 @@ class WorkflowServer:
 
     @asynccontextmanager
     async def _lifespan(self, _: Starlette) -> AsyncGenerator[None, None]:
+        # checking the store for any incomplete runs and restart them
         await self._initialize_active_handlers()
         yield
+        # cancel running workflows
         await self._close()
 
     async def _close(self) -> None:
@@ -663,7 +665,7 @@ class WorkflowServer:
                     pass
 
     async def _initialize_active_handlers(self) -> None:
-        """Resume previously running handlers"""
+        """Resumes previously running workflows, if they were not complete at last shutdown"""
         handlers = await self._workflow_store.query(
             HandlerQuery(completed=False, workflow_name=list(self._workflows.keys()))
         )
@@ -678,15 +680,24 @@ class WorkflowServer:
     def _run_workflow_handler(
         self, handler_id: str, workflow_name: str, handler: WorkflowHandler
     ) -> None:
+        """
+        Streams events from the handler, persisting them, and pushing them to a queue.
+        Stores a _WorkflowHandler helper that wraps the handler with it's queue and streaming task.
+        """
         queue: asyncio.Queue[Event] = asyncio.Queue()
 
         async def _stream_events() -> None:
             async for event in handler.stream_events(expose_internal=True):
-                if (
+                if (  # Watch for a specific internal event that signals the step is complete
                     isinstance(event, StepStateChanged)
-                    and event.step_state == StepState.NOT_IN_PROGRESS
+                    and event.step_state == StepState.NOT_RUNNING
                 ):
-                    if event.context_state is None:
+                    state = (
+                        event.context_state or handler.ctx.to_dict()
+                        if handler.ctx
+                        else None
+                    )
+                    if state is None:
                         logger.warning(
                             f"Context state is None for handler {handler_id}. This is not expected."
                         )
@@ -696,10 +707,11 @@ class WorkflowServer:
                             handler_id=handler_id,
                             workflow_name=workflow_name,
                             completed=False,
-                            ctx=event.context_state,
+                            ctx=state,
                         )
                     )
                 if not isinstance(event, InternalDispatchEvent):
+                    # publish non-internal events to the queue to be consumed by the API
                     queue.put_nowait(event)
             # done when stream events are complete
             if handler.ctx is None:
@@ -722,13 +734,17 @@ class WorkflowServer:
 
 @dataclass
 class _WorkflowHandler:
-    """A wrapper around a WorkflowHandler, since the main handler's queue is being read from internally"""
+    """A wrapper around a handler: WorkflowHandler. Necessary to monitor and dispatch events from the handler's stream_events"""
 
     handler: WorkflowHandler
     queue: asyncio.Queue[Event]
     task: asyncio.Task[None]
 
     async def iter_events(self) -> AsyncGenerator[Event, None]:
+        """
+        Converts the queue to an async generator while the workflow is still running, and there are still events.
+        For better or worse, multiple consumers will compete for events
+        """
         while not self.queue.empty() or not self.task.done():
             available_events = []
             while not self.queue.empty():

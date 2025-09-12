@@ -1,9 +1,11 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2025 LlamaIndex Inc.
-import asyncio
+from typing import AsyncGenerator
 
 import pytest
+import pytest_asyncio
 
+from tests.server.conftest import ExternalEvent, RequestedExternalEvent
 from workflows.server import WorkflowServer
 from workflows import Context
 from workflows.workflow import Workflow
@@ -16,13 +18,14 @@ def memory_store() -> MemoryWorkflowStore:
     return MemoryWorkflowStore()
 
 
-@pytest.fixture
-def server_with_store(
-    memory_store: MemoryWorkflowStore, simple_test_workflow: Workflow
-) -> WorkflowServer:
+@pytest_asyncio.fixture
+async def server_with_store(
+    memory_store: MemoryWorkflowStore, interactive_workflow: Workflow
+) -> AsyncGenerator[WorkflowServer, None]:
     server = WorkflowServer(workflow_store=memory_store)
-    server.add_workflow("test", simple_test_workflow)
-    return server
+    server.add_workflow("test", interactive_workflow)
+    yield server
+    await server._close()
 
 
 @pytest.mark.asyncio
@@ -35,23 +38,24 @@ async def test_store_is_updated_on_step_completion(
     handler_id = "persist-1"
     handler = server._workflows["test"].run()
     server._run_workflow_handler(handler_id, "test", handler)
-
-    # Wait for store to be updated by StepStateChanged events
-    for _ in range(100):
-        if handler_id in memory_store.handlers:
-            break
-        await asyncio.sleep(0.02)
-
+    handler = server._handlers[handler_id]
+    item = await server._handlers[handler_id].queue.get()
+    assert isinstance(item, RequestedExternalEvent)
     assert handler_id in memory_store.handlers
     persistent = memory_store.handlers[handler_id]
     assert persistent.workflow_name == "test"
     assert persistent.completed is False
     assert isinstance(persistent.ctx, dict)
-    # Persisted payload is a state snapshot (not full Context)
-    assert set(persistent.ctx.keys()) >= {"state_data", "state_module", "state_type"}
+    handler = server._handlers[handler_id].handler
+    ctx = handler.ctx
 
-    # cleanup
-    await server._close()
+    # validate that the workflow completes
+    assert ctx is not None
+    ctx.send_event(ExternalEvent(response="pong"))
+    result = await handler
+    assert result == "received: pong"
+    updated = memory_store.handlers[handler_id]
+    assert updated.completed is True
 
 
 @pytest.mark.asyncio
@@ -83,8 +87,6 @@ async def test_resume_active_handlers_across_server_restart(
     # Await its completion through internal result future
     result = await server2._handlers[handler_id].handler
     assert result == "processed: default"
-
-    await server2._close()
 
 
 @pytest.mark.asyncio
@@ -120,5 +122,3 @@ async def test_startup_ignores_unregistered_workflows(
     # Await completion of the resumed known handler
     result = await server._handlers["known-1"].handler
     assert result == "processed: default"
-
-    await server._close()

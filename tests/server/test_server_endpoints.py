@@ -555,7 +555,7 @@ async def test_post_event_to_running_workflow(async_client: AsyncClient) -> None
         await asyncio.sleep(0.1)
 
         serializer = JsonSerializer()
-        event = ExternalEvent(message="Hello from test")
+        event = ExternalEvent(response="Hello from test")
         event_str = serializer.serialize(event)
 
         # Send the event
