@@ -63,6 +63,9 @@ class WorkflowHandler(asyncio.Future[RunResultT]):
         and terminates when a [StopEvent][workflows.events.StopEvent] is
         encountered, indicating the workflow has completed.
 
+        Args:
+            expose_internal (bool): Whether to expose internal events.
+
         Returns:
             AsyncGenerator[Event, None]: An async generator that yields Event objects
                 as they are produced by the workflow.

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
 import json
 import logging
 from importlib.metadata import version
@@ -22,20 +24,37 @@ from starlette.staticfiles import StaticFiles
 
 from workflows import Context, Workflow
 from workflows.context.serializers import JsonSerializer
-from workflows.events import StopEvent
+from workflows.events import (
+    Event,
+    StepState,
+    StepStateChanged,
+    StopEvent,
+)
 from workflows.handler import WorkflowHandler
 
+
+from workflows.server.abstract_workflow_store import (
+    AbstractWorkflowStore,
+    EmptyWorkflowStore,
+    HandlerQuery,
+    PersistentHandler,
+)
 from .utils import nanoid
 
 logger = logging.getLogger()
 
 
 class WorkflowServer:
-    def __init__(self, middleware: list[Middleware] | None = None):
+    def __init__(
+        self,
+        middleware: list[Middleware] | None = None,
+        workflow_store: AbstractWorkflowStore = EmptyWorkflowStore(),
+    ):
         self._workflows: dict[str, Workflow] = {}
         self._contexts: dict[str, Context] = {}
-        self._handlers: dict[str, WorkflowHandler] = {}
+        self._handlers: dict[str, _WorkflowHandler] = {}
         self._results: dict[str, StopEvent] = {}
+        self._workflow_store = workflow_store
         self._assets_path = Path(__file__).parent / "static"
 
         self._middleware = middleware or [
@@ -95,7 +114,9 @@ class WorkflowServer:
             ),
         ]
 
-        self.app = Starlette(routes=self._routes, middleware=self._middleware)
+        self.app = Starlette(
+            routes=self._routes, middleware=self._middleware, lifespan=self._lifespan
+        )
         # Serve the UI as static files
         self.app.mount(
             "/", app=StaticFiles(directory=self._assets_path, html=True), name="ui"
@@ -120,6 +141,20 @@ class WorkflowServer:
         )
 
         await server.serve()
+
+    def openapi_schema(self) -> dict:
+        app = self.app
+        gen = SchemaGenerator(
+            {
+                "openapi": "3.0.0",
+                "info": {
+                    "title": "Workflows API",
+                    "version": version("llama-index-workflows"),
+                },
+            }
+        )
+
+        return gen.get_schema(app.routes)
 
     #
     # HTTP endpoints
@@ -218,16 +253,21 @@ class WorkflowServer:
         """
         workflow = self._extract_workflow(request)
         context, start_event, run_kwargs = await self._extract_run_params(
-            request, workflow
+            request, workflow.workflow
         )
 
         if start_event is not None:
-            input_ev = workflow.start_event_class.model_validate(start_event)
+            input_ev = workflow.workflow.start_event_class.model_validate(start_event)
         else:
             input_ev = None
 
         try:
-            result = await workflow.run(ctx=context, start_event=input_ev, **run_kwargs)
+            handler_id = nanoid()
+            handler = workflow.workflow.run(
+                ctx=context, start_event=input_ev, **run_kwargs
+            )
+            self._run_workflow_handler(handler_id, workflow.name, handler)
+            result = await handler
             return JSONResponse({"result": result})
         except Exception as e:
             raise HTTPException(detail=f"Error running workflow: {e}", status_code=500)
@@ -267,14 +307,14 @@ class WorkflowServer:
         """
         workflow = self._extract_workflow(request)
         try:
-            start_event_schema = workflow.start_event_class.model_json_schema()
+            start_event_schema = workflow.workflow.start_event_class.model_json_schema()
         except Exception as e:
             raise HTTPException(
                 detail=f"Error getting schema of start event for workflow: {e}",
                 status_code=500,
             )
         try:
-            stop_event_schema = workflow.stop_event_class.model_json_schema()
+            stop_event_schema = workflow.workflow.stop_event_class.model_json_schema()
         except Exception as e:
             raise HTTPException(
                 detail=f"Error getting schema of stop event for workflow: {e}",
@@ -334,19 +374,23 @@ class WorkflowServer:
         """
         workflow = self._extract_workflow(request)
         context, start_event, run_kwargs = await self._extract_run_params(
-            request, workflow
+            request, workflow.workflow
         )
         handler_id = nanoid()
 
         if start_event is not None:
-            input_ev = workflow.start_event_class.model_validate(start_event)
+            input_ev = workflow.workflow.start_event_class.model_validate(start_event)
         else:
             input_ev = None
 
-        self._handlers[handler_id] = workflow.run(
-            ctx=context,
-            start_event=input_ev,
-            **run_kwargs,
+        self._run_workflow_handler(
+            handler_id,
+            workflow.name,
+            workflow.workflow.run(
+                ctx=context,
+                start_event=input_ev,
+                **run_kwargs,
+            ),
         )
         return JSONResponse({"handler_id": handler_id, "status": "started"})
 
@@ -390,10 +434,11 @@ class WorkflowServer:
         if handler_id in self._results:
             return JSONResponse({"result": self._results[handler_id]})
 
-        handler = self._handlers.get(handler_id)
-        if handler is None:
+        wrapper = self._handlers.get(handler_id)
+        if wrapper is None:
             raise HTTPException(detail="Handler not found", status_code=404)
 
+        handler = wrapper.run_handler
         if not handler.done():
             return JSONResponse({}, status_code=202)
 
@@ -460,10 +505,10 @@ class WorkflowServer:
         sse = request.query_params.get("sse", "false").lower() == "true"
         media_type = "text/event-stream" if sse else "application/x-ndjson"
 
-        async def event_stream(handler: WorkflowHandler) -> AsyncGenerator[str, None]:
+        async def event_stream(handler: _WorkflowHandler) -> AsyncGenerator[str, None]:
             serializer = JsonSerializer()
 
-            async for event in handler.stream_events(expose_internal=True):
+            async for event in handler.iter_events():
                 serialized_event = serializer.serialize(event)
                 if sse:
                     # need to convert back to str to use SSE
@@ -507,7 +552,7 @@ class WorkflowServer:
         """
         handlers = []
         for handler_id in self._handlers.keys():
-            handler = self._handlers[handler_id]
+            handler = self._handlers[handler_id].run_handler
             status = "running"
             result = None
             error = None
@@ -578,10 +623,11 @@ class WorkflowServer:
         handler_id = request.path_params["handler_id"]
 
         # Check if handler exists
-        handler = self._handlers.get(handler_id)
-        if handler is None:
+        wrapper = self._handlers.get(handler_id)
+        if wrapper is None:
             raise HTTPException(detail="Handler not found", status_code=404)
 
+        handler = wrapper.run_handler
         # Check if workflow is still running
         if handler.done():
             raise HTTPException(detail="Workflow already completed", status_code=409)
@@ -630,7 +676,7 @@ class WorkflowServer:
     # Private methods
     #
 
-    def _extract_workflow(self, request: Request) -> Workflow:
+    def _extract_workflow(self, request: Request) -> _NamedWorkflow:
         if "name" not in request.path_params:
             raise HTTPException(detail="'name' parameter missing", status_code=400)
         name = request.path_params["name"]
@@ -638,7 +684,7 @@ class WorkflowServer:
         if name not in self._workflows:
             raise HTTPException(detail="Workflow not found", status_code=404)
 
-        return self._workflows[name]
+        return _NamedWorkflow(name=name, workflow=self._workflows[name])
 
     async def _extract_run_params(self, request: Request, workflow: Workflow) -> tuple:
         try:
@@ -689,19 +735,136 @@ class WorkflowServer:
                 detail=f"Error processing request body: {e}", status_code=500
             )
 
-    def openapi_schema(self) -> dict:
-        app = self.app
-        gen = SchemaGenerator(
-            {
-                "openapi": "3.0.0",
-                "info": {
-                    "title": "Workflows API",
-                    "version": version("llama-index-workflows"),
-                },
-            }
-        )
+    @asynccontextmanager
+    async def _lifespan(self, _: Starlette) -> AsyncGenerator[None, None]:
+        # checking the store for any incomplete runs and restart them
+        await self._initialize_active_handlers()
+        yield
+        # cancel running workflows
+        await self._close()
 
-        return gen.get_schema(app.routes)
+    async def _close(self) -> None:
+        for handler in self._handlers.values():
+            if not handler.run_handler.done():
+                try:
+                    handler.run_handler.cancel()
+                except Exception:
+                    pass
+                try:
+                    await handler.run_handler.cancel_run()
+                except Exception:
+                    pass
+            if not handler.task.done():
+                try:
+                    handler.task.cancel()
+                except Exception:
+                    pass
+
+    async def _initialize_active_handlers(self) -> None:
+        """Resumes previously running workflows, if they were not complete at last shutdown"""
+        handlers = await self._workflow_store.query(
+            HandlerQuery(
+                status_in=["running"], workflow_name_in=list(self._workflows.keys())
+            )
+        )
+        for persistent in handlers:
+            workflow = self._workflows[persistent.workflow_name]
+            ctx = Context.from_dict(workflow=workflow, data=persistent.ctx)
+            handler = workflow.run(ctx=ctx)
+            self._run_workflow_handler(
+                persistent.handler_id, persistent.workflow_name, handler
+            )
+
+    def _run_workflow_handler(
+        self, handler_id: str, workflow_name: str, handler: WorkflowHandler
+    ) -> None:
+        """
+        Streams events from the handler, persisting them, and pushing them to a queue.
+        Stores a _WorkflowHandler helper that wraps the handler with it's queue and streaming task.
+        """
+        queue: asyncio.Queue[Event] = asyncio.Queue()
+
+        async def _stream_events() -> None:
+            async for event in handler.stream_events(expose_internal=True):
+                if (  # Watch for a specific internal event that signals the step is complete
+                    isinstance(event, StepStateChanged)
+                    and event.step_state == StepState.NOT_RUNNING
+                ):
+                    state = handler.ctx.to_dict() if handler.ctx else None
+                    if state is None:
+                        logger.warning(
+                            f"Context state is None for handler {handler_id}. This is not expected."
+                        )
+                        continue
+                    await self._workflow_store.update(
+                        PersistentHandler(
+                            handler_id=handler_id,
+                            workflow_name=workflow_name,
+                            status="running",
+                            ctx=state,
+                        )
+                    )
+                queue.put_nowait(event)
+            # done when stream events are complete
+            try:
+                await handler
+                status = "completed"
+            except Exception:
+                status = "failed"
+
+            if handler.ctx is None:
+                logger.warning(
+                    f"Context is None for handler {handler_id}. This is not expected."
+                )
+                return
+            await self._workflow_store.update(
+                PersistentHandler(
+                    handler_id=handler_id,
+                    workflow_name=workflow_name,
+                    status=status,
+                    ctx=handler.ctx.to_dict(),
+                )
+            )
+
+        task = asyncio.create_task(_stream_events())
+        self._handlers[handler_id] = _WorkflowHandler(handler, queue, task)
+
+
+@dataclass
+class _WorkflowHandler:
+    """A wrapper around a handler: WorkflowHandler. Necessary to monitor and dispatch events from the handler's stream_events"""
+
+    run_handler: WorkflowHandler
+    queue: asyncio.Queue[Event]
+    task: asyncio.Task[None]
+
+    async def iter_events(self) -> AsyncGenerator[Event, None]:
+        """
+        Converts the queue to an async generator while the workflow is still running, and there are still events.
+        For better or worse, multiple consumers will compete for events
+        """
+        while not self.queue.empty() or not self.task.done():
+            available_events = []
+            while not self.queue.empty():
+                available_events.append(self.queue.get_nowait())
+            for event in available_events:
+                yield event
+            queue_get_task: asyncio.Task[Event] = asyncio.create_task(self.queue.get())
+            task_waitable = self.task
+            done, pending = await asyncio.wait(
+                {queue_get_task, task_waitable}, return_when=asyncio.FIRST_COMPLETED
+            )
+            if queue_get_task in done:
+                yield await queue_get_task
+            else:  # otherwise task completed, so nothing else will be published to the queue
+                queue_get_task.cancel()
+                break
+
+
+@dataclass
+class _NamedWorkflow:
+    name: str
+    workflow: Workflow
 
 
 if __name__ == "__main__":

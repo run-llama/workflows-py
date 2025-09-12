@@ -7,7 +7,13 @@ import asyncio
 import pytest
 
 from workflows import Context, Workflow, step
-from workflows.events import Event, StartEvent, StopEvent
+from workflows.events import (
+    Event,
+    HumanResponseEvent,
+    InputRequiredEvent,
+    StartEvent,
+    StopEvent,
+)
 
 
 class SimpleTestWorkflow(Workflow):
@@ -42,16 +48,23 @@ class StreamingWorkflow(Workflow):
         return StopEvent(result=f"completed_{count}_events")
 
 
-class ExternalEvent(Event):
+class RequestedExternalEvent(InputRequiredEvent):
     message: str
+
+
+class ExternalEvent(HumanResponseEvent):
+    response: str
 
 
 class InteractiveWorkflow(Workflow):
     @step
-    async def start(self, ctx: Context, ev: StartEvent) -> StopEvent:
+    async def start(self, ctx: Context, ev: StartEvent) -> RequestedExternalEvent:
         # Wait for an external event
-        external_event = await ctx.wait_for_event(ExternalEvent)
-        return StopEvent(result=f"received: {external_event.message}")
+        return RequestedExternalEvent(message="ping")
+
+    @step
+    async def end(self, ctx: Context, ev: ExternalEvent) -> StopEvent:
+        return StopEvent(result=f"received: {ev.response}")
 
 
 @pytest.fixture

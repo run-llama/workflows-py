@@ -70,7 +70,7 @@ def test_extract_workflow_success(simple_test_workflow: Workflow) -> None:
     mock_request = Mock()
     mock_request.path_params = {"name": "test"}
 
-    assert server._extract_workflow(mock_request) == simple_test_workflow
+    assert server._extract_workflow(mock_request).workflow == simple_test_workflow
 
 
 def test_extract_workflow_missing_name() -> None:
