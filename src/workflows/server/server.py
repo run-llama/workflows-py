@@ -775,11 +775,7 @@ class WorkflowServer:
                     isinstance(event, StepStateChanged)
                     and event.step_state == StepState.NOT_RUNNING
                 ):
-                    state = (
-                        event.context_state or handler.ctx.to_dict()
-                        if handler.ctx
-                        else None
-                    )
+                    state = handler.ctx.to_dict() if handler.ctx else None
                     if state is None:
                         logger.warning(
                             f"Context state is None for handler {handler_id}. This is not expected."
