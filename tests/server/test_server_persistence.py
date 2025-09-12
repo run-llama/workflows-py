@@ -6,11 +6,13 @@ from typing import AsyncGenerator
 import pytest
 
 from tests.server.conftest import ExternalEvent, RequestedExternalEvent
+from workflows.events import Event, InternalDispatchEvent
 from workflows.server import WorkflowServer
 from workflows import Context
 from workflows.workflow import Workflow
 
 from .memory_workflow_store import MemoryWorkflowStore
+from .util import wait_for_passing
 
 
 @pytest.fixture
@@ -39,8 +41,15 @@ async def test_store_is_updated_on_step_completion(
     handler = server._workflows["test"].run()
     server._run_workflow_handler(handler_id, "test", handler)
     handler = server._handlers[handler_id]
+
     # wait for first step to complete
-    item = await server._handlers[handler_id].queue.get()
+    async def get_non_internal_event() -> Event:
+        item = await server._handlers[handler_id].queue.get()
+        if isinstance(item, InternalDispatchEvent):
+            raise ValueError("Internal event received. Try again")
+        return item
+
+    item = await wait_for_passing(get_non_internal_event)
     assert isinstance(item, RequestedExternalEvent)
 
     # much sure its stored and running

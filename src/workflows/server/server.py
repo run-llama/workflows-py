@@ -7,6 +7,8 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 import json
 import logging
+from importlib.metadata import version
+from pathlib import Path
 from typing import Any, AsyncGenerator
 
 import uvicorn
@@ -18,18 +20,18 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse, StreamingResponse
 from starlette.routing import Route
 from starlette.schemas import SchemaGenerator
+from starlette.staticfiles import StaticFiles
 
 from workflows import Context, Workflow
 from workflows.context.serializers import JsonSerializer
 from workflows.events import (
     Event,
-    InternalDispatchEvent,
     StepState,
     StepStateChanged,
     StopEvent,
 )
 from workflows.handler import WorkflowHandler
-from importlib.metadata import version
+
 
 from workflows.server.abstract_workflow_store import (
     AbstractWorkflowStore,
@@ -53,6 +55,7 @@ class WorkflowServer:
         self._handlers: dict[str, _WorkflowHandler] = {}
         self._results: dict[str, StopEvent] = {}
         self._workflow_store = workflow_store
+        self._assets_path = Path(__file__).parent / "static"
 
         self._middleware = middleware or [
             Middleware(
@@ -78,6 +81,11 @@ class WorkflowServer:
                 "/workflows/{name}/run-nowait",
                 self._run_workflow_nowait,
                 methods=["POST"],
+            ),
+            Route(
+                "/workflows/{name}/schema",
+                self._get_events_schema,
+                methods=["GET"],
             ),
             Route(
                 "/results/{handler_id}",
@@ -109,7 +117,10 @@ class WorkflowServer:
         self.app = Starlette(
             routes=self._routes, middleware=self._middleware, lifespan=self._lifespan
         )
-        self.app.on_event
+        # Serve the UI as static files
+        self.app.mount(
+            "/", app=StaticFiles(directory=self._assets_path, html=True), name="ui"
+        )
 
     def add_workflow(self, name: str, workflow: Workflow) -> None:
         self._workflows[name] = workflow
@@ -245,16 +256,72 @@ class WorkflowServer:
             request, workflow.workflow
         )
 
+        if start_event is not None:
+            input_ev = workflow.workflow.start_event_class.model_validate(start_event)
+        else:
+            input_ev = None
+
         try:
             handler_id = nanoid()
             handler = workflow.workflow.run(
-                ctx=context, start_event=start_event, **run_kwargs
+                ctx=context, start_event=input_ev, **run_kwargs
             )
             self._run_workflow_handler(handler_id, workflow.name, handler)
             result = await handler
             return JSONResponse({"result": result})
         except Exception as e:
             raise HTTPException(detail=f"Error running workflow: {e}", status_code=500)
+
+    async def _get_events_schema(self, request: Request) -> JSONResponse:
+        """
+        ---
+        summary: Get JSON schema for start event
+        description: |
+          Gets the JSON schema of the start and stop events from the specified workflow and returns it under "start" (start event) and "stop" (stop event)
+        parameters:
+          - in: path
+            name: name
+            required: true
+            schema:
+              type: string
+            description: Registered workflow name.
+        requestBody:
+          required: false
+        responses:
+          200:
+            description: JSON schema successfully retrieved for start event
+            content:
+              application/json:
+                schema:
+                  type: object
+                  properties:
+                    start:
+                      description: JSON schema for the start event
+                    stop:
+                      description: JSON schema for the stop event
+                  required: [start, stop]
+          404:
+            description: Workflow not found
+          500:
+            description: Error while getting the JSON schema for the start or stop event
+        """
+        workflow = self._extract_workflow(request)
+        try:
+            start_event_schema = workflow.workflow.start_event_class.model_json_schema()
+        except Exception as e:
+            raise HTTPException(
+                detail=f"Error getting schema of start event for workflow: {e}",
+                status_code=500,
+            )
+        try:
+            stop_event_schema = workflow.workflow.stop_event_class.model_json_schema()
+        except Exception as e:
+            raise HTTPException(
+                detail=f"Error getting schema of stop event for workflow: {e}",
+                status_code=500,
+            )
+
+        return JSONResponse({"start": start_event_schema, "stop": stop_event_schema})
 
     async def _run_workflow_nowait(self, request: Request) -> JSONResponse:
         """
@@ -311,10 +378,19 @@ class WorkflowServer:
         )
         handler_id = nanoid()
 
+        if start_event is not None:
+            input_ev = workflow.workflow.start_event_class.model_validate(start_event)
+        else:
+            input_ev = None
+
         self._run_workflow_handler(
             handler_id,
             workflow.name,
-            workflow.workflow.run(ctx=context, start_event=start_event, **run_kwargs),
+            workflow.workflow.run(
+                ctx=context,
+                start_event=input_ev,
+                **run_kwargs,
+            ),
         )
         return JSONResponse({"handler_id": handler_id, "status": "started"})
 
@@ -369,6 +445,9 @@ class WorkflowServer:
         try:
             result = await handler
             self._results[handler_id] = result
+
+            if isinstance(result, StopEvent):
+                result = result.model_dump()
 
             return JSONResponse({"result": result})
         except Exception as e:
@@ -714,9 +793,7 @@ class WorkflowServer:
                             ctx=state,
                         )
                     )
-                if not isinstance(event, InternalDispatchEvent):
-                    # publish non-internal events to the queue to be consumed by the API
-                    queue.put_nowait(event)
+                queue.put_nowait(event)
             # done when stream events are complete
             try:
                 await handler
