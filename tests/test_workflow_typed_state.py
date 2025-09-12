@@ -4,6 +4,7 @@ from pydantic import BaseModel, Field
 from typing import Union, Optional
 
 from workflows import Context, Workflow
+from workflows.testing import WorkflowTestRunner
 from workflows.decorators import step
 from workflows.events import StartEvent, StopEvent, Event
 
@@ -30,15 +31,12 @@ class MyWorkflow(Workflow):
 
 @pytest.mark.asyncio
 async def test_typed_state() -> None:
-    wf = MyWorkflow()
+    test_runner = WorkflowTestRunner(MyWorkflow())
 
-    handler = wf.run()
-
-    # Run the workflow
-    _ = await handler
+    await test_runner.run(start_event=StartEvent())
 
     # Check final state
-    ctx = handler.ctx
+    ctx = test_runner._workflow._contexts.pop()
     assert ctx is not None
     state = await ctx.store.get_state()
     assert state.model_dump() == MyState(name="John", age=31).model_dump()
@@ -94,9 +92,9 @@ class ParallelWorkflow(Workflow):
 
 @pytest.mark.asyncio
 async def test_typed_state_with_context_manager() -> None:
-    wf = ParallelWorkflow()
+    test_runner = WorkflowTestRunner(ParallelWorkflow())
 
-    result = await wf.run()
+    result = await test_runner.run(start_event=StartEvent())
 
     # Should only be 1 since the context manager locks the state
-    assert result == 1
+    assert result.result == 1
