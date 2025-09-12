@@ -44,13 +44,6 @@ async def async_client(
                 pass
 
 
-# Add a test for:
-# - passing in a start event as a string, without the __is_pydantic and qualified_name fields
-# - passing in a start event as a dict, with the __is_pydantic and qualified_name fields
-# - passing in a start event as a dict, without the __is_pydantic and qualified_name fields
-# - passing in an event type that does not conform to the workflow's start event class
-
-
 @pytest.mark.asyncio
 async def test_run_workflow_with_start_event_str_plain(
     async_client: AsyncClient,
