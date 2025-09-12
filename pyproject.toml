@@ -46,3 +46,6 @@ dependencies = ["pyyaml>=6.0.2"]
 
 [tool.hatch.envs.server.scripts]
 openapi = "python -m workflows.server.server --output openapi.json"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

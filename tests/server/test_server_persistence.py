@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2025 LlamaIndex Inc.
+import asyncio
 from typing import AsyncGenerator
 
 import pytest
-import pytest_asyncio
 
 from tests.server.conftest import ExternalEvent, RequestedExternalEvent
 from workflows.server import WorkflowServer
@@ -18,7 +18,7 @@ def memory_store() -> MemoryWorkflowStore:
     return MemoryWorkflowStore()
 
 
-@pytest_asyncio.fixture
+@pytest.fixture
 async def server_with_store(
     memory_store: MemoryWorkflowStore, interactive_workflow: Workflow
 ) -> AsyncGenerator[WorkflowServer, None]:
@@ -39,23 +39,29 @@ async def test_store_is_updated_on_step_completion(
     handler = server._workflows["test"].run()
     server._run_workflow_handler(handler_id, "test", handler)
     handler = server._handlers[handler_id]
+    # wait for first step to complete
     item = await server._handlers[handler_id].queue.get()
     assert isinstance(item, RequestedExternalEvent)
+
+    # much sure its stored and running
     assert handler_id in memory_store.handlers
     persistent = memory_store.handlers[handler_id]
     assert persistent.workflow_name == "test"
-    assert persistent.completed is False
+    assert persistent.status == "running"
     assert isinstance(persistent.ctx, dict)
-    handler = server._handlers[handler_id].handler
-    ctx = handler.ctx
 
-    # validate that the workflow completes
+    # now, validate that the workflow completes when responding
+    handler = server._handlers[handler_id].run_handler
+    ctx = handler.ctx
     assert ctx is not None
     ctx.send_event(ExternalEvent(response="pong"))
     result = await handler
+    # wait for event loop to resolve all tasks
+    await server._handlers[handler_id].task
+    await asyncio.sleep(0)  # let even loop resolve other waiters on the internal
     assert result == "received: pong"
     updated = memory_store.handlers[handler_id]
-    assert updated.completed is True
+    assert updated.status == "completed"
 
 
 @pytest.mark.asyncio
@@ -71,7 +77,7 @@ async def test_resume_active_handlers_across_server_restart(
         PersistentHandler(
             handler_id=handler_id,
             workflow_name="test",
-            completed=False,
+            status="running",
             ctx=initial_ctx,
         )
     )
@@ -85,8 +91,38 @@ async def test_resume_active_handlers_across_server_restart(
     assert handler_id in server2._handlers
 
     # Await its completion through internal result future
-    result = await server2._handlers[handler_id].handler
+    result = await server2._handlers[handler_id].run_handler
     assert result == "processed: default"
+
+
+@pytest.mark.asyncio
+async def test_store_is_updated_on_workflow_failure(
+    memory_store: MemoryWorkflowStore, error_workflow: Workflow
+) -> None:
+    # Build a server with a failing workflow and the in-memory store
+    server = WorkflowServer(workflow_store=memory_store)
+    server.add_workflow("error", error_workflow)
+
+    # Start a workflow through internal runner to exercise persistence updates
+    handler_id = "fail-1"
+    handler = server._workflows["error"].run()
+    server._run_workflow_handler(handler_id, "error", handler)
+
+    # Await the failure of the handler itself
+    with pytest.raises(ValueError, match="Test error"):
+        await handler
+
+    # Ensure the background streaming task has completed and persisted status
+    await server._handlers[handler_id].task
+    await asyncio.sleep(0)
+
+    # Verify store captured the failed status and has a context snapshot
+    assert handler_id in memory_store.handlers
+    persistent = memory_store.handlers[handler_id]
+    assert persistent.workflow_name == "error"
+    assert persistent.status == "failed"
+    assert isinstance(persistent.ctx, dict)
+    await server._close()
 
 
 @pytest.mark.asyncio
@@ -98,7 +134,7 @@ async def test_startup_ignores_unregistered_workflows(
     # Unknown workflow entry
     await memory_store.update(
         PersistentHandler(
-            handler_id="unknown-1", workflow_name="unknown", completed=False, ctx={}
+            handler_id="unknown-1", workflow_name="unknown", status="running", ctx={}
         )
     )
 
@@ -107,7 +143,7 @@ async def test_startup_ignores_unregistered_workflows(
         PersistentHandler(
             handler_id="known-1",
             workflow_name="test",
-            completed=False,
+            status="running",
             ctx=Context(simple_test_workflow).to_dict(),
         )
     )
@@ -120,5 +156,5 @@ async def test_startup_ignores_unregistered_workflows(
     assert "known-1" in server._handlers
 
     # Await completion of the resumed known handler
-    result = await server._handlers["known-1"].handler
+    result = await server._handlers["known-1"].run_handler
     assert result == "processed: default"

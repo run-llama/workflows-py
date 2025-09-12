@@ -16,35 +16,38 @@ class SqliteWorkflowStore(AbstractWorkflowStore):
     def _init_db(self) -> None:
         conn = sqlite3.connect(self.db_path)
         conn.execute(
-            "CREATE TABLE IF NOT EXISTS handlers (handler_id TEXT PRIMARY KEY, workflow_name TEXT, completed BOOLEAN, ctx TEXT)"
+            "CREATE TABLE IF NOT EXISTS handlers (handler_id TEXT PRIMARY KEY, workflow_name TEXT, status TEXT, ctx TEXT)"
         )
         conn.commit()
         conn.close()
 
     async def query(self, query: HandlerQuery) -> List[PersistentHandler]:
-        sql = "SELECT handler_id, workflow_name, completed, ctx FROM handlers WHERE 1=1"
+        sql = "SELECT handler_id, workflow_name, status, ctx FROM handlers WHERE 1=1"
         params: list = []
 
         # Filter by workflow_name list
-        if query.workflow_name is not None:
-            if len(query.workflow_name) == 0:
+        if query.workflow_name_in is not None:
+            if len(query.workflow_name_in) == 0:
                 return []
-            placeholders = ",".join(["?"] * len(query.workflow_name))
+            placeholders = ",".join(["?"] * len(query.workflow_name_in))
             sql += f" AND workflow_name IN ({placeholders})"
-            params.extend(query.workflow_name)
+            params.extend(query.workflow_name_in)
 
         # Filter by handler_id list
-        if query.handler_id is not None:
-            if len(query.handler_id) == 0:
+        if query.handler_id_in is not None:
+            if len(query.handler_id_in) == 0:
                 return []
-            placeholders = ",".join(["?"] * len(query.handler_id))
+            placeholders = ",".join(["?"] * len(query.handler_id_in))
             sql += f" AND handler_id IN ({placeholders})"
-            params.extend(query.handler_id)
+            params.extend(query.handler_id_in)
 
         # Filter by completed flag
-        if query.completed is not None:
-            sql += " AND completed = ?"
-            params.append(query.completed)
+        if query.status_in is not None:
+            if len(query.status_in) == 0:
+                return []
+            placeholders = ",".join(["?"] * len(query.status_in))
+            sql += f" AND status IN ({placeholders})"
+            params.extend(query.status_in)
 
         conn = sqlite3.connect(self.db_path)
         try:
@@ -61,17 +64,17 @@ class SqliteWorkflowStore(AbstractWorkflowStore):
         cursor = conn.cursor()
         cursor.execute(
             """
-            INSERT INTO handlers (handler_id, workflow_name, completed, ctx)
+            INSERT INTO handlers (handler_id, workflow_name, status, ctx)
             VALUES (?, ?, ?, ?)
             ON CONFLICT(handler_id) DO UPDATE SET
                 workflow_name = excluded.workflow_name,
-                completed = excluded.completed,
+                status = excluded.status,
                 ctx = excluded.ctx
             """,
             (
                 handler.handler_id,
                 handler.workflow_name,
-                handler.completed,
+                handler.status,
                 json.dumps(handler.ctx),
             ),
         )
@@ -83,6 +86,6 @@ def _row_to_persistent_handler(row: tuple) -> PersistentHandler:
     return PersistentHandler(
         handler_id=row[0],
         workflow_name=row[1],
-        completed=row[2],
+        status=row[2],
         ctx=json.loads(row[3]),
     )

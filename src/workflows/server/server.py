@@ -358,15 +358,16 @@ class WorkflowServer:
         if handler_id in self._results:
             return JSONResponse({"result": self._results[handler_id]})
 
-        handler = self._handlers.get(handler_id)
-        if handler is None:
+        wrapper = self._handlers.get(handler_id)
+        if wrapper is None:
             raise HTTPException(detail="Handler not found", status_code=404)
 
-        if not handler.handler.done():
+        handler = wrapper.run_handler
+        if not handler.done():
             return JSONResponse({}, status_code=202)
 
         try:
-            result = await handler.handler
+            result = await handler
             self._results[handler_id] = result
 
             return JSONResponse({"result": result})
@@ -472,14 +473,14 @@ class WorkflowServer:
         """
         handlers = []
         for handler_id in self._handlers.keys():
-            handler = self._handlers[handler_id]
+            handler = self._handlers[handler_id].run_handler
             status = "running"
             result = None
             error = None
 
-            if handler.handler.done():
+            if handler.done():
                 try:
-                    result = handler.handler.result()
+                    result = handler.result()
                     status = "completed"
                 except Exception as e:
                     error = str(e)
@@ -543,16 +544,17 @@ class WorkflowServer:
         handler_id = request.path_params["handler_id"]
 
         # Check if handler exists
-        handler = self._handlers.get(handler_id)
-        if handler is None:
+        wrapper = self._handlers.get(handler_id)
+        if wrapper is None:
             raise HTTPException(detail="Handler not found", status_code=404)
 
+        handler = wrapper.run_handler
         # Check if workflow is still running
-        if handler.handler.done():
+        if handler.done():
             raise HTTPException(detail="Workflow already completed", status_code=409)
 
         # Get the context
-        ctx = handler.handler.ctx
+        ctx = handler.ctx
         if ctx is None:
             raise HTTPException(detail="Context not available", status_code=500)
 
@@ -649,13 +651,13 @@ class WorkflowServer:
 
     async def _close(self) -> None:
         for handler in self._handlers.values():
-            if not handler.handler.done():
+            if not handler.run_handler.done():
                 try:
-                    handler.handler.cancel()
+                    handler.run_handler.cancel()
                 except Exception:
                     pass
                 try:
-                    await handler.handler.cancel_run()
+                    await handler.run_handler.cancel_run()
                 except Exception:
                     pass
             if not handler.task.done():
@@ -667,7 +669,9 @@ class WorkflowServer:
     async def _initialize_active_handlers(self) -> None:
         """Resumes previously running workflows, if they were not complete at last shutdown"""
         handlers = await self._workflow_store.query(
-            HandlerQuery(completed=False, workflow_name=list(self._workflows.keys()))
+            HandlerQuery(
+                status_in=["running"], workflow_name_in=list(self._workflows.keys())
+            )
         )
         for persistent in handlers:
             workflow = self._workflows[persistent.workflow_name]
@@ -706,7 +710,7 @@ class WorkflowServer:
                         PersistentHandler(
                             handler_id=handler_id,
                             workflow_name=workflow_name,
-                            completed=False,
+                            status="running",
                             ctx=state,
                         )
                     )
@@ -714,6 +718,12 @@ class WorkflowServer:
                     # publish non-internal events to the queue to be consumed by the API
                     queue.put_nowait(event)
             # done when stream events are complete
+            try:
+                await handler
+                status = "completed"
+            except Exception:
+                status = "failed"
+
             if handler.ctx is None:
                 logger.warning(
                     f"Context is None for handler {handler_id}. This is not expected."
@@ -723,7 +733,7 @@ class WorkflowServer:
                 PersistentHandler(
                     handler_id=handler_id,
                     workflow_name=workflow_name,
-                    completed=True,
+                    status=status,
                     ctx=handler.ctx.to_dict(),
                 )
             )
@@ -736,7 +746,7 @@ class WorkflowServer:
 class _WorkflowHandler:
     """A wrapper around a handler: WorkflowHandler. Necessary to monitor and dispatch events from the handler's stream_events"""
 
-    handler: WorkflowHandler
+    run_handler: WorkflowHandler
     queue: asyncio.Queue[Event]
     task: asyncio.Task[None]
 

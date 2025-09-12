@@ -380,7 +380,7 @@ class Context(Generic[MODEL_T]):
 
         Args:
             name (str): The name of the step that has been completed.
-            ev (Event): The associated input event that kicked of this completed step.
+            ev (Event): The associated input event that kicked off this completed step.
 
         """
         async with self.lock:

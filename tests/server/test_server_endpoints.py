@@ -3,13 +3,14 @@
 
 import asyncio
 import json
-import time
-from typing import Any, AsyncGenerator, Awaitable, Callable, TypeVar
+from types import SimpleNamespace
+from typing import Any, AsyncGenerator
 
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
+from tests.server.util import wait_for_passing
 from workflows import Context
 from workflows.server import WorkflowServer
 from workflows.workflow import Workflow
@@ -461,29 +462,12 @@ async def test_get_handlers_with_running_workflows(async_client: AsyncClient) ->
                 response = await client.get(f"/results/{handler_id}")
 
 
-T = TypeVar("T")
-
-
-async def _wait_for_passing(
-    func: Callable[[], Awaitable[T]],
-    max_duration: float = 5.0,
-    interval: float = 0.05,
-) -> T:
-    start_time = time.time()
-    last_exception = None
-    while time.time() - start_time < max_duration:
-        remaining_duration = max_duration - (time.time() - start_time)
-        try:
-            return await asyncio.wait_for(func(), timeout=remaining_duration)
-        except Exception as e:
-            last_exception = e
-            await asyncio.sleep(interval)
-    if last_exception:
-        raise last_exception
-    else:
-        raise TimeoutError(
-            f"Function {func.__name__} timed out after {max_duration} seconds"
-        )
+async def validate_result_response(
+    handler_id: str, client: AsyncClient, expected_status: int = 200
+) -> Any:
+    response = await client.get(f"/results/{handler_id}")
+    assert response.status_code == expected_status
+    return response.json()
 
 
 @pytest.mark.asyncio
@@ -493,12 +477,7 @@ async def test_get_handlers_with_completed_workflow(async_client: AsyncClient) -
         response = await client.post("/workflows/test/run-nowait", json={})
         handler_id = response.json()["handler_id"]
 
-        async def get_result() -> Any:
-            response = await client.get(f"/results/{handler_id}")
-            assert response.status_code == 200
-            return response.json()
-
-        await _wait_for_passing(get_result)
+        await wait_for_passing(lambda: validate_result_response(handler_id, client))
         # Get handlers
         response = await client.get("/handlers")
         assert response.status_code == 200
@@ -521,13 +500,9 @@ async def test_get_handlers_with_failed_workflow(async_client: AsyncClient) -> N
         # Wait a bit for workflow to fail
         await asyncio.sleep(0.1)
 
-        # Try to get result (should fail)
-        async def get_failed_result() -> Any:
-            response = await client.get(f"/results/{handler_id}")
-            assert response.status_code == 500
-            return response.json()
-
-        result = await _wait_for_passing(get_failed_result)
+        result = await wait_for_passing(
+            lambda: validate_result_response(handler_id, client, 500)
+        )
         assert result["error"] == "Test error"
 
         # Get handlers
@@ -563,13 +538,9 @@ async def test_post_event_to_running_workflow(async_client: AsyncClient) -> None
         assert response.status_code == 200
         assert response.json() == {"status": "sent"}
 
-        # Wait for workflow to complete
-        async def get_result() -> Any:
-            response = await client.get(f"/results/{handler_id}")
-            assert response.status_code == 200
-            return response.json()
-
-        result = await _wait_for_passing(get_result)
+        result = await wait_for_passing(
+            lambda: validate_result_response(handler_id, client)
+        )
 
         assert result["result"] == "received: Hello from test"
 
@@ -602,19 +573,14 @@ async def test_get_workflow_result_uses_cached_value(
         handler_id = response.json()["handler_id"]
 
         # First fetch populates cache
-        while True:
-            first = await client.get(f"/results/{handler_id}")
-            if first.status_code == 200:
-                break
-            await asyncio.sleep(0.01)
-        assert first.status_code == 200
-        payload = first.json()
-        assert payload["result"] == "processed: cache-me"
+        first = await wait_for_passing(
+            lambda: validate_result_response(handler_id, client)
+        )
+        assert first["result"] == "processed: cache-me"
 
         # Second fetch should return immediately from cache with same payload
-        second = await client.get(f"/results/{handler_id}")
-        assert second.status_code == 200
-        assert second.json() == payload
+        second = await validate_result_response(handler_id, client)
+        assert second == first
 
 
 @pytest.mark.asyncio
@@ -666,18 +632,13 @@ async def test_post_event_context_not_available(
     async_client: AsyncClient, server: WorkflowServer
 ) -> None:
     async with async_client as client:
-        # Inject a dummy handler with no context to trigger 500 path
-        class _DummyInner:
-            def done(self) -> bool:
-                return False
-
-            ctx = None
-
-        class _Wrapper:
-            handler = _DummyInner()
+        # Dumb test for code coverage. Inject a dummy handler with no context to trigger 500 path
+        wrapper = SimpleNamespace(
+            run_handler=SimpleNamespace(done=lambda: False, ctx=None)
+        )
 
         handler_id = "noctx-1"
-        server._handlers[handler_id] = _Wrapper()  # type: ignore[assignment]
+        server._handlers[handler_id] = wrapper  # type: ignore[assignment]
 
         try:
             response = await client.post(f"/events/{handler_id}", json={"event": "{}"})
