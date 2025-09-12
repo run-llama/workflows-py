@@ -60,8 +60,18 @@ class JsonSerializer(BaseSerializer):
         - [PickleSerializer][workflows.context.serializers.PickleSerializer]
     """
 
-    def _serialize_value(self, value: Any) -> Any:
-        """Helper to serialize a single value."""
+    def serialize_value(self, value: Any) -> Any:
+        """
+        serialize a single value to a json friendly type. Converts a json-ifiable value
+        (e.g. pydantic model, llama index component, dict, list, string, number, or boolean)
+        to a dict or other json-friendly type that may contain discriminator fields to help with future deserialization.
+
+        Args:
+            value (Any): The value to serialize.
+
+        Returns:
+            Any: The serialized value. A dict, list, string, number, or boolean.
+        """
         # Note: to avoid circular dependencies we cannot import BaseComponent from llama_index.core
         # if we want to use isinstance(value, BaseComponent) instead of guessing type from the presence
         # of class_name, we need to move BaseComponent out of core
@@ -81,10 +91,10 @@ class JsonSerializer(BaseSerializer):
             }
 
         if isinstance(value, dict):
-            return {k: self._serialize_value(v) for k, v in value.items()}
+            return {k: self.serialize_value(v) for k, v in value.items()}
 
         if isinstance(value, list):
-            return [self._serialize_value(item) for item in value]
+            return [self.serialize_value(item) for item in value]
 
         return value
 
@@ -101,13 +111,20 @@ class JsonSerializer(BaseSerializer):
             ValueError: If the value cannot be encoded to JSON.
         """
         try:
-            serialized_value = self._serialize_value(value)
+            serialized_value = self.serialize_value(value)
             return json.dumps(serialized_value)
         except Exception:
             raise ValueError(f"Failed to serialize value: {type(value)}: {value!s}")
 
-    def _deserialize_value(self, data: Any) -> Any:
-        """Helper to deserialize a single value."""
+    def deserialize_value(self, data: Any) -> Any:
+        """Helper to deserialize a single dict or other json value from its discriminator fields back into a python class.
+
+        Args:
+            data (Any): a dict, list, string, number, or boolean
+
+        Returns:
+            Any: The deserialized value.
+        """
         if isinstance(data, dict):
             if data.get("__is_pydantic") and data.get("qualified_name"):
                 module_class = import_module_from_qualified_name(data["qualified_name"])
@@ -115,9 +132,9 @@ class JsonSerializer(BaseSerializer):
             elif data.get("__is_component") and data.get("qualified_name"):
                 module_class = import_module_from_qualified_name(data["qualified_name"])
                 return module_class.from_dict(data["value"])
-            return {k: self._deserialize_value(v) for k, v in data.items()}
+            return {k: self.deserialize_value(v) for k, v in data.items()}
         elif isinstance(data, list):
-            return [self._deserialize_value(item) for item in data]
+            return [self.deserialize_value(item) for item in data]
         return data
 
     def deserialize(self, value: str) -> Any:
@@ -130,7 +147,7 @@ class JsonSerializer(BaseSerializer):
             Any: The reconstructed value.
         """
         data = json.loads(value)
-        return self._deserialize_value(data)
+        return self.deserialize_value(data)
 
 
 class PickleSerializer(JsonSerializer):
