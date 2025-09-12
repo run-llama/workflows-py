@@ -555,13 +555,12 @@ async def test_get_workflow_result_returns_202_when_pending(
         assert response.status_code == 200
         handler_id = response.json()["handler_id"]
 
-        # Immediately request result; should be pending deterministically
         response = await client.get(f"/results/{handler_id}")
         assert response.status_code == 202
 
 
 @pytest.mark.asyncio
-async def test_get_workflow_result_uses_cached_value(
+async def test_get_workflow_result_multiple_times(
     async_client: AsyncClient,
 ) -> None:
     async with async_client as client:
@@ -578,7 +577,6 @@ async def test_get_workflow_result_uses_cached_value(
         )
         assert first["result"] == "processed: cache-me"
 
-        # Second fetch should return immediately from cache with same payload
         second = await validate_result_response(handler_id, client)
         assert second == first
 
