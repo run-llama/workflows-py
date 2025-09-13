@@ -2,16 +2,15 @@ import pytest
 import asyncio
 
 from workflows import Workflow, Context, step
-from typing import List, Union
+from workflows.testing import WorkflowTestRunner
+from typing import Union
 from workflows.events import (
-    InternalDispatchEvent,
     EventsQueueChanged,
     StepStateChanged,
     StepState,
     Event,
     StartEvent,
     StopEvent,
-    EventType,
 )
 from pydantic import BaseModel
 
@@ -96,30 +95,31 @@ def wf_dict_state() -> ExampleWorkflowDictState:
 
 @pytest.mark.asyncio
 async def test_internal_events(wf: ExampleWorkflow) -> None:
-    handler = wf.run(message="hello")
-    evs: List[EventType] = []
-    async for ev in handler.stream_events(expose_internal=True):
-        if isinstance(ev, InternalDispatchEvent):
-            evs.append(type(ev))
-    await handler
-    assert len(evs) > 0
-    assert all(ev == StepStateChanged or ev == EventsQueueChanged for ev in evs)
+    test_runner = WorkflowTestRunner(wf)
+    result = await test_runner.run(
+        start_event=StartEvent(message="hello"),  # type: ignore
+        exclude_events=[StopEvent],
+    )
+    assert len(result.collected) > 0
+    assert all(
+        isinstance(ev, StepStateChanged) or isinstance(ev, EventsQueueChanged)
+        for ev in result.collected
+    )
 
 
 @pytest.mark.asyncio
 async def test_internal_events_state(wf_state: ExampleWorkflowState) -> None:
-    handler = wf_state.run(message="hello")
-    evs: List[StepStateChanged] = []
-    async for ev in handler.stream_events(expose_internal=True):
-        if (
-            isinstance(ev, StepStateChanged)
-            and ev.name != "_done"
-            and ev.context_state is not None
-        ):
-            evs.append(ev)
-    await handler
-    assert len(evs) == 4
-    for i, ev in enumerate(evs):
+    test_runner = WorkflowTestRunner(wf_state)
+    result = await test_runner.run(
+        start_event=StartEvent(message="hello"),  # type: ignore
+        exclude_events=[StopEvent, EventsQueueChanged],
+    )
+    assert all(isinstance(ev, StepStateChanged) for ev in result.collected)
+    filtered_events = [
+        r for r in result.collected if r.context_state is not None and r.name != "_done"
+    ]
+    assert len(filtered_events) == 4
+    for i, ev in enumerate(filtered_events):
         if i < 2:
             assert ev.name == "first_step"
         else:
@@ -128,8 +128,11 @@ async def test_internal_events_state(wf_state: ExampleWorkflowState) -> None:
             assert ev.step_state == StepState.PREPARING
         else:
             assert ev.step_state == StepState.NOT_IN_PROGRESS
-    assert evs[0].context_state["state_data"] == {"test": '""'}  # type: ignore
-    assert all(ev.context_state["state_data"] == {"test": '"Test"'} for ev in evs[1:])  # type: ignore
+    assert filtered_events[0].context_state["state_data"] == {"test": '""'}
+    assert all(
+        ev.context_state["state_data"] == {"test": '"Test"'}
+        for ev in filtered_events[1:]
+    )
 
 
 @pytest.mark.asyncio
@@ -137,18 +140,17 @@ async def test_internal_events_dict_state(
     wf_dict_state: ExampleWorkflowDictState,
 ) -> None:
     # prove that state modification works also with DictState
-    handler = wf_dict_state.run(message="hello")
-    evs: List[StepStateChanged] = []
-    async for ev in handler.stream_events(expose_internal=True):
-        if (
-            isinstance(ev, StepStateChanged)
-            and ev.name != "_done"
-            and ev.context_state is not None
-        ):
-            evs.append(ev)
-    await handler
-    assert len(evs) == 4
-    for i, ev in enumerate(evs):
+    test_runner = WorkflowTestRunner(wf_dict_state)
+    result = await test_runner.run(
+        start_event=StartEvent(message="hello"),  # type: ignore
+        exclude_events=[StopEvent, EventsQueueChanged],
+    )
+    assert all(isinstance(ev, StepStateChanged) for ev in result.collected)
+    filtered_events = [
+        r for r in result.collected if r.context_state is not None and r.name != "_done"
+    ]
+    assert len(filtered_events) == 4
+    for i, ev in enumerate(filtered_events):
         if i < 2:
             assert ev.name == "first_step"
         else:
@@ -157,24 +159,27 @@ async def test_internal_events_dict_state(
             assert ev.step_state == StepState.PREPARING
         else:
             assert ev.step_state == StepState.NOT_IN_PROGRESS
-    assert evs[0].context_state["state_data"] == {}  # type: ignore
-    assert evs[1].context_state["state_data"] == {"test": '"Test"'}  # type: ignore
-    assert evs[2].context_state["state_data"] == {"test": '"Test"'}  # type: ignore
-    assert evs[3].context_state["state_data"] == {}  # type: ignore
+    assert filtered_events[0].context_state["state_data"] == {}
+    assert filtered_events[1].context_state["state_data"] == {"test": '"Test"'}
+    assert filtered_events[2].context_state["state_data"] == {"test": '"Test"'}
+    assert filtered_events[3].context_state["state_data"] == {}
 
 
 @pytest.mark.asyncio
 async def test_internal_events_multiple_workers(
     wf_workers: ExampleWorkflowMultiWorkers,
 ) -> None:
-    handler = wf_workers.run(message="hello")
-    run_ids = []
-    async for ev in handler.stream_events(expose_internal=True):
-        if isinstance(ev, StepStateChanged):
-            # avoid duplication of the run_ids and exclude the "_done" step
-            if ev.step_state == StepState.RUNNING and ev.name != "_done":
-                run_ids.append(ev.worker_id)
-    await handler
+    test_runner = WorkflowTestRunner(wf_workers)
+    result = await test_runner.run(
+        start_event=StartEvent(message="hello"),  # type: ignore
+        exclude_events=[StopEvent, EventsQueueChanged],
+    )
+    assert all(isinstance(ev, StepStateChanged) for ev in result.collected)
+    run_ids = [
+        r.worker_id
+        for r in result.collected
+        if r.step_state == StepState.RUNNING and r.name != "_done"
+    ]
     assert len(run_ids) == 11
     assert (
         len(set(run_ids)) == 11
