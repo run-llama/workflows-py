@@ -33,7 +33,7 @@ class MyWorkflow(Workflow):
 async def test_typed_state() -> None:
     test_runner = WorkflowTestRunner(MyWorkflow())
 
-    await test_runner.run(start_event=StartEvent())
+    await test_runner.run()
 
     # Check final state
     ctx = test_runner._workflow._contexts.pop()
@@ -94,7 +94,7 @@ class ParallelWorkflow(Workflow):
 async def test_typed_state_with_context_manager() -> None:
     test_runner = WorkflowTestRunner(ParallelWorkflow())
 
-    result = await test_runner.run(start_event=StartEvent())
+    result = await test_runner.run()
 
     # Should only be 1 since the context manager locks the state
     assert result.result == 1

@@ -33,9 +33,7 @@ class StreamingWorkflow(Workflow):
 @pytest.mark.asyncio
 async def test_e2e() -> None:
     test_runner = WorkflowTestRunner(StreamingWorkflow())
-    r = await test_runner.run(
-        start_event=StartEvent(), expose_internal=False, exclude_events=[StopEvent]
-    )
+    r = await test_runner.run(expose_internal=False, exclude_events=[StopEvent])
 
     assert all("msg" in ev for ev in r.collected)
 
