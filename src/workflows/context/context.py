@@ -636,7 +636,7 @@ class Context(Generic[MODEL_T]):
                 )
                 if type(event) is event_type:
                     if all(
-                        event.get(k, default=None) == v for k, v in requirements.items()
+                        getattr(event, k, None) == v for k, v in requirements.items()
                     ):
                         return event
                     else:
