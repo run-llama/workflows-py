@@ -353,12 +353,7 @@ class Workflow(metaclass=WorkflowMeta):
         # Validate the workflow
         self._validate()
 
-        # Start the machinery in a new Context or use the provided one
-        ctx, run_id = self._start(ctx=ctx)
-
-        result = WorkflowHandler(ctx=ctx, run_id=run_id)
-
-        async def _run_workflow() -> None:
+        async def _run_workflow(ctx: Context) -> None:
             if self._sem:
                 await self._sem.acquire()
             try:
@@ -420,13 +415,17 @@ class Workflow(metaclass=WorkflowMeta):
 
                 result.set_result(ctx._retval)
             except Exception as e:
-                result.set_exception(e)
+                if not result.done():
+                    result.set_exception(e)
             finally:
                 if self._sem:
                     self._sem.release()
                 await ctx.shutdown()
 
-        asyncio.create_task(_run_workflow())
+        # Start the machinery in a new Context or use the provided one
+        started_ctx, run_id = self._start(ctx=ctx)
+        run_task = asyncio.create_task(_run_workflow(started_ctx))
+        result = WorkflowHandler(ctx=started_ctx, run_id=run_id, run_task=run_task)
         return result
 
     @step(num_workers=1)
