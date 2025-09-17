@@ -27,6 +27,7 @@ from workflows.events import (
 )
 from workflows.handler import WorkflowHandler
 from workflows.workflow import Workflow
+from workflows.testing import WorkflowTestRunner
 
 from .conftest import (
     AnotherTestEvent,
@@ -61,8 +62,8 @@ async def test_workflow_initialization(workflow: Workflow) -> None:
 
 @pytest.mark.asyncio
 async def test_workflow_run(workflow: Workflow) -> None:
-    result = await workflow.run()
-    assert result == "Workflow completed"
+    r = await WorkflowTestRunner(workflow).run()
+    assert r.result == "Workflow completed"
 
 
 @pytest.mark.asyncio
@@ -73,9 +74,8 @@ async def test_workflow_timeout() -> None:
             await asyncio.sleep(2.0)
             return StopEvent(result="Done")
 
-    workflow = SlowWorkflow(timeout=1)
     with pytest.raises(WorkflowTimeoutError):
-        await workflow.run()
+        await WorkflowTestRunner(SlowWorkflow(timeout=1)).run()
 
 
 @pytest.mark.asyncio
@@ -103,12 +103,11 @@ async def test_workflow_validation_unconsumed_events() -> None:
         async def a_step(self, ev: StartEvent) -> StopEvent:
             return StopEvent()
 
-    workflow = InvalidWorkflow()
     with pytest.raises(
         WorkflowValidationError,
         match="The following events are produced but never consumed: OneTestEvent",
     ):
-        await workflow.run()
+        await WorkflowTestRunner(InvalidWorkflow()).run()
 
 
 @pytest.mark.asyncio
@@ -144,8 +143,7 @@ async def test_workflow_event_propagation() -> None:
             events.append("step2")
             return StopEvent(result="Done")
 
-    workflow = EventTrackingWorkflow()
-    await workflow.run()
+    await WorkflowTestRunner(EventTrackingWorkflow()).run()
     assert events == ["step1", "step2"]
 
 
@@ -160,8 +158,7 @@ async def test_workflow_sync_async_steps() -> None:
         def sync_step(self, ev: OneTestEvent) -> StopEvent:
             return StopEvent(result="Done")
 
-    workflow = SyncAsyncWorkflow()
-    await workflow.run()
+    await WorkflowTestRunner(SyncAsyncWorkflow()).run()
 
 
 @pytest.mark.asyncio
@@ -177,8 +174,7 @@ async def test_workflow_sync_steps_only() -> None:
             # ctx.collect_events(ev, [OneTestEvent])
             return StopEvent()
 
-    workflow = SyncWorkflow()
-    await workflow.run()
+    await WorkflowTestRunner(SyncWorkflow()).run()
 
 
 @pytest.mark.asyncio
@@ -214,22 +210,20 @@ async def test_workflow_num_workers() -> None:
             return StopEvent(result=[ev.another_test_param for ev in events])
 
     workflow = NumWorkersWorkflow()
-
     start_time = time.time()
-    handler = workflow.run()
-    result = await handler
+    r = await WorkflowTestRunner(workflow).run()
     end_time = time.time()
 
-    assert set(result) == {"test1", "test2", "test4"}
+    assert set(r.result) == {"test1", "test2", "test4"}
 
     # ctx should have 1 extra event
-    assert handler.ctx
-    assert "final_step" in handler.ctx._event_buffers
-    event_buffer = handler.ctx._event_buffers["final_step"]
+    ctx = workflow._contexts.pop()
+    assert ctx
+    assert "final_step" in ctx._event_buffers
+    event_buffer = ctx._event_buffers["final_step"]
     assert len(event_buffer["tests.conftest.AnotherTestEvent"]) == 1
 
     # ensure ctx is serializable
-    ctx = handler.ctx
     ctx.to_dict()
 
     # Check if the execution time is close to 1 second (with some tolerance)
@@ -256,8 +250,8 @@ async def test_workflow_step_send_event() -> None:
             return StopEvent(result="step3")
 
     workflow = StepSendEventWorkflow()
-    result = await workflow.run()
-    assert result == "step2"
+    r = await WorkflowTestRunner(workflow).run()
+    assert r.result == "step2"
     ctx = workflow._contexts.pop()
     assert ("step2", "OneTestEvent") in ctx._accepted_events
     assert ("step3", "OneTestEvent") not in ctx._accepted_events
@@ -276,7 +270,7 @@ async def test_workflow_step_send_event_to_None() -> None:
             return StopEvent(result="step2")
 
     workflow = StepSendEventToNoneWorkflow(verbose=True)
-    await workflow.run()
+    await WorkflowTestRunner(workflow).run()
     assert ("step2", "OneTestEvent") in workflow._contexts.pop()._accepted_events
 
 
@@ -295,12 +289,11 @@ async def test_workflow_step_returning_bogus() -> None:
         async def step3(self, ev: OneTestEvent) -> StopEvent:
             return StopEvent(result="step2")
 
-    workflow = TestWorkflow()
     with pytest.raises(
         WorkflowRuntimeError,
         match="Step function step1 returned str instead of an Event instance.",
     ):
-        await workflow.run()
+        await WorkflowTestRunner(TestWorkflow()).run()
 
 
 @pytest.mark.asyncio
@@ -310,11 +303,13 @@ async def test_workflow_multiple_runs() -> None:
         async def step(self, ev: StartEvent) -> StopEvent:
             return StopEvent(result=ev.number * 2)
 
-    workflow = DummyWorkflow()
+    runner = WorkflowTestRunner(DummyWorkflow())
     results = await asyncio.gather(
-        workflow.run(number=3), workflow.run(number=42), workflow.run(number=-99)
+        runner.run(StartEvent(number=3)),  # type: ignore
+        runner.run(StartEvent(number=42)),  # type: ignore
+        runner.run(StartEvent(number=-99)),  # type: ignore
     )
-    assert set(results) == {6, 84, -198}
+    assert set([r.result for r in results]) == {6, 84, -198}
 
 
 def test_add_step() -> None:
@@ -356,9 +351,8 @@ async def test_workflow_task_raises() -> None:
         async def step(self, ev: StartEvent) -> StopEvent:
             raise ValueError("The step raised an error!")
 
-    workflow = DummyWorkflow()
     with pytest.raises(ValueError, match="The step raised an error!"):
-        await workflow.run()
+        await WorkflowTestRunner(DummyWorkflow()).run()
 
 
 def test_workflow_disable_validation() -> None:
@@ -385,21 +379,21 @@ async def test_workflow_continue_context() -> None:
     wf = DummyWorkflow()
 
     # first run
-    r = wf.run()
-    result = await r
-    assert r.ctx
-    assert result == "Done"
-    assert await r.ctx.store.get("number") == 1
+    r = await WorkflowTestRunner(wf).run()
+    assert r.result == "Done"
+    ctx = wf._contexts.pop()
+    assert ctx
+    assert await ctx.store.get("number") == 1
 
     # second run -- independent from the first
-    r = wf.run()
-    result = await r
-    assert r.ctx
-    assert result == "Done"
-    assert await r.ctx.store.get("number") == 1
+    r = await WorkflowTestRunner(wf).run()
+    assert r.result == "Done"
+    ctx = wf._contexts.pop()
+    assert ctx
+    assert await ctx.store.get("number") == 1
 
     # third run -- continue from the second run
-    r = wf.run(ctx=r.ctx)
+    r = wf.run(ctx=ctx)
     result = await r
     assert r.ctx
     assert result == "Done"
@@ -417,23 +411,23 @@ async def test_workflow_pickle() -> None:
             return StopEvent(result="Done")
 
     wf = DummyWorkflow()
-    handler = wf.run()
-    assert handler.ctx
-    _ = await handler
+    await WorkflowTestRunner(wf).run()
+    ctx = wf._contexts.pop()
+    assert ctx
 
     # by default, we can't pickle the LLM/embedding object
     with pytest.raises(ValueError):
-        state_dict = handler.ctx.to_dict()
+        state_dict = ctx.to_dict()
 
     # if we allow pickle, then we can pickle the LLM/embedding object
-    state_dict = handler.ctx.to_dict(serializer=PickleSerializer())
+    state_dict = ctx.to_dict(serializer=PickleSerializer())
     new_handler = WorkflowHandler(
         ctx=Context.from_dict(wf, state_dict, serializer=PickleSerializer())
     )
     assert new_handler.ctx
 
     # check that the step count is the same
-    cur_step = await handler.ctx.store.get("step")
+    cur_step = await ctx.store.get("step")
     new_step = await new_handler.ctx.store.get("step")
     assert new_step == cur_step
 
@@ -480,11 +474,9 @@ class HumanInTheLoopWorkflow(Workflow):
 
 @pytest.mark.asyncio
 async def test_human_in_the_loop() -> None:
-    workflow = HumanInTheLoopWorkflow(timeout=1)
-
     # workflow should raise a timeout error because hitl only works with streaming
     with pytest.raises(WorkflowTimeoutError):
-        await workflow.run()
+        await WorkflowTestRunner(HumanInTheLoopWorkflow(timeout=1)).run()
 
     # workflow should work with streaming
     workflow = HumanInTheLoopWorkflow()
@@ -651,11 +643,8 @@ async def test_custom_stop_event() -> None:
     assert result.outcome == "Workflow completed"
 
     # ensure that streaming exits
-    handler = wf.run(query="foo")
-    async for event in handler.stream_events():
-        await asyncio.sleep(0.01)
-
-    _ = await handler
+    r = await WorkflowTestRunner(wf).run(MyStart(query="foo"))
+    assert len(r.collected) > 0
 
 
 @pytest.mark.asyncio
@@ -789,9 +778,8 @@ async def test_workflow_validation_steps_cannot_accept_stop_event() -> None:
         async def bad_step(self, ev: StopEvent) -> StopEvent:
             return StopEvent()
 
-    workflow = InvalidWorkflowSingleStep()
     with pytest.raises(
         WorkflowValidationError,
         match="Step 'bad_step' cannot accept StopEvent. StopEvent signals the end of the workflow. Use a different Event type instead.",
     ):
-        await workflow.run()
+        await WorkflowTestRunner(InvalidWorkflowSingleStep()).run()

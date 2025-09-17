@@ -11,6 +11,7 @@ from workflows.events import (
     StopEvent,
 )
 from workflows.workflow import Workflow
+from workflows.testing import WorkflowTestRunner
 
 from .conftest import OneTestEvent
 
@@ -27,9 +28,8 @@ class PostponedAnnotationsWorkflow(Workflow):
 
 @pytest.mark.asyncio
 async def test_workflow_postponed_annotations() -> None:
-    workflow = PostponedAnnotationsWorkflow()
-    result = await workflow.run()
-    assert result == "Handled postponed"
+    r = await WorkflowTestRunner(PostponedAnnotationsWorkflow()).run()
+    assert r.result == "Handled postponed"
 
 
 @pytest.mark.asyncio
@@ -43,6 +43,5 @@ async def test_workflow_forward_reference() -> None:
         async def step2(self, ev: OneTestEvent) -> StopEvent:
             return StopEvent(result=f"Handled {ev.test_param}")
 
-    workflow = ForwardRefWorkflow()
-    result = await workflow.run()
-    assert result == "Handled forward"
+    r = await WorkflowTestRunner(ForwardRefWorkflow()).run()
+    assert r.result == "Handled forward"
