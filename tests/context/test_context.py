@@ -16,6 +16,7 @@ from typing import Optional
 from unittest import mock
 
 import pytest
+from pydantic import BaseModel
 
 from workflows.context import Context
 from workflows.context.state_store import DictState
@@ -186,8 +187,11 @@ async def test_wait_for_event_in_workflow() -> None:
     class TestWorkflow(Workflow):
         @step
         async def step1(self, ctx: Context, ev: StartEvent) -> StopEvent:
-            ctx.write_event_to_stream(Event(msg="foo"))
-            result = await ctx.wait_for_event(Event)
+            result = await ctx.wait_for_event(
+                Event,
+                waiter_event=Event(msg="foo"),
+                waiter_id="test_id",
+            )
             return StopEvent(result=result.msg)
 
     workflow = TestWorkflow()
@@ -200,6 +204,51 @@ async def test_wait_for_event_in_workflow() -> None:
 
     result = await handler
     assert result == "bar"
+
+
+class CustomState(BaseModel):
+    pass
+
+
+@pytest.mark.asyncio
+async def test_wait_for_event_in_workflow_serialization() -> None:
+    """Ensure hitl works with serialization and custom state."""
+
+    class TestWorkflow(Workflow):
+        @step
+        async def step1(self, ctx: Context[CustomState], ev: StartEvent) -> StopEvent:
+            result = await ctx.wait_for_event(
+                Event,
+                waiter_event=Event(msg="foo"),
+                waiter_id="test_id",
+            )
+            return StopEvent(result=result.msg)
+
+    workflow = TestWorkflow()
+    handler = workflow.run()
+    ctx_dict = None
+
+    assert handler.ctx
+    async for ev in handler.stream_events():
+        if isinstance(ev, Event) and ev.msg == "foo":
+            ctx_dict = handler.ctx.to_dict()
+            assert len(ctx_dict["waiting_ids"]) == 1
+            await handler.cancel_run()
+            break
+
+    # Roundtrip the context
+    assert ctx_dict is not None
+    new_ctx = Context.from_dict(workflow, ctx_dict)
+    assert len(new_ctx._waiting_ids) == 1
+    new_handler = workflow.run(ctx=new_ctx)
+
+    # Continue the workflow
+    assert new_handler.ctx
+    new_handler.ctx.send_event(Event(msg="bar"))
+
+    result = await new_handler
+    assert result == "bar"
+    assert len(new_handler.ctx._waiting_ids) == 0
 
 
 @pytest.mark.asyncio
