@@ -37,7 +37,7 @@ async def client(
     server.add_workflow("error", error_workflow)
     server.add_workflow("streaming", streaming_workflow)
     server.add_workflow("interactive", interactive_workflow)
-    async with server:
+    async with server.contextmanager():
         transport = ASGITransport(app=server.app)
 
         async with AsyncClient(transport=transport, base_url="http://test") as client:

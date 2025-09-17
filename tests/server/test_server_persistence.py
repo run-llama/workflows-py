@@ -27,7 +27,7 @@ async def server_with_store(
 ) -> AsyncGenerator[WorkflowServer, None]:
     server = WorkflowServer(workflow_store=memory_store)
     server.add_workflow("test", interactive_workflow)
-    async with server:
+    async with server.contextmanager():
         yield server
 
 
@@ -94,7 +94,7 @@ async def test_resume_active_handlers_across_server_restart(
     # Second server: same store and workflow, explicitly initialize active handlers
     server2 = WorkflowServer(workflow_store=memory_store)
     server2.add_workflow("test", simple_test_workflow)
-    async with server2:  # start and stop it
+    async with server2.contextmanager():  # start and stop it
         # The handler should be registered under the same id
         assert handler_id in server2._handlers
 
@@ -110,7 +110,7 @@ async def test_store_is_updated_on_workflow_failure(
     # Build a server with a failing workflow and the in-memory store
     server = WorkflowServer(workflow_store=memory_store)
     server.add_workflow("error", error_workflow)
-    async with server:
+    async with server.contextmanager():
         # Start a workflow through internal runner to exercise persistence updates
         handler_id = "fail-1"
         handler = server._workflows["error"].run()
@@ -155,7 +155,7 @@ async def test_startup_ignores_unregistered_workflows(
 
     server = WorkflowServer(workflow_store=memory_store)
     server.add_workflow("test", simple_test_workflow)
-    async with server:  # start and stop it
+    async with server.contextmanager():  # start and stop it
         assert "unknown-1" not in server._handlers
         assert "known-1" in server._handlers
 
@@ -202,7 +202,7 @@ async def test_persistence_retries_on_failure(
     )
     server.add_workflow("test", simple_test_workflow)
 
-    async with server:
+    async with server.contextmanager():
         # Start a workflow to trigger persistence
         handler_id = "retry-test"
         handler = server._workflows["test"].run()
@@ -246,7 +246,7 @@ async def test_workflow_cancelled_after_all_retries_fail(
         persistence_backoff=[0.0, 0.0],  # 2 retries, very short backoffs
     )
     server.add_workflow("test", streaming_workflow)
-    async with server:
+    async with server.contextmanager():
         try:
             # Start a workflow to trigger persistence
             handler_id = "cancel-test"

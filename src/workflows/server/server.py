@@ -9,7 +9,6 @@ import json
 import logging
 from importlib.metadata import version
 from pathlib import Path
-from types import TracebackType
 from typing import Any, AsyncGenerator
 
 import uvicorn
@@ -120,10 +119,15 @@ class WorkflowServer:
             ),
         ]
 
+        @asynccontextmanager
+        async def lifespan(app: Starlette) -> AsyncGenerator[None, None]:
+            async with self.contextmanager():
+                yield
+
         self.app = Starlette(
             routes=self._routes,
             middleware=self._middleware,
-            lifespan=lambda _: self._lifespan(),
+            lifespan=lifespan,
         )
         # Serve the UI as static files
         self.app.mount(
@@ -133,7 +137,7 @@ class WorkflowServer:
     def add_workflow(self, name: str, workflow: Workflow) -> None:
         self._workflows[name] = workflow
 
-    async def __aenter__(self) -> "WorkflowServer":
+    async def start(self) -> "WorkflowServer":
         """Resumes previously running workflows, if they were not complete at last shutdown"""
         handlers = await self._workflow_store.query(
             HandlerQuery(
@@ -149,12 +153,16 @@ class WorkflowServer:
             )
         return self
 
-    async def __aexit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc: BaseException | None,
-        tb: TracebackType | None,
-    ) -> None:
+    @asynccontextmanager
+    async def contextmanager(self) -> AsyncGenerator["WorkflowServer", None]:
+        """Use this server as a context manager to start and stop it"""
+        await self.start()
+        try:
+            yield self
+        finally:
+            await self.stop()
+
+    async def stop(self) -> None:
         logger.info(
             f"Shutting down Workflow server. Cancelling {len(self._handlers)} handlers."
         )
@@ -856,12 +864,6 @@ class WorkflowServer:
 
         task = asyncio.create_task(_stream_events(handler))
         self._handlers[handler_id] = _WorkflowHandler(handler, queue, task)
-
-    @asynccontextmanager
-    async def _lifespan(self) -> AsyncGenerator[None, None]:
-        # checking the store for any incomplete runs and restart them
-        async with self:
-            yield
 
 
 @dataclass
