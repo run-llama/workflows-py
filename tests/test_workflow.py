@@ -412,7 +412,7 @@ async def test_workflow_pickle() -> None:
 
     wf = DummyWorkflow()
     await WorkflowTestRunner(wf).run()
-    ctx = wf._contexts.pop()
+    ctx = wf._contexts.copy().pop()
     assert ctx
 
     # by default, we can't pickle the LLM/embedding object
@@ -431,12 +431,10 @@ async def test_workflow_pickle() -> None:
     new_step = await new_handler.ctx.store.get("step")
     assert new_step == cur_step
 
-    handler = wf.run(ctx=new_handler.ctx)
-    assert handler.ctx
-    _ = await handler
+    await WorkflowTestRunner(wf).run(ctx=new_handler.ctx)
 
     # check that the step count is incremented
-    assert await handler.ctx.store.get("step") == cur_step + 1
+    assert await new_handler.ctx.store.get("step") == cur_step + 1
 
 
 @pytest.mark.asyncio
