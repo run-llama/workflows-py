@@ -7,6 +7,7 @@ from typing import AsyncGenerator
 import pytest
 
 from workflows.context import Context
+from workflows.testing import WorkflowTestRunner
 from workflows.decorators import step
 from workflows.errors import WorkflowRuntimeError, WorkflowTimeoutError
 from workflows.events import Event, StartEvent, StopEvent
@@ -31,14 +32,10 @@ class StreamingWorkflow(Workflow):
 
 @pytest.mark.asyncio
 async def test_e2e() -> None:
-    wf = StreamingWorkflow()
-    r = wf.run()
+    test_runner = WorkflowTestRunner(StreamingWorkflow())
+    r = await test_runner.run(expose_internal=False, exclude_events=[StopEvent])
 
-    async for ev in r.stream_events():
-        if not isinstance(ev, StopEvent):
-            assert "msg" in ev
-
-    await r
+    assert all("msg" in ev for ev in r.collected)
 
 
 @pytest.mark.asyncio
@@ -86,19 +83,11 @@ async def test_task_timeout() -> None:
 
 @pytest.mark.asyncio
 async def test_multiple_sequential_streams() -> None:
-    wf = StreamingWorkflow()
-    r = wf.run()
-
+    test_runner = WorkflowTestRunner(StreamingWorkflow())
     # stream 1
-    async for _ in r.stream_events():
-        pass
-    await r
-
+    await test_runner.run(StartEvent())
     # stream 2 -- should not raise an error
-    r = wf.run()
-    async for _ in r.stream_events():
-        pass
-    await r
+    await test_runner.run(StartEvent())
 
 
 @pytest.mark.asyncio

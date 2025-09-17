@@ -39,7 +39,7 @@ class WorkflowTestRunner:
 
     async def run(
         self,
-        start_event: StartEvent,
+        start_event: StartEvent = StartEvent(),
         expose_internal: bool = True,
         exclude_events: Optional[list[EventType]] = None,
     ) -> WorkflowTestResult:
