@@ -30,11 +30,13 @@ class WorkflowHandler(asyncio.Future[RunResultT]):
         *args: Any,
         ctx: Context | None = None,
         run_id: str | None = None,
+        run_task: asyncio.Task[None] | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(*args, **kwargs)
         self.run_id = run_id
         self._ctx = ctx
+        self._run_task = run_task
         self._all_events_consumed = False
 
     @property
