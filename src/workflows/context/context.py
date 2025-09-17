@@ -129,6 +129,7 @@ class Context(Generic[MODEL_T]):
         # Global data storage
         self._lock = asyncio.Lock()
         self._state_store: InMemoryStateStore[MODEL_T] | None = None
+        self._waiting_ids: set[str] = set()
 
         # instrumentation
         self._dispatcher = workflow._dispatcher
@@ -272,6 +273,7 @@ class Context(Generic[MODEL_T]):
             "accepted_events": self._accepted_events,
             "broker_log": [serializer.serialize(ev) for ev in self._broker_log],
             "is_running": self.is_running,
+            "waiting_ids": list(self._waiting_ids),
         }
 
     @classmethod
@@ -347,6 +349,10 @@ class Context(Generic[MODEL_T]):
                 for k, v in data["queues"].items()
             }
             context._in_progress = defaultdict(list)
+
+            # restore waiting ids for hitl
+            context._waiting_ids = set(data["waiting_ids"])
+
             return context
         except KeyError as e:
             msg = "Error creating a Context instance: the provided payload has a wrong or old format."
@@ -624,9 +630,9 @@ class Context(Generic[MODEL_T]):
 
         # send the waiter event if it's not already sent
         if waiter_event is not None:
-            is_waiting = await self.store.get(waiter_id, default=False)
+            is_waiting = waiter_id in self._waiting_ids
             if not is_waiting:
-                await self.store.set(waiter_id, True)
+                self._waiting_ids.add(waiter_id)
                 self.write_event_to_stream(waiter_event)
 
         while True:
@@ -648,7 +654,8 @@ class Context(Generic[MODEL_T]):
                     )
                 )
             finally:
-                await self.store.set(waiter_id, False)
+                if waiter_id in self._waiting_ids:
+                    self._waiting_ids.remove(waiter_id)
 
     def write_event_to_stream(self, ev: Event | None) -> None:
         """Enqueue an event for streaming to [WorkflowHandler]](workflows.handler.WorkflowHandler).
