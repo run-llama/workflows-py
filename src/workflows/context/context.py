@@ -636,26 +636,22 @@ class Context(Generic[MODEL_T]):
                 self.write_event_to_stream(waiter_event)
 
         while True:
-            try:
-                event = await asyncio.wait_for(
-                    self._queues[waiter_id].get(), timeout=timeout
+            event = await asyncio.wait_for(
+                self._queues[waiter_id].get(), timeout=timeout
+            )
+            if type(event) is event_type:
+                if all(getattr(event, k, None) == v for k, v in requirements.items()):
+                    if waiter_id in self._waiting_ids:
+                        self._waiting_ids.remove(waiter_id)
+                    return event
+                else:
+                    continue
+            self.write_event_to_stream(
+                EventsQueueChanged(
+                    name=waiter_id,
+                    size=self._queues[waiter_id].qsize(),
                 )
-                if type(event) is event_type:
-                    if all(
-                        getattr(event, k, None) == v for k, v in requirements.items()
-                    ):
-                        return event
-                    else:
-                        continue
-                self.write_event_to_stream(
-                    EventsQueueChanged(
-                        name=waiter_id,
-                        size=self._queues[waiter_id].qsize(),
-                    )
-                )
-            finally:
-                if waiter_id in self._waiting_ids:
-                    self._waiting_ids.remove(waiter_id)
+            )
 
     def write_event_to_stream(self, ev: Event | None) -> None:
         """Enqueue an event for streaming to [WorkflowHandler]](workflows.handler.WorkflowHandler).

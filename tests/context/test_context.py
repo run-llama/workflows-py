@@ -239,6 +239,7 @@ async def test_wait_for_event_in_workflow_serialization() -> None:
     # Roundtrip the context
     assert ctx_dict is not None
     new_ctx = Context.from_dict(workflow, ctx_dict)
+    assert len(new_ctx._waiting_ids) == 1
     new_handler = workflow.run(ctx=new_ctx)
 
     # Continue the workflow
