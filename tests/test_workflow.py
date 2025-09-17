@@ -393,11 +393,11 @@ async def test_workflow_continue_context() -> None:
     assert await ctx.store.get("number") == 1
 
     # third run -- continue from the second run
-    r = wf.run(ctx=ctx)
-    result = await r
-    assert r.ctx
+    handler = wf.run(ctx=ctx)
+    result = await handler
+    assert handler.ctx
     assert result == "Done"
-    assert await r.ctx.store.get("number") == 2
+    assert await handler.ctx.store.get("number") == 2
 
 
 @pytest.mark.asyncio
