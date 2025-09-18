@@ -117,10 +117,76 @@ class ProcessingWorkflow(Workflow):
         return StopEvent(result={"processed_items": results, "total": len(results)})
 
 
+class ComplicatedInput(StartEvent):
+    age: int
+    name: str
+    terrestrian: bool
+    language: str
+
+
+class ChildTerrestrialEvent(Event):
+    greeting: str
+
+
+class AdultTerrestrialEvent(Event):
+    greeting: str
+
+
+class ExtraTerrestrialEvent(Event):
+    language: str
+    greeting: str
+
+
+class ComplicatedWorkflow(Workflow):
+    @step
+    async def first_step(
+        self, ev: ComplicatedInput
+    ) -> ChildTerrestrialEvent | AdultTerrestrialEvent | ExtraTerrestrialEvent:
+        if ev.age < 18 and ev.terrestrian:
+            return ChildTerrestrialEvent(
+                greeting=f"Hello, terrestrial child named {ev.name}"
+            )
+        elif ev.age >= 18 and ev.terrestrian:
+            return AdultTerrestrialEvent(
+                greeting=f"My regards, terrestrial adult named {ev.name}"
+            )
+        else:
+            if ev.language.lower() == "martian":
+                return ExtraTerrestrialEvent(
+                    greeting="Ifmmp uifsf!", language="martian"
+                )
+            elif ev.language.lower() == "venusian":
+                return ExtraTerrestrialEvent(
+                    greeting="!ereht olleH", language="venusian"
+                )
+            else:
+                return ExtraTerrestrialEvent(
+                    greeting="Sorry, I do not speak your language", language=ev.language
+                )
+
+    @step
+    async def terrestrial_child_step(self, ev: ChildTerrestrialEvent) -> StopEvent:
+        return StopEvent(result="Hello back, old person")
+
+    @step
+    async def terrestrial_adult_step(self, ev: AdultTerrestrialEvent) -> StopEvent:
+        return StopEvent(result="Hello back, young fella")
+
+    @step
+    async def extraterrestrial_strp(self, ev: ExtraTerrestrialEvent) -> StopEvent:
+        if ev.language == "martian":
+            return StopEvent(result="Ifmmp cbdl!")
+        elif ev.language == "venusian":
+            return StopEvent(result="kcab olleH")
+        else:
+            return StopEvent(result="Xyubpifhabpmfsh!")
+
+
 async def main() -> None:
     server = WorkflowServer()
 
     # Register workflows
+    server.add_workflow("universe_communication", ComplicatedWorkflow())
     server.add_workflow("greeting", GreetingWorkflow())
     server.add_workflow("math", MathWorkflow())
     server.add_workflow("processing", ProcessingWorkflow())

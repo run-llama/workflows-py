@@ -3,11 +3,14 @@ document.addEventListener('DOMContentLoaded', () => {
     const runButton = document.getElementById('run-button');
     const runsContainer = document.getElementById('runs');
     const eventStreamContainer = document.getElementById('event-stream');
+    const workflowViz = document.getElementById('workflowViz')
 
     let activeRunId = null;
     const eventStreams = {};
+    let cy = null;
     let currentSchema = null;
     let currentOutput = null;
+    let currentWorkflowViz = null;
 
     // Fetch workflows on page load
     fetch('/workflows')
@@ -131,9 +134,15 @@ document.addEventListener('DOMContentLoaded', () => {
                     if (line.trim() === '') continue;
                     try {
                         const eventData = JSON.parse(line);
+                        highlightNode(eventData.qualified_name.replace("__main__.", "").replace("workflows.events.", ""))
                         let eventDetails = "";
+                        let currentStepName = "";
                         for (const key in eventData.value) {
                             const value = eventData.value[key];
+                            if (eventData.qualified_name === "workflows.events.StepStateChange" && key === "name") {
+                                currentStepName = value
+                                highlightNode(currentStepName)
+                            }
                             if (!value || value.toString().trim() === '') {
                                 eventDetails += `<details class="mb-2"><summary class="cursor-pointer text-gray-700 hover:text-gray-900 font-medium">${key}</summary><p class="mt-1 ml-4 text-gray-600 text-sm">No data</p></details>`;
                             } else {
@@ -574,7 +583,7 @@ document.addEventListener('DOMContentLoaded', () => {
         if (!selectedWorkflow) {
             // Reset to fallback form if no workflow selected
             generateFormFields(null);
-            generateOutputFields(null)
+            generateOutputFields(null);
             return;
         }
 
@@ -588,7 +597,228 @@ document.addEventListener('DOMContentLoaded', () => {
             currentOutput = stopSchema;
             generateOutputFields(stopSchema);
         }
+
+        fetchWorkflowViz(selectedWorkflow)
     }
+
+    async function fetchWorkflowViz(selectedWorkflow) {
+        const workflowViz = document.getElementById('workflowViz');
+
+        try {
+            const response = await fetch(`/workflows/${selectedWorkflow}/representation`);
+
+            if (!response.ok) {
+                const errData = await response.json().catch(() => ({}));
+                workflowViz.innerHTML = `<p class="text-red-500 text-lg">An error occurred while retrieving the visualization for the workflow<br>${response.status}: ${JSON.stringify(errData)}<br>Try with another workflow</p>`;
+                workflowViz.classList.replace("bg-gray-50", "bg-red-300");
+                return;
+            }
+
+            const vizJson = await response.json();
+            const vizData = vizJson.result;
+
+            // Clear the container and reset styling
+            workflowViz.innerHTML = '';
+            workflowViz.classList.replace("bg-red-300", "bg-gray-50");
+
+            // Set container height for Cytoscape
+            workflowViz.style.height = '600px';
+            workflowViz.style.width = '100%';
+
+            // Initialize Cytoscape
+            cy = cytoscape({
+                container: workflowViz,
+
+                elements: vizData.elements,
+
+                style: [
+                    // Default styles if not provided by backend
+                    {
+                        selector: '.node-step',
+                        style: {
+                            'background-color': '#92AEFF',
+                            'label': 'data(label)',
+                            'text-valign': 'top',
+                            'text-halign': 'center',
+                            'color': 'white',
+                            'text-outline-width': 1,
+                            'text-outline-color': '#3E18F9',
+                            'shape': 'rectangle',
+                            'width': 'label',
+                            'height': 40,
+                            'font-size': '14px',
+                            'font-weight': 'bold',
+                            'padding': '10px',
+                            'border-width': 1,
+                            'border-color': '#2980b9',
+                            'border-style': 'solid'
+                        }
+                    },
+                    {
+                        selector: 'node',
+                        style: {
+                            'label': 'data(label)',
+                            'text-valign': 'top',
+                            'text-halign': 'center',
+                            'color': 'white',
+                            'font-size': '12px',
+                            'font-weight': 'bold',
+                            'text-outline-width': 1,
+                            'text-outline-color': '#000'
+                        }
+                    },
+                    {
+                        selector: '.node-event',
+                        style: {
+                            'background-color': '#FDEDBA',
+                            'label': 'data(label)',
+                            'text-valign': 'top',
+                            'text-halign': 'center',
+                            'color': 'white',
+                            'text-outline-width': 1,
+                            'text-outline-color': '#FF8705',
+                            'shape': 'diamond',
+                            'width': 'label',
+                            'height': 'label',
+                            'font-size': '12px',
+                            'font-weight': 'bold',
+                            'padding': '10px',
+                            'border-width': 1,
+                            'border-color': '#2980b9',
+                            'border-style': 'solid'
+                        }
+                    },
+                    {
+                        selector: '.node-external',
+                        style: {
+                            'background-color': '#f39c12',
+                            'label': 'data(label)',
+                            'text-valign': 'top',
+                            'text-halign': 'center',
+                            'color': 'white',
+                            'shape': 'diamond',
+                            'width': 'label',
+                            'height': 'label',
+                            'font-size': '12px',
+                            'font-weight': 'bold',
+                            'padding': '15px'
+                        }
+                    },
+                    {
+                        selector: '.workflow-edge',
+                        style: {
+                            'curve-style': 'bezier',
+                            'target-arrow-shape': 'triangle',
+                            'arrow-scale': 1.5,
+                            'line-color': '#666',
+                            'target-arrow-color': '#666',
+                            'width': 2
+                        }
+                    },
+                    {
+                        selector: 'edge',
+                        style: {
+                            'curve-style': 'bezier',
+                            'target-arrow-shape': 'triangle',
+                            'arrow-scale': 1.5,
+                            'line-color': '#666',
+                            'target-arrow-color': '#666',
+                            'width': 2
+                        }
+                    },
+                    {
+                        selector: '.node-step:selected',
+                        style: {
+                            'background-color': '#4B72FE',
+                            'border-width': 3,
+                            'border-style': 'solid',
+                            'border-opacity': 0.8
+                        }
+                    },
+                    {
+                        selector: '.node-event:selected',
+                        style: {
+                            'background-color': '#FFBD74',
+                            'border-width': 3,
+                            'border-style': 'solid',
+                            'border-opacity': 0.8
+                        }
+                    },
+                    {
+                        selector: 'node:selected',
+                        style: {
+                            'border-width': 3,
+                            'border-color': '#34495e',
+                            'border-opacity': 0.8
+                        }
+                    }
+                ],
+
+                layout: {
+                    name: 'dagre',
+                    directed: true,
+                    rankDir: 'LR', // Left to Right
+                    spacingFactor: 1.5,
+                    nodeSep: 50,
+                    rankSep: 100,
+                    padding: 30
+                },
+
+                // Interactive options
+                userZoomingEnabled: true,
+                userPanningEnabled: true,
+                boxSelectionEnabled: false,
+                selectionType: 'single',
+                touchTapThreshold: 8,
+                desktopTapThreshold: 4,
+                autolock: false,
+                autoungrabify: false,
+                autounselectify: false
+            });
+
+            // Add click event for nodes (optional - shows node info)
+            cy.on('tap', 'node', function(event) {
+                const node = event.target;
+                const data = node.data();
+
+                let info = `Node: ${data.label}\nType: ${data.type}`;
+                if (data.title) info += `\nTitle: ${data.title}`;
+                if (data.event_type) info += `\nEvent Type: ${data.event_type}`;
+
+                // You can customize this - maybe show a tooltip or modal instead
+                alert(info);
+            });
+
+            // Fit the graph to the container
+            cy.fit();
+            cy.center();
+
+        } catch (error) {
+            console.error('Error fetching workflow visualization:', error);
+            workflowViz.innerHTML = `<p class="text-red-500 text-lg">An unexpected error occurred while loading the workflow visualization.<br>Please try again.</p>`;
+            workflowViz.classList.replace("bg-gray-50", "bg-red-300");
+        }
+    }
+
+    // Change a specific node by ID
+    function highlightNode(nodeId, color = '#43BF69') {
+        const node = cy.getElementById(nodeId);
+        if (node.length === 0) {
+            return;
+        }
+        node.updateStyle({
+            'background-color': color,
+            'border-width': 3,
+            'border-color': '#FFE66D'
+        });
+    }
+
+    // Reset node to original style
+    function resetNode(nodeId) {
+        const node = cy.getElementById(nodeId);
+        node.removeStyle(); // Removes inline styles, goes back to CSS rules
+    }
+
 
     document.getElementById('workflow-select').addEventListener('change', handleWorkflowSelectChange);
 

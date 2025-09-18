@@ -41,6 +41,7 @@ from workflows.server.abstract_workflow_store import (
     Status,
 )
 from .utils import nanoid
+from .representation_utils import _extract_workflow_structure, workflow_to_cytoscape
 
 logger = logging.getLogger()
 
@@ -115,6 +116,11 @@ class WorkflowServer:
             Route(
                 "/handlers",
                 self._get_handlers,
+                methods=["GET"],
+            ),
+            Route(
+                "/workflows/{name}/representation",
+                self._get_workflow_representation,
                 methods=["GET"],
             ),
         ]
@@ -380,6 +386,61 @@ class WorkflowServer:
             )
 
         return JSONResponse({"start": start_event_schema, "stop": stop_event_schema})
+
+    async def _get_workflow_representation(self, request: Request) -> JSONResponse:
+        """
+        ---
+        summary: Get the representation of the workflow
+        description: |
+          Get the representation of the workflow as a directed graph in JSON format, compatible with CytoscapeJS
+        parameters:
+          - in: path
+            name: name
+            required: true
+            schema:
+              type: string
+            description: Registered workflow name.
+        requestBody:
+          required: false
+        responses:
+          200:
+            description: CitoScapeJS-compatible representation successfully retrieved
+            content:
+              application/json:
+                schema:
+                  type: object
+                  properties:
+                    result:
+                      description: the elements of the CitoScapeJS-compatible representation
+                  required: [result]
+          404:
+            description: Workflow not found
+          500:
+            description: Error while getting CitoScapeJS-compatible workflow representation
+        """
+        workflow = self._extract_workflow(request)
+        try:
+            workflow_graph = _extract_workflow_structure(workflow.workflow)
+            elements = workflow_to_cytoscape(workflow_graph)
+            classedElements: dict[str, list] = {"elements": []}
+            for element in elements["elements"]:
+                if element["data"].get("type"):
+                    if element["data"]["type"] == "step":
+                        element["classes"] = "node-step"
+                    elif element["data"]["type"] == "event":
+                        element["classes"] = "node-event"
+                    elif element["data"]["type"] == "external":
+                        element["classes"] = "node-external"
+                else:
+                    element["classes"] = "workflow-edge"
+                classedElements["elements"].append(element)
+        except Exception as e:
+            raise HTTPException(
+                detail=f"Error while getting CitoScapeJS-compatible workflow representation: {e}",
+                status_code=500,
+            )
+
+        return JSONResponse({"result": classedElements})
 
     async def _run_workflow_nowait(self, request: Request) -> JSONResponse:
         """
