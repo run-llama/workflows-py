@@ -41,6 +41,12 @@ document.addEventListener('DOMContentLoaded', () => {
             runButton.disabled = true;
         });
 
+    nodeDescription.addEventListener('click', (e) => {
+        if (e.target && e.target.id === 'hideNodeDescription') {
+            nodeDescription.classList.add("hidden");
+        }
+    });
+
     runButton.addEventListener('click', () => {
         const workflowName = workflowSelect.value;
         if (!workflowName) {
@@ -135,7 +141,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     if (line.trim() === '') continue;
                     try {
                         const eventData = JSON.parse(line);
-                        highlightNode(eventData.qualified_name.replace("__main__.", "").replace("workflows.events.", ""))
+                        highlightNode(eventData.qualified_name.split(".").at(-1))
                         let eventDetails = "";
                         let currentStepName = "";
                         for (const key in eventData.value) {
@@ -146,8 +152,8 @@ document.addEventListener('DOMContentLoaded', () => {
                                 if (vizData) {
                                     for (const element of vizData.elements) {
                                         if (element.data.id === currentStepName) {
-                                            element.data.inputEvent = eventData.value["input_event_name"].replace("<class", "").replace(">", "").replace("__main__.", "").replace("workflows.events.", "") ?? "Not recorded";
-                                            element.data.outputEvent = eventData.value["output_event_name"].replace("<class", "").replace(">", "").replace("__main__.", "").replace("workflows.events.", "") ?? "Not recorded";
+                                            element.data.inputEvent = eventData.value["input_event_name"].replace("<class", "").replace(">", "").replaceAll("'", "").split(".").at(-1) ?? "Not recorded";
+                                            element.data.outputEvent = eventData.value["output_event_name"].replace("<class", "").replace(">", "").replaceAll("'", "").split(".").at(-1) ?? "Not recorded";
                                         }
                                     }
                                 }
@@ -799,27 +805,28 @@ document.addEventListener('DOMContentLoaded', () => {
                 let info = `<strong class="text-center text-xl">Node ${data.label}</strong><br><strong>Type</strong>: ${data.type}`;
                 if (data.title) info += `<br><strong>Title</strong>: ${data.title}`;
                 if (data.event_type) info += `<br><strong>Event Type</strong>: ${data.event_type}`;
-                if (data.inputEvent) info += `<br><strong>Input Event (last run)</strong>: ${data.inputEvent}`
-                if (data.outputEvent) info += `<br><strong>Output Event (last run)</strong>: ${data.outputEvent}<br>`
+                if (data.inputEvent) info += `<br><strong>Input Event (last call)</strong>: ${data.inputEvent}`
+                if (data.outputEvent) info += `<br><strong>Output Event (last call)</strong>: ${data.outputEvent}<br>`
 
                 // Remove all possible background colors first
                 nodeDescription.classList.remove("bg-gray-50", "bg-[#92AEFF]", "bg-[#FDEDBA]", "bg-[#FFBFF8]");
                 nodeDescription.classList.remove("hidden")
 
+                let bgButton = "bg-blue-600"
+                let txtButton = "text-white"
                 // Then add the correct one
                 if (data.type === "step") {
                     nodeDescription.classList.add("bg-[#92AEFF]");
+                    bgButton = "bg-[#4B72FE]"
                 } else if (data.type === "event") {
                     nodeDescription.classList.add("bg-[#FDEDBA]");
+                    bgButton = "bg-[#FFBD74]"
+                    txtButton = "text-gray-700"
                 } else {
                     nodeDescription.classList.add("bg-[#FFBFF8]");
                 }
 
-                nodeDescription.innerHTML = `<p class="text-gray-700 text-lg p-4">${info}</p>`;
-
-                setTimeout(() => {
-                    nodeDescription.classList.add("hidden")
-                }, 10000);
+                nodeDescription.innerHTML = `<p class="text-gray-700 text-lg p-4">${info}</p><br><button id="hideNodeDescription" class="w-full ${bgButton} ${txtButton} font-bold text-center rounded-lg shadow-lg">Hide Description</button>`;
             });
 
             // Fit the graph to the container
