@@ -8,33 +8,34 @@ You can create a `Workflow` to do anything! Build an agent, a RAG flow, an extra
 Workflows are also automatically instrumented, so you get observability into each step using tools like [Arize Pheonix](/python/framework/module_guides/observability/#arize-phoenix-local). (**NOTE:** Observability works for integrations that take advantage of the newer instrumentation system. Usage may vary.)
 
 
-!!! important
-    The Workflows library can be installed standalone, via `pip install llama-index-workflows`. However,
-    `llama-index-core` comes with a stable version of Workflows included.
+:::note
+The Workflows library can be installed standalone, via `pip install llama-index-workflows`. However,
+`llama-index-core` comes with a stable version of Workflows included.
 
-    In order to maintain the `llama_index` API stable and avoid breaking changes, when installing `llama-index-core` or
-    the `llama-index` umbrella package, Workflows can be accessed with the import path `llama_index.core.workflow`.
+In order to maintain the `llama_index` API stable and avoid breaking changes, when installing `llama-index-core` or
+the `llama-index` umbrella package, Workflows can be accessed with the import path `llama_index.core.workflow`.
+:::
 
 ## Getting Started
 
-!!! tip
-    Workflows make async a first-class citizen, and this page assumes you are running in an async environment. What this means for you is setting up your code for async properly. If you are already running in a server like FastAPI, or in a notebook, you can freely use await already!
+:::tip
+Workflows make async a first-class citizen, and this page assumes you are running in an async environment. What this means for you is setting up your code for async properly. If you are already running in a server like FastAPI, or in a notebook, you can freely use await already!
 
-    If you are running your own python scripts, its best practice to have a single async entry point.
+If you are running your own python scripts, its best practice to have a single async entry point.
 
-    ```python
-    async def main():
-        w = MyWorkflow(...)
-        result = await w.run(...)
-        print(result)
+```python
+async def main():
+    w = MyWorkflow(...)
+    result = await w.run(...)
+    print(result)
 
 
-    if __name__ == "__main__":
-        import asyncio
+if __name__ == "__main__":
+    import asyncio
 
-        asyncio.run(main())
-    ```
-
+    asyncio.run(main())
+```
+:::
 
 As an illustrative example, let's consider a naive workflow where a joke is generated and then critiqued.
 
