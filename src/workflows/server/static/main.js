@@ -4,13 +4,14 @@ document.addEventListener('DOMContentLoaded', () => {
     const runsContainer = document.getElementById('runs');
     const eventStreamContainer = document.getElementById('event-stream');
     const workflowViz = document.getElementById('workflowViz')
+    const nodeDescription = document.getElementById('nodeDescription')
 
     let activeRunId = null;
     const eventStreams = {};
     let cy = null;
     let currentSchema = null;
     let currentOutput = null;
-    let currentWorkflowViz = null;
+    let vizData = null;
 
     // Fetch workflows on page load
     fetch('/workflows')
@@ -142,6 +143,14 @@ document.addEventListener('DOMContentLoaded', () => {
                             if (eventData.qualified_name === "workflows.events.StepStateChanged" && key === "name") {
                                 currentStepName = value
                                 highlightNode(currentStepName)
+                                if (vizData) {
+                                    for (const element of vizData.elements) {
+                                        if (element.data.id === currentStepName) {
+                                            element.data.inputEvent = eventData.value["input_event_name"].replace("<class", "").replace(">", "").replace("__main__.", "").replace("workflows.events.", "") ?? "Not recorded";
+                                            element.data.outputEvent = eventData.value["output_event_name"].replace("<class", "").replace(">", "").replace("__main__.", "").replace("workflows.events.", "") ?? "Not recorded";
+                                        }
+                                    }
+                                }
                             }
                             if (!value || value.toString().trim() === '') {
                                 eventDetails += `<details class="mb-2"><summary class="cursor-pointer text-gray-700 hover:text-gray-900 font-medium">${key}</summary><p class="mt-1 ml-4 text-gray-600 text-sm">No data</p></details>`;
@@ -621,7 +630,7 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             const vizJson = await response.json();
-            const vizData = vizJson.result;
+            vizData = vizJson.result;
 
             // Clear the container and reset styling
             workflowViz.innerHTML = '';
@@ -787,12 +796,30 @@ document.addEventListener('DOMContentLoaded', () => {
                 const node = event.target;
                 const data = node.data();
 
-                let info = `Node: ${data.label}\nType: ${data.type}`;
-                if (data.title) info += `\nTitle: ${data.title}`;
-                if (data.event_type) info += `\nEvent Type: ${data.event_type}`;
+                let info = `<strong class="text-center text-xl">Node ${data.label}</strong><br><strong>Type</strong>: ${data.type}`;
+                if (data.title) info += `<br><strong>Title</strong>: ${data.title}`;
+                if (data.event_type) info += `<br><strong>Event Type</strong>: ${data.event_type}`;
+                if (data.inputEvent) info += `<br><strong>Input Event (last run)</strong>: ${data.inputEvent}`
+                if (data.outputEvent) info += `<br><strong>Output Event (last run)</strong>: ${data.outputEvent}<br>`
 
-                // You can customize this - maybe show a tooltip or modal instead
-                alert(info);
+                // Remove all possible background colors first
+                nodeDescription.classList.remove("bg-gray-50", "bg-[#92AEFF]", "bg-[#FDEDBA]", "bg-[#FFBFF8]");
+                nodeDescription.classList.remove("hidden")
+
+                // Then add the correct one
+                if (data.type === "step") {
+                    nodeDescription.classList.add("bg-[#92AEFF]");
+                } else if (data.type === "event") {
+                    nodeDescription.classList.add("bg-[#FDEDBA]");
+                } else {
+                    nodeDescription.classList.add("bg-[#FFBFF8]");
+                }
+
+                nodeDescription.innerHTML = `<p class="text-gray-700 text-lg p-4">${info}</p>`;
+
+                setTimeout(() => {
+                    nodeDescription.classList.add("hidden")
+                }, 10000);
             });
 
             // Fit the graph to the container
