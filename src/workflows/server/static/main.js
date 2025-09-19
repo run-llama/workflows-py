@@ -636,7 +636,48 @@ document.addEventListener('DOMContentLoaded', () => {
             }
 
             const vizJson = await response.json();
-            vizData = vizJson.result;
+            const vizDataRaw = vizJson.graph;
+            const vizElements = []
+            for (const node of vizDataRaw.nodes) {
+                node_data = {
+                    "data": {
+                        "id": node.id,
+                        "label": node.label,
+                        "type": node.node_type,
+                    },
+                }
+
+                if (node.node_type === "step") {
+                    node_data.classes = "node-step"
+                } else if (node.node_type === "event") {
+                    node_data.classes = "node-event"
+                } else if (node.node_type === "external") {
+                    node_data.classes = "node-external"
+                } else {
+                    node_data.classes = "node"
+                }
+
+                if (node.title) {
+                    node_data.data.title = node.title
+                }
+
+                if (node.event_type) {
+                    node_data.data.event_type = node.event_type
+                }
+                vizElements.push(node_data)
+            }
+            for (const edge of vizDataRaw.edges) {
+                edge_data = {
+                    "data": {
+                        "id": `${edge.source}-${edge.target}`,
+                        "source": edge.source,
+                        "target": edge.target,
+                    }
+                }
+                vizElements.push(edge_data)
+            }
+
+            vizData = {"elements": vizElements}
 
             // Clear the container and reset styling
             workflowViz.innerHTML = '';

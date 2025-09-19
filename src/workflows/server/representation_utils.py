@@ -1,5 +1,5 @@
-from dataclasses import dataclass
-from typing import List, Optional
+from dataclasses import dataclass, asdict
+from typing import List, Optional, Any
 
 from workflows.events import (
     StopEvent,
@@ -26,6 +26,15 @@ class DrawWorkflowNode:
         None  # Store the actual event type for styling decisions
     )
 
+    def to_dict(self) -> dict[str, Any]:
+        d = asdict(self)
+        ev_type = d.pop("event_type")
+        if ev_type:
+            d["event_type"] = ev_type.__name__
+        else:
+            d["event_type"] = ev_type
+        return d
+
 
 @dataclass
 class DrawWorkflowEdge:
@@ -34,6 +43,9 @@ class DrawWorkflowEdge:
     source: str
     target: str
 
+    def to_dict(self) -> dict[str, str]:
+        return asdict(self)
+
 
 @dataclass
 class DrawWorkflowGraph:
@@ -41,6 +53,12 @@ class DrawWorkflowGraph:
 
     nodes: List[DrawWorkflowNode]
     edges: List[DrawWorkflowEdge]
+
+    def to_dict(self) -> dict[str, list]:
+        return {
+            "nodes": [node.to_dict() for node in self.nodes],
+            "edges": [edge.to_dict() for edge in self.edges],
+        }
 
 
 def _truncate_label(label: str, max_length: int) -> str:
@@ -206,41 +224,3 @@ def _extract_workflow_structure(
                 edges.append(DrawWorkflowEdge("external_step", event_type.__name__))
 
     return DrawWorkflowGraph(nodes=nodes, edges=edges)
-
-
-def workflow_to_cytoscape(workflow_graph: DrawWorkflowGraph) -> dict:
-    """Convert DrawWorkflowGraph to Cytoscape.js format."""
-
-    elements = []
-
-    # Add nodes
-    for node in workflow_graph.nodes:
-        node_data = {
-            "data": {
-                "id": node.id,
-                "label": node.label,
-                "type": node.node_type,  # 'step', 'event', 'external'
-            }
-        }
-
-        # Add optional fields if they exist
-        if node.title:
-            node_data["data"]["title"] = node.title
-
-        if node.event_type:
-            node_data["data"]["event_type"] = node.event_type.__name__
-
-        elements.append(node_data)
-
-    # Add edges
-    for edge in workflow_graph.edges:
-        edge_data = {
-            "data": {
-                "id": f"{edge.source}-{edge.target}",  # Cytoscape needs unique edge IDs
-                "source": edge.source,
-                "target": edge.target,
-            }
-        }
-        elements.append(edge_data)
-
-    return {"elements": elements}
