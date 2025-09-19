@@ -137,17 +137,13 @@ async def test_resume_streams() -> None:
             return StopEvent(result="done")
 
     wf = CounterWorkflow()
-    handler_1 = wf.run()
+    await WorkflowTestRunner(wf).run()
+    ctx1 = wf._contexts.copy().pop()
+    assert ctx1
 
-    async for _ in handler_1.stream_events():
-        pass
-    await handler_1
-    assert handler_1.ctx
+    await WorkflowTestRunner(wf).run(ctx=ctx1)
 
-    handler_2 = wf.run(ctx=handler_1.ctx)
-    async for _ in handler_2.stream_events():
-        pass
-    await handler_2
+    ctx2 = wf._contexts.pop()
 
-    assert handler_2.ctx
-    assert await handler_2.ctx.store.get("cur_count") == 2
+    assert ctx2
+    assert await ctx2.store.get("cur_count") == 2

@@ -3,7 +3,7 @@ from collections import Counter
 from dataclasses import dataclass
 
 if TYPE_CHECKING:
-    from workflows import Workflow
+    from workflows import Workflow, Context
 from workflows.events import StartEvent, Event, EventType
 
 
@@ -40,6 +40,7 @@ class WorkflowTestRunner:
     async def run(
         self,
         start_event: StartEvent = StartEvent(),
+        ctx: Optional["Context"] = None,
         expose_internal: bool = True,
         exclude_events: Optional[list[EventType]] = None,
     ) -> WorkflowTestResult:
@@ -64,7 +65,7 @@ class WorkflowTestRunner:
             assert str(test_result.result) == "hello Adam!"
             ```
         """
-        handler = self._workflow.run(start_event=start_event)
+        handler = self._workflow.run(start_event=start_event, ctx=ctx)
         collected_events: list[Event] = []
         async for event in handler.stream_events(expose_internal=expose_internal):
             if exclude_events and type(event) in exclude_events:
