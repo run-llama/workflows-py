@@ -139,7 +139,7 @@ document.addEventListener('DOMContentLoaded', () => {
                         let currentStepName = "";
                         for (const key in eventData.value) {
                             const value = eventData.value[key];
-                            if (eventData.qualified_name === "workflows.events.StepStateChange" && key === "name") {
+                            if (eventData.qualified_name === "workflows.events.StepStateChanged" && key === "name") {
                                 currentStepName = value
                                 highlightNode(currentStepName)
                             }
@@ -151,6 +151,12 @@ document.addEventListener('DOMContentLoaded', () => {
                         }
                         const formattedEvent = `<div class="mb-4 p-3 bg-white rounded border border-gray-200"><strong class="text-gray-800">Event:</strong> <span class="text-blue-600 font-mono text-sm">${eventData.qualified_name}</span><br><strong class="text-gray-800">Data:</strong><div class="mt-2">${eventDetails}</div></div>`;
                         eventStreams[handlerId].push(formattedEvent);
+                        requestAnimationFrame(() => {
+                            setTimeout(() => {
+                                resetNode(eventData.qualified_name.replace("__main__.", "").replace("workflows.events.", ""))
+                                resetNode(currentStepName)
+                            }, 500); // Still add a small delay for visibility
+                        });
 
                         if (handlerId === activeRunId) {
                             eventStreamContainer.innerHTML += formattedEvent;
@@ -806,17 +812,20 @@ document.addEventListener('DOMContentLoaded', () => {
         if (node.length === 0) {
             return;
         }
-        node.updateStyle({
+        node.style({
             'background-color': color,
             'border-width': 3,
-            'border-color': '#FFE66D'
+            'text-outline-color': color,
         });
     }
 
     // Reset node to original style
     function resetNode(nodeId) {
         const node = cy.getElementById(nodeId);
-        node.removeStyle(); // Removes inline styles, goes back to CSS rules
+        if (node.length === 0) {
+            return;
+        }
+        node.removeStyle();
     }
 
 

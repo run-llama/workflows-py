@@ -140,40 +140,69 @@ class ExtraTerrestrialEvent(Event):
 class ComplicatedWorkflow(Workflow):
     @step
     async def first_step(
-        self, ev: ComplicatedInput
+        self,
+        ev: ComplicatedInput,
+        ctx: Context,
     ) -> ChildTerrestrialEvent | AdultTerrestrialEvent | ExtraTerrestrialEvent:
+        ctx.write_event_to_stream(ev)
+        await asyncio.sleep(1)
         if ev.age < 18 and ev.terrestrian:
+            ctx.write_event_to_stream(
+                ChildTerrestrialEvent(
+                    greeting=f"Hello, terrestrial child named {ev.name}"
+                )
+            )
             return ChildTerrestrialEvent(
                 greeting=f"Hello, terrestrial child named {ev.name}"
             )
         elif ev.age >= 18 and ev.terrestrian:
+            ctx.write_event_to_stream(
+                AdultTerrestrialEvent(
+                    greeting=f"My regards, terrestrial adult named {ev.name}"
+                )
+            )
             return AdultTerrestrialEvent(
                 greeting=f"My regards, terrestrial adult named {ev.name}"
             )
         else:
             if ev.language.lower() == "martian":
+                ctx.write_event_to_stream(
+                    ExtraTerrestrialEvent(greeting="Ifmmp uifsf!", language="martian")
+                )
                 return ExtraTerrestrialEvent(
                     greeting="Ifmmp uifsf!", language="martian"
                 )
             elif ev.language.lower() == "venusian":
+                ctx.write_event_to_stream(
+                    ExtraTerrestrialEvent(greeting="!ereht olleH", language="venusian")
+                )
                 return ExtraTerrestrialEvent(
                     greeting="!ereht olleH", language="venusian"
                 )
             else:
+                ctx.write_event_to_stream(
+                    ExtraTerrestrialEvent(
+                        greeting="Sorry, I do not speak your language",
+                        language=ev.language,
+                    )
+                )
                 return ExtraTerrestrialEvent(
                     greeting="Sorry, I do not speak your language", language=ev.language
                 )
 
     @step
     async def terrestrial_child_step(self, ev: ChildTerrestrialEvent) -> StopEvent:
+        await asyncio.sleep(1)
         return StopEvent(result="Hello back, old person")
 
     @step
     async def terrestrial_adult_step(self, ev: AdultTerrestrialEvent) -> StopEvent:
+        await asyncio.sleep(1)
         return StopEvent(result="Hello back, young fella")
 
     @step
-    async def extraterrestrial_strp(self, ev: ExtraTerrestrialEvent) -> StopEvent:
+    async def extraterrestrial_step(self, ev: ExtraTerrestrialEvent) -> StopEvent:
+        await asyncio.sleep(1)
         if ev.language == "martian":
             return StopEvent(result="Ifmmp cbdl!")
         elif ev.language == "venusian":
