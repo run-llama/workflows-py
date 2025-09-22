@@ -29,6 +29,7 @@ from workflows.events import (
     StartEvent,
     StopEvent,
 )
+from workflows.testing import WorkflowTestRunner
 from workflows.workflow import Workflow
 
 from ..conftest import AnotherTestEvent, OneTestEvent
@@ -57,9 +58,8 @@ async def test_collect_events() -> None:
                 return None
             return StopEvent(result=events)
 
-    workflow = TestWorkflow()
-    result = await workflow.run()
-    assert result == [ev1, ev2]
+    r = await WorkflowTestRunner(TestWorkflow()).run()
+    assert r.result == [ev1, ev2]
 
 
 @pytest.mark.asyncio
@@ -144,12 +144,12 @@ def test_to_dict_with_events_buffer(ctx: Context) -> None:
 
 @pytest.mark.asyncio
 async def test_empty_inprogress_when_workflow_done(workflow: Workflow) -> None:
-    h = workflow.run()
-    _ = await h
+    await WorkflowTestRunner(workflow).run()
+    ctx = workflow._contexts.pop()
 
     # there shouldn't be any in progress events
-    assert h.ctx is not None
-    for inprogress_list in h.ctx._in_progress.values():
+    assert ctx is not None
+    for inprogress_list in ctx._in_progress.values():
         assert len(inprogress_list) == 0
 
 

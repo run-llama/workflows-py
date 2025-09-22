@@ -8,6 +8,7 @@ from workflows.decorators import step
 from workflows.events import Event, StartEvent, StopEvent
 from workflows.retry_policy import ConstantDelayRetryPolicy
 from workflows.workflow import Workflow
+from workflows.testing import WorkflowTestRunner
 
 
 @pytest.mark.asyncio
@@ -30,8 +31,8 @@ async def test_retry_e2e() -> None:
             count = await ctx.store.get("counter", default=0)
             await ctx.store.set("counter", count + 1)
 
-    workflow = DummyWorkflow(disable_validation=True)
-    assert await workflow.run() == "All good!"
+    res = await WorkflowTestRunner(DummyWorkflow(disable_validation=True)).run()
+    assert res.result == "All good!"
 
 
 def test_ConstantDelayRetryPolicy_init() -> None:
