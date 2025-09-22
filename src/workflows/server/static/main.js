@@ -8,6 +8,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     let activeRunId = null;
     const eventStreams = {};
+    const eventSources = {};
     let cy = null;
     let currentSchema = null;
     let currentOutput = null;
@@ -120,74 +121,94 @@ document.addEventListener('DOMContentLoaded', () => {
     async function streamEvents(handlerId) {
         eventStreams[handlerId] = [];
         try {
-            const response = await fetch(`/events/${handlerId}`);
-            if (!response.ok) {
-                throw new Error(`HTTP error! status: ${response.status}`);
-            }
-            const reader = response.body.getReader();
-            const decoder = new TextDecoder();
-            let buffer = '';
+            let finalized = false;
+            const eventSource = new EventSource(`/events/${handlerId}?sse=true`);
+            eventSources[handlerId] = eventSource;
 
-            while (true) {
-                const { done, value } = await reader.read();
-                if (done) {
-                    break;
+            const finalize = async () => {
+                if (finalized) return;
+                finalized = true;
+                try {
+                    const outputData = await collectOutputData(handlerId);
+                    populateOutputFields(outputData);
+                } catch (e) {
+                    console.error('Error fetching final output:', e);
+                } finally {
+                    try { eventSource.close(); } catch (_) {}
                 }
-                buffer += decoder.decode(value, { stream: true });
-                const lines = buffer.split('\n');
-                buffer = lines.pop(); // Keep incomplete line in buffer
+            };
 
-                for (const line of lines) {
-                    if (line.trim() === '') continue;
-                    try {
-                        const eventData = JSON.parse(line);
-                        highlightNode(eventData.qualified_name.split(".").at(-1))
-                        let eventDetails = "";
-                        let currentStepName = "";
-                        for (const key in eventData.value) {
-                            const value = eventData.value[key];
-                            if (eventData.qualified_name === "workflows.events.StepStateChanged" && key === "name") {
-                                currentStepName = value
-                                highlightNode(currentStepName)
-                                if (vizData) {
-                                    for (const element of vizData.elements) {
-                                        if (element.data.id === currentStepName) {
-                                            element.data.inputEvent = eventData.value["input_event_name"].replace("<class", "").replace(">", "").replaceAll("'", "").split(".").at(-1) ?? "Not recorded";
-                                            element.data.outputEvent = eventData.value["output_event_name"].replace("<class", "").replace(">", "").replaceAll("'", "").split(".").at(-1) ?? "Not recorded";
-                                        }
+            eventSource.onmessage = (evt) => {
+                try {
+                    const eventData = JSON.parse(evt.data);
+                    highlightNode(eventData.qualified_name.split(".").at(-1))
+                    let eventDetails = "";
+                    let currentStepName = "";
+                    const formatEventName = (raw) => {
+                        if (!raw) return "Not recorded";
+                        try {
+                            const str = typeof raw === 'string' ? raw : String(raw);
+                            const cleaned = str.replace("<class", "").replace(">", "").replaceAll("'", "");
+                            const parts = cleaned.split(".");
+                            const last = parts.at(-1);
+                            return last && last.trim() ? last : "Not recorded";
+                        } catch (_) {
+                            return "Not recorded";
+                        }
+                    };
+                    if (!eventData.value || typeof eventData.value !== 'object') {
+                        // In rare cases, skip rendering details if value is missing
+                        console.warn('Unexpected event without value object:', eventData);
+                    }
+                    for (const key in (eventData.value || {})) {
+                        const value = eventData.value[key];
+                        if (eventData.qualified_name === "workflows.events.StepStateChanged" && key === "name") {
+                            currentStepName = value
+                            highlightNode(currentStepName)
+                            if (vizData) {
+                                for (const element of vizData.elements) {
+                                    if (element.data.id === currentStepName) {
+                                        element.data.inputEvent = formatEventName(eventData.value["input_event_name"]);
+                                        element.data.outputEvent = formatEventName(eventData.value["output_event_name"]);
                                     }
                                 }
                             }
-                            if (!value || value.toString().trim() === '') {
-                                eventDetails += `<details class="mb-2"><summary class="cursor-pointer text-gray-700 hover:text-gray-900 font-medium">${key}</summary><p class="mt-1 ml-4 text-gray-600 text-sm">No data</p></details>`;
-                            } else {
-                                eventDetails += `<details class="mb-2"><summary class="cursor-pointer text-gray-700 hover:text-gray-900 font-medium">${key}</summary><p class="mt-1 ml-4 text-gray-600 text-sm whitespace-pre-wrap break-words">${value}</p></details>`;
-                            }
                         }
-                        const formattedEvent = `<div class="mb-4 p-3 bg-white rounded border border-gray-200"><strong class="text-gray-800">Event:</strong> <span class="text-blue-600 font-mono text-sm">${eventData.qualified_name}</span><br><strong class="text-gray-800">Data:</strong><div class="mt-2">${eventDetails}</div></div>`;
-                        eventStreams[handlerId].push(formattedEvent);
-                        requestAnimationFrame(() => {
-                            setTimeout(() => {
-                                resetNode(eventData.qualified_name.replace("__main__.", "").replace("workflows.events.", ""))
-                                resetNode(currentStepName)
-                            }, 500); // Still add a small delay for visibility
-                        });
-
-                        if (handlerId === activeRunId) {
-                            eventStreamContainer.innerHTML += formattedEvent;
-                            eventStreamContainer.scrollTop = eventStreamContainer.scrollHeight;
+                        if (!value || value.toString().trim() === '') {
+                            eventDetails += `<details class="mb-2"><summary class="cursor-pointer text-gray-700 hover:text-gray-900 font-medium">${key}</summary><p class="mt-1 ml-4 text-gray-600 text-sm">No data</p></details>`;
+                        } else {
+                            eventDetails += `<details class="mb-2"><summary class="cursor-pointer text-gray-700 hover:text-gray-900 font-medium">${key}</summary><p class="mt-1 ml-4 text-gray-600 text-sm whitespace-pre-wrap break-words">${value}</p></details>`;
                         }
-                    } catch (e) {
-                        console.error('Error parsing event line:', line, e);
                     }
-                }
-            }
+                    const formattedEvent = `<div class="mb-4 p-3 bg-white rounded border border-gray-200"><strong class="text-gray-800">Event:</strong> <span class="text-blue-600 font-mono text-sm">${eventData.qualified_name}</span><br><strong class="text-gray-800">Data:</strong><div class="mt-2">${eventDetails}</div></div>`;
+                    eventStreams[handlerId].push(formattedEvent);
+                    requestAnimationFrame(() => {
+                        setTimeout(() => {
+                            resetNode(eventData.qualified_name.replace("__main__.", "").replace("workflows.events.", ""))
+                            resetNode(currentStepName)
+                        }, 500); // Still add a small delay for visibility
+                    });
 
-            outputData = await collectOutputData(handlerId)
-            populateOutputFields(outputData)
+                    if (handlerId === activeRunId) {
+                        eventStreamContainer.innerHTML += formattedEvent;
+                        eventStreamContainer.scrollTop = eventStreamContainer.scrollHeight;
+                    }
+                } catch (e) {
+                    console.error('Error parsing SSE event:', evt.data, e);
+                }
+            };
+
+            eventSource.onerror = async (err) => {
+                // When the stream closes normally, browsers fire onerror and readyState becomes CLOSED
+                if (eventSource.readyState === EventSource.CLOSED) {
+                    await finalize();
+                } else {
+                    console.info("Event source disconnected. Ready state:", eventSource.readyState, "error:", err);
+                }
+            };
         } catch (err) {
-            console.error('Error streaming events:', err);
-            eventStreamContainer.innerHTML += `<div class="text-red-600 p-3 bg-red-50 border border-red-200 rounded">Error streaming events: ${err.message}</div>`;
+            console.error('Error initializing EventSource:', err);
+            eventStreamContainer.innerHTML += `<div class="text-red-600 p-3 bg-red-50 border border-red-200 rounded">Error initializing event stream: ${err.message}</div>`;
         }
     }
 
