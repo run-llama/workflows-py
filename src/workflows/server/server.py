@@ -591,11 +591,6 @@ class WorkflowServer:
           200:
             description: Streaming started
             content:
-              # Intentionally omits the application/x-ndjson content type to simplify client generation
-              # application/x-ndjson:
-              #   schema:
-              #     type: string
-              #     description: Newline-delimited JSON stream of events.
               text/event-stream:
                 schema:
                   type: object
