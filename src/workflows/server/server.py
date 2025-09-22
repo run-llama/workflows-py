@@ -41,6 +41,7 @@ from workflows.server.abstract_workflow_store import (
     Status,
 )
 from .utils import nanoid
+from .representation_utils import _extract_workflow_structure
 
 logger = logging.getLogger()
 
@@ -115,6 +116,11 @@ class WorkflowServer:
             Route(
                 "/handlers",
                 self._get_handlers,
+                methods=["GET"],
+            ),
+            Route(
+                "/workflows/{name}/representation",
+                self._get_workflow_representation,
                 methods=["GET"],
             ),
         ]
@@ -380,6 +386,48 @@ class WorkflowServer:
             )
 
         return JSONResponse({"start": start_event_schema, "stop": stop_event_schema})
+
+    async def _get_workflow_representation(self, request: Request) -> JSONResponse:
+        """
+        ---
+        summary: Get the representation of the workflow
+        description: |
+          Get the representation of the workflow as a directed graph in JSON format
+        parameters:
+          - in: path
+            name: name
+            required: true
+            schema:
+              type: string
+            description: Registered workflow name.
+        requestBody:
+          required: false
+        responses:
+          200:
+            description: JSON representation successfully retrieved
+            content:
+              application/json:
+                schema:
+                  type: object
+                  properties:
+                    graph:
+                      description: the elements of the JSON representation of the workflow
+                  required: [graph]
+          404:
+            description: Workflow not found
+          500:
+            description: Error while getting JSON workflow representation
+        """
+        workflow = self._extract_workflow(request)
+        try:
+            workflow_graph = _extract_workflow_structure(workflow.workflow)
+        except Exception as e:
+            raise HTTPException(
+                detail=f"Error while getting JSON workflow representation: {e}",
+                status_code=500,
+            )
+
+        return JSONResponse({"graph": workflow_graph.to_dict()})
 
     async def _run_workflow_nowait(self, request: Request) -> JSONResponse:
         """
