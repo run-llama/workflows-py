@@ -585,20 +585,24 @@ class WorkflowServer:
             required: false
             schema:
               type: boolean
-              default: false
-            description: If true, stream as text/event-stream instead of NDJSON.
+              default: true
+            description: If false, as NDJSON instead of Server-Sent Events.
         responses:
           200:
             description: Streaming started
             content:
-              application/x-ndjson:
-                schema:
-                  type: string
-                  description: Newline-delimited JSON stream of events.
               text/event-stream:
                 schema:
-                  type: string
+                  type: object
                   description: Server-Sent Events stream of event data.
+                  properties:
+                    value:
+                      type: object
+                      description: The event value.
+                    qualified_name:
+                      type: string
+                      description: The qualified name of the event.
+                  required: [value, qualified_name]
           404:
             description: Handler not found
         """
@@ -606,9 +610,14 @@ class WorkflowServer:
         handler = self._handlers.get(handler_id)
         if handler is None:
             raise HTTPException(detail="Handler not found", status_code=404)
+        if handler.queue.empty() and handler.task.done():
+            # https://html.spec.whatwg.org/multipage/server-sent-events.html
+            # Clients will reconnect if the connection is closed; a client can
+            # be told to stop reconnecting using the HTTP 204 No Content response code.
+            raise HTTPException(detail="Handler is completed", status_code=204)
 
         # Get raw_event query parameter
-        sse = request.query_params.get("sse", "false").lower() == "true"
+        sse = request.query_params.get("sse", "true").lower() == "true"
         media_type = "text/event-stream" if sse else "application/x-ndjson"
 
         async def event_stream(handler: _WorkflowHandler) -> AsyncGenerator[str, None]:
@@ -617,9 +626,8 @@ class WorkflowServer:
             async for event in handler.iter_events():
                 serialized_event = serializer.serialize(event)
                 if sse:
-                    # need to convert back to str to use SSE
-                    event_dict = json.loads(serialized_event)
-                    yield f"event: {event_dict.get('qualified_name')}\ndata: {json.dumps(event_dict.get('value'))}\n"
+                    # emit as untyped data. Difficult to subscribe to dynamic event types with SSE.
+                    yield f"data: {serialized_event}\n\n"
                 else:
                     yield f"{serialized_event}\n"
 

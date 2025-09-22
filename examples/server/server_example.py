@@ -79,7 +79,7 @@ class ProcessingWorkflow(Workflow):
 
     @step
     async def process(self, ctx: Context, ev: StartEvent) -> StopEvent:
-        items = getattr(ev, "items", ["item1", "item2", "item3", "item4", "item5"])
+        items = getattr(ev, "things", ["item1", "item2", "item3", "item4", "item5"])
 
         ctx.write_event_to_stream(
             ProgressEvent(
