@@ -241,7 +241,7 @@ async def test_run_workflow_nowait_success(client: AsyncClient) -> None:
     data = response.json()
     assert "handler_id" in data
     assert "status" in data
-    assert data["status"] == "started"
+    assert data["status"] == "running"
     assert len(data["handler_id"]) == 10  # Default nanoid length
 
 
@@ -256,7 +256,7 @@ async def test_run_workflow_nowait_with_start_event(client: AsyncClient) -> None
     data = response.json()
     assert "handler_id" in data
     assert "status" in data
-    assert data["status"] == "started"
+    assert data["status"] == "running"
     assert len(data["handler_id"]) == 10  # Default nanoid length
 
 
@@ -311,9 +311,8 @@ async def test_get_workflow_result_error(
     assert response.status_code == 500
 
     # Verify the result content
-    result_data = response.json()
-    assert "error" in result_data
-    assert result_data["error"] == "Test error"
+    # Now returns detailed error string body
+    assert "Test error" in response.text
 
 
 @pytest.mark.asyncio
@@ -506,7 +505,7 @@ async def validate_result_response(
 ) -> Any:
     response = await client.get(f"/results/{handler_id}")
     assert response.status_code == expected_status
-    return response.json()
+    return response.json() if expected_status == 200 else response.text
 
 
 @pytest.mark.asyncio
@@ -540,7 +539,7 @@ async def test_get_handlers_with_failed_workflow(client: AsyncClient) -> None:
     result = await wait_for_passing(
         lambda: validate_result_response(handler_id, client, 500)
     )
-    assert result["error"] == "Test error"
+    assert "Test error" in result
 
     # Get handlers
     response = await client.get("/handlers")
