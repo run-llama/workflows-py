@@ -9,7 +9,7 @@ from typing import Any, AsyncGenerator
 
 import pytest
 import pytest_asyncio
-from httpx import ASGITransport, AsyncClient
+from httpx import ASGITransport, AsyncClient, Response
 
 from tests.server.util import wait_for_passing
 from workflows import Context
@@ -732,7 +732,7 @@ async def test_handler_datetime_fields_progress(client: AsyncClient) -> None:
     assert updated_at_2 >= updated_at_1
 
     # Wait for completion and check completed_at
-    async def _wait_done():
+    async def _wait_done() -> Response:
         r = await client.get(f"/results/{handler_id}")
         if r.status_code == 200:
             return r

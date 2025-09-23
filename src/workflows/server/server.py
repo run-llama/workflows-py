@@ -242,8 +242,16 @@ class WorkflowServer:
                                     "enum": ["running", "completed", "failed"],
                                 },
                                 "started_at": {"type": "string", "format": "date-time"},
-                                "updated_at": {"type": "string", "format": "date-time", "nullable": True},
-                                "completed_at": {"type": "string", "format": "date-time", "nullable": True},
+                                "updated_at": {
+                                    "type": "string",
+                                    "format": "date-time",
+                                    "nullable": True,
+                                },
+                                "completed_at": {
+                                    "type": "string",
+                                    "format": "date-time",
+                                    "nullable": True,
+                                },
                                 "error": {"type": "string", "nullable": True},
                                 "result": {"description": "Workflow result value"},
                             },
@@ -969,7 +977,9 @@ class _WorkflowHandler:
             status=self.status,
             started_at=self.started_at.isoformat(),
             updated_at=self.updated_at.isoformat(),
-            completed_at=self.completed_at.isoformat() if self.completed_at is not None else None,
+            completed_at=self.completed_at.isoformat()
+            if self.completed_at is not None
+            else None,
             error=self.error,
             result=self.result,
         )
@@ -1021,6 +1031,7 @@ class _WorkflowHandler:
             else:  # otherwise task completed, so nothing else will be published to the queue
                 queue_get_task.cancel()
                 break
+
 
 @dataclass
 class _NamedWorkflow:
