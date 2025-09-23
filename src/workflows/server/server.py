@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-import time
 import json
 import logging
 from importlib.metadata import version
@@ -56,9 +55,9 @@ class HandlerDict(TypedDict):
     error: str | None
     result: RunResultT | None
     status: Status
-    started_at: float
-    updated_at: float | None
-    completed_at: float | None
+    started_at: str
+    updated_at: str | None
+    completed_at: str | None
 
 
 class WorkflowServer:
@@ -697,10 +696,7 @@ class WorkflowServer:
                 schema:
                   $ref: '#/components/schemas/HandlersList'
         """
-        items: list[HandlerDict] = []
-        for wrapper in self._handlers.values():
-            items.append(wrapper.to_dict())
-
+        items = [wrapper.to_dict() for wrapper in self._handlers.values()]
         return JSONResponse({"handlers": items})
 
     async def _post_event(self, request: Request) -> JSONResponse:
@@ -916,11 +912,11 @@ class WorkflowServer:
                         continue
                     await checkpoint("running")
 
-                wrapper.updated_at = time.time()
+                wrapper.updated_at = datetime.now(timezone.utc)
                 queue.put_nowait(event)
             # done when stream events are complete
             status: Status = "completed"
-            wrapper.completed_at = time.time()
+            wrapper.completed_at = datetime.now(timezone.utc)
             try:
                 await handler
             except Exception as e:
@@ -942,8 +938,8 @@ class WorkflowServer:
             task=task,
             handler_id=handler_id,
             workflow_name=workflow_name,
-            started_at=time.time(),
-            updated_at=time.time(),
+            started_at=datetime.now(timezone.utc),
+            updated_at=datetime.now(timezone.utc),
             completed_at=None,
         )
         self._handlers[handler_id] = wrapper
@@ -961,22 +957,22 @@ class _WorkflowHandler:
     # metadata
     handler_id: str
     workflow_name: str
-    started_at: float
-    updated_at: float
-    completed_at: float | None
+    started_at: datetime
+    updated_at: datetime
+    completed_at: datetime | None
 
     def to_dict(self) -> HandlerDict:
-        return {
-            "handler_id": self.handler_id,
-            "workflow_name": self.workflow_name,
-            "run_id": self.run_handler.run_id,
-            "status": self.status,
-            "started_at": _ts_to_iso(self.started_at),
-            "updated_at": _ts_to_iso(self.updated_at),
-            "completed_at": _ts_to_iso(self.completed_at) if self.completed_at is not None else None,
-            "error": self.error,
-            "result": self.result,
-        }
+        return HandlerDict(
+            handler_id=self.handler_id,
+            workflow_name=self.workflow_name,
+            run_id=self.run_handler.run_id,
+            status=self.status,
+            started_at=self.started_at.isoformat(),
+            updated_at=self.updated_at.isoformat(),
+            completed_at=self.completed_at.isoformat() if self.completed_at is not None else None,
+            error=self.error,
+            result=self.result,
+        )
 
     @property
     def status(self) -> Status:
@@ -1025,11 +1021,6 @@ class _WorkflowHandler:
             else:  # otherwise task completed, so nothing else will be published to the queue
                 queue_get_task.cancel()
                 break
-
-
-def _ts_to_iso(ts: float) -> str:
-    return datetime.fromtimestamp(ts, tz=timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
-
 
 @dataclass
 class _NamedWorkflow:
