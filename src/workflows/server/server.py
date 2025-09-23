@@ -1028,8 +1028,7 @@ class _WorkflowHandler:
 
 
 def _ts_to_iso(ts: float) -> str:
-    dt = datetime.fromtimestamp(ts, tz=timezone.utc)
-    return dt.isoformat().replace("+00:00", "Z")
+    return datetime.fromtimestamp(ts, tz=timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
 
 
 @dataclass
