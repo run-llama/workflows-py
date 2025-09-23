@@ -11,6 +11,7 @@ import logging
 from importlib.metadata import version
 from pathlib import Path
 from typing import Any, AsyncGenerator, TypedDict
+from datetime import datetime, timezone
 
 import uvicorn
 from starlette.applications import Starlette
@@ -241,9 +242,9 @@ class WorkflowServer:
                                     "type": "string",
                                     "enum": ["running", "completed", "failed"],
                                 },
-                                "started_at": {"type": "number"},
-                                "updated_at": {"type": "number", "nullable": True},
-                                "completed_at": {"type": "number", "nullable": True},
+                                "started_at": {"type": "string", "format": "date-time"},
+                                "updated_at": {"type": "string", "format": "date-time", "nullable": True},
+                                "completed_at": {"type": "string", "format": "date-time", "nullable": True},
                                 "error": {"type": "string", "nullable": True},
                                 "result": {"description": "Workflow result value"},
                             },
@@ -970,9 +971,9 @@ class _WorkflowHandler:
             "workflow_name": self.workflow_name,
             "run_id": self.run_handler.run_id,
             "status": self.status,
-            "started_at": self.started_at,
-            "updated_at": self.updated_at,
-            "completed_at": self.completed_at,
+            "started_at": _ts_to_iso(self.started_at),
+            "updated_at": _ts_to_iso(self.updated_at),
+            "completed_at": _ts_to_iso(self.completed_at) if self.completed_at is not None else None,
             "error": self.error,
             "result": self.result,
         }
@@ -1024,6 +1025,11 @@ class _WorkflowHandler:
             else:  # otherwise task completed, so nothing else will be published to the queue
                 queue_get_task.cancel()
                 break
+
+
+def _ts_to_iso(ts: float) -> str:
+    dt = datetime.fromtimestamp(ts, tz=timezone.utc)
+    return dt.isoformat().replace("+00:00", "Z")
 
 
 @dataclass
