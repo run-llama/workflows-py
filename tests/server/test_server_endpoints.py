@@ -9,12 +9,13 @@ from typing import Any, AsyncGenerator
 
 import pytest
 import pytest_asyncio
-from httpx import ASGITransport, AsyncClient
+from httpx import ASGITransport, AsyncClient, Response
 
 from tests.server.util import wait_for_passing
 from workflows import Context
 from workflows.server import WorkflowServer
 from workflows.workflow import Workflow
+from datetime import datetime
 
 # Prepare the event to send
 from workflows.context.serializers import JsonSerializer
@@ -241,7 +242,7 @@ async def test_run_workflow_nowait_success(client: AsyncClient) -> None:
     data = response.json()
     assert "handler_id" in data
     assert "status" in data
-    assert data["status"] == "started"
+    assert data["status"] == "running"
     assert len(data["handler_id"]) == 10  # Default nanoid length
 
 
@@ -256,7 +257,7 @@ async def test_run_workflow_nowait_with_start_event(client: AsyncClient) -> None
     data = response.json()
     assert "handler_id" in data
     assert "status" in data
-    assert data["status"] == "started"
+    assert data["status"] == "running"
     assert len(data["handler_id"]) == 10  # Default nanoid length
 
 
@@ -311,9 +312,8 @@ async def test_get_workflow_result_error(
     assert response.status_code == 500
 
     # Verify the result content
-    result_data = response.json()
-    assert "error" in result_data
-    assert result_data["error"] == "Test error"
+    # Now returns detailed error string body
+    assert "Test error" in response.text
 
 
 @pytest.mark.asyncio
@@ -506,7 +506,7 @@ async def validate_result_response(
 ) -> Any:
     response = await client.get(f"/results/{handler_id}")
     assert response.status_code == expected_status
-    return response.json()
+    return response.json() if expected_status == 200 else response.text
 
 
 @pytest.mark.asyncio
@@ -540,7 +540,7 @@ async def test_get_handlers_with_failed_workflow(client: AsyncClient) -> None:
     result = await wait_for_passing(
         lambda: validate_result_response(handler_id, client, 500)
     )
-    assert result["error"] == "Test error"
+    assert "Test error" in result
 
     # Get handlers
     response = await client.get("/handlers")
@@ -697,3 +697,53 @@ async def test_post_event_missing_event_data(client: AsyncClient) -> None:
     response = await client.post(f"/events/{handler_id}", json={})
     assert response.status_code == 400
     assert "Event data is required" in response.text
+
+
+@pytest.mark.asyncio
+async def test_handler_datetime_fields_progress(client: AsyncClient) -> None:
+    # Start interactive workflow which waits for an external event
+    response = await client.post("/workflows/interactive/run-nowait", json={})
+    assert response.status_code == 200
+    handler_id = response.json()["handler_id"]
+
+    # Snapshot initial times
+    resp = await client.get("/handlers")
+    assert resp.status_code == 200
+    handlers = resp.json()["handlers"]
+    item = next(h for h in handlers if h["handler_id"] == handler_id)
+    started_at_1 = datetime.fromisoformat(item["started_at"])  # ISO 8601
+    updated_at_1 = datetime.fromisoformat(item["updated_at"])  # ISO 8601
+    assert started_at_1 <= updated_at_1
+    assert item["completed_at"] is None
+
+    # Send an external event to progress the workflow and update timestamps
+    await asyncio.sleep(0.01)
+    serializer = JsonSerializer()
+    event = ExternalEvent(response="ts-check")
+    event_str = serializer.serialize(event)
+    send = await client.post(f"/events/{handler_id}", json={"event": event_str})
+    assert send.status_code == 200
+
+    # Check updated_at increased
+    resp2 = await client.get("/handlers")
+    assert resp2.status_code == 200
+    item2 = next(h for h in resp2.json()["handlers"] if h["handler_id"] == handler_id)
+    updated_at_2 = datetime.fromisoformat(item2["updated_at"])  # ISO 8601
+    assert updated_at_2 >= updated_at_1
+
+    # Wait for completion and check completed_at
+    async def _wait_done() -> Response:
+        r = await client.get(f"/results/{handler_id}")
+        if r.status_code == 200:
+            return r
+        raise AssertionError("not done")
+
+    await wait_for_passing(_wait_done)
+
+    resp3 = await client.get("/handlers")
+    item3 = next(h for h in resp3.json()["handlers"] if h["handler_id"] == handler_id)
+    assert item3["status"] in {"completed", "failed"}
+    if item3["status"] == "completed":
+        assert item3["completed_at"] is not None
+        completed_at = datetime.fromisoformat(item3["completed_at"])  # ISO 8601
+        assert completed_at >= updated_at_2
