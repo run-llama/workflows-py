@@ -1,85 +1,144 @@
-import httpx
+# TOP-LEVEL
 import time
 import json
-import inspect
 
-from typing import Literal, Any, Union, Callable, AsyncGenerator, AsyncIterator
-from contextlib import asynccontextmanager
-from logging import getLogger
-from workflows.events import StartEvent, Event
+# GENERATED CLASSES (CLIENTS)
+from workflows.openapi_generated_client.workflows_api_client import (
+    Client,
+    AuthenticatedClient,
+)
+
+# GENERATED FUNCTIONS (API)
+from workflows.openapi_generated_client.workflows_api_client.api.default.get_health import (
+    asyncio as get_health,
+)
+from workflows.openapi_generated_client.workflows_api_client.api.default.get_workflows import (
+    asyncio as get_workflows,
+)
+from workflows.openapi_generated_client.workflows_api_client.api.default.get_handlers import (
+    asyncio as get_handlers,
+)
+from workflows.openapi_generated_client.workflows_api_client.api.default.get_results_handler_id import (
+    asyncio as get_results_handler_id,
+)
+from workflows.openapi_generated_client.workflows_api_client.api.default.get_events_handler_id import (
+    asyncio as get_events_handler_id,
+)
+from workflows.openapi_generated_client.workflows_api_client.api.default.post_workflows_name_run import (
+    asyncio as post_workflows_name_run,
+)
+from workflows.openapi_generated_client.workflows_api_client.api.default.post_workflows_name_run_nowait import (
+    asyncio as post_workflows_name_run_nowait,
+)
+from workflows.openapi_generated_client.workflows_api_client.api.default.post_events_handler_id import (
+    asyncio as post_events_handler_id,
+)
+
+# GENERATED TYPES (API)
+from workflows.openapi_generated_client.workflows_api_client.models.post_workflows_name_run_body import (
+    PostWorkflowsNameRunBody,
+)
+from workflows.openapi_generated_client.workflows_api_client.models.post_workflows_name_run_body_context import (
+    PostWorkflowsNameRunBodyContext,
+)
+from workflows.openapi_generated_client.workflows_api_client.models.post_workflows_name_run_body_start_event import (
+    PostWorkflowsNameRunBodyStartEvent,
+)
+from workflows.openapi_generated_client.workflows_api_client.models.post_workflows_name_run_body_kwargs import (
+    PostWorkflowsNameRunBodyKwargs,
+)
+from workflows.openapi_generated_client.workflows_api_client.models.post_workflows_name_run_nowait_body import (
+    PostWorkflowsNameRunNowaitBody,
+)
+from workflows.openapi_generated_client.workflows_api_client.models.post_workflows_name_run_nowait_body_context import (
+    PostWorkflowsNameRunNowaitBodyContext,
+)
+from workflows.openapi_generated_client.workflows_api_client.models.post_workflows_name_run_nowait_body_kwargs import (
+    PostWorkflowsNameRunNowaitBodyKwargs,
+)
+from workflows.openapi_generated_client.workflows_api_client.models.post_workflows_name_run_nowait_body_start_event import (
+    PostWorkflowsNameRunNowaitBodyStartEvent,
+)
+from workflows.openapi_generated_client.workflows_api_client.models.get_events_handler_id_response_200 import (
+    GetEventsHandlerIdResponse200,
+)
+from workflows.openapi_generated_client.workflows_api_client.models.post_events_handler_id_body import (
+    PostEventsHandlerIdBody,
+)
+from workflows.openapi_generated_client.workflows_api_client.models.post_events_handler_id_response_200 import (
+    PostEventsHandlerIdResponse200,
+)
+from workflows.openapi_generated_client.workflows_api_client.models.handler import (
+    Handler,
+)
+from workflows.openapi_generated_client.workflows_api_client.models.handler_status import (
+    HandlerStatus,
+)
+from workflows.openapi_generated_client.workflows_api_client.types import Unset, UNSET
+
+# MISC
 from workflows import Context
-
-
-logger = getLogger(__name__)
+from workflows.events import StartEvent, Event
+from workflows.context.serializers import JsonSerializer
+from .utils import AuthDetails, EventDict
+from typing import Literal, Optional, Any, Union, cast
 
 
 class WorkflowClient:
     def __init__(
         self,
-        protocol: Literal["http", "https"] | None = None,
-        host: str | None = None,
-        port: int | None = None,
-        timeout: int | None = None,
-    ):
-        # TODO: middleware-related logic
-        self.protocol = protocol or "http"
-        self.host = host or "localhost"
-        self.port = port or 8000
-        self.timeout = timeout or 600
-        # TODO: add some basic TLS/verification and auth features
-
-    @asynccontextmanager
-    async def _get_client(self) -> AsyncIterator:
-        async with httpx.AsyncClient(
-            base_url=self.protocol + "://" + self.host + ":" + str(self.port),
-            timeout=self.timeout,
-        ) as client:
-            yield client
+        protocol: Literal["http", "https"] = "http",
+        host: str = "localhost",
+        port: int = 80,
+        auth_details: Optional[AuthDetails] = None,
+        raise_on_unexpected_status: bool = True,
+        **kwargs: Any,
+    ) -> None:
+        self.base_url = f"{protocol}://{host}:{port}"
+        if auth_details:
+            self._client = AuthenticatedClient(
+                base_url=self.base_url,
+                token=auth_details.token,
+                prefix=auth_details.prefix,
+                auth_header_name=auth_details.auth_header_name,
+                raise_on_unexpected_status=raise_on_unexpected_status,
+                cookies=kwargs.get("cookies", {}),
+                headers=kwargs.get("headers", {}),
+                timeout=kwargs.get("timeout", None),
+                verify_ssl=kwargs.get("verify_ssl", True),
+                follow_redirects=kwargs.get("follow_redirects", False),
+                httpx_args=kwargs.get("httpx_args", {}),
+            )
+        else:
+            self._client = Client(
+                base_url=self.base_url,
+                raise_on_unexpected_status=raise_on_unexpected_status,
+                cookies=kwargs.get("cookies", {}),
+                headers=kwargs.get("headers", {}),
+                timeout=kwargs.get("timeout", None),
+                verify_ssl=kwargs.get("verify_ssl", True),
+                follow_redirects=kwargs.get("follow_redirects", False),
+                httpx_args=kwargs.get("httpx_args", {}),
+            )
 
     async def is_healthy(self) -> bool:
-        """
-        Check whether the workflow server is helathy or not
-
-        Returns:
-            bool: True if the workflow server is healthy, false if not
-        """
-        async with self._get_client() as client:
-            response = await client.get("/health")
-        if response.status_code == 200:
-            return response.json().get("status", "") == "healthy"
-        return False
+        response = await get_health(client=self._client)
+        if not response:
+            return False
+        return True
 
     async def ping(self) -> float:
-        """
-        Ping the workflow and get the latency in milliseconds
-
-        Returns:
-            float: latency in milliseconds
-        """
-        async with self._get_client() as client:
-            start = time.time()
-            response = await client.get("/health")
-            if response.status_code == 200:
-                end = time.time()
-                return (end - start) * 1000
-            else:
-                raise httpx.ConnectError(
-                    f"Failed to establish a connection with server running on: {self.protocol}://{self.host}:{self.port}"
-                )
+        start = time.time()
+        response = await get_health(client=self._client)
+        if not response:
+            return -1
+        return (time.time() - start) * 1000
 
     async def list_workflows(self) -> list[str]:
-        """
-        List workflows
-
-        Returns:
-            list: List of workflow names available through the server.
-        """
-        async with self._get_client() as client:
-            response = await client.get("/workflows")
-
-            response.raise_for_status()
-
-            return response.json()["workflows"]
+        response = await get_workflows(client=self._client)
+        if not response:
+            return []
+        return response.workflows
 
     async def run_workflow(
         self,
@@ -87,43 +146,29 @@ class WorkflowClient:
         start_event: Union[StartEvent, dict[str, Any], None] = None,
         context: Union[Context, dict[str, Any], None] = None,
         **kwargs: Any,
-    ) -> Any:
-        """
-        Run the workflow and wait until completion.
-
-        Args:
-            start_event (Union[StartEvent, dict[str, Any], None]): start event class or dictionary representation (optional, defaults to None and get passed as an empty dictionary if not provided).
-            context: Context or serialized representation of it (optional, defaults to None if not provided)
-            **kwargs: Any number of keyword arguments that would be passed on as additional keyword arguments to the workflow.
-
-        Returns:
-            Any: Result of the workflow
-        """
-        if isinstance(start_event, StartEvent):
-            try:
-                start_event = start_event.model_dump()
-            except Exception as e:
-                raise ValueError(
-                    f"Impossible to serialize the start event because of: {e}"
-                )
-        if isinstance(context, Context):
+    ) -> Handler:
+        if start_event and isinstance(start_event, StartEvent):
+            start_event = start_event.model_dump()
+        if context and isinstance(context, Context):
             try:
                 context = context.to_dict()
             except Exception as e:
-                raise ValueError(f"Impossible to serialize the context because of: {e}")
-        request_body = {
-            "start_event": start_event or {},
-            "context": context or {},
-            "additional_kwargs": kwargs,
-        }
-        async with self._get_client() as client:
-            response = await client.post(
-                f"/workflows/{workflow_name}/run", json=request_body
-            )
-
-            response.raise_for_status()
-
-            return response.json()["result"]
+                raise ValueError(f"Impossible to serialize context because of: {e}")
+        response = await post_workflows_name_run(
+            name=workflow_name,
+            client=self._client,
+            body=PostWorkflowsNameRunBody(
+                start_event=PostWorkflowsNameRunBodyStartEvent.from_dict(
+                    cast(dict, start_event) or {}
+                ),
+                context=PostWorkflowsNameRunBodyContext.from_dict(context or {}),
+                kwargs=PostWorkflowsNameRunBodyKwargs.from_dict(kwargs),
+            ),
+        )
+        if isinstance(response, Handler):
+            return response
+        else:
+            raise ValueError("Response was not properly generated")
 
     async def run_workflow_nowait(
         self,
@@ -131,212 +176,91 @@ class WorkflowClient:
         start_event: Union[StartEvent, dict[str, Any], None] = None,
         context: Union[Context, dict[str, Any], None] = None,
         **kwargs: Any,
-    ) -> str:
-        """
-        Run the workflow in the background.
-
-        Args:
-            start_event (Union[StartEvent, dict[str, Any], None]): start event class or dictionary representation (optional, defaults to None and get passed as an empty dictionary if not provided).
-            context: Context or serialized representation of it (optional, defaults to None if not provided)
-            **kwargs: Any number of keyword arguments that would be passed on as additional keyword arguments to the workflow.
-
-        Returns:
-            str: ID of the handler running the workflow
-        """
-        if isinstance(start_event, StartEvent):
-            try:
-                start_event = start_event.model_dump()
-            except Exception as e:
-                raise ValueError(
-                    f"Impossible to serialize the start event because of: {e}"
-                )
-        if isinstance(context, Context):
+    ) -> Handler:
+        if start_event and isinstance(start_event, StartEvent):
+            start_event = start_event.model_dump()
+        if context and isinstance(context, Context):
             try:
                 context = context.to_dict()
             except Exception as e:
-                raise ValueError(f"Impossible to serialize the context because of: {e}")
-        request_body = {
-            "start_event": start_event or {},
-            "context": context or {},
-            "additional_kwargs": kwargs,
-        }
-        async with self._get_client() as client:
-            response = await client.post(
-                f"/workflows/{workflow_name}/run-nowait", json=request_body
-            )
-
-            response.raise_for_status()
-
-            return response.json()["handler_id"]
-
-    async def _stream_events_sse(
-        self,
-        handler_id: str,
-    ) -> AsyncGenerator[dict[str, Any], None]:
-        """
-        Stream events using Server-Sent Events format
-        """
-        url = f"/events/{handler_id}?sse=true"
-
-        async with self._get_client() as client:
-            try:
-                async with client.stream(
-                    "GET",
-                    url,
-                ) as response:
-                    # Handle different response codes
-                    if response.status_code == 404:
-                        raise ValueError("Handler not found")
-                    elif response.status_code == 204:
-                        # Handler completed, no more events
-                        return  # type: ignore
-
-                    response.raise_for_status()
-
-                    async for line in response.aiter_lines():
-                        if line.startswith("data: "):
-                            # Extract JSON from SSE data line
-                            json_data = line[6:]  # Remove 'data: ' prefix
-                            if json_data.strip():  # Skip empty data lines
-                                try:
-                                    event = json.loads(json_data.replace("\n", ""))
-                                    yield event.get("value", {})
-                                except json.JSONDecodeError as e:
-                                    print(
-                                        f"Failed to parse JSON: {e}, data: {json_data}"
-                                    )
-                                    continue
-
-            except httpx.TimeoutException:
-                raise TimeoutError(
-                    f"Timeout waiting for events from handler {handler_id}"
-                )
-            except httpx.RequestError as e:
-                raise ConnectionError(f"Failed to connect to event stream: {e}")
-
-    async def _stream_events_ndjson(
-        self,
-        handler_id: str,
-    ) -> AsyncGenerator[dict[str, Any], None]:
-        """
-        Stream events using newline-delimited JSON format
-        """
-        url = f"/events/{handler_id}?sse=false"
-
-        async with self._get_client() as client:
-            try:
-                async with client.stream("GET", url) as response:
-                    # Handle different response codes
-                    if response.status_code == 404:
-                        raise ValueError("Handler not found")
-                    elif response.status_code == 204:
-                        # Handler completed, no more events
-                        return
-
-                    response.raise_for_status()
-
-                    async for line in response.aiter_lines():
-                        if line.strip():  # Skip empty lines
-                            try:
-                                event = json.loads(line.replace("\n", ""))
-                                yield event.get("value", {})
-                            except json.JSONDecodeError as e:
-                                print(f"Failed to parse JSON: {e}, data: {line}")
-                                continue
-
-            except httpx.TimeoutException:
-                raise TimeoutError(
-                    f"Timeout waiting for events from handler {handler_id}"
-                )
-            except httpx.RequestError as e:
-                raise ConnectionError(f"Failed to connect to event stream: {e}")
-
-    async def stream_events(
-        self,
-        handler_id: str,
-        event_callback: Callable[[dict[str, Any]], Any] | None = None,
-        sse: bool = True,
-    ) -> None:
-        """
-        Stream events from a running handler.
-
-        Args:
-            handler_id (str): ID of the handler streaming the events
-            event_callback (Callable[[dict[str, Any]], Any]): Function to call when an event is received from the stream (optional, defaults to None)
-            sse (bool): Whether to enable server-sent events or not
-
-        Returns:
-            None
-        """
-        callback = event_callback or (
-            lambda event: logger.info(f"Processing data: {event}")
+                raise ValueError(f"Impossible to serialize context because of: {e}")
+        response = await post_workflows_name_run_nowait(
+            name=workflow_name,
+            client=self._client,
+            body=PostWorkflowsNameRunNowaitBody(
+                start_event=PostWorkflowsNameRunNowaitBodyStartEvent.from_dict(
+                    cast(dict, start_event) or {}
+                ),
+                context=PostWorkflowsNameRunNowaitBodyContext.from_dict(context or {}),
+                kwargs=PostWorkflowsNameRunNowaitBodyKwargs.from_dict(kwargs),
+            ),
         )
-        is_async = inspect.iscoroutinefunction(callback)
-        if sse:
-            async for event in self._stream_events_sse(handler_id):
-                if is_async:
-                    await callback(event)  # type: ignore
-                else:
-                    callback(event)
+        if isinstance(response, Handler):
+            return response
         else:
-            async for event in self._stream_events_ndjson(handler_id):
-                if is_async:
-                    await callback(event)  # type: ignore
-                else:
-                    callback(event)
-        return None
+            raise ValueError("Response was not properly generated")
 
-    async def send_event(
+    async def get_workflow_events(self, handler: Handler) -> dict:
+        response = await get_events_handler_id(
+            handler_id=handler.handler_id, client=self._client, sse=False
+        )
+        if isinstance(response, GetEventsHandlerIdResponse200):
+            return response.to_dict()
+        else:
+            raise ValueError("Response was not properly generated")
+
+    async def get_workflow_handlers(self) -> list[Handler]:
+        response = await get_handlers(client=self._client)
+        if response:
+            return response.handlers
+        else:
+            raise ValueError("Response was not properly generated")
+
+    async def get_workflow_result(self, handler: Handler) -> Any:
+        response = await get_results_handler_id(
+            handler_id=handler.handler_id, client=self._client
+        )
+        if isinstance(response, Handler):
+            if response.status == HandlerStatus.COMPLETED:
+                return response.result
+            elif response.status == HandlerStatus.RUNNING:
+                return response.status.value
+            else:
+                return response.error
+        elif isinstance(response, str):
+            return response
+        else:
+            raise ValueError("Response was not properly generated")
+
+    async def send_workflow_event(
         self,
-        handler_id: str,
-        event: Event | dict[str, Any] | str,
-        step: str | None = None,
-    ) -> bool:
-        """
-        Send an event to the workflow.
-
-        Args:
-            handler_id (str): ID of the handler of the running workflow to send the event to
-            event (Event | dict[str, Any] | str): Event to send, represented as an Event object, a dictionary or a serialized string.
-            step (str | None): Step to send the event to (optional, defaults to None)
-
-        Returns:
-            bool: Success status of the send operation
-        """
+        handler: Handler,
+        event: Union[Event, EventDict, str],
+        step: Optional[str] = None,
+    ) -> str:
         if isinstance(event, Event):
             try:
-                event = event.model_dump_json()
+                event = JsonSerializer().serialize(event)
             except Exception as e:
-                raise ValueError(f"Error while serializing the provided event: {e}")
-        elif isinstance(event, dict):
+                raise ValueError(
+                    f"It was not possible to serialize the event you want to send because of: {e}"
+                )
+        elif event is EventDict:
+            event.setdefault("__is_pydantic", True)
             try:
                 event = json.dumps(event)
             except Exception as e:
-                raise ValueError(f"Error while serializing the provided event: {e}")
-        request_body = {"event": event}
-        if step:
-            request_body.update({"step": step})
-        async with self._get_client() as client:
-            response = await client.post(f"/events/{handler_id}", json=request_body)
-            response.raise_for_status()
-
-            return response.json()["status"] == "sent"
-
-    async def get_result(self, handler_id: str) -> Any:
-        """
-        Get the result of the workflow associated with the specified handler ID.
-
-        Args:
-            handler_id (str): ID of the handler running the workflow
-
-        Returns:
-            Any: Result of the workflow
-        """
-        async with self._get_client() as client:
-            response = await client.get(f"/results/{handler_id}")
-            response.raise_for_status()
-
-            if response.status_code == 202:
-                return
-
-            return response.json()["result"]
+                raise ValueError(
+                    f"It was not possible to serialize the event you want to send because of: {e}"
+                )
+        if not step:
+            step: Unset = UNSET
+        response = await post_events_handler_id(
+            handler_id=handler.handler_id,
+            client=self._client,
+            body=PostEventsHandlerIdBody(event=cast(str, event), step=step),
+        )
+        if isinstance(response, PostEventsHandlerIdResponse200):
+            return response.status.value
+        else:
+            raise ValueError("Response was not properly generated")
