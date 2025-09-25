@@ -80,9 +80,11 @@ class WorkflowServer:
         self._middleware = middleware or [
             Middleware(
                 CORSMiddleware,
-                allow_origins=["*"],
+                # regex echoes the origin header back, which some browsers require (rather than "*") when credentials are required
+                allow_origin_regex=".*",
                 allow_methods=["*"],
                 allow_headers=["*"],
+                allow_credentials=True,
             )
         ]
 
