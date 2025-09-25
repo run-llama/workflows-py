@@ -374,7 +374,7 @@ class WorkflowServer:
             description: Error running workflow or invalid request body
         """
         workflow = self._extract_workflow(request)
-        context, start_event, run_kwargs = await self._extract_run_params(
+        context, start_event, run_kwargs, handler_id = await self._extract_run_params(
             request, workflow.workflow, workflow.name
         )
 
@@ -384,7 +384,6 @@ class WorkflowServer:
             input_ev = None
 
         try:
-            handler_id = nanoid()
             handler = workflow.workflow.run(
                 ctx=context, start_event=input_ev, **run_kwargs
             )
@@ -533,10 +532,9 @@ class WorkflowServer:
             description: Workflow or handler identifier not found
         """
         workflow = self._extract_workflow(request)
-        context, start_event, run_kwargs = await self._extract_run_params(
+        context, start_event, run_kwargs, handler_id = await self._extract_run_params(
             request, workflow.workflow, workflow.name
         )
-        handler_id = nanoid()
 
         if start_event is not None:
             input_ev = workflow.workflow.start_event_class.model_validate(start_event)
@@ -877,7 +875,8 @@ class WorkflowServer:
 
                 context = Context.from_dict(workflow, persisted_handlers[0].ctx)
 
-            return (context, start_event, run_kwargs)
+            handler_id = handler_id or nanoid()
+            return (context, start_event, run_kwargs, handler_id)
 
         except HTTPException:
             # Re-raise HTTPExceptions as-is (like start_event validation errors)

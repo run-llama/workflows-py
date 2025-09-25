@@ -328,3 +328,13 @@ async def test_resume_across_runs(
             assert response2.status_code == 200
             resp_data2 = response2.json()
             assert resp_data2["result"] == "count: 8, runs: 2"
+
+            # Verify the handler id is the same
+            assert resp_data2["handler_id"] == handler_id
+
+            # Wait for the handler to be fully persisted as completed
+            await asyncio.sleep(0.1)
+
+            # Verify memory store has only one handler
+            assert len(memory_store.handlers) == 1
+            assert memory_store.handlers[handler_id].status == "completed"
