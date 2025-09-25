@@ -1,12 +1,12 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2025 LlamaIndex Inc.
 import asyncio
+import json
+import pytest
 from typing import AsyncGenerator
 
-import pytest
-
 from tests.server.conftest import ExternalEvent, RequestedExternalEvent
-from workflows.events import Event, InternalDispatchEvent
+from workflows.events import Event, InternalDispatchEvent, StartEvent
 from workflows.server import WorkflowServer
 from workflows import Context
 from workflows.workflow import Workflow
@@ -27,6 +27,16 @@ async def server_with_store(
 ) -> AsyncGenerator[WorkflowServer, None]:
     server = WorkflowServer(workflow_store=memory_store)
     server.add_workflow("test", interactive_workflow)
+    async with server.contextmanager():
+        yield server
+
+
+@pytest.fixture
+async def server_with_store_and_simple_workflow(
+    memory_store: MemoryWorkflowStore, simple_test_workflow: Workflow
+) -> AsyncGenerator[WorkflowServer, None]:
+    server = WorkflowServer(workflow_store=memory_store)
+    server.add_workflow("test", simple_test_workflow)
     async with server.contextmanager():
         yield server
 
@@ -279,3 +289,69 @@ async def test_workflow_cancelled_after_all_retries_fail(
                 except Exception:
                     pass
             await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_resume_across_runs(
+    memory_store: MemoryWorkflowStore, cumulative_workflow: Workflow
+) -> None:
+    """Test that workflow context accumulates data across multiple runs using handler_id continuation."""
+    server = WorkflowServer(workflow_store=memory_store)
+    server.add_workflow("cumulative", cumulative_workflow)
+
+    async with server.contextmanager():
+        # First run - should start with count=0, increment by 5
+        handler_id_1 = "cumulative-run-1"
+        start_event_1 = StartEvent(increment=5)  # type: ignore
+        handler_1 = server._workflows["cumulative"].run(start_event=start_event_1)
+        server._run_workflow_handler(handler_id_1, "cumulative", handler_1)
+
+        # Wait for first run to complete
+        result_1 = await server._handlers[handler_id_1].run_handler
+        await server._handlers[handler_id_1].task
+
+        # Verify first run result
+        assert result_1 == "count: 5, runs: 1"
+
+        # Verify first run is stored as completed
+        assert handler_id_1 in memory_store.handlers
+        first_run_persistent = memory_store.handlers[handler_id_1]
+        assert first_run_persistent.status == "completed"
+        assert first_run_persistent.workflow_name == "cumulative"
+
+        # Extract context from first run to verify state
+        first_ctx = first_run_persistent.ctx
+        state_data = first_ctx["state"]["state_data"]
+        assert json.loads(state_data["_data"]["count"]) == 5
+        assert json.loads(state_data["_data"]["run_history"]) == ["run_1_increment_5"]
+
+        # Second run - should continue from first run's context, increment by 3
+        handler_id_2 = "cumulative-run-2"
+        # Create context from first run's persisted state
+        continued_ctx = Context.from_dict(workflow=cumulative_workflow, data=first_ctx)
+        start_event_2 = StartEvent(increment=3)  # type: ignore
+        handler_2 = server._workflows["cumulative"].run(
+            ctx=continued_ctx, start_event=start_event_2
+        )
+        server._run_workflow_handler(handler_id_2, "cumulative", handler_2)
+
+        # Wait for second run to complete
+        result_2 = await server._handlers[handler_id_2].run_handler
+        await server._handlers[handler_id_2].task
+
+        # Verify second run result - should be cumulative
+        assert result_2 == "count: 8, runs: 2"
+
+        # Verify second run is stored as completed
+        assert handler_id_2 in memory_store.handlers
+        second_run_persistent = memory_store.handlers[handler_id_2]
+        assert second_run_persistent.status == "completed"
+
+        # Extract context from second run to verify cumulative state
+        second_ctx = second_run_persistent.ctx
+        state_data = second_ctx["state"]["state_data"]
+        assert json.loads(state_data["_data"]["count"]) == 8
+        assert json.loads(state_data["_data"]["run_history"]) == [
+            "run_1_increment_5",
+            "run_2_increment_3",
+        ]
