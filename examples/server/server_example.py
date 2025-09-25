@@ -31,17 +31,17 @@ class GreetingWorkflow(Workflow):
             ctx.write_event_to_stream(StreamEvent(sequence=i))
             await asyncio.sleep(0.3)
 
-        name = getattr(ev, "name", "World")
-        greeting = getattr(ev, "greeting", "Hello")
-        excl_marks = getattr(ev, "exclamation_marks", 1)
-        formal = getattr(ev, "formal", False)
+        name = ev.name
+        greeting = ev.greeting
+        excl_marks = ev.exclamation_marks
+        formal = ev.formal
         if formal:
             greeting = "Good Morning Your Honor"
         name = name + "!" * excl_marks
         return GreetingOutput(
             full_greeting=f"{greeting}, {name}",
             length=len(f"{greeting}, {name}"),
-            is_formal=formal,
+            is_formal=formal if isinstance(formal, bool) else False,
         )
 
 

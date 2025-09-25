@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, AsyncGenerator, TypedDict
 from datetime import datetime, timezone
 
+from pydantic import BaseModel
 import uvicorn
 from starlette.applications import Starlette
 from starlette.exceptions import HTTPException
@@ -587,14 +588,6 @@ class WorkflowServer:
         """
         handler_id = request.path_params["handler_id"]
 
-        # Immediately return the result if available
-        if handler_id in self._results:
-            wrapper = self._handlers.get(handler_id)
-            if wrapper is None:
-                raise HTTPException(detail="Handler not found", status_code=404)
-            dict = wrapper.to_dict()
-            return JSONResponse(dict)
-
         wrapper = self._handlers.get(handler_id)
         if wrapper is None:
             raise HTTPException(detail="Handler not found", status_code=404)
@@ -607,9 +600,6 @@ class WorkflowServer:
         try:
             result = await handler
             self._results[handler_id] = result
-
-            if isinstance(result, StopEvent):
-                result = result.model_dump()
 
             return JSONResponse(wrapper.to_dict())
         except Exception as e:
@@ -983,7 +973,9 @@ class _WorkflowHandler:
             if self.completed_at is not None
             else None,
             error=self.error,
-            result=self.result,
+            result=self.result.model_dump()
+            if self.result is not None and isinstance(self.result, BaseModel)
+            else self.result,
         )
 
     @property
