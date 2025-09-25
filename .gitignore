@@ -147,3 +147,6 @@ cython_debug/
 
 # Generated files
 openapi.json
+src/workflows/openapi_generated_client/README.md
+src/workflows/openapi_generated_client/pyproject.toml
+src/workflows/openapi_generated_client/.gitignore

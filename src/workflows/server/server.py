@@ -404,8 +404,6 @@ class WorkflowServer:
             schema:
               type: string
             description: Registered workflow name.
-        requestBody:
-          required: false
         responses:
           200:
             description: JSON schema successfully retrieved for start event
@@ -455,8 +453,6 @@ class WorkflowServer:
             schema:
               type: string
             description: Registered workflow name.
-        requestBody:
-          required: false
         responses:
           200:
             description: JSON representation successfully retrieved
@@ -605,9 +601,6 @@ class WorkflowServer:
         try:
             result = await handler
             self._results[handler_id] = result
-
-            if isinstance(result, StopEvent):
-                result = result.model_dump()
 
             return JSONResponse(wrapper.to_dict())
         except Exception as e:
@@ -981,7 +974,9 @@ class _WorkflowHandler:
             if self.completed_at is not None
             else None,
             error=self.error,
-            result=self.result,
+            result=self.result.model_dump()
+            if isinstance(self.result, StopEvent)
+            else self.result,
         )
 
     @property
