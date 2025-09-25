@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2025 LlamaIndex Inc.
 import asyncio
-from typing import AsyncGenerator
-
 import pytest
+from typing import AsyncGenerator
+from httpx import AsyncClient, ASGITransport
 
 from tests.server.conftest import ExternalEvent, RequestedExternalEvent
 from workflows.events import Event, InternalDispatchEvent
@@ -27,6 +27,16 @@ async def server_with_store(
 ) -> AsyncGenerator[WorkflowServer, None]:
     server = WorkflowServer(workflow_store=memory_store)
     server.add_workflow("test", interactive_workflow)
+    async with server.contextmanager():
+        yield server
+
+
+@pytest.fixture
+async def server_with_store_and_simple_workflow(
+    memory_store: MemoryWorkflowStore, simple_test_workflow: Workflow
+) -> AsyncGenerator[WorkflowServer, None]:
+    server = WorkflowServer(workflow_store=memory_store)
+    server.add_workflow("test", simple_test_workflow)
     async with server.contextmanager():
         yield server
 
@@ -279,3 +289,52 @@ async def test_workflow_cancelled_after_all_retries_fail(
                 except Exception:
                     pass
             await asyncio.sleep(0)
+
+
+@pytest.mark.asyncio
+async def test_resume_across_runs(
+    memory_store: MemoryWorkflowStore, cumulative_workflow: Workflow
+) -> None:
+    """Test that workflow context accumulates data across multiple runs using handler_id continuation."""
+    server = WorkflowServer(workflow_store=memory_store)
+    server.add_workflow("cumulative", cumulative_workflow)
+
+    async with server.contextmanager():
+        transport = ASGITransport(app=server.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            # First run - should start with count=0, increment by 5
+            response = await client.post(
+                "/workflows/cumulative/run", json={"start_event": {"increment": 5}}
+            )
+            assert response.status_code == 200
+            resp_data = response.json()
+            assert resp_data["result"] == "count: 5, runs: 1"
+
+            # Get the handler id for that run
+            handler_id = resp_data["handler_id"]
+
+            # Wait for the handler to be fully persisted as completed
+            await asyncio.sleep(0.1)
+
+            # Verify it's persisted in the store as completed
+            persisted = memory_store.handlers[handler_id]
+            assert persisted.status == "completed"
+
+            # Second run - should start with count=5, increment by 3
+            response2 = await client.post(
+                "/workflows/cumulative/run",
+                json={"handler_id": handler_id, "start_event": {"increment": 3}},
+            )
+            assert response2.status_code == 200
+            resp_data2 = response2.json()
+            assert resp_data2["result"] == "count: 8, runs: 2"
+
+            # Verify the handler id is the same
+            assert resp_data2["handler_id"] == handler_id
+
+            # Wait for the handler to be fully persisted as completed
+            await asyncio.sleep(0.1)
+
+            # Verify memory store has only one handler
+            assert len(memory_store.handlers) == 1
+            assert memory_store.handlers[handler_id].status == "completed"

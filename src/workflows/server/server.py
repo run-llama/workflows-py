@@ -356,6 +356,9 @@ class WorkflowServer:
                   context:
                     type: object
                     description: Serialized workflow Context.
+                  handler_id:
+                    type: string
+                    description: Workflow handler identifier to continue from a previous completed run.
                   kwargs:
                     type: object
                     description: Additional keyword arguments for the workflow.
@@ -369,13 +372,13 @@ class WorkflowServer:
           400:
             description: Invalid start_event payload
           404:
-            description: Workflow not found
+            description: Workflow or handler identifier not found
           500:
             description: Error running workflow or invalid request body
         """
         workflow = self._extract_workflow(request)
-        context, start_event, run_kwargs = await self._extract_run_params(
-            request, workflow.workflow
+        context, start_event, run_kwargs, handler_id = await self._extract_run_params(
+            request, workflow.workflow, workflow.name
         )
 
         if start_event is not None:
@@ -384,7 +387,6 @@ class WorkflowServer:
             input_ev = None
 
         try:
-            handler_id = nanoid()
             handler = workflow.workflow.run(
                 ctx=context, start_event=input_ev, **run_kwargs
             )
@@ -514,6 +516,9 @@ class WorkflowServer:
                   context:
                     type: object
                     description: Serialized workflow Context.
+                  handler_id:
+                    type: string
+                    description: Workflow handler identifier to continue from a previous completed run.
                   kwargs:
                     type: object
                     description: Additional keyword arguments for the workflow.
@@ -527,13 +532,12 @@ class WorkflowServer:
           400:
             description: Invalid start_event payload
           404:
-            description: Workflow not found
+            description: Workflow or handler identifier not found
         """
         workflow = self._extract_workflow(request)
-        context, start_event, run_kwargs = await self._extract_run_params(
-            request, workflow.workflow
+        context, start_event, run_kwargs, handler_id = await self._extract_run_params(
+            request, workflow.workflow, workflow.name
         )
-        handler_id = nanoid()
 
         if start_event is not None:
             input_ev = workflow.workflow.start_event_class.model_validate(start_event)
@@ -809,12 +813,15 @@ class WorkflowServer:
 
         return _NamedWorkflow(name=name, workflow=self._workflows[name])
 
-    async def _extract_run_params(self, request: Request, workflow: Workflow) -> tuple:
+    async def _extract_run_params(
+        self, request: Request, workflow: Workflow, workflow_name: str
+    ) -> tuple:
         try:
             body = await request.json()
             context_data = body.get("context")
             run_kwargs = body.get("kwargs", {})
             start_event_data = body.get("start_event")
+            handler_id = body.get("handler_id")
 
             # Extract custom StartEvent if present
             start_event = None
@@ -847,8 +854,21 @@ class WorkflowServer:
             context = None
             if context_data:
                 context = Context.from_dict(workflow=workflow, data=context_data)
+            elif handler_id:
+                persisted_handlers = await self._workflow_store.query(
+                    HandlerQuery(
+                        handler_id_in=[handler_id],
+                        workflow_name_in=[workflow_name],
+                        status_in=["completed"],
+                    )
+                )
+                if len(persisted_handlers) == 0:
+                    raise HTTPException(detail="Handler not found", status_code=404)
 
-            return (context, start_event, run_kwargs)
+                context = Context.from_dict(workflow, persisted_handlers[0].ctx)
+
+            handler_id = handler_id or nanoid()
+            return (context, start_event, run_kwargs, handler_id)
 
         except HTTPException:
             # Re-raise HTTPExceptions as-is (like start_event validation errors)

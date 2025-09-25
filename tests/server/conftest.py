@@ -67,6 +67,27 @@ class InteractiveWorkflow(Workflow):
         return StopEvent(result=f"received: {ev.response}")
 
 
+class CumulativeWorkflow(Workflow):
+    @step
+    async def accumulate(self, ctx: Context, ev: StartEvent) -> StopEvent:
+        # Get the current count from context store, defaulting to 0
+        current_count = await ctx.store.get("count", 0)
+
+        # Get the increment value from the start event, defaulting to 1
+        increment = getattr(ev, "increment", 1)
+
+        # Add to the count
+        new_count = current_count + increment
+        await ctx.store.set("count", new_count)
+
+        # Also track run history
+        run_history = await ctx.store.get("run_history", [])
+        run_history.append(f"run_{len(run_history) + 1}_increment_{increment}")
+        await ctx.store.set("run_history", run_history)
+
+        return StopEvent(result=f"count: {new_count}, runs: {len(run_history)}")
+
+
 @pytest.fixture
 def simple_test_workflow() -> Workflow:
     return SimpleTestWorkflow()
@@ -85,3 +106,8 @@ def streaming_workflow() -> Workflow:
 @pytest.fixture
 def interactive_workflow() -> Workflow:
     return InteractiveWorkflow()
+
+
+@pytest.fixture
+def cumulative_workflow() -> Workflow:
+    return CumulativeWorkflow()
