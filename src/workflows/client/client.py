@@ -1,6 +1,7 @@
 # TOP-LEVEL
 import time
 import json
+import httpx
 
 # GENERATED CLASSES (CLIENTS)
 from workflows.openapi_generated_client.workflows_api_client import (
@@ -20,9 +21,6 @@ from workflows.openapi_generated_client.workflows_api_client.api.default.get_han
 )
 from workflows.openapi_generated_client.workflows_api_client.api.default.get_results_handler_id import (
     asyncio as get_results_handler_id,
-)
-from workflows.openapi_generated_client.workflows_api_client.api.default.get_events_handler_id import (
-    asyncio as get_events_handler_id,
 )
 from workflows.openapi_generated_client.workflows_api_client.api.default.post_workflows_name_run import (
     asyncio as post_workflows_name_run,
@@ -59,9 +57,6 @@ from workflows.openapi_generated_client.workflows_api_client.models.post_workflo
 from workflows.openapi_generated_client.workflows_api_client.models.post_workflows_name_run_nowait_body_start_event import (
     PostWorkflowsNameRunNowaitBodyStartEvent,
 )
-from workflows.openapi_generated_client.workflows_api_client.models.get_events_handler_id_response_200 import (
-    GetEventsHandlerIdResponse200,
-)
 from workflows.openapi_generated_client.workflows_api_client.models.post_events_handler_id_body import (
     PostEventsHandlerIdBody,
 )
@@ -81,7 +76,7 @@ from workflows import Context
 from workflows.events import StartEvent, Event
 from workflows.context.serializers import JsonSerializer
 from .utils import AuthDetails, EventDict
-from typing import Literal, Optional, Any, Union, cast
+from typing import Literal, Optional, Any, Union, cast, AsyncGenerator
 
 
 class WorkflowClient:
@@ -200,14 +195,41 @@ class WorkflowClient:
         else:
             raise ValueError("Response was not properly generated")
 
-    async def get_workflow_events(self, handler: Handler) -> dict:
-        response = await get_events_handler_id(
-            handler_id=handler.handler_id, client=self._client, sse=False
-        )
-        if isinstance(response, GetEventsHandlerIdResponse200):
-            return response.to_dict()
-        else:
-            raise ValueError("Response was not properly generated")
+    async def get_workflow_events(
+        self,
+        handler: Handler,
+    ) -> AsyncGenerator[dict[str, Any], None]:
+        """
+        Stream events using newline-delimited JSON format
+        """
+        url = f"/events/{handler.handler_id}?sse=false"
+        client = self._client.get_async_httpx_client()
+        try:
+            async with client.stream("GET", url) as response:
+                # Handle different response codes
+                if response.status_code == 404:
+                    raise ValueError("Handler not found")
+                elif response.status_code == 204:
+                    # Handler completed, no more events
+                    return
+
+                response.raise_for_status()
+
+                async for line in response.aiter_lines():
+                    if line.strip():  # Skip empty lines
+                        try:
+                            event = json.loads(line.replace("\n", ""))
+                            yield event
+                        except json.JSONDecodeError as e:
+                            print(f"Failed to parse JSON: {e}, data: {line}")
+                            continue
+
+        except httpx.TimeoutException:
+            raise TimeoutError(
+                f"Timeout waiting for events from handler {handler.handler_id}"
+            )
+        except httpx.RequestError as e:
+            raise ConnectionError(f"Failed to connect to event stream: {e}")
 
     async def get_workflow_handlers(self) -> list[Handler]:
         response = await get_handlers(client=self._client)
