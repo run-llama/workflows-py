@@ -404,6 +404,8 @@ class WorkflowServer:
             schema:
               type: string
             description: Registered workflow name.
+        requestBody:
+          required: false
         responses:
           200:
             description: JSON schema successfully retrieved for start event
@@ -453,6 +455,8 @@ class WorkflowServer:
             schema:
               type: string
             description: Registered workflow name.
+        requestBody:
+          required: false
         responses:
           200:
             description: JSON representation successfully retrieved
