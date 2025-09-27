@@ -32,9 +32,9 @@ async def main() -> None:
     )
     print("==== STARTING THE WORKFLOW ===")
     print(f"Workflow running with handler: {handler}")
-    print("=== STREAMING EVENTS ===")
-    async for event in client.get_workflow_events(handler):
-        print("Received data:", event)
+    # print("=== STREAMING EVENTS ===")
+    # events = await client.get_workflow_events(handler)
+    # print(events)
     # Poll for result
     result = handler.status.value
     while result == "running":

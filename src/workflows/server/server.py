@@ -602,6 +602,9 @@ class WorkflowServer:
             result = await handler
             self._results[handler_id] = result
 
+            if isinstance(result, StopEvent):
+                result = result.model_dump()
+
             return JSONResponse(wrapper.to_dict())
         except Exception as e:
             raise HTTPException(
@@ -974,9 +977,7 @@ class _WorkflowHandler:
             if self.completed_at is not None
             else None,
             error=self.error,
-            result=self.result.model_dump()
-            if isinstance(self.result, StopEvent)
-            else self.result,
+            result=self.result,
         )
 
     @property

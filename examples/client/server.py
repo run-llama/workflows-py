@@ -1,5 +1,5 @@
 from workflows import Workflow, step, Context
-from workflows.events import StartEvent, StopEvent, Event
+from workflows.events import StartEvent, StopEvent, InputRequiredEvent
 from pydantic import Field
 from workflows.server import WorkflowServer
 
@@ -12,7 +12,7 @@ class InputNumbers(StartEvent):
     operation: Literal["sum", "subtraction"] = Field(default="sum")
 
 
-class CalculationEvent(Event):
+class CalculationEvent(InputRequiredEvent):
     result: int
 
 
@@ -46,7 +46,6 @@ class AddOrSubtractWorkflow(Workflow):
 async def main() -> None:
     server = WorkflowServer()
     server.add_workflow("add_or_subtract", AddOrSubtractWorkflow(timeout=1000))
-    server.add_workflow("add_or_subtract_2", AddOrSubtractWorkflow(timeout=1000))
     try:
         await server.serve("localhost", 8000)
     except KeyboardInterrupt:
