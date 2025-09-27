@@ -1,5 +1,5 @@
 from workflows import Workflow, step, Context
-from workflows.events import StartEvent, StopEvent, InputRequiredEvent
+from workflows.events import StartEvent, StopEvent, Event
 from pydantic import Field
 from workflows.server import WorkflowServer
 
@@ -12,7 +12,7 @@ class InputNumbers(StartEvent):
     operation: Literal["sum", "subtraction"] = Field(default="sum")
 
 
-class CalculationEvent(InputRequiredEvent):
+class CalculationEvent(Event):
     result: int
 
 

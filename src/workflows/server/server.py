@@ -981,7 +981,9 @@ class _WorkflowHandler:
             if self.completed_at is not None
             else None,
             error=self.error,
-            result=self.result,
+            result=self.result.model_dump()
+            if isinstance(self.result, StopEvent)
+            else self.result,
         )
 
     @property

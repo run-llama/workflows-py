@@ -1,9 +1,8 @@
 import httpx
 import time
 import json
-import inspect
 
-from typing import Literal, Any, Union, Callable, AsyncGenerator, AsyncIterator
+from typing import Literal, Any, Union, AsyncGenerator, AsyncIterator
 from contextlib import asynccontextmanager
 from logging import getLogger
 from workflows.events import StartEvent, Event
@@ -131,7 +130,7 @@ class WorkflowClient:
         start_event: Union[StartEvent, dict[str, Any], None] = None,
         context: Union[Context, dict[str, Any], None] = None,
         **kwargs: Any,
-    ) -> str:
+    ) -> dict[str, Any]:
         """
         Run the workflow in the background.
 
@@ -141,7 +140,7 @@ class WorkflowClient:
             **kwargs: Any number of keyword arguments that would be passed on as additional keyword arguments to the workflow.
 
         Returns:
-            str: ID of the handler running the workflow
+            dict[str, Any]: JSON representation of the handler running the workflow
         """
         if isinstance(start_event, StartEvent):
             try:
@@ -167,59 +166,20 @@ class WorkflowClient:
 
             response.raise_for_status()
 
-            return response.json()["handler_id"]
+            return response.json()
 
-    async def _stream_events_sse(
+    async def get_workflow_events(
         self,
         handler_id: str,
     ) -> AsyncGenerator[dict[str, Any], None]:
         """
-        Stream events using Server-Sent Events format
-        """
-        url = f"/events/{handler_id}?sse=true"
+        Stream events as they are produced by the workflow.
 
-        async with self._get_client() as client:
-            try:
-                async with client.stream(
-                    "GET",
-                    url,
-                ) as response:
-                    # Handle different response codes
-                    if response.status_code == 404:
-                        raise ValueError("Handler not found")
-                    elif response.status_code == 204:
-                        # Handler completed, no more events
-                        return  # type: ignore
+        Args:
+            handler_id (str): ID of the handler running the workflow
 
-                    response.raise_for_status()
-
-                    async for line in response.aiter_lines():
-                        if line.startswith("data: "):
-                            # Extract JSON from SSE data line
-                            json_data = line[6:]  # Remove 'data: ' prefix
-                            if json_data.strip():  # Skip empty data lines
-                                try:
-                                    event = json.loads(json_data.replace("\n", ""))
-                                    yield event.get("value", {})
-                                except json.JSONDecodeError as e:
-                                    print(
-                                        f"Failed to parse JSON: {e}, data: {json_data}"
-                                    )
-                                    continue
-
-            except httpx.TimeoutException:
-                raise TimeoutError(
-                    f"Timeout waiting for events from handler {handler_id}"
-                )
-            except httpx.RequestError as e:
-                raise ConnectionError(f"Failed to connect to event stream: {e}")
-
-    async def _stream_events_ndjson(
-        self,
-        handler_id: str,
-    ) -> AsyncGenerator[dict[str, Any], None]:
-        """
-        Stream events using newline-delimited JSON format
+        Returns:
+            AsyncGenerator[dict[str, Any], None]: Generator for the events that are streamed in the form of dictionaries.
         """
         url = f"/events/{handler_id}?sse=false"
 
@@ -239,7 +199,7 @@ class WorkflowClient:
                         if line.strip():  # Skip empty lines
                             try:
                                 event = json.loads(line.replace("\n", ""))
-                                yield event.get("value", {})
+                                yield event
                             except json.JSONDecodeError as e:
                                 print(f"Failed to parse JSON: {e}, data: {line}")
                                 continue
@@ -250,41 +210,6 @@ class WorkflowClient:
                 )
             except httpx.RequestError as e:
                 raise ConnectionError(f"Failed to connect to event stream: {e}")
-
-    async def stream_events(
-        self,
-        handler_id: str,
-        event_callback: Callable[[dict[str, Any]], Any] | None = None,
-        sse: bool = True,
-    ) -> None:
-        """
-        Stream events from a running handler.
-
-        Args:
-            handler_id (str): ID of the handler streaming the events
-            event_callback (Callable[[dict[str, Any]], Any]): Function to call when an event is received from the stream (optional, defaults to None)
-            sse (bool): Whether to enable server-sent events or not
-
-        Returns:
-            None
-        """
-        callback = event_callback or (
-            lambda event: logger.info(f"Processing data: {event}")
-        )
-        is_async = inspect.iscoroutinefunction(callback)
-        if sse:
-            async for event in self._stream_events_sse(handler_id):
-                if is_async:
-                    await callback(event)  # type: ignore
-                else:
-                    callback(event)
-        else:
-            async for event in self._stream_events_ndjson(handler_id):
-                if is_async:
-                    await callback(event)  # type: ignore
-                else:
-                    callback(event)
-        return None
 
     async def send_event(
         self,
