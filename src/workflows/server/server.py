@@ -171,47 +171,10 @@ class WorkflowServer:
             workflow = self._workflows[persistent.workflow_name]
             try:
                 ctx = Context.from_dict(workflow=workflow, data=persistent.ctx)
-            except Exception as e:
-                logger.error(
-                    (
-                        "Failed to restore context for handler %s (workflow=%s). "
-                        "Marking as failed and skipping resume: %s"
-                    ),
-                    persistent.handler_id,
-                    persistent.workflow_name,
-                    e,
-                    exc_info=True,
-                )
-                # Best-effort to mark the handler as failed so it won't be retried on next startup
-                try:
-                    await self._workflow_store.update(
-                        PersistentHandler(
-                            handler_id=persistent.handler_id,
-                            workflow_name=persistent.workflow_name,
-                            status="failed",
-                            ctx=persistent.ctx,
-                        )
-                    )
-                except Exception:
-                    logger.error(
-                        "Failed to update workflow store for handler %s to failed.",
-                        persistent.handler_id,
-                        exc_info=True,
-                    )
-                continue
-
-            try:
                 handler = workflow.run(ctx=ctx)
             except Exception as e:
                 logger.error(
-                    (
-                        "Failed to start workflow run for handler %s (workflow=%s). "
-                        "Marking as failed and skipping resume: %s"
-                    ),
-                    persistent.handler_id,
-                    persistent.workflow_name,
-                    e,
-                    exc_info=True,
+                    f"Failed to resume handler {persistent.handler_id} for workflow {persistent.workflow_name}: {e}"
                 )
                 try:
                     await self._workflow_store.update(
@@ -223,11 +186,7 @@ class WorkflowServer:
                         )
                     )
                 except Exception:
-                    logger.error(
-                        "Failed to update workflow store for handler %s to failed.",
-                        persistent.handler_id,
-                        exc_info=True,
-                    )
+                    pass
                 continue
 
             self._run_workflow_handler(

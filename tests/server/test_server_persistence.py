@@ -114,6 +114,38 @@ async def test_resume_active_handlers_across_server_restart(
 
 
 @pytest.mark.asyncio
+async def test_startup_marks_invalid_persisted_context_as_failed(
+    memory_store: MemoryWorkflowStore, simple_test_workflow: Workflow
+) -> None:
+    """Server should not crash on invalid persisted context; it should mark it failed."""
+    # Seed an invalid context payload that will fail Context.from_dict
+    invalid_ctx = {"state": {"data": {"__is_pydantic": True, "value": 1, "qualified_name": "non.existent.Model"}},
+                   "streaming_queue": "[]", "queues": {}, "event_buffers": {},
+                   "in_progress": {}, "accepted_events": [], "broker_log": [],
+                   "is_running": False, "waiting_ids": []}
+
+    handler_id = "bad-ctx-1"
+    await memory_store.update(
+        PersistentHandler(
+            handler_id=handler_id,
+            workflow_name="test",
+            status="running",
+            ctx=invalid_ctx,
+        )
+    )
+
+    server = WorkflowServer(workflow_store=memory_store)
+    server.add_workflow("test", simple_test_workflow)
+    async with server.contextmanager():
+        # Invalid handler should not be registered
+        assert handler_id not in server._handlers
+
+    # After startup attempt, it should be marked as failed in the store
+    persisted = memory_store.handlers[handler_id]
+    assert persisted.status == "failed"
+
+
+@pytest.mark.asyncio
 async def test_store_is_updated_on_workflow_failure(
     memory_store: MemoryWorkflowStore, error_workflow: Workflow
 ) -> None:
