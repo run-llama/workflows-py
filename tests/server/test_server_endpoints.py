@@ -787,9 +787,9 @@ async def test_cancel_handler_persists_cancelled_status(
         )
         handler_id = response.json()["handler_id"]
 
-        resp_cancel = await client.delete(f"/handlers/{handler_id}?stop_only=true")
+        resp_cancel = await client.post(f"/handlers/{handler_id}/cancel?purge=false")
         assert resp_cancel.status_code == 200
-        assert resp_cancel.json() == {"status": "stopped"}
+        assert resp_cancel.json() == {"status": "cancelled"}
 
         persisted_cancelled = await store.query(
             HandlerQuery(handler_id_in=[handler_id])
@@ -797,7 +797,7 @@ async def test_cancel_handler_persists_cancelled_status(
         assert len(persisted_cancelled) == 1
         assert persisted_cancelled[0].status == "cancelled"
 
-        resp_delete2 = await client.delete(f"/handlers/{handler_id}?stop_only=true")
+        resp_delete2 = await client.post(f"/handlers/{handler_id}/cancel?purge=false")
         assert resp_delete2.status_code == 404
 
 
@@ -816,8 +816,8 @@ async def test_delete_persisted_handler_removes_from_store(
             )
         ],
     ) as (_server, client, store):
-        resp_delete_store = await client.delete(
-            "/handlers/persist-only"  # stop_only=false is default
+        resp_delete_store = await client.post(
+            "/handlers/persist-only/cancel?purge=true"
         )
         assert resp_delete_store.status_code == 200
         assert resp_delete_store.json() == {"status": "deleted"}
@@ -843,14 +843,10 @@ async def test_stop_only_persisted_handler_without_removal_returns_not_found(
             )
         ],
     ) as (_server, client, store):
-        resp_cancel_store_only = await client.delete(
-            "/handlers/store-only?stop_only=true"
-        )
+        resp_cancel_store_only = await client.post("/handlers/store-only/cancel")
         assert resp_cancel_store_only.status_code == 404
 
-        resp_cancel_store_only = await client.delete(
-            "/handlers/store-only?stop_only=true"
-        )
+        resp_cancel_store_only = await client.post("/handlers/store-only/cancel")
         assert resp_cancel_store_only.status_code == 404
 
         persisted = await store.query(HandlerQuery(handler_id_in=["store-only"]))

@@ -136,9 +136,9 @@ class WorkflowServer:
                 methods=["GET"],
             ),
             Route(
-                "/handlers/{handler_id}",
-                self._delete_handler,
-                methods=["DELETE"],
+                "/handlers/{handler_id}/cancel",
+                self._cancel_handler,
+                methods=["POST"],
             ),
             Route(
                 "/workflows/{name}/representation",
@@ -798,13 +798,13 @@ class WorkflowServer:
                 detail=f"Error processing request: {e}", status_code=500
             )
 
-    async def _delete_handler(self, request: Request) -> JSONResponse:
+    async def _cancel_handler(self, request: Request) -> JSONResponse:
         """
         ---
         summary: Stop and delete handler
         description: |
           Stops a running workflow handler by cancelling its tasks. Optionally removes the
-          handler from the persistence store.
+          handler from the persistence store if purge=true.
         parameters:
           - in: path
             name: handler_id
@@ -813,15 +813,15 @@ class WorkflowServer:
               type: string
             description: Workflow handler identifier.
           - in: query
-            name: stop_only
+            name: purge
             required: false
             schema:
               type: boolean
               default: false
-            description: If true, only stop the handler and do not delete it from the store.
+            description: If true, also deletes the handler from the store, otherwise updates the status to cancelled.
         responses:
           200:
-            description: Handler stopped and deleted or stopped only
+            description: Handler cancelled and deleted or cancelled only
             content:
               application/json:
                 schema:
@@ -829,24 +829,30 @@ class WorkflowServer:
                   properties:
                     status:
                       type: string
-                      enum: [deleted, stopped]
+                      enum: [deleted, cancelled]
                   required: [status]
           404:
             description: Handler not found
         """
         handler_id = request.path_params["handler_id"]
         # Simple boolean parsing aligned with other APIs (e.g., `sse`): only "true" enables
-        stop_only = request.query_params.get("stop_only", "false").lower() == "true"
+        purge = request.query_params.get("purge", "false").lower() == "true"
 
         wrapper = self._handlers.get(handler_id)
-        if wrapper is None and stop_only:
+        if wrapper is None and not purge:
             raise HTTPException(detail="Handler not found", status_code=404)
 
         if wrapper is not None:
             await self._close_handler(wrapper)
 
         # Single persistence delete path
-        if stop_only:
+        if purge:
+            n_deleted = await self._workflow_store.delete(
+                HandlerQuery(handler_id_in=[handler_id])
+            )
+            if n_deleted == 0:
+                raise HTTPException(detail="Handler not found", status_code=404)
+        else:
             # mark it as cancelled if it's not already completed
             existing = await self._workflow_store.query(
                 HandlerQuery(handler_id_in=[handler_id])
@@ -865,14 +871,8 @@ class WorkflowServer:
                         ctx=ctx,
                     )
                 )
-        else:
-            n_deleted = await self._workflow_store.delete(
-                HandlerQuery(handler_id_in=[handler_id])
-            )
-            if n_deleted == 0:
-                raise HTTPException(detail="Handler not found", status_code=404)
 
-        return JSONResponse({"status": "deleted" if not stop_only else "stopped"})
+        return JSONResponse({"status": "deleted" if purge else "cancelled"})
 
     #
     # Private methods

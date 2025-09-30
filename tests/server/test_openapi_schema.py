@@ -21,7 +21,7 @@ def test_openapi_schema_includes_all_routes(simple_test_workflow: Workflow) -> N
         "/results/{handler_id}": {"get"},
         "/events/{handler_id}": {"get"},
         "/handlers": {"get"},
-        "/handlers/{handler_id}": {"delete"},
+        "/handlers/{handler_id}/cancel": {"post"},
         "/health": {"get"},
     }
 
