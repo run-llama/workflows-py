@@ -31,6 +31,7 @@ from workflows.events import (
     StepState,
     StepStateChanged,
     StopEvent,
+    InternalDispatchEvent,
 )
 from workflows.handler import WorkflowHandler
 
@@ -639,6 +640,13 @@ class WorkflowServer:
               type: boolean
               default: true
             description: If false, as NDJSON instead of Server-Sent Events.
+          - in: query
+            name: include_internal
+            required: false
+            schema:
+              type: boolean
+              default: false
+            description: If true, include internal workflow events (e.g., step state changes).
         responses:
           200:
             description: Streaming started
@@ -670,12 +678,19 @@ class WorkflowServer:
 
         # Get raw_event query parameter
         sse = request.query_params.get("sse", "true").lower() == "true"
+        include_internal = (
+            request.query_params.get("include_internal", "false").lower() == "true"
+        )
         media_type = "text/event-stream" if sse else "application/x-ndjson"
 
         async def event_stream(handler: _WorkflowHandler) -> AsyncGenerator[str, None]:
             serializer = JsonSerializer()
 
             async for event in handler.iter_events():
+                if not include_internal and isinstance(event, InternalDispatchEvent):
+                    # Skip internal events unless explicitly requested
+                    await asyncio.sleep(0)
+                    continue
                 serialized_event = serializer.serialize(event)
                 if sse:
                     # emit as untyped data. Difficult to subscribe to dynamic event types with SSE.
