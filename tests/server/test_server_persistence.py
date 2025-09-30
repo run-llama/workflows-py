@@ -119,10 +119,18 @@ async def test_startup_marks_invalid_persisted_context_as_failed(
 ) -> None:
     """Server should not crash on invalid persisted context; it should mark it failed."""
     # Seed an invalid context payload that will fail Context.from_dict
-    invalid_ctx = {"state": {"data": {"__is_pydantic": True, "value": 1, "qualified_name": "non.existent.Model"}},
-                   "streaming_queue": "[]", "queues": {}, "event_buffers": {},
-                   "in_progress": {}, "accepted_events": [], "broker_log": [],
-                   "is_running": False, "waiting_ids": []}
+    # Make the context structurally valid but with an invalid streaming_queue JSON
+    invalid_ctx = {
+        "state": {},
+        "streaming_queue": "not-json",
+        "queues": {},
+        "event_buffers": {},
+        "in_progress": {},
+        "accepted_events": [],
+        "broker_log": [],
+        "is_running": False,
+        "waiting_ids": [],
+    }
 
     handler_id = "bad-ctx-1"
     await memory_store.update(
