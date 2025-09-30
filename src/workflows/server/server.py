@@ -170,8 +170,26 @@ class WorkflowServer:
         )
         for persistent in handlers:
             workflow = self._workflows[persistent.workflow_name]
-            ctx = Context.from_dict(workflow=workflow, data=persistent.ctx)
-            handler = workflow.run(ctx=ctx)
+            try:
+                ctx = Context.from_dict(workflow=workflow, data=persistent.ctx)
+                handler = workflow.run(ctx=ctx)
+            except Exception as e:
+                logger.error(
+                    f"Failed to resume handler {persistent.handler_id} for workflow {persistent.workflow_name}: {e}"
+                )
+                try:
+                    await self._workflow_store.update(
+                        PersistentHandler(
+                            handler_id=persistent.handler_id,
+                            workflow_name=persistent.workflow_name,
+                            status="failed",
+                            ctx=persistent.ctx,
+                        )
+                    )
+                except Exception:
+                    pass
+                continue
+
             self._run_workflow_handler(
                 persistent.handler_id, persistent.workflow_name, handler
             )
