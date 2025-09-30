@@ -842,58 +842,44 @@ class WorkflowServer:
             description: Handler not found
         """
         handler_id = request.path_params["handler_id"]
-        # Interpret presence of the flag as true unless explicitly false
-        q = request.query_params
-        raw_param = q.get("remove_from_store")
-        remove_from_store = "remove_from_store" in q
-        if raw_param is not None:
-            remove_from_store = str(raw_param).lower() not in {
-                "",
-                "0",
-                "false",
-                "no",
-                "off",
-            }
+        # Simple boolean parsing aligned with other APIs (e.g., `sse`): only "true" enables
+        remove_from_store = (
+            request.query_params.get("remove_from_store", "false").lower() == "true"
+        )
 
         wrapper = self._handlers.get(handler_id)
-        if wrapper is None:
-            if remove_from_store:
-                try:
-                    await self._workflow_store.delete(handler_id)
-                except Exception as e:
-                    logger.error(
-                        f"Failed to delete handler {handler_id} from store: {e}"
-                    )
-                return JSONResponse({"status": "deleted"})
+        if wrapper is None and not remove_from_store:
             raise HTTPException(detail="Handler not found", status_code=404)
 
-        # Cancel running workflow and background tasks
-        try:
-            run_handler = wrapper.run_handler
-            if not run_handler.done():
-                try:
-                    run_handler.cancel()
-                except Exception:
-                    pass
-                try:
-                    await run_handler.cancel_run()
-                except Exception:
-                    pass
-            if wrapper.task is not None and not wrapper.task.done():
-                try:
-                    wrapper.task.cancel()
-                except Exception:
-                    pass
-        finally:
-            # Remove from in-memory maps regardless
-            self._handlers.pop(handler_id, None)
-            self._results.pop(handler_id, None)
+        if wrapper is not None:
+            # Cancel running workflow and background tasks
+            try:
+                run_handler = wrapper.run_handler
+                if not run_handler.done():
+                    try:
+                        run_handler.cancel()
+                    except Exception:
+                        pass
+                    try:
+                        await run_handler.cancel_run()
+                    except Exception:
+                        pass
+                if wrapper.task is not None and not wrapper.task.done():
+                    try:
+                        wrapper.task.cancel()
+                    except Exception:
+                        pass
+            finally:
+                # Remove from in-memory maps regardless
+                self._handlers.pop(handler_id, None)
+                self._results.pop(handler_id, None)
 
+        # Single persistence delete path
         if remove_from_store:
             try:
                 await self._workflow_store.delete(handler_id)
             except Exception as e:
-                # Log but do not fail the delete endpoint as the in-memory handler is gone
+                # Log but do not fail the delete endpoint
                 logger.error(f"Failed to delete handler {handler_id} from store: {e}")
 
         return JSONResponse({"status": "deleted"})

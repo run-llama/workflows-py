@@ -1,5 +1,5 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = ">=3.9"
 resolution-markers = [
     "python_full_version >= '3.10'",
@@ -558,6 +558,10 @@ dev = [
     { name = "pytest-xdist" },
     { name = "pyyaml" },
 ]
+server = [
+    { name = "starlette" },
+    { name = "uvicorn" },
+]
 
 [package.metadata]
 requires-dist = [
@@ -581,6 +585,10 @@ dev = [
     { name = "pytest-cov", specifier = ">=6.1.1" },
     { name = "pytest-xdist", specifier = ">=3.8.0" },
     { name = "pyyaml", specifier = ">=6.0.2" },
+]
+server = [
+    { name = "starlette", specifier = ">=0.47.2" },
+    { name = "uvicorn", specifier = ">=0.35.0" },
 ]
 
 [[package]]
