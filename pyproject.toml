@@ -14,10 +14,6 @@ dev = [
   "packaging>=21.0",
   "pytest-xdist>=3.8.0"
 ]
-server = [
-    "starlette>=0.47.2",
-    "uvicorn>=0.35.0",
-]
 
 [project]
 name = "llama-index-workflows"
