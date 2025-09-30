@@ -12,7 +12,7 @@ import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient, Response
 
-from tests.server.util import wait_for_passing
+from .util import wait_for_passing
 from workflows import Context
 from workflows.server import WorkflowServer
 from workflows.server.abstract_workflow_store import HandlerQuery, PersistentHandler
@@ -21,8 +21,8 @@ from datetime import datetime
 
 # Prepare the event to send
 from workflows.context.serializers import JsonSerializer
-from tests.server.conftest import ExternalEvent
-from tests.server.memory_workflow_store import MemoryWorkflowStore
+from .conftest import ExternalEvent
+from .memory_workflow_store import MemoryWorkflowStore
 
 
 @pytest.fixture

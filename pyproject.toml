@@ -35,6 +35,18 @@ server = ["starlette>=0.39.0", "uvicorn>=0.32.0"]
 [tool.basedpyright]
 typeCheckingMode = "standard"
 
+[[tool.basedpyright.executionEnvironments]]
+root = "src"
+pythonVersion = "3.9"
+
+[[tool.basedpyright.executionEnvironments]]
+root = "tests"
+pythonVersion = "3.9"
+
+[[tool.basedpyright.executionEnvironments]]
+root = "examples"
+pythonVersion = "3.13"
+
 [tool.coverage.run]
 omit = ["tests/*"]
 

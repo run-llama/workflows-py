@@ -5,7 +5,7 @@ import pytest
 from typing import AsyncGenerator
 from httpx import AsyncClient, ASGITransport
 
-from tests.server.conftest import ExternalEvent, RequestedExternalEvent
+from .conftest import ExternalEvent, RequestedExternalEvent
 from workflows.events import Event, InternalDispatchEvent
 from workflows.server import WorkflowServer
 from workflows import Context
