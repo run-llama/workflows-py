@@ -35,3 +35,6 @@ class MemoryWorkflowStore(AbstractWorkflowStore):
 
     async def update(self, handler: PersistentHandler) -> None:
         self.handlers[handler.handler_id] = handler
+
+    async def delete(self, handler_id: str) -> None:
+        self.handlers.pop(handler_id, None)

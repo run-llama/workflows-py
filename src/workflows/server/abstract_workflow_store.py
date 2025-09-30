@@ -32,10 +32,16 @@ class AbstractWorkflowStore(ABC):
     @abstractmethod
     async def update(self, handler: PersistentHandler) -> None: ...
 
+    @abstractmethod
+    async def delete(self, handler_id: str) -> None: ...
+
 
 class EmptyWorkflowStore(AbstractWorkflowStore):
     async def query(self, query: HandlerQuery) -> List[PersistentHandler]:
         return []
 
     async def update(self, handler: PersistentHandler) -> None:
+        pass
+
+    async def delete(self, handler_id: str) -> None:
         pass

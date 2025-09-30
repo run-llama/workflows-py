@@ -136,6 +136,11 @@ class WorkflowServer:
                 methods=["GET"],
             ),
             Route(
+                "/handlers/{handler_id}",
+                self._delete_handler,
+                methods=["DELETE"],
+            ),
+            Route(
                 "/workflows/{name}/representation",
                 self._get_workflow_representation,
                 methods=["GET"],
@@ -702,6 +707,109 @@ class WorkflowServer:
         """
         items = [wrapper.to_dict() for wrapper in self._handlers.values()]
         return JSONResponse({"handlers": items})
+
+    async def _delete_handler(self, request: Request) -> JSONResponse:
+        """
+        ---
+        summary: Delete handler
+        description: |
+          Cancels a running workflow handler and deletes it from the server's in-memory registry.
+          Optionally removes the handler from the persistence store.
+        parameters:
+          - in: path
+            name: handler_id
+            required: true
+            schema:
+              type: string
+            description: Workflow handler identifier.
+          - in: query
+            name: remove_persistence
+            required: false
+            schema:
+              type: boolean
+              default: false
+            description: If true, remove the handler from the persistence store.
+        responses:
+          200:
+            description: Handler cancelled and deleted
+            content:
+              application/json:
+                schema:
+                  type: object
+                  properties:
+                    status:
+                      type: string
+                      enum: [deleted]
+                  required: [status]
+          404:
+            description: Handler not found
+        """
+        handler_id = request.path_params.get("handler_id")
+        if handler_id is None:
+            raise HTTPException(detail="'handler_id' parameter missing", status_code=400)
+
+        wrapper = self._handlers.get(handler_id)
+        if wrapper is None:
+            raise HTTPException(detail="Handler not found", status_code=404)
+
+        # Parse remove_persistence flag
+        remove_persistence = (
+            request.query_params.get("remove_persistence", "false").lower() == "true"
+        )
+
+        # Attempt to cancel the running handler and background task
+        handler = wrapper.run_handler
+        try:
+            if not handler.done():
+                try:
+                    handler.cancel()
+                except Exception:
+                    pass
+                try:
+                    await handler.cancel_run()
+                except Exception:
+                    pass
+        finally:
+            task = wrapper.task
+            if task is not None and not task.done():
+                try:
+                    task.cancel()
+                except Exception:
+                    pass
+
+        # Persistence handling
+        try:
+            if remove_persistence:
+                try:
+                    await self._workflow_store.delete(handler_id)
+                except Exception:
+                    # Don't fail delete on persistence errors
+                    logger.error(
+                        f"Failed to remove handler {handler_id} from persistence store",
+                        exc_info=True,
+                    )
+            else:
+                # Best-effort: mark as failed so it won't be resumed as running
+                if handler.ctx is not None:
+                    try:
+                        await self._workflow_store.update(
+                            PersistentHandler(
+                                handler_id=handler_id,
+                                workflow_name=wrapper.workflow_name,
+                                status="failed",
+                                ctx=handler.ctx.to_dict(),
+                            )
+                        )
+                    except Exception:
+                        logger.error(
+                            f"Failed to update cancelled handler {handler_id} in persistence store",
+                            exc_info=True,
+                        )
+        finally:
+            # Remove from in-memory registry
+            self._handlers.pop(handler_id, None)
+
+        return JSONResponse({"status": "deleted"})
 
     async def _post_event(self, request: Request) -> JSONResponse:
         """
