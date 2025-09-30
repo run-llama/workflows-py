@@ -50,15 +50,6 @@ repos:
     rev: 1.31.1
     hooks:
       - id: basedpyright
-        additional_dependencies:
-          - pydantic==2.11.9
-          - starlette==0.48.0
-          - uvicorn==0.37.0
-          - typing-extensions==4.15.0
-          - llama-index-instrumentation==0.4.1
-          - packaging==25.0
-          - pytest==8.4.2
-          - httpx==0.28.1
 
   - repo: https://github.com/codespell-project/codespell
     rev: v2.3.0
