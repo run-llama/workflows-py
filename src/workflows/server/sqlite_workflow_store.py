@@ -81,6 +81,15 @@ class SqliteWorkflowStore(AbstractWorkflowStore):
         conn.commit()
         conn.close()
 
+    async def delete(self, handler_id: str) -> None:
+        conn = sqlite3.connect(self.db_path)
+        try:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM handlers WHERE handler_id = ?", (handler_id,))
+            conn.commit()
+        finally:
+            conn.close()
+
 
 def _row_to_persistent_handler(row: tuple) -> PersistentHandler:
     return PersistentHandler(

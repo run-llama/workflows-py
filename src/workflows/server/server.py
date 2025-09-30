@@ -136,6 +136,11 @@ class WorkflowServer:
                 methods=["GET"],
             ),
             Route(
+                "/handlers/{handler_id}",
+                self._delete_handler,
+                methods=["DELETE"],
+            ),
+            Route(
                 "/workflows/{name}/representation",
                 self._get_workflow_representation,
                 methods=["GET"],
@@ -799,6 +804,80 @@ class WorkflowServer:
             raise HTTPException(
                 detail=f"Error processing request: {e}", status_code=500
             )
+
+    async def _delete_handler(self, request: Request) -> JSONResponse:
+        """
+        ---
+        summary: Stop and delete handler
+        description: |
+          Stops a running workflow handler by cancelling its tasks. Optionally removes the
+          handler from the persistence store.
+        parameters:
+          - in: path
+            name: handler_id
+            required: true
+            schema:
+              type: string
+            description: Workflow handler identifier.
+          - in: query
+            name: remove_from_store
+            required: false
+            schema:
+              type: boolean
+              default: false
+            description: If true, also delete the handler's persisted state from the store.
+        responses:
+          200:
+            description: Handler stopped and deleted
+            content:
+              application/json:
+                schema:
+                  type: object
+                  properties:
+                    status:
+                      type: string
+                      enum: [deleted]
+                  required: [status]
+          404:
+            description: Handler not found
+        """
+        handler_id = request.path_params["handler_id"]
+        remove_from_store = request.query_params.get("remove_from_store", "false").lower() == "true"
+
+        wrapper = self._handlers.get(handler_id)
+        if wrapper is None:
+            raise HTTPException(detail="Handler not found", status_code=404)
+
+        # Cancel running workflow and background tasks
+        try:
+            run_handler = wrapper.run_handler
+            if not run_handler.done():
+                try:
+                    run_handler.cancel()
+                except Exception:
+                    pass
+                try:
+                    await run_handler.cancel_run()
+                except Exception:
+                    pass
+            if wrapper.task is not None and not wrapper.task.done():
+                try:
+                    wrapper.task.cancel()
+                except Exception:
+                    pass
+        finally:
+            # Remove from in-memory maps regardless
+            self._handlers.pop(handler_id, None)
+            self._results.pop(handler_id, None)
+
+        if remove_from_store:
+            try:
+                await self._workflow_store.delete(handler_id)
+            except Exception as e:
+                # Log but do not fail the delete endpoint as the in-memory handler is gone
+                logger.error(f"Failed to delete handler {handler_id} from store: {e}")
+
+        return JSONResponse({"status": "deleted"})
 
     #
     # Private methods
