@@ -194,22 +194,10 @@ class WorkflowServer:
         logger.info(
             f"Shutting down Workflow server. Cancelling {len(self._handlers)} handlers."
         )
-        for handler in self._handlers.values():
-            if not handler.run_handler.done():
-                try:
-                    handler.run_handler.cancel()
-                except Exception:
-                    pass
-                try:
-                    await handler.run_handler.cancel_run()
-                except Exception:
-                    pass
-            if handler.task is not None and not handler.task.done():
-                try:
-                    handler.task.cancel()
-                except Exception:
-                    pass
+        for handler in list(self._handlers.values()):
+            await self._close_handler(handler)
         self._handlers.clear()
+        self._results.clear()
 
     async def serve(
         self,
@@ -820,15 +808,15 @@ class WorkflowServer:
               type: string
             description: Workflow handler identifier.
           - in: query
-            name: remove_from_store
+            name: stop_only
             required: false
             schema:
               type: boolean
               default: false
-            description: If true, also delete the handler's persisted state from the store.
+            description: If true, only stop the handler and do not delete it from the store.
         responses:
           200:
-            description: Handler stopped and deleted
+            description: Handler stopped and deleted or stopped only
             content:
               application/json:
                 schema:
@@ -836,53 +824,31 @@ class WorkflowServer:
                   properties:
                     status:
                       type: string
-                      enum: [deleted]
+                      enum: [deleted, stopped]
                   required: [status]
           404:
             description: Handler not found
         """
         handler_id = request.path_params["handler_id"]
         # Simple boolean parsing aligned with other APIs (e.g., `sse`): only "true" enables
-        remove_from_store = (
-            request.query_params.get("remove_from_store", "false").lower() == "true"
-        )
+        stop_only = request.query_params.get("stop_only", "false").lower() == "true"
 
         wrapper = self._handlers.get(handler_id)
-        if wrapper is None and not remove_from_store:
+        if wrapper is None and stop_only:
             raise HTTPException(detail="Handler not found", status_code=404)
 
         if wrapper is not None:
-            # Cancel running workflow and background tasks
-            try:
-                run_handler = wrapper.run_handler
-                if not run_handler.done():
-                    try:
-                        run_handler.cancel()
-                    except Exception:
-                        pass
-                    try:
-                        await run_handler.cancel_run()
-                    except Exception:
-                        pass
-                if wrapper.task is not None and not wrapper.task.done():
-                    try:
-                        wrapper.task.cancel()
-                    except Exception:
-                        pass
-            finally:
-                # Remove from in-memory maps regardless
-                self._handlers.pop(handler_id, None)
-                self._results.pop(handler_id, None)
+            await self._close_handler(wrapper)
 
         # Single persistence delete path
-        if remove_from_store:
-            try:
-                await self._workflow_store.delete(handler_id)
-            except Exception as e:
-                # Log but do not fail the delete endpoint
-                logger.error(f"Failed to delete handler {handler_id} from store: {e}")
+        if not stop_only:
+            n_deleted = await self._workflow_store.delete(
+                HandlerQuery(handler_id_in=[handler_id])
+            )
+            if n_deleted == 0:
+                raise HTTPException(detail="Handler not found", status_code=404)
 
-        return JSONResponse({"status": "deleted"})
+        return JSONResponse({"status": "deleted" if not stop_only else "stopped"})
 
     #
     # Private methods
@@ -1048,6 +1014,24 @@ class WorkflowServer:
         )
         self._handlers[handler_id] = wrapper
         return wrapper
+
+    async def _close_handler(self, handler: _WorkflowHandler) -> None:
+        if not handler.run_handler.done():
+            try:
+                handler.run_handler.cancel()
+            except Exception:
+                pass
+            try:
+                await handler.run_handler.cancel_run()
+            except Exception:
+                pass
+        if handler.task is not None and not handler.task.done():
+            try:
+                handler.task.cancel()
+            except Exception:
+                pass
+        self._handlers.pop(handler.handler_id, None)
+        self._results.pop(handler.handler_id, None)
 
 
 @dataclass

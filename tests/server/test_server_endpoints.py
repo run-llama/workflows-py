@@ -785,7 +785,10 @@ async def test_delete_running_handler_and_persisted(
 
             # Now ensure a persisted-only handler can be removed when remove_from_store=true
             # Seed a persisted completed handler
-            from workflows.server.abstract_workflow_store import PersistentHandler
+            from workflows.server.abstract_workflow_store import (
+                HandlerQuery,
+                PersistentHandler,
+            )
 
             await store.update(
                 PersistentHandler(
@@ -801,4 +804,7 @@ async def test_delete_running_handler_and_persisted(
                 "/handlers/persist-only?remove_from_store=true"
             )
             assert resp_delete_store.status_code == 200
-            assert "persist-only" not in store.handlers
+            persisted_handlers = await store.query(
+                HandlerQuery(handler_id_in=["persist-only"])
+            )
+            assert persisted_handlers == []

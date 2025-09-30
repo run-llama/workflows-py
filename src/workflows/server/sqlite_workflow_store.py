@@ -3,13 +3,13 @@ from workflows.server.abstract_workflow_store import (
     HandlerQuery,
     PersistentHandler,
 )
-from typing import List
+from typing import List, Optional, Sequence, Tuple
 import sqlite3
 import json
 
 
 class SqliteWorkflowStore(AbstractWorkflowStore):
-    def __init__(self, db_path: str):
+    def __init__(self, db_path: str) -> None:
         self.db_path = db_path
         self._init_db()
 
@@ -22,33 +22,14 @@ class SqliteWorkflowStore(AbstractWorkflowStore):
         conn.close()
 
     async def query(self, query: HandlerQuery) -> List[PersistentHandler]:
-        sql = "SELECT handler_id, workflow_name, status, ctx FROM handlers WHERE 1=1"
-        params: list = []
+        filter_spec = self._build_filters(query)
+        if filter_spec is None:
+            return []
 
-        # Filter by workflow_name list
-        if query.workflow_name_in is not None:
-            if len(query.workflow_name_in) == 0:
-                return []
-            placeholders = ",".join(["?"] * len(query.workflow_name_in))
-            sql += f" AND workflow_name IN ({placeholders})"
-            params.extend(query.workflow_name_in)
-
-        # Filter by handler_id list
-        if query.handler_id_in is not None:
-            if len(query.handler_id_in) == 0:
-                return []
-            placeholders = ",".join(["?"] * len(query.handler_id_in))
-            sql += f" AND handler_id IN ({placeholders})"
-            params.extend(query.handler_id_in)
-
-        # Filter by completed flag
-        if query.status_in is not None:
-            if len(query.status_in) == 0:
-                return []
-            placeholders = ",".join(["?"] * len(query.status_in))
-            sql += f" AND status IN ({placeholders})"
-            params.extend(query.status_in)
-
+        clauses, params = filter_spec
+        sql = "SELECT handler_id, workflow_name, status, ctx FROM handlers"
+        if clauses:
+            sql = f"{sql} WHERE {' AND '.join(clauses)}"
         conn = sqlite3.connect(self.db_path)
         try:
             cursor = conn.cursor()
@@ -81,14 +62,57 @@ class SqliteWorkflowStore(AbstractWorkflowStore):
         conn.commit()
         conn.close()
 
-    async def delete(self, handler_id: str) -> None:
+    async def delete(self, query: HandlerQuery) -> int:
+        filter_spec = self._build_filters(query)
+        if filter_spec is None:
+            return 0
+
+        clauses, params = filter_spec
+        if not clauses:
+            return 0
+
+        sql = f"DELETE FROM handlers WHERE {' AND '.join(clauses)}"
         conn = sqlite3.connect(self.db_path)
         try:
             cursor = conn.cursor()
-            cursor.execute("DELETE FROM handlers WHERE handler_id = ?", (handler_id,))
+            cursor.execute(sql, tuple(params))
+            deleted = cursor.rowcount
             conn.commit()
         finally:
             conn.close()
+
+        return int(deleted)
+
+    def _build_filters(
+        self, query: HandlerQuery
+    ) -> Optional[Tuple[List[str], List[str]]]:
+        clauses: List[str] = []
+        params: List[str] = []
+
+        def add_in_clause(column: str, values: Sequence[str]) -> None:
+            placeholders = ",".join(["?"] * len(values))
+            clauses.append(f"{column} IN ({placeholders})")
+            params.extend(values)
+
+        if query.workflow_name_in is not None:
+            if len(query.workflow_name_in) == 0:
+                return None
+            add_in_clause("workflow_name", query.workflow_name_in)
+
+        if query.handler_id_in is not None:
+            if len(query.handler_id_in) == 0:
+                return None
+            add_in_clause("handler_id", query.handler_id_in)
+
+        if query.status_in is not None:
+            if len(query.status_in) == 0:
+                return None
+            add_in_clause("status", query.status_in)
+
+        if not clauses:
+            return clauses, params
+
+        return clauses, params
 
 
 def _row_to_persistent_handler(row: tuple) -> PersistentHandler:

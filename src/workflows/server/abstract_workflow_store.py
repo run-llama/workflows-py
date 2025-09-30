@@ -33,7 +33,7 @@ class AbstractWorkflowStore(ABC):
     async def update(self, handler: PersistentHandler) -> None: ...
 
     @abstractmethod
-    async def delete(self, handler_id: str) -> None: ...
+    async def delete(self, query: HandlerQuery) -> int: ...
 
 
 class EmptyWorkflowStore(AbstractWorkflowStore):
@@ -43,5 +43,5 @@ class EmptyWorkflowStore(AbstractWorkflowStore):
     async def update(self, handler: PersistentHandler) -> None:
         pass
 
-    async def delete(self, handler_id: str) -> None:
-        pass
+    async def delete(self, query: HandlerQuery) -> int:
+        return 0
