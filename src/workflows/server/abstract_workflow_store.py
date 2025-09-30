@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pydantic import BaseModel
 
 
-Status = Literal["running", "completed", "failed"]
+Status = Literal["running", "completed", "failed", "cancelled"]
 
 
 @dataclass()
@@ -44,4 +44,4 @@ class EmptyWorkflowStore(AbstractWorkflowStore):
         pass
 
     async def delete(self, query: HandlerQuery) -> int:
-        return 0
+        return 1  # otherwise deletion calls will 404

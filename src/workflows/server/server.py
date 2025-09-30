@@ -235,7 +235,12 @@ class WorkflowServer:
                                 "run_id": {"type": "string", "nullable": True},
                                 "status": {
                                     "type": "string",
-                                    "enum": ["running", "completed", "failed"],
+                                    "enum": [
+                                        "running",
+                                        "completed",
+                                        "failed",
+                                        "cancelled",
+                                    ],
                                 },
                                 "started_at": {"type": "string", "format": "date-time"},
                                 "updated_at": {
@@ -841,7 +846,26 @@ class WorkflowServer:
             await self._close_handler(wrapper)
 
         # Single persistence delete path
-        if not stop_only:
+        if stop_only:
+            # mark it as cancelled if it's not already completed
+            existing = await self._workflow_store.query(
+                HandlerQuery(handler_id_in=[handler_id])
+            )
+            if existing:
+                ctx = (
+                    wrapper.run_handler.ctx.to_dict()
+                    if wrapper and wrapper.run_handler.ctx
+                    else existing[0].ctx
+                )
+                await self._workflow_store.update(
+                    PersistentHandler(
+                        handler_id=handler_id,
+                        workflow_name=existing[0].workflow_name,
+                        status="cancelled",
+                        ctx=ctx,
+                    )
+                )
+        else:
             n_deleted = await self._workflow_store.delete(
                 HandlerQuery(handler_id_in=[handler_id])
             )
@@ -1015,7 +1039,9 @@ class WorkflowServer:
         self._handlers[handler_id] = wrapper
         return wrapper
 
-    async def _close_handler(self, handler: _WorkflowHandler) -> None:
+    async def _close_handler(
+        self, handler: _WorkflowHandler, *, persist_status: Status | None = None
+    ) -> None:
         if not handler.run_handler.done():
             try:
                 handler.run_handler.cancel()
@@ -1025,6 +1051,20 @@ class WorkflowServer:
                 await handler.run_handler.cancel_run()
             except Exception:
                 pass
+            if persist_status is not None:
+                if handler.run_handler.ctx is not None:
+                    await self._workflow_store.update(
+                        PersistentHandler(
+                            handler_id=handler.handler_id,
+                            workflow_name=handler.workflow_name,
+                            status=persist_status,
+                            ctx=handler.run_handler.ctx.to_dict(),
+                        )
+                    )
+                else:
+                    await self._workflow_store.delete(
+                        HandlerQuery(handler_id_in=[handler.handler_id])
+                    )
         if handler.task is not None and not handler.task.done():
             try:
                 handler.task.cancel()

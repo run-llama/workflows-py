@@ -4,8 +4,9 @@
 import asyncio
 from collections import Counter
 import json
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
-from typing import Any, AsyncGenerator
+from typing import Any, AsyncGenerator, AsyncIterator, Optional
 
 import pytest
 import pytest_asyncio
@@ -14,6 +15,7 @@ from httpx import ASGITransport, AsyncClient, Response
 from tests.server.util import wait_for_passing
 from workflows import Context
 from workflows.server import WorkflowServer
+from workflows.server.abstract_workflow_store import HandlerQuery, PersistentHandler
 from workflows.workflow import Workflow
 from datetime import datetime
 
@@ -45,6 +47,26 @@ async def client(
 
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             yield client
+
+
+@asynccontextmanager
+async def server_with_persisted_handlers(
+    interactive_workflow: Workflow,
+    *,
+    persisted_handlers: Optional[list[PersistentHandler]] = None,
+) -> AsyncIterator[tuple[WorkflowServer, AsyncClient, MemoryWorkflowStore]]:
+    store = MemoryWorkflowStore()
+    if persisted_handlers is not None:
+        for handler in persisted_handlers:
+            await store.update(handler)
+
+    server_with_store = WorkflowServer(workflow_store=store)
+    server_with_store.add_workflow("interactive", interactive_workflow)
+
+    async with server_with_store.contextmanager():
+        transport = ASGITransport(app=server_with_store.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            yield server_with_store, client, store
 
 
 @pytest.mark.asyncio
@@ -751,60 +773,85 @@ async def test_handler_datetime_fields_progress(client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
-async def test_delete_running_handler_and_persisted(
-    client: AsyncClient, server: WorkflowServer, interactive_workflow: Workflow
+async def test_cancel_handler_persists_cancelled_status(
+    interactive_workflow: Workflow,
 ) -> None:
-    # Replace server with one that has a store so we can test store deletion
-    store = MemoryWorkflowStore()
-    server_with_store = WorkflowServer(workflow_store=store)
-    server_with_store.add_workflow("interactive", interactive_workflow)
-    async with server_with_store.contextmanager():
-        transport = ASGITransport(app=server_with_store.app)
-        async with AsyncClient(transport=transport, base_url="http://test") as client2:
-            # Start interactive workflow that waits
-            response = await client2.post(
-                "/workflows/interactive/run-nowait",
-                json={},
-            )
-            handler_id = response.json()["handler_id"]
+    async with server_with_persisted_handlers(interactive_workflow) as (
+        _server,
+        client,
+        store,
+    ):
+        response = await client.post(
+            "/workflows/interactive/run-nowait",
+            json={},
+        )
+        handler_id = response.json()["handler_id"]
 
-            # Ensure it's listed
-            resp_handlers = await client2.get("/handlers")
-            assert any(
-                h["handler_id"] == handler_id for h in resp_handlers.json()["handlers"]
-            )
+        resp_cancel = await client.delete(f"/handlers/{handler_id}?stop_only=true")
+        assert resp_cancel.status_code == 200
+        assert resp_cancel.json() == {"status": "stopped"}
 
-            # Delete without removing from store (defaults to false) - should stop and remove in-memory only
-            resp_delete = await client2.delete(f"/handlers/{handler_id}")
-            assert resp_delete.status_code == 200
-            assert resp_delete.json() == {"status": "deleted"}
+        persisted_cancelled = await store.query(
+            HandlerQuery(handler_id_in=[handler_id])
+        )
+        assert len(persisted_cancelled) == 1
+        assert persisted_cancelled[0].status == "cancelled"
 
-            # Deleting again without touching store should 404 since not in memory anymore
-            resp_delete2 = await client2.delete(f"/handlers/{handler_id}")
-            assert resp_delete2.status_code == 404
+        resp_delete2 = await client.delete(f"/handlers/{handler_id}?stop_only=true")
+        assert resp_delete2.status_code == 404
 
-            # Now ensure a persisted-only handler can be removed when remove_from_store=true
-            # Seed a persisted completed handler
-            from workflows.server.abstract_workflow_store import (
-                HandlerQuery,
-                PersistentHandler,
-            )
 
-            await store.update(
-                PersistentHandler(
-                    handler_id="persist-only",
-                    workflow_name="interactive",
-                    status="completed",
-                    ctx=Context(server_with_store._workflows["interactive"]).to_dict(),
-                )
+@pytest.mark.asyncio
+async def test_delete_persisted_handler_removes_from_store(
+    interactive_workflow: Workflow,
+) -> None:
+    async with server_with_persisted_handlers(
+        interactive_workflow,
+        persisted_handlers=[
+            PersistentHandler(
+                handler_id="persist-only",
+                workflow_name="interactive",
+                status="completed",
+                ctx={},
             )
+        ],
+    ) as (_server, client, store):
+        resp_delete_store = await client.delete(
+            "/handlers/persist-only"  # stop_only=false is default
+        )
+        assert resp_delete_store.status_code == 200
+        assert resp_delete_store.json() == {"status": "deleted"}
 
-            # Delete persisted-only
-            resp_delete_store = await client2.delete(
-                "/handlers/persist-only?remove_from_store=true"
+        persisted_handlers = await store.query(
+            HandlerQuery(handler_id_in=["persist-only"])
+        )
+        assert persisted_handlers == []
+
+
+@pytest.mark.asyncio
+async def test_stop_only_persisted_handler_without_removal_returns_not_found(
+    interactive_workflow: Workflow,
+) -> None:
+    async with server_with_persisted_handlers(
+        interactive_workflow,
+        persisted_handlers=[
+            PersistentHandler(
+                handler_id="store-only",
+                workflow_name="interactive",
+                status="completed",
+                ctx={},
             )
-            assert resp_delete_store.status_code == 200
-            persisted_handlers = await store.query(
-                HandlerQuery(handler_id_in=["persist-only"])
-            )
-            assert persisted_handlers == []
+        ],
+    ) as (_server, client, store):
+        resp_cancel_store_only = await client.delete(
+            "/handlers/store-only?stop_only=true"
+        )
+        assert resp_cancel_store_only.status_code == 404
+
+        resp_cancel_store_only = await client.delete(
+            "/handlers/store-only?stop_only=true"
+        )
+        assert resp_cancel_store_only.status_code == 404
+
+        persisted = await store.query(HandlerQuery(handler_id_in=["store-only"]))
+        assert persisted and persisted[0].status == "completed"
