@@ -334,7 +334,7 @@ async def test_stream_events_success(client: AsyncClient) -> None:
     handler_id = data["handler_id"]
 
     # Stream events
-    response = await client.get(f"/events/{handler_id}")
+    response = await client.get(f"/events/{handler_id}?internal=true")
     assert response.status_code == 200
     assert response.headers["content-type"] == "text/event-stream; charset=utf-8"
 
@@ -431,7 +431,7 @@ async def test_stream_events_no_events(client: AsyncClient) -> None:
     handler_id = data["handler_id"]
 
     # Try to stream events
-    response = await client.get(f"/events/{handler_id}")
+    response = await client.get(f"/events/{handler_id}?internal=true")
     assert response.status_code == 200
     assert response.headers["content-type"] == "text/event-stream; charset=utf-8"
 

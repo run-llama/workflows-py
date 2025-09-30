@@ -28,6 +28,7 @@ from workflows import Context, Workflow
 from workflows.context.serializers import JsonSerializer
 from workflows.events import (
     Event,
+    InternalDispatchEvent,
     StepState,
     StepStateChanged,
     StopEvent,
@@ -639,6 +640,13 @@ class WorkflowServer:
               type: boolean
               default: true
             description: If false, as NDJSON instead of Server-Sent Events.
+          - in: query
+            name: internal
+            required: false
+            schema:
+              type: boolean
+              default: false
+            description: If true, include internal workflow events in the stream.
         responses:
           200:
             description: Streaming started
@@ -668,14 +676,20 @@ class WorkflowServer:
             # be told to stop reconnecting using the HTTP 204 No Content response code.
             raise HTTPException(detail="Handler is completed", status_code=204)
 
-        # Get raw_event query parameter
+        # Query parameters
         sse = request.query_params.get("sse", "true").lower() == "true"
+        include_internal = (
+            request.query_params.get("internal", "false").lower() == "true"
+        )
         media_type = "text/event-stream" if sse else "application/x-ndjson"
 
         async def event_stream(handler: _WorkflowHandler) -> AsyncGenerator[str, None]:
             serializer = JsonSerializer()
 
             async for event in handler.iter_events():
+                # Filter out internal events unless explicitly requested
+                if not include_internal and isinstance(event, InternalDispatchEvent):
+                    continue
                 serialized_event = serializer.serialize(event)
                 if sse:
                     # emit as untyped data. Difficult to subscribe to dynamic event types with SSE.
