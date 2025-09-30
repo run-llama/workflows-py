@@ -20,6 +20,7 @@ from datetime import datetime
 # Prepare the event to send
 from workflows.context.serializers import JsonSerializer
 from tests.server.conftest import ExternalEvent
+from tests.server.memory_workflow_store import MemoryWorkflowStore
 
 
 @pytest.fixture
@@ -747,3 +748,57 @@ async def test_handler_datetime_fields_progress(client: AsyncClient) -> None:
         assert item3["completed_at"] is not None
         completed_at = datetime.fromisoformat(item3["completed_at"])  # ISO 8601
         assert completed_at >= updated_at_2
+
+
+@pytest.mark.asyncio
+async def test_delete_running_handler_and_persisted(
+    client: AsyncClient, server: WorkflowServer, interactive_workflow: Workflow
+) -> None:
+    # Replace server with one that has a store so we can test store deletion
+    store = MemoryWorkflowStore()
+    server_with_store = WorkflowServer(workflow_store=store)
+    server_with_store.add_workflow("interactive", interactive_workflow)
+    async with server_with_store.contextmanager():
+        transport = ASGITransport(app=server_with_store.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client2:
+            # Start interactive workflow that waits
+            response = await client2.post(
+                "/workflows/interactive/run-nowait",
+                json={},
+            )
+            handler_id = response.json()["handler_id"]
+
+            # Ensure it's listed
+            resp_handlers = await client2.get("/handlers")
+            assert any(
+                h["handler_id"] == handler_id for h in resp_handlers.json()["handlers"]
+            )
+
+            # Delete without removing from store (defaults to false) - should stop and remove in-memory only
+            resp_delete = await client2.delete(f"/handlers/{handler_id}")
+            assert resp_delete.status_code == 200
+            assert resp_delete.json() == {"status": "deleted"}
+
+            # Deleting again without touching store should 404 since not in memory anymore
+            resp_delete2 = await client2.delete(f"/handlers/{handler_id}")
+            assert resp_delete2.status_code == 404
+
+            # Now ensure a persisted-only handler can be removed when remove_from_store=true
+            # Seed a persisted completed handler
+            from workflows.server.abstract_workflow_store import PersistentHandler
+
+            await store.update(
+                PersistentHandler(
+                    handler_id="persist-only",
+                    workflow_name="interactive",
+                    status="completed",
+                    ctx=Context(server_with_store._workflows["interactive"]).to_dict(),
+                )
+            )
+
+            # Delete persisted-only
+            resp_delete_store = await client2.delete(
+                "/handlers/persist-only?remove_from_store=true"
+            )
+            assert resp_delete_store.status_code == 200
+            assert "persist-only" not in store.handlers

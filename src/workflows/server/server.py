@@ -842,10 +842,29 @@ class WorkflowServer:
             description: Handler not found
         """
         handler_id = request.path_params["handler_id"]
-        remove_from_store = request.query_params.get("remove_from_store", "false").lower() == "true"
+        # Interpret presence of the flag as true unless explicitly false
+        q = request.query_params
+        raw_param = q.get("remove_from_store")
+        remove_from_store = "remove_from_store" in q
+        if raw_param is not None:
+            remove_from_store = str(raw_param).lower() not in {
+                "",
+                "0",
+                "false",
+                "no",
+                "off",
+            }
 
         wrapper = self._handlers.get(handler_id)
         if wrapper is None:
+            if remove_from_store:
+                try:
+                    await self._workflow_store.delete(handler_id)
+                except Exception as e:
+                    logger.error(
+                        f"Failed to delete handler {handler_id} from store: {e}"
+                    )
+                return JSONResponse({"status": "deleted"})
             raise HTTPException(detail="Handler not found", status_code=404)
 
         # Cancel running workflow and background tasks

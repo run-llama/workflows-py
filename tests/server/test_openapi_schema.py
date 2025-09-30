@@ -20,6 +20,8 @@ def test_openapi_schema_includes_all_routes(simple_test_workflow: Workflow) -> N
         "/workflows/{name}/run-nowait": {"post"},
         "/results/{handler_id}": {"get"},
         "/events/{handler_id}": {"get"},
+        "/handlers": {"get"},
+        "/handlers/{handler_id}": {"delete"},
         "/health": {"get"},
     }
 
