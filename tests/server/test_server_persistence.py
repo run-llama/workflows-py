@@ -114,6 +114,51 @@ async def test_resume_active_handlers_across_server_restart(
 
 
 @pytest.mark.asyncio
+async def test_startup_skips_invalid_persisted_context(
+    memory_store: MemoryWorkflowStore, simple_test_workflow: Workflow
+) -> None:
+    """Server should not crash if a persisted running handler has an invalid context payload."""
+    # Persist a running handler with an invalid context payload (e.g., mismatched schema)
+    await memory_store.update(
+        PersistentHandler(
+            handler_id="bad-ctx-1",
+            workflow_name="test",
+            status="running",
+            ctx={"state": {"state_data": {"_data": {"history": "not-a-list"}}, "state_type": "DictState", "state_module": "workflows.context.state_store"},
+                 "streaming_queue": "[]",
+                 "queues": {},
+                 "event_buffers": {},
+                 "in_progress": {},
+                 "accepted_events": [],
+                 "broker_log": [],
+                 "is_running": False,
+                 "waiting_ids": []},
+        )
+    )
+
+    # Also persist a good one to verify startup proceeds
+    good_id = "good-ctx-1"
+    await memory_store.update(
+        PersistentHandler(
+            handler_id=good_id,
+            workflow_name="test",
+            status="running",
+            ctx=Context(simple_test_workflow).to_dict(),
+        )
+    )
+
+    server = WorkflowServer(workflow_store=memory_store)
+    server.add_workflow("test", simple_test_workflow)
+    async with server.contextmanager():
+        # Bad one should be skipped and marked failed
+        assert "bad-ctx-1" not in server._handlers
+        assert memory_store.handlers["bad-ctx-1"].status == "failed"
+
+        # Good one should be resumed
+        assert good_id in server._handlers
+
+
+@pytest.mark.asyncio
 async def test_store_is_updated_on_workflow_failure(
     memory_store: MemoryWorkflowStore, error_workflow: Workflow
 ) -> None:

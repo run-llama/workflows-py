@@ -169,8 +169,32 @@ class WorkflowServer:
         )
         for persistent in handlers:
             workflow = self._workflows[persistent.workflow_name]
-            ctx = Context.from_dict(workflow=workflow, data=persistent.ctx)
-            handler = workflow.run(ctx=ctx)
+            try:
+                ctx = Context.from_dict(workflow=workflow, data=persistent.ctx)
+                handler = workflow.run(ctx=ctx)
+            except Exception as e:
+                logger.error(
+                    f"Failed to resume handler {persistent.handler_id} for workflow '{persistent.workflow_name}'. Skipping. Error: {e}",
+                    exc_info=True,
+                )
+                # Try to mark the handler as failed to avoid retrying on next startup.
+                try:
+                    await self._workflow_store.update(
+                        PersistentHandler(
+                            handler_id=persistent.handler_id,
+                            workflow_name=persistent.workflow_name,
+                            status="failed",
+                            ctx=persistent.ctx,
+                        )
+                    )
+                except Exception:
+                    # Best-effort update; never crash startup here.
+                    logger.error(
+                        f"Failed to mark handler {persistent.handler_id} as failed in the workflow store.",
+                        exc_info=True,
+                    )
+                continue
+
             self._run_workflow_handler(
                 persistent.handler_id, persistent.workflow_name, handler
             )
@@ -853,7 +877,12 @@ class WorkflowServer:
             # Extract custom Context if present
             context = None
             if context_data:
-                context = Context.from_dict(workflow=workflow, data=context_data)
+                try:
+                    context = Context.from_dict(workflow=workflow, data=context_data)
+                except Exception as e:
+                    raise HTTPException(
+                        detail=f"Validation error for 'context': {e}", status_code=400
+                    )
             elif handler_id:
                 persisted_handlers = await self._workflow_store.query(
                     HandlerQuery(
