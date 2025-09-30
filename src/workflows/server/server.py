@@ -641,7 +641,7 @@ class WorkflowServer:
               default: true
             description: If false, as NDJSON instead of Server-Sent Events.
           - in: query
-            name: internal
+            name: include_internal
             required: false
             schema:
               type: boolean
@@ -678,7 +678,9 @@ class WorkflowServer:
 
         # Get raw_event query parameter
         sse = request.query_params.get("sse", "true").lower() == "true"
-        include_internal = request.query_params.get("internal", "false").lower() == "true"
+        include_internal = (
+            request.query_params.get("include_internal", "false").lower() == "true"
+        )
         media_type = "text/event-stream" if sse else "application/x-ndjson"
 
         async def event_stream(handler: _WorkflowHandler) -> AsyncGenerator[str, None]:

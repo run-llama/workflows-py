@@ -420,9 +420,11 @@ async def test_stream_events_not_found(client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
-async def test_stream_events_no_events(client: AsyncClient) -> None:
-    """Test streaming from workflow that emits no events."""
-    # Start simple workflow that doesn't emit events
+async def test_stream_events_no_events_default_hides_internal(
+    client: AsyncClient,
+) -> None:
+    """Test streaming from workflow that emits no events. Default excludes internal events."""
+    # Start simple workflow that doesn't emit user events
     response = await client.post(
         "/workflows/test/run-nowait", json={"kwargs": {"message": "test"}}
     )
@@ -430,30 +432,55 @@ async def test_stream_events_no_events(client: AsyncClient) -> None:
     data = response.json()
     handler_id = data["handler_id"]
 
-    # Try to stream events
+    # Stream without include_internal
     response = await client.get(f"/events/{handler_id}")
     assert response.status_code == 200
     assert response.headers["content-type"] == "text/event-stream; charset=utf-8"
 
-    # Should get no stream events (may get StopEvent)
+    # Collect events
     events = []
     async for line in response.aiter_lines():
         if line.strip():
             event_data = json.loads(line.removeprefix("data: "))
-            # Filter out empty events
             if event_data:
                 events.append(event_data)
 
-    # Only control events and a final StopEvent
-    event_types = [events["qualified_name"] for events in events]
-    seen_types = set(event_types)
-    assert seen_types == {
-        "workflows.events.StopEvent",
-        "workflows.events.EventsQueueChanged",
-        "workflows.events.StepStateChanged",
-    }
+    # Only StopEvent should be present because internal events are hidden by default
+    event_types = [e["qualified_name"] for e in events]
+    assert set(event_types) == {"workflows.events.StopEvent"}
     assert event_types[-1] == "workflows.events.StopEvent"
     assert Counter(event_types)["workflows.events.StopEvent"] == 1
+
+
+@pytest.mark.asyncio
+async def test_stream_events_include_internal_true(client: AsyncClient) -> None:
+    """When include_internal=true, internal events should be included."""
+    # Start simple workflow that doesn't emit user events
+    response = await client.post(
+        "/workflows/test/run-nowait", json={"kwargs": {"message": "test"}}
+    )
+    assert response.status_code == 200
+    data = response.json()
+    handler_id = data["handler_id"]
+
+    # Stream with include_internal=true
+    response = await client.get(f"/events/{handler_id}?include_internal=true")
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "text/event-stream; charset=utf-8"
+
+    # Collect events
+    events = []
+    async for line in response.aiter_lines():
+        if line.strip():
+            event_data = json.loads(line.removeprefix("data: "))
+            if event_data:
+                events.append(event_data)
+
+    event_types = [e["qualified_name"] for e in events]
+    # Expect internal event types to be present along with StopEvent
+    assert "workflows.events.StopEvent" in event_types
+    assert "workflows.events.EventsQueueChanged" in event_types
+    assert "workflows.events.StepStateChanged" in event_types
 
 
 @pytest.mark.asyncio
