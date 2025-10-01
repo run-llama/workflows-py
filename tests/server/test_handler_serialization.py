@@ -36,6 +36,7 @@ async def test__workflow_handler_to_dict_json_roundtrip() -> None:
         run_handler=handler,
         queue=queue,
         task=task,
+        consumer_mutex=asyncio.Lock(),
         handler_id="handler-1",
         workflow_name="wf",
         started_at=now,

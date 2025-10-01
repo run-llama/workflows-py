@@ -28,10 +28,10 @@ from workflows import Context, Workflow
 from workflows.context.serializers import JsonSerializer
 from workflows.events import (
     Event,
+    InternalDispatchEvent,
     StepState,
     StepStateChanged,
     StopEvent,
-    InternalDispatchEvent,
 )
 from workflows.handler import WorkflowHandler
 
@@ -642,6 +642,10 @@ class WorkflowServer:
             "value": <pydantic serialized value>,
             "qualified_name": <python path to pydantic class>
           }
+
+          Event queue is mutable. Elements are added to the queue by the workflow handler, and removed by any consumer of the queue.
+          The queue is protected by a lock that is acquired by the consumer, so only one consumer of the queue at a time is allowed.
+
         parameters:
           - in: path
             name: handler_id
@@ -663,6 +667,13 @@ class WorkflowServer:
               type: boolean
               default: false
             description: If true, include internal workflow events (e.g., step state changes).
+          - in: query
+            name: acquire_timeout
+            required: false
+            schema:
+              type: number
+              default: 1
+            description: Timeout for acquiring the lock to iterate over the events.
         responses:
           200:
             description: Streaming started
@@ -683,6 +694,18 @@ class WorkflowServer:
             description: Handler not found
         """
         handler_id = request.path_params["handler_id"]
+        timeout = request.query_params.get("acquire_timeout", "1").lower()
+        include_internal = (
+            request.query_params.get("include_internal", "false").lower() == "true"
+        )
+        sse = request.query_params.get("sse", "true").lower() == "true"
+        try:
+            timeout = float(timeout)
+        except ValueError:
+            raise HTTPException(
+                detail=f"Invalid acquire_timeout: '{timeout}'", status_code=400
+            )
+
         handler = self._handlers.get(handler_id)
         if handler is None:
             raise HTTPException(detail="Handler not found", status_code=404)
@@ -693,19 +716,21 @@ class WorkflowServer:
             raise HTTPException(detail="Handler is completed", status_code=204)
 
         # Get raw_event query parameter
-        sse = request.query_params.get("sse", "true").lower() == "true"
-        include_internal = (
-            request.query_params.get("include_internal", "false").lower() == "true"
-        )
         media_type = "text/event-stream" if sse else "application/x-ndjson"
+
+        try:
+            generator = await handler.acquire_events_stream(timeout=timeout)
+        except NoLockAvailable as e:
+            raise HTTPException(
+                detail=f"No lock available to acquire after {timeout}s timeout",
+                status_code=409,
+            ) from e
 
         async def event_stream(handler: _WorkflowHandler) -> AsyncGenerator[str, None]:
             serializer = JsonSerializer()
 
-            async for event in handler.iter_events():
+            async for event in generator:
                 if not include_internal and isinstance(event, InternalDispatchEvent):
-                    # Skip internal events unless explicitly requested
-                    await asyncio.sleep(0)
                     continue
                 serialized_event = serializer.serialize(event)
                 if sse:
@@ -1063,6 +1088,7 @@ class WorkflowServer:
             run_handler=handler,
             queue=queue,
             task=task,
+            consumer_mutex=asyncio.Lock(),
             handler_id=handler_id,
             workflow_name=workflow_name,
             started_at=datetime.now(timezone.utc),
@@ -1114,6 +1140,8 @@ class _WorkflowHandler:
     run_handler: WorkflowHandler
     queue: asyncio.Queue[Event]
     task: asyncio.Task[None]
+    # only one consumer of the queue at a time allowed
+    consumer_mutex: asyncio.Lock
 
     # metadata
     handler_id: str
@@ -1165,27 +1193,53 @@ class _WorkflowHandler:
         except Exception:
             return None
 
-    async def iter_events(self) -> AsyncGenerator[Event, None]:
+    async def acquire_events_stream(
+        self, timeout: float = 1
+    ) -> AsyncGenerator[Event, None]:
+        """
+        Acquires the lock to iterate over the events, and returns generator of events.
+        """
+        try:
+            await asyncio.wait_for(self.consumer_mutex.acquire(), timeout=timeout)
+        except asyncio.TimeoutError:
+            raise NoLockAvailable(
+                f"No lock available to acquire after {timeout}s timeout"
+            )
+        return self._iter_events(timeout=timeout)
+
+    async def _iter_events(self, timeout: float = 1) -> AsyncGenerator[Event, None]:
         """
         Converts the queue to an async generator while the workflow is still running, and there are still events.
         For better or worse, multiple consumers will compete for events
         """
-        while not self.queue.empty() or not self.task.done():
-            available_events = []
-            while not self.queue.empty():
-                available_events.append(self.queue.get_nowait())
-            for event in available_events:
-                yield event
-            queue_get_task: asyncio.Task[Event] = asyncio.create_task(self.queue.get())
-            task_waitable = self.task
-            done, pending = await asyncio.wait(
-                {queue_get_task, task_waitable}, return_when=asyncio.FIRST_COMPLETED
-            )
-            if queue_get_task in done:
-                yield await queue_get_task
-            else:  # otherwise task completed, so nothing else will be published to the queue
-                queue_get_task.cancel()
-                break
+
+        try:
+            while not self.queue.empty() or not self.task.done():
+                available_events = []
+                while not self.queue.empty():
+                    available_events.append(self.queue.get_nowait())
+                for event in available_events:
+                    yield event
+                queue_get_task: asyncio.Task[Event] = asyncio.create_task(
+                    self.queue.get()
+                )
+                task_waitable = self.task
+                done, pending = await asyncio.wait(
+                    {queue_get_task, task_waitable}, return_when=asyncio.FIRST_COMPLETED
+                )
+                if queue_get_task in done:
+                    yield await queue_get_task
+                else:  # otherwise task completed, so nothing else will be published to the queue
+                    queue_get_task.cancel()
+                    break
+        finally:
+            self.consumer_mutex.release()
+
+
+class NoLockAvailable(Exception):
+    """Raised when no lock is available to acquire after a timeout"""
+
+    pass
 
 
 @dataclass

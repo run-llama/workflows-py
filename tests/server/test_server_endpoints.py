@@ -26,22 +26,24 @@ from .memory_workflow_store import MemoryWorkflowStore
 
 
 @pytest.fixture
-def server() -> WorkflowServer:
-    return WorkflowServer()
+def server(
+    simple_test_workflow: Workflow,
+    error_workflow: Workflow,
+    streaming_workflow: Workflow,
+    interactive_workflow: Workflow,
+) -> WorkflowServer:
+    server = WorkflowServer()
+    server.add_workflow("test", simple_test_workflow)
+    server.add_workflow("error", error_workflow)
+    server.add_workflow("streaming", streaming_workflow)
+    server.add_workflow("interactive", interactive_workflow)
+    return server
 
 
 @pytest_asyncio.fixture
 async def client(
     server: WorkflowServer,
-    simple_test_workflow: Workflow,
-    error_workflow: Workflow,
-    streaming_workflow: Workflow,
-    interactive_workflow: Workflow,
 ) -> AsyncGenerator:
-    server.add_workflow("test", simple_test_workflow)
-    server.add_workflow("error", error_workflow)
-    server.add_workflow("streaming", streaming_workflow)
-    server.add_workflow("interactive", interactive_workflow)
     async with server.contextmanager():
         transport = ASGITransport(app=server.app)
 
@@ -440,6 +442,49 @@ async def test_stream_events_not_found(client: AsyncClient) -> None:
     """Test streaming events from non-existent handler."""
     response = await client.get("/events/nonexistent")
     assert response.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_stream_events_single_consumer(client: AsyncClient) -> None:
+    """Test that the consumer lock mechanism works with acquire_timeout."""
+    # Start a streaming workflow that completes quickly
+    handler_response = await client.post("/workflows/interactive/run-nowait", json={})
+    handler_id = handler_response.json()["handler_id"]
+
+    # send 2 simultaneous requests
+    a = asyncio.create_task(
+        client.send(
+            client.build_request("GET", f"/events/{handler_id}?acquire_timeout=0.01"),
+            stream=True,
+        )
+    )
+    b = asyncio.create_task(
+        client.send(
+            client.build_request("GET", f"/events/{handler_id}?acquire_timeout=0.01"),
+            stream=True,
+        )
+    )
+
+    # wait for one to be rejected
+    done, pending = await asyncio.wait({a, b}, return_when=asyncio.FIRST_COMPLETED)
+
+    # Assert that the done request got a 409 response
+    assert len(done) == 1
+    done_response = list(done)[0].result()
+    assert done_response.status_code == 409
+
+    # Send an ExternalEvent to complete the workflow
+    send_response = await client.post(
+        f"/events/{handler_id}",
+        json={
+            "event": JsonSerializer().serialize(ExternalEvent(response="test-response"))
+        },
+    )
+    assert send_response.status_code == 200
+
+    # Wait for the pending response and stream it
+    pending_response = await list(pending)[0]
+    assert pending_response.status_code == 200
 
 
 @pytest.mark.asyncio
