@@ -1,3 +1,7 @@
+docs_dir: docs/api_reference
+site_url: https://developers.llamaindex.ai/python/workflows-api-reference/
+extra:
+  homepage: /
 extra_css:
   - css/style.css
   - css/algolia.css
@@ -12,22 +16,6 @@ markdown_extensions:
   - mkdocs-click
   - toc:
       permalink: "#"
-nav:
-  - Home: index.md
-  - API Reference:
-      - Workflows:
-          - api_reference/workflow
-  - Workflows:
-      - v2:
-          - ./workflows/v2/index.md
-          - ./workflows/v2/customizing_entry_exit_points.md
-          - ./workflows/v2/drawing.md
-          - ./workflows/v2/managing_events.md
-          - ./workflows/v2/managing_state.md
-          - ./workflows/v2/durable_workflows.md
-          - ./workflows/v2/retry_steps.md
-          - ./workflows/v2/resources.md
-          - ./workflows/v2/deployment.md
 plugins:
   - search
   - include_dir_to_nav
@@ -55,13 +43,12 @@ plugins:
               - griffe_fieldz
           paths:
             - ../workflows
-site_name: LlamaDeploy
+site_name: LlamaIndex Workflows
 theme:
   custom_dir: overrides
   favicon: _static/assets/LlamaLogoBrowserTab.png
   features:
     - navigation.instant
-    - navigation.tabs
     - navigation.indexes
     - navigation.top
     - navigation.footer
