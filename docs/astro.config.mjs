@@ -55,7 +55,7 @@ export default defineConfig({
 						});
 					`
 				}
-			  ],			
+			  ],
 			social: [
 				{
 					icon: 'twitter',

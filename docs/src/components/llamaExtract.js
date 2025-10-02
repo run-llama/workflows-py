@@ -10,7 +10,7 @@ export const LEPython = ({children}) => (
 )
 
 export const LEAPI = ({children, endpoint = "", isUpload=false, outputFile=false}) => {
-  if (!endpoint) endpoint = "parsing/upload" 
+  if (!endpoint) endpoint = "parsing/upload"
   let outputLine = <></>
   if (outputFile) outputLine = <>
     &nbsp;\<br/>&nbsp;&nbsp;--output "file.png"

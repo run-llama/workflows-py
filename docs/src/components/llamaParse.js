@@ -10,7 +10,7 @@ export const LPPython = ({children}) => (
 )
 
 export const LPAPI = ({children, endpoint = "", isUpload=false, outputFile=false}) => {
-  if (!endpoint) endpoint = "upload" 
+  if (!endpoint) endpoint = "upload"
   let outputLine = <></>
   if (outputFile) outputLine = <>
     &nbsp;\<br/>&nbsp;&nbsp;--output "file.png"
@@ -36,10 +36,10 @@ export const LPAPI = ({children, endpoint = "", isUpload=false, outputFile=false
         })
         .join("");
     }
-    
+
     // Split by | if multiple parameters
     const entries = rawContent.split("|");
-    
+
     paramList = entries.map((line) => {
       return <>&nbsp;\<br/>&nbsp;&nbsp;--form '{line.trim()}'</>
     });
