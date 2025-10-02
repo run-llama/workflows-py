@@ -1,4 +1,6 @@
-# Deploying a Workflow
+---
+title: Deploying a Workflow
+---
 
 ## Deploying with `WorkflowServer`
 

@@ -1,4 +1,6 @@
-# Managing events
+---
+title: Managing events
+---
 
 ## Waiting for Multiple Events
 
