@@ -1,4 +1,6 @@
-# Writing durable workflows
+---
+title: Writing durable workflows
+---
 
 Workflows are ephemeral by default, meaning that once the `run()` method returns its result, the workflow state is lost. A subsequent call to `run()` on the same workflow instance will start from a fresh state.
 

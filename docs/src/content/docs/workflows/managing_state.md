@@ -1,4 +1,6 @@
-# Managing State
+---
+title: Managing State
+---
 
 By default, workflows automatically initialize and untyped state store. You can access this as needed to share information between workflow steps through the `Context` object.
 

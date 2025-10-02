@@ -1,4 +1,6 @@
-# Drawing a Workflow
+---
+title: Drawing a Workflow
+---
 
 Workflows can be visualized, using the power of type annotations in your step definitions. You can either draw all possible paths through the workflow, or the most recent execution, to help with debugging.
 
