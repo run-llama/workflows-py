@@ -31,6 +31,7 @@ dependencies = [
 
 [project.optional-dependencies]
 server = ["starlette>=0.39.0", "uvicorn>=0.32.0"]
+client = ["httpx>=0.28.1"]
 
 [tool.basedpyright]
 typeCheckingMode = "standard"
