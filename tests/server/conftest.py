@@ -88,6 +88,16 @@ class CumulativeWorkflow(Workflow):
         return StopEvent(result=f"count: {new_count}, runs: {len(run_history)}")
 
 
+class RequiredStartEvent(StartEvent):
+    message: str
+
+
+class StructuredStartWorkflow(Workflow):
+    @step
+    async def start(self, ev: RequiredStartEvent) -> StopEvent:
+        return StopEvent(result=ev.message)
+
+
 @pytest.fixture
 def simple_test_workflow() -> Workflow:
     return SimpleTestWorkflow()
@@ -111,3 +121,8 @@ def interactive_workflow() -> Workflow:
 @pytest.fixture
 def cumulative_workflow() -> Workflow:
     return CumulativeWorkflow()
+
+
+@pytest.fixture
+def structured_start_workflow() -> Workflow:
+    return StructuredStartWorkflow()
