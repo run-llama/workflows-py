@@ -301,9 +301,6 @@ class StepStateChanged(InternalDispatchEvent):
     output_event_name: Optional[str] = Field(
         description="Name of the output event", default=None
     )
-    context_state: Optional[dict[str, Any]] = Field(
-        description="Snapshot of the current workflow state", default=None
-    )
 
 
 class EventsQueueChanged(InternalDispatchEvent):

@@ -68,7 +68,7 @@ async def test_task_timeout() -> None:
             await asyncio.sleep(2)
             return StopEvent()
 
-    wf = DummyWorkflow(timeout=1)
+    wf = DummyWorkflow(timeout=0.1)
     r = wf.run()
 
     # Make sure we don't block indefinitely here because the step raised
@@ -137,13 +137,13 @@ async def test_resume_streams() -> None:
             return StopEvent(result="done")
 
     wf = CounterWorkflow()
-    await WorkflowTestRunner(wf).run()
-    ctx1 = wf._contexts.copy().pop()
+    result = await WorkflowTestRunner(wf).run()
+    ctx1 = result.ctx
     assert ctx1
 
-    await WorkflowTestRunner(wf).run(ctx=ctx1)
+    result2 = await WorkflowTestRunner(wf).run(ctx=ctx1)
 
-    ctx2 = wf._contexts.pop()
+    ctx2 = result2.ctx
 
     assert ctx2
     assert await ctx2.store.get("cur_count") == 2
