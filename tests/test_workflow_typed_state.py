@@ -33,10 +33,10 @@ class MyWorkflow(Workflow):
 async def test_typed_state() -> None:
     test_runner = WorkflowTestRunner(MyWorkflow())
 
-    await test_runner.run()
+    result = await test_runner.run()
 
     # Check final state
-    ctx = test_runner._workflow._contexts.pop()
+    ctx = result.ctx
     assert ctx is not None
     state = await ctx.store.get_state()
     assert state.model_dump() == MyState(name="John", age=31).model_dump()
