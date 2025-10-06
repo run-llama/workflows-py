@@ -7,6 +7,8 @@ import asyncio
 import json
 import sys
 
+from workflows.runtime.broker import WorkflowBroker
+
 try:
     from typing import Union
 except ImportError:
@@ -20,7 +22,7 @@ from pydantic import BaseModel
 
 from workflows.context import Context
 from workflows.context.state_store import DictState
-from workflows.decorators import StepConfig, step
+from workflows.decorators import step
 from workflows.errors import WorkflowRuntimeError
 from workflows.events import (
     Event,
@@ -80,13 +82,13 @@ async def test_get_not_found(ctx: Context) -> None:
         await ctx.store.get("foo")
 
 
-def test_send_event_step_is_none(ctx: Context) -> None:
-    ctx._queues = {"step1": mock.MagicMock(), "step2": mock.MagicMock()}
+def test_send_event_step_is_none(ctx: Context, broker: WorkflowBroker) -> None:
+    broker._state.queues = {"step1": mock.MagicMock(), "step2": mock.MagicMock()}
     ev = Event(foo="bar")
     ctx.send_event(ev)
-    for q in ctx._queues.values():
+    for q in broker._state.queues.values():
         q.put_nowait.assert_called_with(ev)  # type: ignore
-    assert ctx._broker_log == [ev]
+    assert broker._state.broker_log == [ev]
 
 
 def test_send_event_to_non_existent_step(ctx: Context) -> None:
@@ -97,44 +99,33 @@ def test_send_event_to_non_existent_step(ctx: Context) -> None:
 
 
 def test_send_event_to_wrong_step(ctx: Context) -> None:
-    ctx._step_configs["step"] = StepConfig(  # type: ignore[attr-defined]
-        accepted_events=[],
-        event_name="test_event",
-        return_types=[],
-        context_parameter="",
-        num_workers=99,
-        retry_policy=None,
-        resources=[],
-    )
-
     with pytest.raises(
         WorkflowRuntimeError,
-        match="Step step does not accept event of type <class 'workflows.events.Event'>",
+        match="Step middle_step does not accept event of type <class 'workflows.events.Event'>",
     ):
-        ctx.send_event(Event(), "step")
+        ctx.send_event(Event(), "middle_step")
 
 
-def test_send_event_to_step(workflow: Workflow) -> None:
+async def test_send_event_to_step(workflow: Workflow) -> None:
     step2 = mock.MagicMock()
-    step2.__step_config.accepted_events = [Event]
+    step2._step_config.accepted_events = [Event]
 
     workflow._get_steps = mock.MagicMock(  # type: ignore
         return_value={"step1": mock.MagicMock(), "step2": step2}
     )
 
     ctx: Context[DictState] = Context(workflow=workflow)
-    ctx._queues = {"step1": mock.MagicMock(), "step2": mock.MagicMock()}
+    broker = ctx._init_broker(workflow)
+    try:
+        broker._state.queues = {"step1": mock.MagicMock(), "step2": mock.MagicMock()}
 
-    ev = Event(foo="bar")
-    ctx.send_event(ev, "step2")
+        ev = Event(foo="bar")
+        ctx.send_event(ev, "step2")
 
-    ctx._queues["step1"].put_nowait.assert_not_called()  # type: ignore
-    ctx._queues["step2"].put_nowait.assert_called_with(ev)  # type: ignore
-
-
-def test_get_result(ctx: Context) -> None:
-    ctx._retval = 42
-    assert ctx.get_result() == 42
+        broker._state.queues["step1"].put_nowait.assert_not_called()  # type: ignore
+        broker._state.queues["step2"].put_nowait.assert_called_with(ev)  # type: ignore
+    finally:
+        await broker.shutdown()
 
 
 def test_to_dict_with_events_buffer(ctx: Context) -> None:
@@ -144,12 +135,13 @@ def test_to_dict_with_events_buffer(ctx: Context) -> None:
 
 @pytest.mark.asyncio
 async def test_empty_inprogress_when_workflow_done(workflow: Workflow) -> None:
-    await WorkflowTestRunner(workflow).run()
-    ctx = workflow._contexts.pop()
+    result = await WorkflowTestRunner(workflow).run()
+    ctx = result.ctx
 
     # there shouldn't be any in progress events
     assert ctx is not None
-    for inprogress_list in ctx._in_progress.values():
+    assert ctx._broker_run is not None
+    for inprogress_list in ctx._broker_run._state.in_progress.values():
         assert len(inprogress_list) == 0
 
 
@@ -238,17 +230,19 @@ async def test_wait_for_event_in_workflow_serialization() -> None:
 
     # Roundtrip the context
     assert ctx_dict is not None
+    # verify creating a new context has the correct state
     new_ctx = Context.from_dict(workflow, ctx_dict)
-    assert len(new_ctx._waiting_ids) == 1
     new_handler = workflow.run(ctx=new_ctx)
+    assert new_ctx._broker_run
+    assert len(new_ctx._broker_run._state.waiting_ids) == 1
 
     # Continue the workflow
     assert new_handler.ctx
     new_handler.ctx.send_event(Event(msg="bar"))
-
     result = await new_handler
     assert result == "bar"
-    assert len(new_handler.ctx._waiting_ids) == 0
+    assert new_handler.ctx._broker_run
+    assert len(new_handler.ctx._broker_run._state.waiting_ids) == 0
 
 
 @pytest.mark.asyncio
@@ -345,6 +339,7 @@ async def test_wait_for_multiple_events_in_workflow() -> None:
 
     result = await handler
     assert result == ["foo", "bar"]
+    assert not handler.ctx.is_running
 
     # serialize and resume
     ctx_dict = handler.ctx.to_dict()

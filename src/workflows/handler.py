@@ -129,5 +129,9 @@ class WorkflowHandler(asyncio.Future[RunResultT]):
             ```
         """
         if self.ctx:
-            self.ctx._cancel_flag.set()
-            await asyncio.sleep(0)
+            self.ctx._workflow_cancel_run()
+            if self._run_task is not None:
+                try:
+                    await self._run_task
+                except Exception:
+                    pass
