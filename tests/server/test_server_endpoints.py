@@ -268,7 +268,7 @@ async def test_structured_start_event_missing_value_treated_as_empty_and_validat
 
     response = await client.post(
         "/workflows/structured/run",
-        json={}, # testing no start_event whatsoever
+        json={},  # testing no start_event whatsoever
     )
     assert response.status_code == 400
     assert "Validation error for 'start_event'" in response.text
