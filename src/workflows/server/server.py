@@ -29,6 +29,7 @@ from workflows.context.serializers import JsonSerializer
 from workflows.events import (
     Event,
     InternalDispatchEvent,
+    StartEvent,
     StepState,
     StepStateChanged,
     StopEvent,
@@ -394,7 +395,7 @@ class WorkflowServer:
             description: Error running workflow or invalid request body
         """
         workflow = self._extract_workflow(request)
-        context, start_event, run_kwargs, handler_id = await self._extract_run_params(
+        context, start_event, handler_id = await self._extract_run_params(
             request, workflow.workflow, workflow.name
         )
 
@@ -405,7 +406,8 @@ class WorkflowServer:
 
         try:
             handler = workflow.workflow.run(
-                ctx=context, start_event=input_ev, **run_kwargs
+                ctx=context,
+                start_event=input_ev,
             )
             wrapper = self._run_workflow_handler(handler_id, workflow.name, handler)
             await handler
@@ -552,7 +554,7 @@ class WorkflowServer:
             description: Workflow or handler identifier not found
         """
         workflow = self._extract_workflow(request)
-        context, start_event, run_kwargs, handler_id = await self._extract_run_params(
+        context, start_event, handler_id = await self._extract_run_params(
             request, workflow.workflow, workflow.name
         )
 
@@ -564,7 +566,6 @@ class WorkflowServer:
         handler = workflow.workflow.run(
             ctx=context,
             start_event=input_ev,
-            **run_kwargs,
         )
         wrapper = self._run_workflow_handler(
             handler_id,
@@ -947,17 +948,17 @@ class WorkflowServer:
 
     async def _extract_run_params(
         self, request: Request, workflow: Workflow, workflow_name: str
-    ) -> tuple:
+    ) -> tuple[Context | None, StartEvent | None, str]:
         try:
             body = await request.json()
             context_data = body.get("context")
             run_kwargs = body.get("kwargs", {})
-            start_event_data = body.get("start_event")
+            start_event_data = body.get("start_event", run_kwargs)
             handler_id = body.get("handler_id")
 
             # Extract custom StartEvent if present
             start_event = None
-            if start_event_data:
+            if start_event_data is not None:
                 serializer = JsonSerializer()
                 try:
                     start_event = (
@@ -1000,7 +1001,7 @@ class WorkflowServer:
                 context = Context.from_dict(workflow, persisted_handlers[0].ctx)
 
             handler_id = handler_id or nanoid()
-            return (context, start_event, run_kwargs, handler_id)
+            return (context, start_event, handler_id)
 
         except HTTPException:
             # Re-raise HTTPExceptions as-is (like start_event validation errors)
