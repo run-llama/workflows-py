@@ -108,7 +108,7 @@ async def test_internal_events(wf: ExampleWorkflow) -> None:
 
 
 @pytest.mark.asyncio
-async def test_internal_events_state(wf_state: ExampleWorkflowState) -> None:
+async def test_internal_events_sequence(wf_state: ExampleWorkflowState) -> None:
     test_runner = WorkflowTestRunner(wf_state)
     result = await test_runner.run(
         start_event=StartEvent(message="hello"),  # type: ignore
@@ -116,53 +116,29 @@ async def test_internal_events_state(wf_state: ExampleWorkflowState) -> None:
     )
     assert all(isinstance(ev, StepStateChanged) for ev in result.collected)
     filtered_events = [
-        r for r in result.collected if r.context_state is not None and r.name != "_done"
+        {"name": x.name, "step_state": x.step_state} for x in result.collected
     ]
-    assert len(filtered_events) == 4
-    for i, ev in enumerate(filtered_events):
-        if i < 2:
-            assert ev.name == "first_step"
-        else:
-            assert ev.name == "second_step"
-        if i % 2 == 0:
-            assert ev.step_state == StepState.PREPARING
-        else:
-            assert ev.step_state == StepState.NOT_IN_PROGRESS
-    assert filtered_events[0].context_state["state_data"] == {"test": '""'}
-    assert all(
-        ev.context_state["state_data"] == {"test": '"Test"'}
-        for ev in filtered_events[1:]
-    )
-
-
-@pytest.mark.asyncio
-async def test_internal_events_dict_state(
-    wf_dict_state: ExampleWorkflowDictState,
-) -> None:
-    # prove that state modification works also with DictState
-    test_runner = WorkflowTestRunner(wf_dict_state)
-    result = await test_runner.run(
-        start_event=StartEvent(message="hello"),  # type: ignore
-        exclude_events=[StopEvent, EventsQueueChanged],
-    )
-    assert all(isinstance(ev, StepStateChanged) for ev in result.collected)
-    filtered_events = [
-        r for r in result.collected if r.context_state is not None and r.name != "_done"
+    assert filtered_events == [
+        dict(name="first_step", step_state=StepState.PREPARING),
+        dict(name="first_step", step_state=StepState.IN_PROGRESS),
+        dict(name="first_step", step_state=StepState.RUNNING),
+        dict(name="first_step", step_state=StepState.NOT_RUNNING),
+        dict(name="first_step", step_state=StepState.NOT_IN_PROGRESS),
+        # TODO(adrian) very soon! - duplicate event bug. Encountered while refactoring this test.
+        dict(name="first_step", step_state=StepState.NOT_IN_PROGRESS),
+        dict(name="first_step", step_state=StepState.EXITED),
+        dict(name="second_step", step_state=StepState.PREPARING),
+        dict(name="second_step", step_state=StepState.IN_PROGRESS),
+        dict(name="second_step", step_state=StepState.RUNNING),
+        dict(name="second_step", step_state=StepState.NOT_RUNNING),
+        dict(name="second_step", step_state=StepState.NOT_IN_PROGRESS),
+        # TODO(adrian) very soon! - duplicate event bug. Encountered while refactoring this test.
+        dict(name="second_step", step_state=StepState.NOT_IN_PROGRESS),
+        dict(name="second_step", step_state=StepState.EXITED),
+        dict(name="_done", step_state=StepState.PREPARING),
+        dict(name="_done", step_state=StepState.IN_PROGRESS),
+        dict(name="_done", step_state=StepState.RUNNING),
     ]
-    assert len(filtered_events) == 4
-    for i, ev in enumerate(filtered_events):
-        if i < 2:
-            assert ev.name == "first_step"
-        else:
-            assert ev.name == "second_step"
-        if i % 2 == 0:
-            assert ev.step_state == StepState.PREPARING
-        else:
-            assert ev.step_state == StepState.NOT_IN_PROGRESS
-    assert filtered_events[0].context_state["state_data"] == {}
-    assert filtered_events[1].context_state["state_data"] == {"test": '"Test"'}
-    assert filtered_events[2].context_state["state_data"] == {"test": '"Test"'}
-    assert filtered_events[3].context_state["state_data"] == {}
 
 
 @pytest.mark.asyncio

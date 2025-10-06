@@ -75,7 +75,7 @@ async def test_workflow_timeout() -> None:
             return StopEvent(result="Done")
 
     with pytest.raises(WorkflowTimeoutError):
-        await WorkflowTestRunner(SlowWorkflow(timeout=1)).run()
+        await WorkflowTestRunner(SlowWorkflow(timeout=0.1)).run()
 
 
 @pytest.mark.asyncio
@@ -217,10 +217,11 @@ async def test_workflow_num_workers() -> None:
     assert set(r.result) == {"test1", "test2", "test4"}
 
     # ctx should have 1 extra event
-    ctx = workflow._contexts.pop()
+    ctx = r.ctx
     assert ctx
-    assert "final_step" in ctx._event_buffers
-    event_buffer = ctx._event_buffers["final_step"]
+    assert ctx._broker_run is not None
+    assert "final_step" in ctx._broker_run._state.event_buffers
+    event_buffer = ctx._broker_run._state.event_buffers["final_step"]
     assert len(event_buffer["tests.conftest.AnotherTestEvent"]) == 1
 
     # ensure ctx is serializable
@@ -252,9 +253,10 @@ async def test_workflow_step_send_event() -> None:
     workflow = StepSendEventWorkflow()
     r = await WorkflowTestRunner(workflow).run()
     assert r.result == "step2"
-    ctx = workflow._contexts.pop()
-    assert ("step2", "OneTestEvent") in ctx._accepted_events
-    assert ("step3", "OneTestEvent") not in ctx._accepted_events
+    ctx = r.ctx
+    assert ctx._broker_run is not None
+    assert ("step2", "OneTestEvent") in ctx._broker_run._state.accepted_events
+    assert ("step3", "OneTestEvent") not in ctx._broker_run._state.accepted_events
 
 
 @pytest.mark.asyncio
@@ -270,8 +272,9 @@ async def test_workflow_step_send_event_to_None() -> None:
             return StopEvent(result="step2")
 
     workflow = StepSendEventToNoneWorkflow(verbose=True)
-    await WorkflowTestRunner(workflow).run()
-    assert ("step2", "OneTestEvent") in workflow._contexts.pop()._accepted_events
+    result = await WorkflowTestRunner(workflow).run()
+    assert result.ctx._broker_run is not None
+    assert ("step2", "OneTestEvent") in result.ctx._broker_run._state.accepted_events
 
 
 @pytest.mark.asyncio
@@ -341,7 +344,7 @@ def test_add_step_not_a_step() -> None:
         WorkflowValidationError,
         match="Step function another_step is missing the `@step` decorator.",
     ):
-        TestWorkflow.add_step(another_step)
+        TestWorkflow.add_step(another_step)  # type: ignore
 
 
 @pytest.mark.asyncio
@@ -381,14 +384,14 @@ async def test_workflow_continue_context() -> None:
     # first run
     r = await WorkflowTestRunner(wf).run()
     assert r.result == "Done"
-    ctx = wf._contexts.pop()
+    ctx = r.ctx
     assert ctx
     assert await ctx.store.get("number") == 1
 
     # second run -- independent from the first
     r = await WorkflowTestRunner(wf).run()
     assert r.result == "Done"
-    ctx = wf._contexts.pop()
+    ctx = r.ctx
     assert ctx
     assert await ctx.store.get("number") == 1
 
@@ -411,8 +414,8 @@ async def test_workflow_pickle() -> None:
             return StopEvent(result="Done")
 
     wf = DummyWorkflow()
-    await WorkflowTestRunner(wf).run()
-    ctx = wf._contexts.copy().pop()
+    r = await WorkflowTestRunner(wf).run()
+    ctx = r.ctx
     assert ctx
 
     # by default, we can't pickle the LLM/embedding object
@@ -421,16 +424,16 @@ async def test_workflow_pickle() -> None:
 
     # if we allow pickle, then we can pickle the LLM/embedding object
     state_dict = ctx.to_dict(serializer=PickleSerializer())
-    new_handler = WorkflowHandler(
-        ctx=Context.from_dict(wf, state_dict, serializer=PickleSerializer())
-    )
+    new_ctx = Context.from_dict(wf, state_dict, serializer=PickleSerializer())
+    assert await new_ctx.store.get("step") == 1
+    new_handler = WorkflowHandler(ctx=new_ctx)
     assert new_handler.ctx
+    assert await new_handler.ctx.store.get("step") == 1
 
     # check that the step count is the same
     cur_step = await ctx.store.get("step")
     new_step = await new_handler.ctx.store.get("step")
     assert new_step == cur_step
-
     await WorkflowTestRunner(wf).run(ctx=new_handler.ctx)
 
     # check that the step count is incremented
@@ -439,21 +442,31 @@ async def test_workflow_pickle() -> None:
 
 @pytest.mark.asyncio
 async def test_workflow_context_to_dict(workflow: Workflow) -> None:
-    handler = workflow.run()
-    ctx = handler.ctx
+    ctx: Union[Context, None] = None
+    new_ctx: Union[Context, None] = None
+    try:
+        handler = workflow.run()
+        ctx = handler.ctx
 
-    ctx.send_event(EventWithName(name="test"))  # type:ignore
+        ctx.send_event(EventWithName(name="test"))  # type:ignore
 
-    # get the context dict
-    data = ctx.to_dict()  # type:ignore
+        # get the context dict
+        data = ctx.to_dict()  # type:ignore
 
-    # finish workflow
-    await handler
+        # finish workflow
+        await handler
 
-    new_ctx = Context.from_dict(workflow, data)
-
-    print(new_ctx._queues)
-    assert new_ctx._queues["start_step"].get_nowait().name == "test"
+        new_ctx = Context.from_dict(workflow, data)
+        new_ctx._init_broker(workflow)
+        assert new_ctx._broker_run is not None
+        assert (
+            new_ctx._broker_run._state.queues["start_step"].get_nowait().name == "test"
+        )
+    finally:
+        if ctx is not None and ctx._broker_run is not None:
+            await ctx._broker_run.shutdown()
+        if new_ctx is not None and new_ctx._broker_run is not None:
+            await new_ctx._broker_run.shutdown()
 
 
 class HumanInTheLoopWorkflow(Workflow):
@@ -507,7 +520,6 @@ async def test_human_in_the_loop_with_resume() -> None:
             break
 
     assert handler.exception()
-
     new_handler = workflow.run(ctx=Context.from_dict(workflow, ctx_dict))  # type:ignore
     new_handler.ctx.send_event(HumanResponseEvent(response="42"))  # type:ignore
 
@@ -533,13 +545,9 @@ class DummyWorkflowForConcurrentRunsTest(Workflow):
         async with self._lock:
             self.num_active_runs += 1
         await asyncio.sleep(0.01)
-        return StopEvent(result=f"Run {run_num}: Done")
-
-    @step
-    async def _done(self, ctx: Context, ev: StopEvent) -> None:
         async with self._lock:
             self.num_active_runs -= 1
-        await super()._done(ctx, ev)
+        return StopEvent(result=f"Run {run_num}: Done")
 
     async def get_active_runs(self) -> Any:
         async with self._lock:

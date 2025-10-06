@@ -5,37 +5,31 @@ from __future__ import annotations
 
 import asyncio
 import functools
-import json
-import time
+import uuid
 import warnings
-from collections import defaultdict
 from typing import (
     TYPE_CHECKING,
     Any,
-    Callable,
-    DefaultDict,
     Generic,
-    Tuple,
     Type,
     TypeVar,
     cast,
 )
 
+from pydantic import BaseModel, ValidationError
+
+from workflows.context.context_types import SerializedContext
 from workflows.decorators import StepConfig
 from workflows.errors import (
     ContextSerdeError,
-    WorkflowCancelledByUser,
-    WorkflowDone,
     WorkflowRuntimeError,
 )
 from workflows.events import (
     Event,
-    InputRequiredEvent,
-    EventsQueueChanged,
-    StepStateChanged,
-    StepState,
+    StartEvent,
 )
-from workflows.resource import ResourceManager
+from workflows.runtime.state import WorkflowBrokerState
+from workflows.runtime.broker import WorkflowBroker
 from workflows.types import RunResultT
 
 from .serializers import BaseSerializer, JsonSerializer
@@ -43,6 +37,7 @@ from .state_store import MODEL_T, DictState, InMemoryStateStore
 
 if TYPE_CHECKING:  # pragma: no cover
     from workflows import Workflow
+    from workflows.handler import WorkflowHandler
 
 T = TypeVar("T", bound=Event)
 EventBuffer = dict[str, list[Event]]
@@ -58,7 +53,9 @@ warnings.simplefilter("once", UnserializableKeyWarning)
 
 class Context(Generic[MODEL_T]):
     """
-    Global, per-run context and event broker for a `Workflow`.
+    Global, per-run context for a `Workflow`. Provides an interface into the
+    underlying broker run, for both external (workflow run oberservers) and
+    internal consumption by workflow steps.
 
     The `Context` coordinates event delivery between steps, tracks in-flight work,
     exposes a global state store, and provides utilities for streaming and
@@ -68,6 +65,8 @@ class Context(Generic[MODEL_T]):
     Args:
         workflow (Workflow): The owning workflow instance. Used to infer
             step configuration and instrumentation.
+        previous_context: A previous context snapshot to resume from.
+        serializer: A serializer to use for serializing and deserializing the current and previous context snapshots.
 
     Attributes:
         is_running (bool): Whether the workflow is currently running.
@@ -116,39 +115,141 @@ class Context(Generic[MODEL_T]):
     # are known to be unserializable in some cases.
     known_unserializable_keys = ("memory",)
 
-    def __init__(self, workflow: "Workflow") -> None:
-        self.is_running = False
-        # Store the step configs of this workflow, to be used in send_event
-        self._step_configs: dict[str, StepConfig | None] = {}
-        for step_name, step_func in workflow._get_steps().items():
-            self._step_configs[step_name] = getattr(step_func, "__step_config", None)
+    # Backing state store; serialized as `state`
+    _state_store: InMemoryStateStore[MODEL_T]
+    _broker_run: WorkflowBroker[MODEL_T] | None
 
-        # Init broker machinery
-        self._init_broker_data()
+    def __init__(
+        self,
+        workflow: Workflow,
+        previous_context: dict[str, Any] | None = None,
+        serializer: BaseSerializer | None = None,
+    ) -> None:
+        self._serializer = serializer or JsonSerializer()
+        self._broker_run = None
 
-        # Global data storage
-        self._lock = asyncio.Lock()
-        self._state_store: InMemoryStateStore[MODEL_T] | None = None
-        self._waiting_ids: set[str] = set()
-
-        # instrumentation
-        self._dispatcher = workflow._dispatcher
-
-    async def _init_state_store(self, state_class: MODEL_T) -> None:
-        # If a state manager already exists, ensure the requested state type is compatible
-        if self._state_store is not None:
-            existing_state = await self._state_store.get_state()
-            if type(state_class) is not type(existing_state):
-                # Existing state type differs from the requested one – this is not allowed
-                raise ValueError(
-                    f"Cannot initialize with state class {type(state_class)} because it already has a state class {type(existing_state)}"
+        # parse the serialized context
+        serializer = serializer or JsonSerializer()
+        if previous_context is not None:
+            try:
+                previous_context_parsed = SerializedContext.model_validate(
+                    previous_context
                 )
+            except ValidationError as e:
+                raise ContextSerdeError(
+                    f"Context dict specified in an invalid format: {e}"
+                ) from e
+        else:
+            previous_context_parsed = SerializedContext()
 
-            # State manager already initialised and compatible – nothing to do
-            return
+        self._init_snapshot = previous_context_parsed
 
-        # First-time initialisation
-        self._state_store = InMemoryStateStore(state_class)
+        # initialization of the state store is a bit complex, due to inferring and validating its type from the
+        # provided workflow context args
+
+        state_types: set[Type[BaseModel]] = set()
+        for _, step_func in workflow._get_steps().items():
+            step_config: StepConfig = step_func._step_config
+            if (
+                step_config.context_state_type is not None
+                and step_config.context_state_type != DictState
+                and issubclass(step_config.context_state_type, BaseModel)
+            ):
+                state_type = step_config.context_state_type
+                state_types.add(state_type)
+
+        if len(state_types) > 1:
+            raise ValueError(
+                "Multiple state types are not supported. Make sure that each Context[...] has the same generic state type. Found: "
+                + ", ".join([state_type.__name__ for state_type in state_types])
+            )
+        state_type = state_types.pop() if state_types else DictState
+        if previous_context_parsed.state:
+            # perhaps offer a way to clear on invalid
+            store_state = InMemoryStateStore.from_dict(
+                previous_context_parsed.state, serializer
+            )
+            if store_state.state_type != state_type:
+                raise ValueError(
+                    f"State type mismatch. Workflow context expected {state_type.__name__}, got {store_state.state_type.__name__}"
+                )
+            self._state_store = cast(InMemoryStateStore[MODEL_T], store_state)
+        else:
+            try:
+                state_instance = cast(MODEL_T, state_type())
+                self._state_store = InMemoryStateStore(state_instance)
+            except Exception as e:
+                raise WorkflowRuntimeError(
+                    f"Failed to initialize state of type {state_type}. Does your state define defaults for all fields? Original error:\n{e}"
+                ) from e
+
+    @property
+    def is_running(self) -> bool:
+        """Whether the workflow is currently running."""
+        if self._broker_run is None:
+            return self._init_snapshot.is_running
+        else:
+            return self._broker_run.is_running
+
+    def _init_broker(self, workflow: Workflow) -> WorkflowBroker[MODEL_T]:
+        if self._broker_run is not None:
+            raise WorkflowRuntimeError("Broker already initialized")
+        run_id = str(uuid.uuid4())
+
+        broker_state = WorkflowBrokerState.from_serialized(
+            self._init_snapshot, self._serializer
+        )
+        self._broker_run = WorkflowBroker(
+            workflow=workflow,
+            context=self,
+            state=broker_state,
+            run_id=run_id,
+        )
+        return self._broker_run
+
+    def _workflow_run(
+        self,
+        workflow: Workflow,
+        start_event: StartEvent | None = None,
+        semaphore: asyncio.Semaphore | None = None,
+    ) -> WorkflowHandler:
+        """
+        called by package internally from the workflow to run it
+        """
+        prev_broker: WorkflowBroker[MODEL_T] | None = None
+        if self._broker_run is not None:
+            prev_broker = self._broker_run
+            self._broker_run = None
+
+        self._broker_run = self._init_broker(workflow)
+
+        async def before_start() -> None:
+            if prev_broker is not None:
+                try:
+                    await prev_broker.shutdown()
+                except Exception:
+                    pass
+            if semaphore is not None:
+                await semaphore.acquire()
+
+        async def after_complete() -> None:
+            if semaphore is not None:
+                semaphore.release()
+
+        return self._broker_run.start(
+            workflow=workflow,
+            start_event=start_event,
+            before_start=before_start,
+            after_complete=after_complete,
+        )
+
+    def _workflow_cancel_run(self) -> None:
+        """
+        Called internally from the handler to cancel a context's run
+        """
+        if self._broker_run is None:
+            raise WorkflowRuntimeError("Workflow run is not yet running")
+        self._broker_run.cancel_run()
 
     @property
     def store(self) -> InMemoryStateStore[MODEL_T]:
@@ -160,61 +261,7 @@ class Context(Generic[MODEL_T]):
         Returns:
             InMemoryStateStore[MODEL_T]: The state store instance.
         """
-        # Default to DictState if no state manager is initialized
-        if self._state_store is None:
-            # DictState is designed to be compatible with any MODEL_T as the default fallback
-            default_store = InMemoryStateStore(DictState())
-            self._state_store = cast(InMemoryStateStore[MODEL_T], default_store)
-
         return self._state_store
-
-    def _init_broker_data(self) -> None:
-        self._queues: dict[str, asyncio.Queue] = {}
-        self._tasks: set[asyncio.Task] = set()
-        self._broker_log: list[Event] = []
-        self._cancel_flag: asyncio.Event = asyncio.Event()
-        self._step_flags: dict[str, asyncio.Event] = {}
-        self._step_events_holding: list[Event] | None = None
-        self._step_lock: asyncio.Lock = asyncio.Lock()
-        self._step_condition: asyncio.Condition = asyncio.Condition(
-            lock=self._step_lock
-        )
-        self._step_event_written: asyncio.Condition = asyncio.Condition(
-            lock=self._step_lock
-        )
-        self._accepted_events: list[Tuple[str, str]] = []
-        self._retval: RunResultT = None
-        # Map the step names that were executed to a list of events they received.
-        # This will be serialized, and is needed to resume a Workflow run passing
-        # an existing context.
-        self._in_progress: dict[str, list[Event]] = defaultdict(list)
-        # Keep track of the steps currently running. This is only valid when a
-        # workflow is running and won't be serialized. Note that a single step
-        # might have multiple workers, so we keep a counter.
-        self._currently_running_steps: DefaultDict[str, int] = defaultdict(int)
-        # Streaming machinery
-        self._streaming_queue: asyncio.Queue = asyncio.Queue()
-        # Step-specific instance
-        self._event_buffers: dict[str, EventBuffer] = {}
-
-    def _serialize_queue(self, queue: asyncio.Queue, serializer: BaseSerializer) -> str:
-        queue_items = list(queue._queue)  # type: ignore
-        queue_objs = [serializer.serialize(obj) for obj in queue_items]
-        return json.dumps(queue_objs)
-
-    def _deserialize_queue(
-        self,
-        queue_str: str,
-        serializer: BaseSerializer,
-        prefix_queue_objs: list[Any] = [],
-    ) -> asyncio.Queue:
-        queue_objs = json.loads(queue_str)
-        queue_objs = prefix_queue_objs + queue_objs
-        queue: asyncio.Queue = asyncio.Queue()
-        for obj in queue_objs:
-            event_obj = serializer.deserialize(obj)
-            queue.put_nowait(event_obj)
-        return queue
 
     def to_dict(self, serializer: BaseSerializer | None = None) -> dict[str, Any]:
         """Serialize the context to a JSON-serializable dict.
@@ -246,35 +293,21 @@ class Context(Generic[MODEL_T]):
             result = await my_workflow.run(..., ctx=restored_ctx)
             ```
         """
-        serializer = serializer or JsonSerializer()
+        serializer = serializer or self._serializer
 
         # Serialize state using the state manager's method
         state_data = {}
         if self._state_store is not None:
             state_data = self._state_store.to_dict(serializer)
 
-        return {
-            "state": state_data,  # Use state manager's serialize method
-            "streaming_queue": self._serialize_queue(self._streaming_queue, serializer),
-            "queues": {
-                k: self._serialize_queue(v, serializer) for k, v in self._queues.items()
-            },
-            "event_buffers": {
-                k: {
-                    inner_k: [serializer.serialize(ev) for ev in inner_v]
-                    for inner_k, inner_v in v.items()
-                }
-                for k, v in self._event_buffers.items()
-            },
-            "in_progress": {
-                k: [serializer.serialize(ev) for ev in v]
-                for k, v in self._in_progress.items()
-            },
-            "accepted_events": self._accepted_events,
-            "broker_log": [serializer.serialize(ev) for ev in self._broker_log],
-            "is_running": self.is_running,
-            "waiting_ids": list(self._waiting_ids),
-        }
+        context = (
+            self._broker_run._state
+            if self._broker_run is not None
+            else WorkflowBrokerState()
+        ).to_serialized(serializer)
+        context.state = state_data
+        # mode="python" to support pickling over json if one so chooses. This should perhaps be moved into the serializers
+        return context.model_dump(mode="python")
 
     @classmethod
     def from_dict(
@@ -311,105 +344,11 @@ class Context(Generic[MODEL_T]):
             result = await my_workflow.run(..., ctx=restored_ctx)
             ```
         """
-        serializer = serializer or JsonSerializer()
-
         try:
-            context = cls(workflow)
-
-            # Deserialize state manager using the state manager's method
-            if "state" in data:
-                context._state_store = cast(
-                    InMemoryStateStore[MODEL_T],
-                    InMemoryStateStore.from_dict(data["state"], serializer),
-                )
-
-            context._streaming_queue = context._deserialize_queue(
-                data["streaming_queue"], serializer
-            )
-
-            context._event_buffers = {}
-            for buffer_id, type_events_map in data["event_buffers"].items():
-                context._event_buffers[buffer_id] = {}
-                for event_type, events_list in type_events_map.items():
-                    context._event_buffers[buffer_id][event_type] = [
-                        serializer.deserialize(ev) for ev in events_list
-                    ]
-
-            context._accepted_events = data["accepted_events"]
-            context._broker_log = [
-                serializer.deserialize(ev) for ev in data["broker_log"]
-            ]
-            context.is_running = data["is_running"]
-            # load back up whatever was in the queue as well as the events whose steps
-            # were in progress when the serialization of the Context took place
-            context._queues = {
-                k: context._deserialize_queue(
-                    v, serializer, prefix_queue_objs=data["in_progress"].get(k, [])
-                )
-                for k, v in data["queues"].items()
-            }
-            context._in_progress = defaultdict(list)
-
-            # restore waiting ids for hitl
-            context._waiting_ids = set(data["waiting_ids"])
-
-            return context
+            return cls(workflow, previous_context=data, serializer=serializer)
         except KeyError as e:
             msg = "Error creating a Context instance: the provided payload has a wrong or old format."
             raise ContextSerdeError(msg) from e
-
-    async def mark_in_progress(self, name: str, ev: Event, worker_id: str = "") -> None:
-        """
-        Add input event to in_progress dict.
-
-        Args:
-            name (str): The name of the step that is in progress.
-            ev (Event): The input event that kicked off this step.
-
-        """
-        async with self.lock:
-            self.write_event_to_stream(
-                StepStateChanged(
-                    step_state=StepState.IN_PROGRESS,
-                    name=name,
-                    input_event_name=(str(type(ev))),
-                    worker_id=worker_id,
-                )
-            )
-            self._in_progress[name].append(ev)
-
-    async def remove_from_in_progress(
-        self, name: str, ev: Event, worker_id: str = ""
-    ) -> None:
-        """
-        Remove input event from active steps.
-
-        Args:
-            name (str): The name of the step that has been completed.
-            ev (Event): The associated input event that kicked off this completed step.
-
-        """
-        async with self.lock:
-            self.write_event_to_stream(
-                StepStateChanged(
-                    step_state=StepState.NOT_IN_PROGRESS,
-                    name=name,
-                    input_event_name=(str(type(ev))),
-                    worker_id=worker_id,
-                )
-            )
-            events = [e for e in self._in_progress[name] if e != ev]
-            self._in_progress[name] = events
-
-    async def add_running_step(self, name: str) -> None:
-        async with self.lock:
-            self._currently_running_steps[name] += 1
-
-    async def remove_running_step(self, name: str) -> None:
-        async with self.lock:
-            self._currently_running_steps[name] -= 1
-            if self._currently_running_steps[name] == 0:
-                del self._currently_running_steps[name]
 
     async def running_steps(self) -> list[str]:
         """Return the list of currently running step names.
@@ -417,32 +356,9 @@ class Context(Generic[MODEL_T]):
         Returns:
             list[str]: Names of steps that have at least one active worker.
         """
-        async with self.lock:
-            return list(self._currently_running_steps)
-
-    @property
-    def lock(self) -> asyncio.Lock:
-        """Returns a mutex to lock the Context."""
-        return self._lock
-
-    def _get_full_path(self, ev_type: Type[Event]) -> str:
-        return f"{ev_type.__module__}.{ev_type.__name__}"
-
-    def _get_event_buffer_id(self, events: list[Type[Event]]) -> str:
-        # Try getting the current task name
-        try:
-            current_task = asyncio.current_task()
-            if current_task:
-                t_name = current_task.get_name()
-                # Do not use the default value 'Task'
-                if t_name != "Task":
-                    return t_name
-        except RuntimeError:
-            # This is a sync step, fallback to using events list
-            pass
-
-        # Fall back to creating a stable identifier from expected events
-        return ":".join(sorted(self._get_full_path(e_type) for e_type in events))
+        if self._broker_run is None:
+            raise WorkflowRuntimeError("Workflow run is not yet running")
+        return await self._broker_run.running_steps()
 
     def collect_events(
         self, ev: Event, expected: list[Type[Event]], buffer_id: str | None = None
@@ -481,34 +397,9 @@ class Context(Generic[MODEL_T]):
         See Also:
             - [Event][workflows.events.Event]
         """
-        buffer_id = buffer_id or self._get_event_buffer_id(expected)
-
-        if buffer_id not in self._event_buffers:
-            self._event_buffers[buffer_id] = defaultdict(list)
-
-        event_type_path = self._get_full_path(type(ev))
-        self._event_buffers[buffer_id][event_type_path].append(ev)
-
-        retval: list[Event] = []
-        for e_type in expected:
-            e_type_path = self._get_full_path(e_type)
-            e_instance_list = self._event_buffers[buffer_id].get(e_type_path, [])
-            if e_instance_list:
-                retval.append(e_instance_list.pop(0))
-            else:
-                # We already know we don't have all the events
-                break
-
-        if len(retval) == len(expected):
-            return retval
-
-        # put back the events if unable to collect all
-        for i, ev_to_restore in enumerate(retval):
-            e_type = type(retval[i])
-            e_type_path = self._get_full_path(e_type)
-            self._event_buffers[buffer_id][e_type_path].append(ev_to_restore)
-
-        return None
+        if self._broker_run is None:
+            raise WorkflowRuntimeError("Workflow run is not yet running")
+        return self._broker_run.collect_events(ev, expected, buffer_id)
 
     def send_event(self, message: Event, step: str | None = None) -> None:
         """Dispatch an event to one or all workflow steps.
@@ -548,28 +439,9 @@ class Context(Generic[MODEL_T]):
             result = await handler
             ```
         """
-        if step is None:
-            for name, queue in self._queues.items():
-                queue.put_nowait(message)
-                self.write_event_to_stream(
-                    EventsQueueChanged(name=name, size=queue.qsize())
-                )
-        else:
-            if step not in self._step_configs:
-                raise WorkflowRuntimeError(f"Step {step} does not exist")
-
-            step_config = self._step_configs[step]
-            if step_config and type(message) in step_config.accepted_events:
-                self._queues[step].put_nowait(message)
-                self.write_event_to_stream(
-                    EventsQueueChanged(name=step, size=self._queues[step].qsize())
-                )
-            else:
-                raise WorkflowRuntimeError(
-                    f"Step {step} does not accept event of type {type(message)}"
-                )
-
-        self._broker_log.append(message)
+        if self._broker_run is None:
+            raise WorkflowRuntimeError("Workflow run is not yet running")
+        return self._broker_run.send_event(message, step)
 
     async def wait_for_event(
         self,
@@ -615,43 +487,11 @@ class Context(Generic[MODEL_T]):
                 return StopEvent(result=response.response)
             ```
         """
-        requirements = requirements or {}
-
-        # Generate a unique key for the waiter
-        event_str = self._get_full_path(event_type)
-        requirements_str = str(requirements)
-        waiter_id = waiter_id or f"waiter_{event_str}_{requirements_str}"
-
-        if waiter_id not in self._queues:
-            self._queues[waiter_id] = asyncio.Queue()
-            self.write_event_to_stream(
-                EventsQueueChanged(name=waiter_id, size=self._queues[waiter_id].qsize())
-            )
-
-        # send the waiter event if it's not already sent
-        if waiter_event is not None:
-            is_waiting = waiter_id in self._waiting_ids
-            if not is_waiting:
-                self._waiting_ids.add(waiter_id)
-                self.write_event_to_stream(waiter_event)
-
-        while True:
-            event = await asyncio.wait_for(
-                self._queues[waiter_id].get(), timeout=timeout
-            )
-            if type(event) is event_type:
-                if all(getattr(event, k, None) == v for k, v in requirements.items()):
-                    if waiter_id in self._waiting_ids:
-                        self._waiting_ids.remove(waiter_id)
-                    return event
-                else:
-                    continue
-            self.write_event_to_stream(
-                EventsQueueChanged(
-                    name=waiter_id,
-                    size=self._queues[waiter_id].qsize(),
-                )
-            )
+        if self._broker_run is None:
+            raise WorkflowRuntimeError("Workflow run is not yet running")
+        return await self._broker_run.wait_for_event(
+            event_type, waiter_event, waiter_id, requirements, timeout
+        )
 
     def write_event_to_stream(self, ev: Event | None) -> None:
         """Enqueue an event for streaming to [WorkflowHandler]](workflows.handler.WorkflowHandler).
@@ -668,263 +508,51 @@ class Context(Generic[MODEL_T]):
                 return StopEvent(result="ok")
             ```
         """
-        self._streaming_queue.put_nowait(ev)
+        if self._broker_run is None:
+            raise WorkflowRuntimeError("Workflow run is not yet running")
+        self._broker_run.write_event_to_stream(ev)
 
     def get_result(self) -> RunResultT:
         """Return the final result of the workflow run.
 
+        Deprecated:
+            This method is deprecated and will be removed in a future release.
+            Prefer awaiting the handler returned by `Workflow.run`, e.g.:
+            `result = await workflow.run(..., ctx=ctx)`.
+
         Examples:
             ```python
+            # Preferred
             result = await my_workflow.run(..., ctx=ctx)
+
+            # Deprecated
             result_agent = ctx.get_result()
             ```
 
         Returns:
             RunResultT: The value provided via a `StopEvent`.
         """
-        return self._retval
+        _warn_get_result()
+        if self._broker_run is None:
+            raise WorkflowRuntimeError("Workflow run is not yet running")
+        return self._broker_run._retval
 
     @property
     def streaming_queue(self) -> asyncio.Queue:
         """The internal queue used for streaming events to callers."""
-        return self._streaming_queue
+        if self._broker_run is None:
+            raise WorkflowRuntimeError("Workflow run is not yet running")
+        return self._broker_run.streaming_queue
 
-    async def shutdown(self) -> None:
-        """Shut down the workflow run and clean up background tasks.
 
-        Cancels all outstanding workers, waits for them to finish, and marks the
-        context as not running. Queues and state remain available so callers can
-        inspect or drain leftover events.
-        """
-        self.is_running = False
-        # Cancel all running tasks
-        for task in self._tasks:
-            task.cancel()
-        # Wait for all tasks to complete
-        await asyncio.gather(*self._tasks, return_exceptions=True)
-        self._tasks.clear()
-
-    def add_step_worker(
-        self,
-        name: str,
-        step: Callable,
-        config: StepConfig,
-        verbose: bool,
-        run_id: str,
-        worker_id: str,
-        resource_manager: ResourceManager,
-    ) -> None:
-        """Spawn a background worker task to process events for a step.
-
-        Args:
-            name (str): Step name.
-            step (Callable): Step function (sync or async).
-            config (StepConfig): Resolved configuration for the step.
-            verbose (bool): If True, print step activity.
-            run_id (str): Run identifier for instrumentation.
-            worker_id (str): ID of the worker running the step
-            resource_manager (ResourceManager): Resource injector for the step.
-        """
-        self._tasks.add(
-            asyncio.create_task(
-                self._step_worker(
-                    name=name,
-                    step=step,
-                    config=config,
-                    verbose=verbose,
-                    run_id=run_id,
-                    worker_id=worker_id,
-                    resource_manager=resource_manager,
-                ),
-                name=name,
-            )
-        )
-
-    async def _step_worker(
-        self,
-        name: str,
-        step: Callable,
-        config: StepConfig,
-        verbose: bool,
-        run_id: str,
-        worker_id: str,
-        resource_manager: ResourceManager,
-    ) -> None:
-        while True:
-            ev = await self._queues[name].get()
-            if type(ev) not in config.accepted_events:
-                continue
-
-            if verbose and name != "_done":
-                print(f"Running step {name}")
-
-            # run step
-            # Initialize state manager if needed
-            if self._state_store is None:
-                if (
-                    hasattr(config, "context_state_type")
-                    and config.context_state_type is not None
-                ):
-                    # Instantiate the state class and initialize the state manager
-                    try:
-                        # Try to instantiate the state class
-                        state_instance = cast(MODEL_T, config.context_state_type())
-                        await self._init_state_store(state_instance)
-                    except Exception as e:
-                        raise WorkflowRuntimeError(
-                            f"Failed to initialize state of type {config.context_state_type}. "
-                            "Does your state define defaults for all fields? Original error:\n"
-                            f"{e}"
-                        ) from e
-                else:
-                    # Initialize state manager with DictState by default
-                    dict_state = cast(MODEL_T, DictState())
-                    await self._init_state_store(dict_state)
-
-            kwargs: dict[str, Any] = {}
-            if config.context_parameter:
-                kwargs[config.context_parameter] = self
-            for resource in config.resources:
-                kwargs[resource.name] = await resource_manager.get(
-                    resource=resource.resource
-                )
-            kwargs[config.event_name] = ev
-
-            # wrap the step with instrumentation
-            instrumented_step = self._dispatcher.span(step)
-
-            # - check if its async or not
-            # - if not async, run it in an executor
-            self.write_event_to_stream(
-                StepStateChanged(
-                    name=name,
-                    step_state=StepState.PREPARING,
-                    worker_id=worker_id,
-                    input_event_name=str(type(ev)),
-                    context_state=self.store.to_dict_snapshot(JsonSerializer()),
-                )
-            )
-            if asyncio.iscoroutinefunction(step):
-                retry_start_at = time.time()
-                attempts = 0
-                while True:
-                    await self.mark_in_progress(name=name, ev=ev, worker_id=worker_id)
-                    await self.add_running_step(name)
-                    self.write_event_to_stream(
-                        StepStateChanged(
-                            name=name,
-                            step_state=StepState.RUNNING,
-                            worker_id=worker_id,
-                            input_event_name=str(type(ev)),
-                        )
-                    )
-                    try:
-                        new_ev = await instrumented_step(**kwargs)
-                        kwargs.clear()
-                        break  # exit the retrying loop
-
-                    except WorkflowDone:
-                        await self.remove_from_in_progress(
-                            name=name, ev=ev, worker_id=worker_id
-                        )
-                        raise
-                    except Exception as e:
-                        if config.retry_policy is None:
-                            raise
-
-                        delay = config.retry_policy.next(
-                            retry_start_at + time.time(), attempts, e
-                        )
-                        if delay is None:
-                            raise
-
-                        attempts += 1
-                        if verbose:
-                            print(
-                                f"Step {name} produced an error, retry in {delay} seconds"
-                            )
-                        await asyncio.sleep(delay)
-                    finally:
-                        await self.remove_running_step(name)
-                        self.write_event_to_stream(
-                            StepStateChanged(
-                                name=name,
-                                step_state=StepState.NOT_RUNNING,
-                                worker_id=worker_id,
-                                input_event_name=str(type(ev)),
-                            )
-                        )
-
-            else:
-                try:
-                    run_task = functools.partial(instrumented_step, **kwargs)
-                    kwargs.clear()
-                    new_ev = await asyncio.get_event_loop().run_in_executor(
-                        None, run_task
-                    )
-                except WorkflowDone:
-                    await self.remove_from_in_progress(
-                        name=name, ev=ev, worker_id=worker_id
-                    )
-                    raise
-                except Exception as e:
-                    raise WorkflowRuntimeError(f"Error in step '{name}': {e!s}") from e
-
-            self.write_event_to_stream(
-                StepStateChanged(
-                    name=name,
-                    step_state=StepState.NOT_IN_PROGRESS,
-                    worker_id=worker_id,
-                    input_event_name=str(type(ev)),
-                    context_state=self.store.to_dict_snapshot(JsonSerializer()),
-                )
-            )
-            if verbose and name != "_done":
-                if new_ev is not None:
-                    print(f"Step {name} produced event {type(new_ev).__name__}")
-                else:
-                    print(f"Step {name} produced no event")
-
-            # Store the accepted event for the drawing operations
-            if new_ev is not None:
-                self._accepted_events.append((name, type(ev).__name__))
-
-            # Fail if the step returned something that's not an event
-            if new_ev is not None and not isinstance(new_ev, Event):
-                msg = f"Step function {name} returned {type(new_ev).__name__} instead of an Event instance."
-                raise WorkflowRuntimeError(msg)
-
-            await self.remove_from_in_progress(name=name, ev=ev, worker_id=worker_id)
-            self.write_event_to_stream(
-                StepStateChanged(
-                    name=name,
-                    step_state=StepState.EXITED,
-                    worker_id=worker_id,
-                    input_event_name=str(type(ev)),
-                    output_event_name=str(type(new_ev)),
-                )
-            )
-            # InputRequiredEvent's are special case and need to be written to the stream
-            # this way, the user can access and respond to the event
-            if isinstance(new_ev, InputRequiredEvent):
-                self.write_event_to_stream(new_ev)
-            elif new_ev is not None:
-                self.send_event(new_ev)
-
-    def add_cancel_worker(self) -> None:
-        """Install a worker that turns a cancel flag into an exception.
-
-        When the cancel flag is set, a `WorkflowCancelledByUser` will be raised
-        internally to abort the run.
-
-        See Also:
-            - [WorkflowCancelledByUser][workflows.errors.WorkflowCancelledByUser]
-        """
-        self._tasks.add(asyncio.create_task(self._cancel_worker()))
-
-    async def _cancel_worker(self) -> None:
-        try:
-            await self._cancel_flag.wait()
-            raise WorkflowCancelledByUser
-        except asyncio.CancelledError:
-            return
+@functools.lru_cache(maxsize=1)
+def _warn_get_result() -> None:
+    warnings.warn(
+        (
+            "Context.get_result() is deprecated and will be removed in a future "
+            "release. Prefer awaiting the WorkflowHandler returned by "
+            "Workflow.run: `result = await workflow.run(..., ctx=ctx)`."
+        ),
+        DeprecationWarning,
+        stacklevel=2,
+    )

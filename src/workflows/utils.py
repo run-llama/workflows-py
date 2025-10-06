@@ -5,14 +5,19 @@ from __future__ import annotations
 
 import inspect
 from typing import (
+    TYPE_CHECKING,
     Annotated,
     Any,
     Callable,
     Optional,
+    cast,
     get_args,
     get_origin,
     get_type_hints,
 )
+
+if TYPE_CHECKING:
+    from workflows.decorators import StepFunction
 
 try:
     from typing import Union
@@ -147,7 +152,7 @@ def validate_step_signature(spec: StepSignatureSpec) -> None:
         raise WorkflowValidationError(msg)
 
 
-def get_steps_from_class(_class: object) -> dict[str, Callable]:
+def get_steps_from_class(_class: object) -> dict[str, StepFunction]:
     """
     Given a class, return the list of its methods that were defined as steps.
 
@@ -158,17 +163,19 @@ def get_steps_from_class(_class: object) -> dict[str, Callable]:
         dict[str, Callable]: A dictionary mapping step names to their corresponding methods.
 
     """
-    step_methods: dict[str, Callable] = {}
+    from workflows.decorators import StepFunction
+
+    step_methods: dict[str, StepFunction] = {}
     all_methods = inspect.getmembers(_class, predicate=inspect.isfunction)
 
     for name, method in all_methods:
-        if hasattr(method, "__step_config"):
-            step_methods[name] = method
+        if hasattr(method, "_step_config"):
+            step_methods[name] = cast(StepFunction, method)
 
     return step_methods
 
 
-def get_steps_from_instance(workflow: object) -> dict[str, Callable]:
+def get_steps_from_instance(workflow: object) -> dict[str, StepFunction]:
     """
     Given a workflow instance, return the list of its methods that were defined as steps.
 
@@ -179,12 +186,14 @@ def get_steps_from_instance(workflow: object) -> dict[str, Callable]:
         dict[str, Callable]: A dictionary mapping step names to their corresponding methods.
 
     """
-    step_methods: dict[str, Callable] = {}
+    from workflows.decorators import StepFunction
+
+    step_methods: dict[str, StepFunction] = {}
     all_methods = inspect.getmembers(workflow, predicate=inspect.ismethod)
 
     for name, method in all_methods:
-        if hasattr(method, "__step_config"):
-            step_methods[name] = method
+        if hasattr(method, "_step_config"):
+            step_methods[name] = cast(StepFunction, method)
 
     return step_methods
 

@@ -14,13 +14,13 @@ def test_serialization_roundtrip(ctx: Context, workflow: Workflow) -> None:
     assert Context.from_dict(workflow, ctx.to_dict())
 
 
-def test_old_serialization(ctx: Context, workflow: Workflow) -> None:
+def test_deserialization_invalid(ctx: Context, workflow: Workflow) -> None:
     old_payload = {
         "globals": {},
         "streaming_queue": "[]",
         "queues": {"test_id": "[]"},
         "events_buffer": {},
-        "in_progress": {},
+        "in_progress": "This should be a dict",
         "accepted_events": [],
         "broker_log": [],
         "waiter_id": "test_id",
