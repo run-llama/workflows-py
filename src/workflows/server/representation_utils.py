@@ -6,7 +6,7 @@ from workflows.events import (
     InputRequiredEvent,
     HumanResponseEvent,
 )
-from workflows.decorators import StepConfig
+from workflows.decorators import StepConfig, StepFunction
 from workflows.protocol import (
     WorkflowGraphEdge,
     WorkflowGraphNode,
@@ -79,7 +79,7 @@ def _extract_workflow_structure(
 ) -> DrawWorkflowGraph:
     """Extract workflow structure into an intermediate representation."""
     # Get workflow steps
-    steps = get_steps_from_class(workflow)
+    steps: dict[str, StepFunction] = get_steps_from_class(workflow)
     if not steps:
         steps = get_steps_from_instance(workflow)
 
@@ -93,9 +93,7 @@ def _extract_workflow_structure(
     # Assuming that `Workflow` is validated before drawing, it's enough to find the first one.
     current_stop_event = None
     for step_name, step_func in steps.items():
-        step_config = getattr(step_func, "__step_config", None)
-        if step_config is None:
-            continue
+        step_config = step_func._step_config
 
         for return_type in step_config.return_types:
             if issubclass(return_type, StopEvent):
@@ -107,9 +105,7 @@ def _extract_workflow_structure(
 
     # First pass: Add all nodes
     for step_name, step_func in steps.items():
-        step_config = getattr(step_func, "__step_config", None)
-        if step_config is None:
-            continue
+        step_config = step_func._step_config
 
         # Add step node
         step_label = (
@@ -206,9 +202,7 @@ def _extract_workflow_structure(
 
     # Second pass: Add edges
     for step_name, step_func in steps.items():
-        step_config = getattr(step_func, "__step_config", None)
-        if step_config is None:
-            continue
+        step_config = step_func._step_config
 
         # Edges from steps to return types
         for return_type in step_config.return_types:
