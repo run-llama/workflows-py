@@ -42,6 +42,7 @@ async def test__workflow_handler_to_dict_json_roundtrip() -> None:
         started_at=now,
         updated_at=now,
         completed_at=now,
+        handler_metadata={"test": "metadata"},
     )
 
     d = wrapper.to_dict()

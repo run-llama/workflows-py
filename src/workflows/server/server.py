@@ -61,6 +61,7 @@ class HandlerDict(TypedDict):
     started_at: str
     updated_at: str | None
     completed_at: str | None
+    handler_metadata: dict[str, Any] | None
 
 
 class WorkflowServer:
@@ -73,7 +74,6 @@ class WorkflowServer:
         persistence_backoff: list[float] = [0.5, 3],
     ):
         self._workflows: dict[str, Workflow] = {}
-        self._contexts: dict[str, Context] = {}
         self._handlers: dict[str, _WorkflowHandler] = {}
         self._results: dict[str, StopEvent] = {}
         self._workflow_store = workflow_store
@@ -197,7 +197,7 @@ class WorkflowServer:
                 continue
 
             self._run_workflow_handler(
-                persistent.handler_id, persistent.workflow_name, handler
+                persistent.handler_id, persistent.workflow_name, handler, None
             )
         return self
 
@@ -377,6 +377,9 @@ class WorkflowServer:
                   handler_id:
                     type: string
                     description: Workflow handler identifier to continue from a previous completed run.
+                  handler_metadata:
+                    type: object
+                    description: Optional metadata to attach to the handler. If handler_id is provided, this metadata will overwrite existing metadata.
                   kwargs:
                     type: object
                     description: Additional keyword arguments for the workflow.
@@ -395,9 +398,12 @@ class WorkflowServer:
             description: Error running workflow or invalid request body
         """
         workflow = self._extract_workflow(request)
-        context, start_event, handler_id = await self._extract_run_params(
-            request, workflow.workflow, workflow.name
-        )
+        (
+            context,
+            start_event,
+            handler_id,
+            handler_metadata,
+        ) = await self._extract_run_params(request, workflow.workflow, workflow.name)
 
         if start_event is not None:
             input_ev = workflow.workflow.start_event_class.model_validate(start_event)
@@ -409,7 +415,9 @@ class WorkflowServer:
                 ctx=context,
                 start_event=input_ev,
             )
-            wrapper = self._run_workflow_handler(handler_id, workflow.name, handler)
+            wrapper = self._run_workflow_handler(
+                handler_id, workflow.name, handler, handler_metadata
+            )
             await handler
             return JSONResponse(wrapper.to_dict())
         except Exception as e:
@@ -554,9 +562,12 @@ class WorkflowServer:
             description: Workflow or handler identifier not found
         """
         workflow = self._extract_workflow(request)
-        context, start_event, handler_id = await self._extract_run_params(
-            request, workflow.workflow, workflow.name
-        )
+        (
+            context,
+            start_event,
+            handler_id,
+            handler_metadata,
+        ) = await self._extract_run_params(request, workflow.workflow, workflow.name)
 
         if start_event is not None:
             input_ev = workflow.workflow.start_event_class.model_validate(start_event)
@@ -571,6 +582,7 @@ class WorkflowServer:
             handler_id,
             workflow.name,
             handler,
+            handler_metadata,
         )
         return JSONResponse(wrapper.to_dict())
 
@@ -748,7 +760,29 @@ class WorkflowServer:
         """
         ---
         summary: Get handlers
-        description: Returns all workflow handlers.
+        description: Returns all workflow handlers with optional filtering.
+        parameters:
+          - in: query
+            name: status
+            schema:
+              type: string
+              enum: [running, completed, failed, cancelled]
+            description: Filter by handler status
+          - in: query
+            name: metadata_exact
+            schema:
+              type: string
+            description: JSON object for exact metadata field matching
+          - in: query
+            name: metadata_has_keys
+            schema:
+              type: string
+            description: Comma-separated list of required metadata keys
+          - in: query
+            name: metadata_contains
+            schema:
+              type: string
+            description: JSON object for case-insensitive substring matching on string metadata values
         responses:
           200:
             description: List of handlers
@@ -756,8 +790,99 @@ class WorkflowServer:
               application/json:
                 schema:
                   $ref: '#/components/schemas/HandlersList'
+          400:
+            description: Invalid query parameters
         """
-        items = [wrapper.to_dict() for wrapper in self._handlers.values()]
+        # Get query parameters
+        query_params = request.query_params
+        status_filter = query_params.get("status")
+        metadata_exact_str = query_params.get("metadata_exact")
+        metadata_has_keys_str = query_params.get("metadata_has_keys")
+        metadata_contains_str = query_params.get("metadata_contains")
+
+        # Parse JSON parameters
+        metadata_exact = None
+        if metadata_exact_str:
+            try:
+                metadata_exact = json.loads(metadata_exact_str)
+                if not isinstance(metadata_exact, dict):
+                    raise HTTPException(
+                        detail="metadata_exact must be a JSON object",
+                        status_code=400,
+                    )
+            except json.JSONDecodeError:
+                raise HTTPException(
+                    detail="Invalid JSON in metadata_exact parameter",
+                    status_code=400,
+                )
+
+        metadata_contains = None
+        if metadata_contains_str:
+            try:
+                metadata_contains = json.loads(metadata_contains_str)
+                if not isinstance(metadata_contains, dict):
+                    raise HTTPException(
+                        detail="metadata_contains must be a JSON object",
+                        status_code=400,
+                    )
+            except json.JSONDecodeError:
+                raise HTTPException(
+                    detail="Invalid JSON in metadata_contains parameter",
+                    status_code=400,
+                )
+
+        metadata_has_keys = None
+        if metadata_has_keys_str:
+            metadata_has_keys = [
+                key.strip() for key in metadata_has_keys_str.split(",")
+            ]
+
+        # Filter handlers
+        items = []
+        for wrapper in self._handlers.values():
+            # Apply status filter
+            if status_filter and wrapper.status != status_filter:
+                continue
+
+            # Apply metadata_exact filter
+            if metadata_exact is not None:
+                handler_metadata = wrapper.handler_metadata or {}
+                matches = all(
+                    handler_metadata.get(key) == value
+                    for key, value in metadata_exact.items()
+                )
+                if not matches:
+                    continue
+
+            # Apply metadata_has_keys filter
+            if metadata_has_keys is not None:
+                handler_metadata = wrapper.handler_metadata or {}
+                has_all_keys = all(key in handler_metadata for key in metadata_has_keys)
+                if not has_all_keys:
+                    continue
+
+            # Apply metadata_contains filter
+            if metadata_contains is not None:
+                handler_metadata = wrapper.handler_metadata or {}
+                matches = True
+                for key, search_value in metadata_contains.items():
+                    if key not in handler_metadata:
+                        matches = False
+                        break
+                    handler_value = handler_metadata[key]
+                    if not isinstance(handler_value, str) or not isinstance(
+                        search_value, str
+                    ):
+                        matches = False
+                        break
+                    if search_value.lower() not in handler_value.lower():
+                        matches = False
+                        break
+                if not matches:
+                    continue
+
+            items.append(wrapper.to_dict())
+
         return JSONResponse({"handlers": items})
 
     async def _post_event(self, request: Request) -> JSONResponse:
@@ -948,13 +1073,25 @@ class WorkflowServer:
 
     async def _extract_run_params(
         self, request: Request, workflow: Workflow, workflow_name: str
-    ) -> tuple[Context | None, StartEvent | None, str]:
+    ) -> tuple[Context | None, StartEvent | None, str, dict | None]:
         try:
             body = await request.json()
             context_data = body.get("context")
             run_kwargs = body.get("kwargs", {})
             start_event_data = body.get("start_event", run_kwargs)
             handler_id = body.get("handler_id")
+            handler_metadata = body.get("handler_metadata")
+
+            # Convert handler_metadata to dict if it's a string
+            if handler_metadata is not None:
+                if isinstance(handler_metadata, str):
+                    handler_metadata = json.loads(handler_metadata)
+
+                if not isinstance(handler_metadata, dict):
+                    raise HTTPException(
+                        detail=f"Invalid handler_metadata: should be a dict, but got {type(handler_metadata)}",
+                        status_code=400,
+                    )
 
             # Extract custom StartEvent if present
             start_event = None
@@ -1001,7 +1138,7 @@ class WorkflowServer:
                 context = Context.from_dict(workflow, persisted_handlers[0].ctx)
 
             handler_id = handler_id or nanoid()
-            return (context, start_event, handler_id)
+            return (context, start_event, handler_id, handler_metadata)
 
         except HTTPException:
             # Re-raise HTTPExceptions as-is (like start_event validation errors)
@@ -1012,7 +1149,11 @@ class WorkflowServer:
             )
 
     def _run_workflow_handler(
-        self, handler_id: str, workflow_name: str, handler: WorkflowHandler
+        self,
+        handler_id: str,
+        workflow_name: str,
+        handler: WorkflowHandler,
+        handler_metadata: dict[str, Any] | None = None,
     ) -> _WorkflowHandler:
         """
         Streams events from the handler, persisting them, and pushing them to a queue.
@@ -1087,6 +1228,7 @@ class WorkflowServer:
         task = asyncio.create_task(_stream_events(handler))
         wrapper = _WorkflowHandler(
             run_handler=handler,
+            handler_metadata=handler_metadata,
             queue=queue,
             task=task,
             consumer_mutex=asyncio.Lock(),
@@ -1150,10 +1292,12 @@ class _WorkflowHandler:
     started_at: datetime
     updated_at: datetime
     completed_at: datetime | None
+    handler_metadata: dict[str, Any] | None
 
     def to_dict(self) -> HandlerDict:
         return HandlerDict(
             handler_id=self.handler_id,
+            handler_metadata=self.handler_metadata,
             workflow_name=self.workflow_name,
             run_id=self.run_handler.run_id,
             status=self.status,
