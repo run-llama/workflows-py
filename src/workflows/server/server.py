@@ -73,6 +73,7 @@ class WorkflowServer:
         persistence_backoff: list[float] = [0.5, 3],
     ):
         self._workflows: dict[str, Workflow] = {}
+        self._additional_events: dict[str, list[type[Event]] | None] = {}
         self._contexts: dict[str, Context] = {}
         self._handlers: dict[str, _WorkflowHandler] = {}
         self._results: dict[str, StopEvent] = {}
@@ -147,6 +148,11 @@ class WorkflowServer:
                 self._get_workflow_representation,
                 methods=["GET"],
             ),
+            Route(
+                "/workflows/{name}/events",
+                self._list_workflow_events,
+                methods=["GET"],
+            ),
         ]
 
         @asynccontextmanager
@@ -164,8 +170,15 @@ class WorkflowServer:
             "/", app=StaticFiles(directory=self._assets_path, html=True), name="ui"
         )
 
-    def add_workflow(self, name: str, workflow: Workflow) -> None:
+    def add_workflow(
+        self,
+        name: str,
+        workflow: Workflow,
+        additional_events: list[type[Event]] | None = None,
+    ) -> None:
         self._workflows[name] = workflow
+        if additional_events is not None:
+            self._additional_events[name] = additional_events
 
     async def start(self) -> "WorkflowServer":
         """Resumes previously running workflows, if they were not complete at last shutdown"""
@@ -345,6 +358,55 @@ class WorkflowServer:
         """
         workflow_names = list(self._workflows.keys())
         return JSONResponse({"workflows": workflow_names})
+
+    async def _list_workflow_events(self, request: Request) -> JSONResponse:
+        """
+        ---
+        summary: List workflow events
+        description: Returns the list of registered workflow event schemas.
+        parameters:
+          - name: workflow_name
+            in: query
+            description: Name of the workflow to list events for
+            required: true
+            schema:
+              type: string
+        responses:
+          200:
+            description: List of workflow event schemas
+            content:
+              application/json:
+                schema:
+                  type: object
+                  properties:
+                    events:
+                      type: array
+                      items:
+                        type: object
+                        properties:
+                          name:
+                            type: string
+                          schema:
+                            type: object
+                        required: [name, schema]
+                  required: [events]
+        """
+        if "name" not in request.path_params:
+            raise HTTPException(status_code=400, detail="name param is required")
+
+        name = request.path_params["name"]
+        if name not in self._workflows:
+            raise HTTPException(status_code=404, detail=f"Workflow '{name}' not found")
+
+        events = self._workflows[name].events
+        additional_events = self._additional_events.get(name, [])
+        if additional_events:
+            events.extend(additional_events)
+        event_objs = []
+        for event in events:
+            event_objs.append(event.model_json_schema())
+
+        return JSONResponse({"events": event_objs})
 
     async def _run_workflow(self, request: Request) -> JSONResponse:
         """
