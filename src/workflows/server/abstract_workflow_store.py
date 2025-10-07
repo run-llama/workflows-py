@@ -2,7 +2,7 @@ from __future__ import annotations
 from abc import abstractmethod, ABC
 from typing import Literal, Optional, List, Any
 from dataclasses import dataclass
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 Status = Literal["running", "completed", "failed", "cancelled"]
@@ -23,6 +23,7 @@ class PersistentHandler(BaseModel):
     workflow_name: str
     status: Status
     ctx: dict[str, Any]
+    handler_metadata_json: str | None = Field(default=None)
 
 
 class AbstractWorkflowStore(ABC):

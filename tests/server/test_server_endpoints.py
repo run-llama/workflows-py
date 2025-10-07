@@ -832,7 +832,10 @@ async def test_post_event_missing_event_data(client: AsyncClient) -> None:
 @pytest.mark.asyncio
 async def test_handler_datetime_fields_progress(client: AsyncClient) -> None:
     # Start interactive workflow which waits for an external event
-    response = await client.post("/workflows/interactive/run-nowait", json={})
+    response = await client.post(
+        "/workflows/interactive/run-nowait",
+        json={"handler_metadata": {"name": "test_handler"}},
+    )
     assert response.status_code == 200
     handler_id = response.json()["handler_id"]
 
@@ -845,6 +848,7 @@ async def test_handler_datetime_fields_progress(client: AsyncClient) -> None:
     updated_at_1 = datetime.fromisoformat(item["updated_at"])  # ISO 8601
     assert started_at_1 <= updated_at_1
     assert item["completed_at"] is None
+    assert item["handler_metadata"]["name"] == "test_handler"
 
     # Send an external event to progress the workflow and update timestamps
     await asyncio.sleep(0.01)

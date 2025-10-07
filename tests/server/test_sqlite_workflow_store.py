@@ -16,6 +16,7 @@ async def test_update_and_query_returns_inserted_handler(tmp_path: Path) -> None
         workflow_name="wf_a",
         status="running",
         ctx={"state": {"x": 1, "y": [1, 2, 3]}},
+        handler_metadata_json='{"key1": "value", "key2": 2}',
     )
 
     await store.update(handler)
@@ -31,6 +32,7 @@ async def test_update_and_query_returns_inserted_handler(tmp_path: Path) -> None
     assert found.workflow_name == "wf_a"
     assert found.status == "running"
     assert found.ctx == {"state": {"x": 1, "y": [1, 2, 3]}}
+    assert found.handler_metadata_json == '{"key1": "value", "key2": 2}'
 
 
 @pytest.mark.asyncio
