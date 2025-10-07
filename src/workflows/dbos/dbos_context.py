@@ -66,7 +66,6 @@ class DBOSContext(Context[MODEL_T]):
 
             self.dbos_wrapped_step_workers[step_name] = wrapped_step_worker
 
-    # TODO: it's better to make this method async...
     @override
     def add_step_worker(
         self,
@@ -107,6 +106,7 @@ class DBOSContext(Context[MODEL_T]):
                 )
             )
 
+    # TODO (Qian): some code needs to be deterministic and durable, like sleep() and time.time() should be DBOS step. Event receiving needs to be durable too.
     async def _internal_step_worker(
         self,
         name: str,
@@ -277,25 +277,3 @@ class DBOSContext(Context[MODEL_T]):
                 self.write_event_to_stream(new_ev)
             elif new_ev is not None:
                 self.send_event(new_ev)
-
-    @override
-    async def _step_worker(
-        self,
-        name: str,
-        step: Callable,
-        config: StepConfig,
-        verbose: bool,
-        run_id: str,
-        worker_id: str,
-        resource_manager: ResourceManager,
-    ) -> None:
-        # Note: step might not be serializable so cannot be passed to DBOS workflow directly
-        print(f"Submitting DBOS step worker for step: {name}")
-        await self.dbos_wrapped_step_workers[name](
-            name,
-            config,
-            verbose,
-            run_id,
-            worker_id,
-            resource_manager,
-        )

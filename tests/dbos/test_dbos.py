@@ -26,8 +26,8 @@ from workflows.events import (
     StopEvent,
 )
 from workflows.testing import WorkflowTestRunner
-from workflows.workflow import Workflow
 from workflows.dbos.dbos_context import DBOSContext
+from workflows.dbos.dbos_workflow import DBOSWorkflow
 
 from ..conftest import AnotherTestEvent, OneTestEvent
 
@@ -67,7 +67,7 @@ async def test_collect_events(dbos: DBOS) -> None:
     ev1 = OneTestEvent()
     ev2 = AnotherTestEvent()
 
-    class TestWorkflow(Workflow):
+    class TestWorkflow(DBOSWorkflow):
         @step(num_workers=1)
         async def step1(self, _: StartEvent) -> OneTestEvent:
             return ev1
