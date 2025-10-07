@@ -792,5 +792,5 @@ def test_get_workflow_events() -> None:
     events = DummyWorkflow().events
     assert len(events) == 2
     event_names = [e.__name__ for e in events]
-    assert "Mystop" in event_names
+    assert "MyStop" in event_names
     assert "MyStart" in event_names
