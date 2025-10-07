@@ -240,6 +240,41 @@ async def test_run_workflow_nowait_invalid_start_event(
 
 
 @pytest.mark.asyncio
+async def test_structured_start_event_empty_object_validated(
+    client: AsyncClient,
+    server: WorkflowServer,
+    structured_start_workflow: Workflow,
+) -> None:
+    # Register workflow with required StartEvent fields
+    server.add_workflow("structured", structured_start_workflow)
+
+    # Empty object should be validated and rejected with 400
+    response = await client.post(
+        "/workflows/structured/run",
+        json={"start_event": {}},
+    )
+    assert response.status_code == 400
+    assert "Validation error for 'start_event'" in response.text
+
+
+@pytest.mark.asyncio
+async def test_structured_start_event_missing_value_treated_as_empty_and_validated(
+    client: AsyncClient,
+    server: WorkflowServer,
+    structured_start_workflow: Workflow,
+) -> None:
+    # Register workflow with required StartEvent fields
+    server.add_workflow("structured", structured_start_workflow)
+
+    response = await client.post(
+        "/workflows/structured/run",
+        json={},  # testing no start_event whatsoever
+    )
+    assert response.status_code == 400
+    assert "Validation error for 'start_event'" in response.text
+
+
+@pytest.mark.asyncio
 async def test_run_workflow_with_start_event_and_kwargs(
     client: AsyncClient,
 ) -> None:

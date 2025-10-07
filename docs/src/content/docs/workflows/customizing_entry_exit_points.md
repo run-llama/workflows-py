@@ -1,4 +1,6 @@
-# Customizing entry and exit points
+---
+title: Customizing entry and exit points
+---
 
 Most of the times, relying on the default entry and exit points we have seen in the [Getting Started] section is enough.
 However, workflows support custom events where you normally would expect `StartEvent` and `StopEvent`, let's see how.

@@ -1,4 +1,6 @@
-# Introduction
+---
+title: Introduction
+---
 
 A `Workflow` in LlamaIndex is an event-driven abstraction used to chain together several events. Workflows are made up
 of `steps`, with each step responsible for handling certain event types and emitting new events.

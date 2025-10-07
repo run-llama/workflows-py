@@ -1,4 +1,6 @@
-# Resource Objects
+---
+title: Resource Objects
+---
 
 Resources are external dependencies you can inject into the steps of a workflow.
 
