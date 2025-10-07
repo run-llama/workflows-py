@@ -1136,6 +1136,13 @@ class WorkflowServer:
                     raise HTTPException(detail="Handler not found", status_code=404)
 
                 context = Context.from_dict(workflow, persisted_handlers[0].ctx)
+                if (
+                    handler_metadata is None
+                    and persisted_handlers[0].handler_metadata_json
+                ):
+                    handler_metadata = json.loads(
+                        persisted_handlers[0].handler_metadata_json
+                    )
 
             handler_id = handler_id or nanoid()
             return (context, start_event, handler_id, handler_metadata)
