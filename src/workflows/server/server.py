@@ -402,6 +402,7 @@ class WorkflowServer:
         additional_events = self._additional_events.get(name, [])
         if additional_events:
             events.extend(additional_events)
+
         event_objs = []
         for event in events:
             event_objs.append(event.model_json_schema())
