@@ -7,6 +7,7 @@ import base64
 import json
 import pickle
 from abc import ABC, abstractmethod
+from datetime import datetime, timezone
 from typing import Any
 
 from pydantic import BaseModel
@@ -88,6 +89,7 @@ class JsonSerializer(BaseSerializer):
                 "__is_pydantic": True,
                 "value": value.model_dump(mode="json"),
                 "qualified_name": get_qualified_name(value),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
             }
 
         if isinstance(value, dict):
