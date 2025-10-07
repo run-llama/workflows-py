@@ -16,7 +16,7 @@ class SqliteWorkflowStore(AbstractWorkflowStore):
     def _init_db(self) -> None:
         conn = sqlite3.connect(self.db_path)
         conn.execute(
-            "CREATE TABLE IF NOT EXISTS handlers (handler_id TEXT PRIMARY KEY, workflow_name TEXT, status TEXT, ctx TEXT)"
+            "CREATE TABLE IF NOT EXISTS handlers (handler_id TEXT PRIMARY KEY, workflow_name TEXT, status TEXT, ctx TEXT, handler_metadata_json TEXT)"
         )
         conn.commit()
         conn.close()
@@ -27,7 +27,7 @@ class SqliteWorkflowStore(AbstractWorkflowStore):
             return []
 
         clauses, params = filter_spec
-        sql = "SELECT handler_id, workflow_name, status, ctx FROM handlers"
+        sql = "SELECT handler_id, workflow_name, status, ctx, handler_metadata_json FROM handlers"
         if clauses:
             sql = f"{sql} WHERE {' AND '.join(clauses)}"
         conn = sqlite3.connect(self.db_path)
@@ -43,22 +43,43 @@ class SqliteWorkflowStore(AbstractWorkflowStore):
     async def update(self, handler: PersistentHandler) -> None:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
-        cursor.execute(
-            """
-            INSERT INTO handlers (handler_id, workflow_name, status, ctx)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(handler_id) DO UPDATE SET
-                workflow_name = excluded.workflow_name,
-                status = excluded.status,
-                ctx = excluded.ctx
-            """,
-            (
-                handler.handler_id,
-                handler.workflow_name,
-                handler.status,
-                json.dumps(handler.ctx),
-            ),
-        )
+
+        if handler.handler_metadata_json is not None:
+            cursor.execute(
+                """
+                INSERT INTO handlers (handler_id, workflow_name, status, ctx, handler_metadata_json)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(handler_id) DO UPDATE SET
+                    workflow_name = excluded.workflow_name,
+                    status = excluded.status,
+                    ctx = excluded.ctx,
+                    handler_metadata_json = excluded.handler_metadata_json
+                """,
+                (
+                    handler.handler_id,
+                    handler.workflow_name,
+                    handler.status,
+                    json.dumps(handler.ctx),
+                    handler.handler_metadata_json,
+                ),
+            )
+        else:
+            cursor.execute(
+                """
+                INSERT INTO handlers (handler_id, workflow_name, status, ctx)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(handler_id) DO UPDATE SET
+                    workflow_name = excluded.workflow_name,
+                    status = excluded.status,
+                    ctx = excluded.ctx
+                """,
+                (
+                    handler.handler_id,
+                    handler.workflow_name,
+                    handler.status,
+                    json.dumps(handler.ctx),
+                ),
+            )
         conn.commit()
         conn.close()
 
@@ -121,4 +142,5 @@ def _row_to_persistent_handler(row: tuple) -> PersistentHandler:
         workflow_name=row[1],
         status=row[2],
         ctx=json.loads(row[3]),
+        handler_metadata_json=row[4],
     )

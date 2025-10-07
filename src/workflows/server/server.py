@@ -1169,9 +1169,15 @@ class WorkflowServer:
                 backoffs = list(self._persistence_backoff)
                 while True:
                     try:
+                        handler_metadata_str = (
+                            json.dumps(handler_metadata)
+                            if handler_metadata is not None
+                            else None
+                        )
                         await self._workflow_store.update(
                             PersistentHandler(
                                 handler_id=handler_id,
+                                handler_metadata_json=handler_metadata_str,
                                 workflow_name=workflow_name,
                                 status=status,
                                 ctx=ctx,
