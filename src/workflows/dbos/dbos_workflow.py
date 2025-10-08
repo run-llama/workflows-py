@@ -50,7 +50,7 @@ class DBOSWorkflow(Workflow):
         num_concurrent_runs: int | None = None,
     ) -> None:
         """
-        Initialize a workflow instance.
+        Initialize a DBOS workflow instance.
 
         Args:
             timeout (float | None): Max seconds to wait for completion. `None`
@@ -70,7 +70,7 @@ class DBOSWorkflow(Workflow):
             num_concurrent_runs=num_concurrent_runs,
         )
 
-        # TODO (Qian): initialize DBOS specific attributes here
+        # TODO (Qian): add DBOS specific initialization if needed
 
     @override
     @step(num_workers=1)
@@ -83,6 +83,10 @@ class DBOSWorkflow(Workflow):
 
         ctx.write_event_to_stream(ev)
 
+        # Signal all other workers to stop via DBOS durable notification
+        dbos_ctx = cast(DBOSContext, ctx)
+        await dbos_ctx.send_event_async("done")
+
         # Signal we want to stop the workflow. Since we're about to raise, delete
         # the reference to ctx explicitly to avoid it becoming dangling
         del ctx
@@ -94,9 +98,7 @@ class DBOSWorkflow(Workflow):
         ctx: Context | None = None,
     ) -> Tuple[Context, str]:
         """
-        sets up the queues and tasks for each declared step.
-
-        This method also launches each step as an async task.
+        launches each step as a separate DBOS workflow.
         """
         run_id = str(uuid.uuid4())
         # Make sure it's a DBOSContext if provided
@@ -117,11 +119,7 @@ class DBOSWorkflow(Workflow):
             dbos_context._cancel_flag.clear()
 
         for name, step_func in self._get_steps().items():
-            if name not in dbos_context._queues:
-                dbos_context._queues[name] = asyncio.Queue()
-
-            if name not in dbos_context._step_flags:
-                dbos_context._step_flags[name] = asyncio.Event()
+            # DBOS shouldn't need these local queues and flags. Use durable notification instead.
 
             # At this point, step_func is guaranteed to have the `__step_config` attribute
             step_config: StepConfig = getattr(step_func, "__step_config")
@@ -169,11 +167,10 @@ class DBOSWorkflow(Workflow):
             try:
                 if not ctx.is_running:
                     # Send the first event
-                    # TODO (Qian): support durable DBOS start event
                     start_event_instance = self._get_start_event_instance(
                         start_event, **kwargs
                     )
-                    ctx.send_event(start_event_instance)
+                    await ctx.send_event_async(start_event_instance)
 
                     # the context is now running
                     ctx.is_running = True
@@ -206,11 +203,7 @@ class DBOSWorkflow(Workflow):
                         exception_raised = e
                         break
 
-                # Cancel any pending workflows in DBOS
-                for wf_handle in ctx._dbos_wf_handle:
-                    await DBOS.send_async(wf_handle.get_workflow_id(), "done")
-
-                # Make sure the workflows are completed
+                # Make sure all DBOS workflows are completed
                 for wf_handle in ctx._dbos_wf_handle:
                     wf_id = wf_handle.get_workflow_id()
                     wf_handle_async = await DBOS.retrieve_workflow_async(wf_id)

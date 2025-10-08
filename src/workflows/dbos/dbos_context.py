@@ -18,7 +18,13 @@ from workflows.context.serializers import JsonSerializer
 from workflows.context.state_store import MODEL_T, DictState
 from workflows.decorators import StepConfig
 from workflows.errors import WorkflowCancelledByUser, WorkflowDone, WorkflowRuntimeError
-from workflows.events import Event, InputRequiredEvent, StepState, StepStateChanged
+from workflows.events import (
+    Event,
+    InputRequiredEvent,
+    StepState,
+    StepStateChanged,
+    EventsQueueChanged,
+)
 from workflows.resource import ResourceManager
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -38,6 +44,7 @@ class DBOSContext(Context[MODEL_T]):
         self.workflow = workflow
 
         self._dbos_wf_handle: set[WorkflowHandle] = set()
+        self._step_wf_handle_map: dict[str, set[WorkflowHandle]] = {}
         # Register wrapped workflows for sync and async step workers
         step_names = self.workflow._get_steps().keys()
         self.dbos_wrapped_step_workers: dict[str, Callable] = {}
@@ -76,13 +83,13 @@ class DBOSContext(Context[MODEL_T]):
             except asyncio.CancelledError:
                 return
 
-        @DBOS.workflow(name=f"{self.context_name}.cancel.worker")
+        @DBOS.workflow(name=f"{self.context_name}._cancel.worker")
         async def wrapped_cancel_worker() -> None:
             print("DBOS executing cancel worker")
             # Non-blocking wait for the cancel flag to be set
             while True:
                 await _wrapped_cancel_worker()
-                recv_res = await DBOS.recv_async(timeout_seconds=1)
+                recv_res = await DBOS.recv_async(timeout_seconds=3)
                 if recv_res == "done":
                     # Meaning the end of the workflow.
                     print("Cancel worker received termination signal")
@@ -119,6 +126,7 @@ class DBOSContext(Context[MODEL_T]):
                 wf_func, name, config, verbose, run_id, worker_id, resource_manager
             )
             self._dbos_wf_handle.add(wf_handle)
+            self._step_wf_handle_map.setdefault(name, set()).add(wf_handle)
 
     # TODO (Qian): some code needs to be deterministic and durable, like sleep() and time.time() should be DBOS step. Event receiving needs to be durable too.
     async def _internal_step_worker(
@@ -132,27 +140,18 @@ class DBOSContext(Context[MODEL_T]):
         resource_manager: ResourceManager,
     ) -> None:
         while True:
-            # Don't block forever. So we're able to cancel the DBOS workflow
+            # Don't block forever, set recv timeout. So we're able to cancel the DBOS workflow
             ev: Any = None
-            recv_res = await DBOS.recv_async(timeout_seconds=1)
+            recv_res = await DBOS.recv_async(timeout_seconds=3)
             # Try to receive cancellation signal
             if recv_res == "done":
                 # Meaning the end of the workflow.
                 print(f"Step worker {name} received termination signal")
                 return
-            try:
-                # TODO (Qian): use durable send here.
-                ev = self._queues[name].get_nowait()
+            else:
+                ev = recv_res
                 if type(ev) not in config.accepted_events:
                     continue
-            except asyncio.QueueEmpty:
-                recv_res = await DBOS.recv_async(timeout_seconds=1)
-                # Try to receive cancellation signal
-                if recv_res == "done":
-                    # Meaning the end of the workflow.
-                    print(f"Step worker {name} received termination signal")
-                    return
-                continue
 
             if verbose and name != "_done":
                 print(f"Running step {name}")
@@ -308,7 +307,7 @@ class DBOSContext(Context[MODEL_T]):
             if isinstance(new_ev, InputRequiredEvent):
                 self.write_event_to_stream(new_ev)
             elif new_ev is not None:
-                self.send_event(new_ev)
+                await self.send_event_async(new_ev)
 
     @override
     def add_cancel_worker(self) -> None:
@@ -323,6 +322,7 @@ class DBOSContext(Context[MODEL_T]):
         print("Starting DBOS cancel worker")
         wf_handle = DBOS.start_workflow(self.dbos_wrapped_cancel_worker)
         self._dbos_wf_handle.add(wf_handle)
+        self._step_wf_handle_map.setdefault("_cancel", set()).add(wf_handle)
 
     @override
     async def shutdown(self) -> None:
@@ -334,13 +334,84 @@ class DBOSContext(Context[MODEL_T]):
         """
         print("Shutting down DBOSContext")
         self.is_running = False
-        # Cancel all running tasks
-        # for wf_handle in self._dbos_wf_handle:
-        #     DBOS.cancel_workflow(wf_handle.get_workflow_id())
-        # Wait for all tasks to complete
-        # for wf_handle in self._dbos_wf_handle:
-        #     try:
-        #         wf_handle.get_result()
-        #     except Exception:
-        #         pass
         self._dbos_wf_handle.clear()
+
+    @override
+    def send_event(self, message: Event, step: str | None = None) -> None:
+        """Dispatch an event to one or all workflow steps.
+
+        If `step` is omitted, the event is broadcast to all step queues and
+        non-matching steps will ignore it. When `step` is provided, the target
+        step must accept the event type or a
+        [WorkflowRuntimeError][workflows.errors.WorkflowRuntimeError] is raised.
+
+        This method uses DBOS durable notification to send events.
+        """
+        print("DBOSContext sending event")
+        if step is None:
+            # Send through DBOS
+            for name, wf_handles in self._step_wf_handle_map.items():
+                for wf_handle in wf_handles:
+                    DBOS.send(wf_handle.get_workflow_id(), message)
+                    # TODO (Qian): keep a counter of the number of events in the queue?
+                    #  For now, just write size=1
+                    self.write_event_to_stream(EventsQueueChanged(name=name, size=1))
+
+        else:
+            if step not in self._step_configs:
+                raise WorkflowRuntimeError(f"Step {step} does not exist")
+
+            step_config = self._step_configs[step]
+            if step_config and type(message) in step_config.accepted_events:
+                wf_handles = self._step_wf_handle_map.get(step, set())
+                for wf_handle in wf_handles:
+                    DBOS.send(wf_handle.get_workflow_id(), message)
+                # TODO (Qian): keep a counter of the number of events in the queue?
+                self.write_event_to_stream(EventsQueueChanged(name=step, size=1))
+            else:
+                raise WorkflowRuntimeError(
+                    f"Step {step} does not accept event of type {type(message)}"
+                )
+
+        self._broker_log.append(message)
+
+    async def send_event_async(
+        self, message: Event | str, step: str | None = None
+    ) -> None:
+        """Dispatch an event to one or all workflow steps.
+
+        If `step` is omitted, the event is broadcast to all step queues and
+        non-matching steps will ignore it. When `step` is provided, the target
+        step must accept the event type or a
+        [WorkflowRuntimeError][workflows.errors.WorkflowRuntimeError] is raised.
+
+        This method uses DBOS durable notification to send events.
+        """
+        print(f"DBOSContext sending event async: {message}")
+        if step is None:
+            # Send through DBOS
+            for name, wf_handles in self._step_wf_handle_map.items():
+                for wf_handle in wf_handles:
+                    await DBOS.send_async(wf_handle.get_workflow_id(), message)
+                    # TODO (Qian): keep a counter of the number of events in the queue?
+                    #  For now, just write size=1
+                    self.write_event_to_stream(EventsQueueChanged(name=name, size=1))
+
+        else:
+            if step not in self._step_configs:
+                raise WorkflowRuntimeError(f"Step {step} does not exist")
+
+            step_config = self._step_configs[step]
+            if step_config and type(message) in step_config.accepted_events:
+                wf_handles = self._step_wf_handle_map.get(step, set())
+                for wf_handle in wf_handles:
+                    await DBOS.send_async(wf_handle.get_workflow_id(), message)
+                # TODO (Qian): keep a counter of the number of events in the queue?
+                self.write_event_to_stream(EventsQueueChanged(name=step, size=1))
+            else:
+                raise WorkflowRuntimeError(
+                    f"Step {step} does not accept event of type {type(message)}"
+                )
+
+        if isinstance(message, Event):
+            self._broker_log.append(message)

@@ -36,6 +36,8 @@ DBOS_CONFIG: DBOSConfig = {
     "name": "pydantic_dbos_tests",
     "database_url": f"sqlite:///{DBOS_SQLITE_FILE}",
     "system_database_url": f"sqlite:///{DBOS_SQLITE_FILE}",
+    # Use the following for Postgres testing, which is much faster than SQLite.
+    # "system_database_url": "postgresql://postgres:dbos@localhost:5432/llamaindex_test_sys",
     "run_admin_server": False,
 }
 
