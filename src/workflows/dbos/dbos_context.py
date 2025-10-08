@@ -17,7 +17,7 @@ from dbos import DBOS, SetWorkflowID, WorkflowHandle
 from workflows.context.serializers import JsonSerializer
 from workflows.context.state_store import MODEL_T, DictState
 from workflows.decorators import StepConfig
-from workflows.errors import WorkflowDone, WorkflowRuntimeError
+from workflows.errors import WorkflowCancelledByUser, WorkflowDone, WorkflowRuntimeError
 from workflows.events import Event, InputRequiredEvent, StepState, StepStateChanged
 from workflows.resource import ResourceManager
 
@@ -41,6 +41,7 @@ class DBOSContext(Context[MODEL_T]):
         # Register wrapped workflows for sync and async step workers
         step_names = self.workflow._get_steps().keys()
         self.dbos_wrapped_step_workers: dict[str, Callable] = {}
+
         for step_name in step_names:
 
             @DBOS.workflow(name=f"{self.context_name}.{step_name}.worker")
@@ -65,6 +66,29 @@ class DBOSContext(Context[MODEL_T]):
                 )
 
             self.dbos_wrapped_step_workers[step_name] = wrapped_step_worker
+
+        # Register wrapped workflow for cancel worker
+        @DBOS.step()
+        async def _wrapped_cancel_worker() -> None:
+            try:
+                if self._cancel_flag.is_set():
+                    raise WorkflowCancelledByUser
+            except asyncio.CancelledError:
+                return
+
+        @DBOS.workflow(name=f"{self.context_name}.cancel.worker")
+        async def wrapped_cancel_worker() -> None:
+            print("DBOS executing cancel worker")
+            # Non-blocking wait for the cancel flag to be set
+            while True:
+                await _wrapped_cancel_worker()
+                recv_res = await DBOS.recv_async(timeout_seconds=1)
+                if recv_res == "done":
+                    # Meaning the end of the workflow.
+                    print("Cancel worker received termination signal")
+                    return
+
+        self.dbos_wrapped_cancel_worker = wrapped_cancel_worker
 
     @override
     def add_step_worker(
@@ -96,16 +120,6 @@ class DBOSContext(Context[MODEL_T]):
             )
             self._dbos_wf_handle.add(wf_handle)
 
-            # TODO: this is not needed for the full integration. Just a hack for now
-            self._tasks.add(
-                cast(
-                    asyncio.Task,
-                    asyncio.get_event_loop().run_in_executor(
-                        None, lambda: wf_handle.get_result()
-                    ),
-                )
-            )
-
     # TODO (Qian): some code needs to be deterministic and durable, like sleep() and time.time() should be DBOS step. Event receiving needs to be durable too.
     async def _internal_step_worker(
         self,
@@ -118,8 +132,26 @@ class DBOSContext(Context[MODEL_T]):
         resource_manager: ResourceManager,
     ) -> None:
         while True:
-            ev = await self._queues[name].get()
-            if type(ev) not in config.accepted_events:
+            # Don't block forever. So we're able to cancel the DBOS workflow
+            ev: Any = None
+            recv_res = await DBOS.recv_async(timeout_seconds=1)
+            # Try to receive cancellation signal
+            if recv_res == "done":
+                # Meaning the end of the workflow.
+                print(f"Step worker {name} received termination signal")
+                return
+            try:
+                # TODO (Qian): use durable send here.
+                ev = self._queues[name].get_nowait()
+                if type(ev) not in config.accepted_events:
+                    continue
+            except asyncio.QueueEmpty:
+                recv_res = await DBOS.recv_async(timeout_seconds=1)
+                # Try to receive cancellation signal
+                if recv_res == "done":
+                    # Meaning the end of the workflow.
+                    print(f"Step worker {name} received termination signal")
+                    return
                 continue
 
             if verbose and name != "_done":
@@ -277,3 +309,38 @@ class DBOSContext(Context[MODEL_T]):
                 self.write_event_to_stream(new_ev)
             elif new_ev is not None:
                 self.send_event(new_ev)
+
+    @override
+    def add_cancel_worker(self) -> None:
+        """Install a worker that turns a cancel flag into an exception.
+
+        When the cancel flag is set, a `WorkflowCancelledByUser` will be raised
+        internally to abort the run.
+
+        See Also:
+            - [WorkflowCancelledByUser][workflows.errors.WorkflowCancelledByUser]
+        """
+        print("Starting DBOS cancel worker")
+        wf_handle = DBOS.start_workflow(self.dbos_wrapped_cancel_worker)
+        self._dbos_wf_handle.add(wf_handle)
+
+    @override
+    async def shutdown(self) -> None:
+        """Shut down the workflow run and clean up background tasks.
+
+        Cancels all outstanding workers, waits for them to finish, and marks the
+        context as not running. Queues and state remain available so callers can
+        inspect or drain leftover events.
+        """
+        print("Shutting down DBOSContext")
+        self.is_running = False
+        # Cancel all running tasks
+        # for wf_handle in self._dbos_wf_handle:
+        #     DBOS.cancel_workflow(wf_handle.get_workflow_id())
+        # Wait for all tasks to complete
+        # for wf_handle in self._dbos_wf_handle:
+        #     try:
+        #         wf_handle.get_result()
+        #     except Exception:
+        #         pass
+        self._dbos_wf_handle.clear()

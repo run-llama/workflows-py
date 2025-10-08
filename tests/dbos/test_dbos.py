@@ -94,9 +94,11 @@ async def test_collect_events(dbos: DBOS) -> None:
 
     # Make sure the workflow is stored in DBOS.
     wf_list = dbos.list_workflows()
-    # 3 + 1 _done steps -> four DBOS workflows.
-    assert len(wf_list) == 4
+    # 3 steps + 1 _done step + 1 cancel step + 5 send signals -> 10 DBOS workflows.
+    assert len(wf_list) == 10
     for wf in wf_list:
         print(
             f"Workflow in DBOS: {wf.workflow_id} with status {wf.status}, name {wf.name}"
         )
+        # the _done workflow is ERROR because it raises a WorkflowDone exception to terminate.
+        assert wf.status in ["SUCCESS", "ERROR"]
