@@ -904,7 +904,11 @@ class WorkflowServer:
             serializer = JsonSerializer()
             try:
                 event_data = serializer.deserialize(event_str)
-                if isinstance(event_data, dict):
+                if (
+                    isinstance(event_data, dict)
+                    and "type" in event_data
+                    and "data" in event_data
+                ):
                     event_title = event_data["type"]
                     event = events_by_title[event_title].model_validate(
                         event_data["data"]
