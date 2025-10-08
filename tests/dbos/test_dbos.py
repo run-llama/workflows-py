@@ -89,13 +89,13 @@ async def test_collect_events(dbos: DBOS) -> None:
             return StopEvent(result=events)
 
     test_workflow = TestWorkflow()
-    # For failure recovery, DBOS context should be defined statically so that the recovery process can find it.
+    # For failure recovery, DBOS context should be defined statically (not in a dynamic function) so that the recovery process can find it.
     dbos_ctx: DBOSContext[DictState] = DBOSContext(test_workflow, "test_collect_events")
     r = await WorkflowTestRunner(test_workflow).run(ctx=dbos_ctx)
     assert r.result == [ev1, ev2]
 
-    # Make sure the workflow is stored in DBOS.
-    wf_list = dbos.list_workflows()
+    # Make sure the workflows are stored in DBOS.
+    wf_list = await dbos.list_workflows_async()
     # 3 steps + 1 _done step + 1 cancel step + 5 send signals -> 10 DBOS workflows.
     assert len(wf_list) == 10
     for wf in wf_list:
@@ -104,3 +104,9 @@ async def test_collect_events(dbos: DBOS) -> None:
         )
         # the _done workflow is ERROR because it raises a WorkflowDone exception to terminate.
         assert wf.status in ["SUCCESS", "ERROR"]
+
+        wf_steps = await DBOS.list_workflow_steps_async(wf.workflow_id)
+        for db_step in wf_steps:
+            print(
+                f"  Step in DBOS: {db_step['function_id']} with name {db_step['function_name']}"
+            )
