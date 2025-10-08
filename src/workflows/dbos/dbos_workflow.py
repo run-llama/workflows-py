@@ -30,8 +30,6 @@ from workflows.handler import WorkflowHandler
 
 from dbos import (
     DBOS,
-    WorkflowHandle,
-    error as dbos_error,
 )
 
 dispatcher = get_dispatcher(__name__)
@@ -113,7 +111,6 @@ class DBOSWorkflow(Workflow):
             self._contexts.add(dbos_context)
         else:
             # clean up the context from the previous run
-            dbos_context._tasks = set()
             dbos_context._retval = None
             dbos_context._step_events_holding = None
             dbos_context._cancel_flag.clear()
@@ -175,18 +172,12 @@ class DBOSWorkflow(Workflow):
                     # the context is now running
                     ctx.is_running = True
 
-                def wait_for_completion(wf_handle: WorkflowHandle) -> None:
-                    try:
-                        wf_handle.get_result()
-                    except dbos_error.DBOSAwaitedWorkflowCancelledError:
-                        return
-
-                wait_tasks: set[asyncio.Future] = set()
-                for wf_handle in ctx._dbos_wf_handle:
-                    wait_task = asyncio.get_event_loop().run_in_executor(
-                        None, wait_for_completion, wf_handle
-                    )
-                    wait_tasks.add(wait_task)
+                # Wait for all DBOS workflows to complete or throw an exception
+                loop = asyncio.get_event_loop()
+                wait_tasks = {
+                    loop.run_in_executor(None, wf_handle.get_result)
+                    for wf_handle in ctx._dbos_wf_handle
+                }
                 done, _ = await asyncio.wait(
                     wait_tasks,
                     timeout=self._timeout,
