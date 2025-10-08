@@ -913,7 +913,7 @@ class WorkflowServer:
                     event = event_data
                 else:
                     raise ValueError(
-                        "Invalid event data. Should be a dictionary of {'title': 'event_title', 'data': {...}} or a serialized event"
+                        "Invalid event data. Should be a dictionary of {'type': 'event_type', 'data': {...}} or a serialized event"
                     )
             except Exception as e:
                 raise HTTPException(
