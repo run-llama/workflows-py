@@ -31,6 +31,11 @@ if TYPE_CHECKING:  # pragma: no cover
     from workflows import Workflow
 
 
+@DBOS.step()
+async def _durable_time() -> float:
+    return time.time()
+
+
 class DBOSContext(Context[MODEL_T]):
     """
     DBOS Context class for durable workflows.
@@ -128,7 +133,6 @@ class DBOSContext(Context[MODEL_T]):
             self._dbos_wf_handle.add(wf_handle)
             self._step_wf_handle_map.setdefault(name, set()).add(wf_handle)
 
-    # TODO (Qian): some code needs to be deterministic and durable, like sleep() and time.time() should be DBOS step. Event receiving needs to be durable too.
     async def _internal_step_worker(
         self,
         name: str,
@@ -203,7 +207,7 @@ class DBOSContext(Context[MODEL_T]):
                 )
             )
             if asyncio.iscoroutinefunction(step):
-                retry_start_at = time.time()
+                retry_start_at = await _durable_time()
                 attempts = 0
                 while True:
                     await self.mark_in_progress(name=name, ev=ev, worker_id=worker_id)
@@ -230,8 +234,9 @@ class DBOSContext(Context[MODEL_T]):
                         if config.retry_policy is None:
                             raise
 
+                        curr_time = await _durable_time()
                         delay = config.retry_policy.next(
-                            retry_start_at + time.time(), attempts, e
+                            retry_start_at + curr_time, attempts, e
                         )
                         if delay is None:
                             raise
@@ -241,7 +246,7 @@ class DBOSContext(Context[MODEL_T]):
                             print(
                                 f"Step {name} produced an error, retry in {delay} seconds"
                             )
-                        await asyncio.sleep(delay)
+                        await DBOS.sleep_async(delay)
                     finally:
                         await self.remove_running_step(name)
                         self.write_event_to_stream(
