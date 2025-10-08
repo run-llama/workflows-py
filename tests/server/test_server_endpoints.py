@@ -712,6 +712,31 @@ async def test_post_event_to_running_workflow(client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
+async def test_post_event_simple_schema_to_running_workflow(
+    client: AsyncClient,
+) -> None:
+    # Start an interactive workflow
+    response = await client.post("/workflows/interactive/run-nowait", json={})
+    assert response.status_code == 200
+    handler_id = response.json()["handler_id"]
+
+    # Wait a bit for workflow to start
+    await asyncio.sleep(0.1)
+
+    # Send the event
+    event_str = '{"type": "ExternalEvent", "data": {"response": "Hello from test"}}'
+    response = await client.post(f"/events/{handler_id}", json={"event": event_str})
+    assert response.status_code == 200
+    assert response.json() == {"status": "sent"}
+
+    result = await wait_for_passing(
+        lambda: validate_result_response(handler_id, client)
+    )
+
+    assert result["result"] == "received: Hello from test"
+
+
+@pytest.mark.asyncio
 async def test_get_workflow_result_returns_202_when_pending(
     client: AsyncClient,
 ) -> None:
@@ -787,7 +812,9 @@ async def test_post_event_context_not_available(
     client: AsyncClient, server: WorkflowServer
 ) -> None:
     # Dumb test for code coverage. Inject a dummy handler with no context to trigger 500 path
-    wrapper = SimpleNamespace(run_handler=SimpleNamespace(done=lambda: False, ctx=None))
+    wrapper = SimpleNamespace(
+        run_handler=SimpleNamespace(done=lambda: False, ctx=None), workflow_name="test"
+    )
 
     handler_id = "noctx-1"
     server._handlers[handler_id] = wrapper  # type: ignore[assignment]

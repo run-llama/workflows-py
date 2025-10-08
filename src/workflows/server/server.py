@@ -845,6 +845,8 @@ class WorkflowServer:
                   event:
                     type: string
                     description: Serialized event in JSON format.
+                    examples:
+                        {"type": "event_name", "data": {"key": "value"}}
                   step:
                     type: string
                     description: Optional target step name. If not provided, event is sent to all steps.
@@ -876,6 +878,10 @@ class WorkflowServer:
             raise HTTPException(detail="Handler not found", status_code=404)
 
         handler = wrapper.run_handler
+        events_by_title = {
+            e.__name__: e for e in self._workflows[wrapper.workflow_name].events
+        }
+
         # Check if workflow is still running
         if handler.done():
             raise HTTPException(detail="Workflow already completed", status_code=409)
@@ -897,7 +903,18 @@ class WorkflowServer:
             # Deserialize the event
             serializer = JsonSerializer()
             try:
-                event = serializer.deserialize(event_str)
+                event_data = serializer.deserialize(event_str)
+                if isinstance(event_data, dict):
+                    event_title = event_data["type"]
+                    event = events_by_title[event_title].model_validate(
+                        event_data["data"]
+                    )
+                elif isinstance(event_data, Event):
+                    event = event_data
+                else:
+                    raise ValueError(
+                        "Invalid event data. Should be a dictionary of {'title': 'event_title', 'data': {...}} or a serialized event"
+                    )
             except Exception as e:
                 raise HTTPException(
                     detail=f"Failed to deserialize event: {e}", status_code=400
