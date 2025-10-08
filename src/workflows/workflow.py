@@ -26,6 +26,7 @@ from .errors import (
     WorkflowValidationError,
 )
 from .events import (
+    Event,
     HumanResponseEvent,
     InputRequiredEvent,
     StartEvent,
@@ -122,6 +123,7 @@ class Workflow(metaclass=WorkflowMeta):
         self._num_concurrent_runs = num_concurrent_runs
         self._stop_event_class = self._ensure_stop_event_class()
         self._start_event_class = self._ensure_start_event_class()
+        self._events = self._ensure_events_collected()
         self._sem = (
             asyncio.Semaphore(num_concurrent_runs) if num_concurrent_runs else None
         )
@@ -162,6 +164,36 @@ class Workflow(metaclass=WorkflowMeta):
         Determined by inspecting step input types.
         """
         return self._start_event_class
+
+    @property
+    def events(self) -> list[type[Event]]:
+        """Returns all known events emitted by this workflow.
+
+        Determined by inspecting step input/output types.
+        """
+        return self._events
+
+    def _ensure_events_collected(self) -> list[type[Event]]:
+        """Returns all known events emitted by this workflow.
+
+        Determined by inspecting step input/output types.
+        """
+        events_found: set[type[Event]] = set()
+        for step_func in self._get_steps().values():
+            step_config: StepConfig = getattr(step_func, "__step_config")
+
+            # Do not collect events from the done step
+            if step_func.__name__ == "_done":
+                continue
+
+            for event_type in step_config.return_types:
+                if issubclass(event_type, Event):
+                    events_found.add(event_type)
+            for event_type in step_config.accepted_events:
+                if issubclass(event_type, Event):
+                    events_found.add(event_type)
+
+        return list(events_found)
 
     def _ensure_stop_event_class(self) -> type[RunResultT]:
         """
