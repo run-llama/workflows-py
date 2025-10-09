@@ -1,7 +1,7 @@
 import httpx
 import json
 
-from typing import Literal, Any, Union, AsyncGenerator, AsyncIterator
+from typing import Literal, Any, Union, AsyncGenerator, AsyncIterator, Optional
 from contextlib import asynccontextmanager
 from workflows.events import StartEvent, Event
 from workflows import Context
@@ -13,7 +13,7 @@ from workflows.types import RunResultT
 class WorkflowClient:
     def __init__(
         self,
-        protocol: Literal["http", "https"] | None = None,
+        protocol: Optional[Literal["http", "https"]] = None,
         host: str | None = None,
         port: int | None = None,
         timeout: int | None = None,
