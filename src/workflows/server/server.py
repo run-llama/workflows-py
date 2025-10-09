@@ -383,12 +383,6 @@ class WorkflowServer:
                       type: array
                       items:
                         type: object
-                        properties:
-                          name:
-                            type: string
-                          schema:
-                            type: object
-                        required: [name, schema]
                   required: [events]
         """
         if "name" not in request.path_params:
