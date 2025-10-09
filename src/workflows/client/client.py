@@ -65,6 +65,7 @@ class WorkflowClient:
     async def run_workflow(
         self,
         workflow_name: str,
+        handler_id: Optional[str] = None,
         start_event: Union[StartEvent, dict[str, Any], str, None] = None,
         context: Union[Context, dict[str, Any], None] = None,
     ) -> Any:
@@ -74,6 +75,7 @@ class WorkflowClient:
         Args:
             start_event (Union[StartEvent, dict[str, Any], None]): start event class or dictionary representation (optional, defaults to None and get passed as an empty dictionary if not provided).
             context: Context or serialized representation of it (optional, defaults to None if not provided)
+            handler_id (Optional[str]): Workflow handler identifier to continue from a previous completed run.
 
         Returns:
             Any: Result of the workflow
@@ -94,6 +96,8 @@ class WorkflowClient:
             "start_event": start_event or "",
             "context": context or {},
         }
+        if handler_id:
+            request_body["handler_id"] = handler_id
         async with self._get_client() as client:
             response = await client.post(
                 f"/workflows/{workflow_name}/run", json=request_body
@@ -106,6 +110,7 @@ class WorkflowClient:
     async def run_workflow_nowait(
         self,
         workflow_name: str,
+        handler_id: Optional[str] = None,
         start_event: Union[StartEvent, dict[str, Any], None] = None,
         context: Union[Context, dict[str, Any], None] = None,
     ) -> dict[str, Any]:
@@ -115,6 +120,7 @@ class WorkflowClient:
         Args:
             start_event (Union[StartEvent, dict[str, Any], None]): start event class or dictionary representation (optional, defaults to None and get passed as an empty dictionary if not provided).
             context: Context or serialized representation of it (optional, defaults to None if not provided)
+            handler_id (Optional[str]): Workflow handler identifier to continue from a previous completed run.
 
         Returns:
             dict[str, Any]: JSON representation of the handler running the workflow
@@ -135,6 +141,8 @@ class WorkflowClient:
             "start_event": start_event or "{}",
             "context": context or {},
         }
+        if handler_id:
+            request_body["handler_id"] = handler_id
         async with self._get_client() as client:
             response = await client.post(
                 f"/workflows/{workflow_name}/run-nowait", json=request_body
