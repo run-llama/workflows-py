@@ -1,4 +1,6 @@
-# Introduction
+---
+title: Introduction
+---
 
 A `Workflow` in LlamaIndex is an event-driven abstraction used to chain together several events. Workflows are made up
 of `steps`, with each step responsible for handling certain event types and emitting new events.
@@ -253,7 +255,7 @@ Last but not least, a few more advanced use cases that demonstrate how workflows
 to quickly implement prototypes, for example from literature:
 
 - [Advanced Text-to-SQL](/python/examples/workflow/advanced_text_to_sql/)
-- [JSON Query Engine](/python/examples/workflow/JSONalyze_query_engine/)
+- [JSON Query Engine](/python/examples/workflow/jsonalyze_query_engine/)
 - [Long RAG](/python/examples/workflow/long_rag_pack/)
 - [Multi-Step Query Engine](/python/examples/workflow/multi_step_query_engine/)
 - [Multi-Strategy Workflow](/python/examples/workflow/multi_strategy_workflow/)

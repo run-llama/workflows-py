@@ -35,3 +35,13 @@ class MemoryWorkflowStore(AbstractWorkflowStore):
 
     async def update(self, handler: PersistentHandler) -> None:
         self.handlers[handler.handler_id] = handler
+
+    async def delete(self, query: HandlerQuery) -> int:
+        to_delete = [
+            handler_id
+            for handler_id, handler in list(self.handlers.items())
+            if _matches_query(handler, query)
+        ]
+        for handler_id in to_delete:
+            del self.handlers[handler_id]
+        return len(to_delete)

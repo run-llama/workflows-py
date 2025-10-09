@@ -77,6 +77,58 @@ async def test_update_on_conflict_overwrites_existing_row(tmp_path: Path) -> Non
 
 
 @pytest.mark.asyncio
+async def test_delete_filters_by_query(tmp_path: Path) -> None:
+    db_path: str = str(tmp_path / "handlers.db")
+    store = SqliteWorkflowStore(db_path)
+
+    await store.update(
+        PersistentHandler(
+            handler_id="delete-me",
+            workflow_name="wf_delete",
+            status="completed",
+            ctx={"val": 1},
+        )
+    )
+    await store.update(
+        PersistentHandler(
+            handler_id="keep-me",
+            workflow_name="wf_keep",
+            status="running",
+            ctx={"val": 2},
+        )
+    )
+
+    deleted = await store.delete(HandlerQuery(handler_id_in=["delete-me"]))
+
+    assert deleted == 1
+    remaining = await store.query(HandlerQuery())
+    ids = {handler.handler_id for handler in remaining}
+    assert ids == {"keep-me"}
+
+
+@pytest.mark.asyncio
+async def test_delete_noop_on_empty_filter(tmp_path: Path) -> None:
+    db_path: str = str(tmp_path / "handlers.db")
+    store = SqliteWorkflowStore(db_path)
+
+    await store.update(
+        PersistentHandler(
+            handler_id="delete-me",
+            workflow_name="wf_delete",
+            status="completed",
+            ctx={},
+        )
+    )
+
+    deleted = await store.delete(HandlerQuery(handler_id_in=[]))
+
+    assert deleted == 0
+    remaining = await store.query(HandlerQuery())
+    assert len(remaining) == 1
+    assert remaining[0].handler_id == "delete-me"
+
+
+@pytest.mark.asyncio
 async def test_query_filters_by_handler_id_and_empty_lists(tmp_path: Path) -> None:
     db_path: str = str(tmp_path / "handlers.db")
     store = SqliteWorkflowStore(db_path)

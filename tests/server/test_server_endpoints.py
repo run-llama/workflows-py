@@ -4,46 +4,71 @@
 import asyncio
 from collections import Counter
 import json
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
-from typing import Any, AsyncGenerator
+from typing import Any, AsyncGenerator, AsyncIterator, Optional
 
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient, Response
 
-from tests.server.util import wait_for_passing
+from .util import wait_for_passing
 from workflows import Context
 from workflows.server import WorkflowServer
+from workflows.server.abstract_workflow_store import HandlerQuery, PersistentHandler
 from workflows.workflow import Workflow
 from datetime import datetime
 
 # Prepare the event to send
 from workflows.context.serializers import JsonSerializer
-from tests.server.conftest import ExternalEvent
+from .conftest import ExternalEvent
+from .memory_workflow_store import MemoryWorkflowStore
 
 
 @pytest.fixture
-def server() -> WorkflowServer:
-    return WorkflowServer()
+def server(
+    simple_test_workflow: Workflow,
+    error_workflow: Workflow,
+    streaming_workflow: Workflow,
+    interactive_workflow: Workflow,
+) -> WorkflowServer:
+    server = WorkflowServer()
+    server.add_workflow("test", simple_test_workflow)
+    server.add_workflow("error", error_workflow)
+    server.add_workflow("streaming", streaming_workflow)
+    server.add_workflow("interactive", interactive_workflow)
+    return server
 
 
 @pytest_asyncio.fixture
 async def client(
     server: WorkflowServer,
-    simple_test_workflow: Workflow,
-    error_workflow: Workflow,
-    streaming_workflow: Workflow,
-    interactive_workflow: Workflow,
 ) -> AsyncGenerator:
-    server.add_workflow("test", simple_test_workflow)
-    server.add_workflow("error", error_workflow)
-    server.add_workflow("streaming", streaming_workflow)
-    server.add_workflow("interactive", interactive_workflow)
     async with server.contextmanager():
         transport = ASGITransport(app=server.app)
 
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             yield client
+
+
+@asynccontextmanager
+async def server_with_persisted_handlers(
+    interactive_workflow: Workflow,
+    *,
+    persisted_handlers: Optional[list[PersistentHandler]] = None,
+) -> AsyncIterator[tuple[WorkflowServer, AsyncClient, MemoryWorkflowStore]]:
+    store = MemoryWorkflowStore()
+    if persisted_handlers is not None:
+        for handler in persisted_handlers:
+            await store.update(handler)
+
+    server_with_store = WorkflowServer(workflow_store=store)
+    server_with_store.add_workflow("interactive", interactive_workflow)
+
+    async with server_with_store.contextmanager():
+        transport = ASGITransport(app=server_with_store.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            yield server_with_store, client, store
 
 
 @pytest.mark.asyncio
@@ -209,6 +234,41 @@ async def test_run_workflow_nowait_invalid_start_event(
     # Test with invalid JSON for start_event in nowait endpoint
     response = await client.post(
         "/workflows/test/run-nowait", json={"start_event": "invalid json"}
+    )
+    assert response.status_code == 400
+    assert "Validation error for 'start_event'" in response.text
+
+
+@pytest.mark.asyncio
+async def test_structured_start_event_empty_object_validated(
+    client: AsyncClient,
+    server: WorkflowServer,
+    structured_start_workflow: Workflow,
+) -> None:
+    # Register workflow with required StartEvent fields
+    server.add_workflow("structured", structured_start_workflow)
+
+    # Empty object should be validated and rejected with 400
+    response = await client.post(
+        "/workflows/structured/run",
+        json={"start_event": {}},
+    )
+    assert response.status_code == 400
+    assert "Validation error for 'start_event'" in response.text
+
+
+@pytest.mark.asyncio
+async def test_structured_start_event_missing_value_treated_as_empty_and_validated(
+    client: AsyncClient,
+    server: WorkflowServer,
+    structured_start_workflow: Workflow,
+) -> None:
+    # Register workflow with required StartEvent fields
+    server.add_workflow("structured", structured_start_workflow)
+
+    response = await client.post(
+        "/workflows/structured/run",
+        json={},  # testing no start_event whatsoever
     )
     assert response.status_code == 400
     assert "Validation error for 'start_event'" in response.text
@@ -420,9 +480,54 @@ async def test_stream_events_not_found(client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
-async def test_stream_events_no_events(client: AsyncClient) -> None:
-    """Test streaming from workflow that emits no events."""
-    # Start simple workflow that doesn't emit events
+async def test_stream_events_single_consumer(client: AsyncClient) -> None:
+    """Test that the consumer lock mechanism works with acquire_timeout."""
+    # Start a streaming workflow that completes quickly
+    handler_response = await client.post("/workflows/interactive/run-nowait", json={})
+    handler_id = handler_response.json()["handler_id"]
+
+    # send 2 simultaneous requests
+    a = asyncio.create_task(
+        client.send(
+            client.build_request("GET", f"/events/{handler_id}?acquire_timeout=0.01"),
+            stream=True,
+        )
+    )
+    b = asyncio.create_task(
+        client.send(
+            client.build_request("GET", f"/events/{handler_id}?acquire_timeout=0.01"),
+            stream=True,
+        )
+    )
+
+    # wait for one to be rejected
+    done, pending = await asyncio.wait({a, b}, return_when=asyncio.FIRST_COMPLETED)
+
+    # Assert that the done request got a 409 response
+    assert len(done) == 1
+    done_response = list(done)[0].result()
+    assert done_response.status_code == 409
+
+    # Send an ExternalEvent to complete the workflow
+    send_response = await client.post(
+        f"/events/{handler_id}",
+        json={
+            "event": JsonSerializer().serialize(ExternalEvent(response="test-response"))
+        },
+    )
+    assert send_response.status_code == 200
+
+    # Wait for the pending response and stream it
+    pending_response = await list(pending)[0]
+    assert pending_response.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_stream_events_no_events_default_hides_internal(
+    client: AsyncClient,
+) -> None:
+    """Test streaming from workflow that emits no events. Default excludes internal events."""
+    # Start simple workflow that doesn't emit user events
     response = await client.post(
         "/workflows/test/run-nowait", json={"kwargs": {"message": "test"}}
     )
@@ -430,30 +535,55 @@ async def test_stream_events_no_events(client: AsyncClient) -> None:
     data = response.json()
     handler_id = data["handler_id"]
 
-    # Try to stream events
+    # Stream without include_internal
     response = await client.get(f"/events/{handler_id}")
     assert response.status_code == 200
     assert response.headers["content-type"] == "text/event-stream; charset=utf-8"
 
-    # Should get no stream events (may get StopEvent)
+    # Collect events
     events = []
     async for line in response.aiter_lines():
         if line.strip():
             event_data = json.loads(line.removeprefix("data: "))
-            # Filter out empty events
             if event_data:
                 events.append(event_data)
 
-    # Only control events and a final StopEvent
-    event_types = [events["qualified_name"] for events in events]
-    seen_types = set(event_types)
-    assert seen_types == {
-        "workflows.events.StopEvent",
-        "workflows.events.EventsQueueChanged",
-        "workflows.events.StepStateChanged",
-    }
+    # Only StopEvent should be present because internal events are hidden by default
+    event_types = [e["qualified_name"] for e in events]
+    assert set(event_types) == {"workflows.events.StopEvent"}
     assert event_types[-1] == "workflows.events.StopEvent"
     assert Counter(event_types)["workflows.events.StopEvent"] == 1
+
+
+@pytest.mark.asyncio
+async def test_stream_events_include_internal_true(client: AsyncClient) -> None:
+    """When include_internal=true, internal events should be included."""
+    # Start simple workflow that doesn't emit user events
+    response = await client.post(
+        "/workflows/test/run-nowait", json={"kwargs": {"message": "test"}}
+    )
+    assert response.status_code == 200
+    data = response.json()
+    handler_id = data["handler_id"]
+
+    # Stream with include_internal=true
+    response = await client.get(f"/events/{handler_id}?include_internal=true")
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "text/event-stream; charset=utf-8"
+
+    # Collect events
+    events = []
+    async for line in response.aiter_lines():
+        if line.strip():
+            event_data = json.loads(line.removeprefix("data: "))
+            if event_data:
+                events.append(event_data)
+
+    event_types = [e["qualified_name"] for e in events]
+    # Expect internal event types to be present along with StopEvent
+    assert "workflows.events.StopEvent" in event_types
+    assert "workflows.events.EventsQueueChanged" in event_types
+    assert "workflows.events.StepStateChanged" in event_types
 
 
 @pytest.mark.asyncio
@@ -582,6 +712,31 @@ async def test_post_event_to_running_workflow(client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
+async def test_post_event_simple_schema_to_running_workflow(
+    client: AsyncClient,
+) -> None:
+    # Start an interactive workflow
+    response = await client.post("/workflows/interactive/run-nowait", json={})
+    assert response.status_code == 200
+    handler_id = response.json()["handler_id"]
+
+    # Wait a bit for workflow to start
+    await asyncio.sleep(0.1)
+
+    # Send the event
+    event_str = '{"type": "ExternalEvent", "data": {"response": "Hello from test"}}'
+    response = await client.post(f"/events/{handler_id}", json={"event": event_str})
+    assert response.status_code == 200
+    assert response.json() == {"status": "sent"}
+
+    result = await wait_for_passing(
+        lambda: validate_result_response(handler_id, client)
+    )
+
+    assert result["result"] == "received: Hello from test"
+
+
+@pytest.mark.asyncio
 async def test_get_workflow_result_returns_202_when_pending(
     client: AsyncClient,
 ) -> None:
@@ -657,7 +812,9 @@ async def test_post_event_context_not_available(
     client: AsyncClient, server: WorkflowServer
 ) -> None:
     # Dumb test for code coverage. Inject a dummy handler with no context to trigger 500 path
-    wrapper = SimpleNamespace(run_handler=SimpleNamespace(done=lambda: False, ctx=None))
+    wrapper = SimpleNamespace(
+        run_handler=SimpleNamespace(done=lambda: False, ctx=None), workflow_name="test"
+    )
 
     handler_id = "noctx-1"
     server._handlers[handler_id] = wrapper  # type: ignore[assignment]
@@ -747,3 +904,84 @@ async def test_handler_datetime_fields_progress(client: AsyncClient) -> None:
         assert item3["completed_at"] is not None
         completed_at = datetime.fromisoformat(item3["completed_at"])  # ISO 8601
         assert completed_at >= updated_at_2
+
+
+@pytest.mark.asyncio
+async def test_cancel_handler_persists_cancelled_status(
+    interactive_workflow: Workflow,
+) -> None:
+    async with server_with_persisted_handlers(interactive_workflow) as (
+        _server,
+        client,
+        store,
+    ):
+        response = await client.post(
+            "/workflows/interactive/run-nowait",
+            json={},
+        )
+        handler_id = response.json()["handler_id"]
+
+        resp_cancel = await client.post(f"/handlers/{handler_id}/cancel?purge=false")
+        assert resp_cancel.status_code == 200
+        assert resp_cancel.json() == {"status": "cancelled"}
+
+        persisted_cancelled = await store.query(
+            HandlerQuery(handler_id_in=[handler_id])
+        )
+        assert len(persisted_cancelled) == 1
+        assert persisted_cancelled[0].status == "cancelled"
+
+        resp_delete2 = await client.post(f"/handlers/{handler_id}/cancel?purge=false")
+        assert resp_delete2.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_delete_persisted_handler_removes_from_store(
+    interactive_workflow: Workflow,
+) -> None:
+    async with server_with_persisted_handlers(
+        interactive_workflow,
+        persisted_handlers=[
+            PersistentHandler(
+                handler_id="persist-only",
+                workflow_name="interactive",
+                status="completed",
+                ctx={},
+            )
+        ],
+    ) as (_server, client, store):
+        resp_delete_store = await client.post(
+            "/handlers/persist-only/cancel?purge=true"
+        )
+        assert resp_delete_store.status_code == 200
+        assert resp_delete_store.json() == {"status": "deleted"}
+
+        persisted_handlers = await store.query(
+            HandlerQuery(handler_id_in=["persist-only"])
+        )
+        assert persisted_handlers == []
+
+
+@pytest.mark.asyncio
+async def test_stop_only_persisted_handler_without_removal_returns_not_found(
+    interactive_workflow: Workflow,
+) -> None:
+    async with server_with_persisted_handlers(
+        interactive_workflow,
+        persisted_handlers=[
+            PersistentHandler(
+                handler_id="store-only",
+                workflow_name="interactive",
+                status="completed",
+                ctx={},
+            )
+        ],
+    ) as (_server, client, store):
+        resp_cancel_store_only = await client.post("/handlers/store-only/cancel")
+        assert resp_cancel_store_only.status_code == 404
+
+        resp_cancel_store_only = await client.post("/handlers/store-only/cancel")
+        assert resp_cancel_store_only.status_code == 404
+
+        persisted = await store.query(HandlerQuery(handler_id_in=["store-only"]))
+        assert persisted and persisted[0].status == "completed"

@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pydantic import BaseModel
 
 
-Status = Literal["running", "completed", "failed"]
+Status = Literal["running", "completed", "failed", "cancelled"]
 
 
 @dataclass()
@@ -32,6 +32,9 @@ class AbstractWorkflowStore(ABC):
     @abstractmethod
     async def update(self, handler: PersistentHandler) -> None: ...
 
+    @abstractmethod
+    async def delete(self, query: HandlerQuery) -> int: ...
+
 
 class EmptyWorkflowStore(AbstractWorkflowStore):
     async def query(self, query: HandlerQuery) -> List[PersistentHandler]:
@@ -39,3 +42,6 @@ class EmptyWorkflowStore(AbstractWorkflowStore):
 
     async def update(self, handler: PersistentHandler) -> None:
         pass
+
+    async def delete(self, query: HandlerQuery) -> int:
+        return 1  # otherwise deletion calls will 404

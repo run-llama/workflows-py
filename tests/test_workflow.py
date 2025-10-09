@@ -781,3 +781,16 @@ async def test_workflow_validation_steps_cannot_accept_stop_event() -> None:
         match="Step 'bad_step' cannot accept StopEvent. StopEvent signals the end of the workflow. Use a different Event type instead.",
     ):
         await WorkflowTestRunner(InvalidWorkflowSingleStep()).run()
+
+
+def test_get_workflow_events() -> None:
+    class DummyWorkflow(Workflow):
+        @step
+        def one(self, ev: MyStart) -> MyStop:
+            return MyStop(outcome="nope")
+
+    events = DummyWorkflow().events
+    assert len(events) == 2
+    event_names = [e.__name__ for e in events]
+    assert "MyStop" in event_names
+    assert "MyStart" in event_names

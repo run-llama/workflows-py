@@ -5,12 +5,12 @@ import pytest
 from typing import AsyncGenerator
 from httpx import AsyncClient, ASGITransport
 
-from tests.server.conftest import ExternalEvent, RequestedExternalEvent
+from .conftest import ExternalEvent, RequestedExternalEvent
 from workflows.events import Event, InternalDispatchEvent
 from workflows.server import WorkflowServer
 from workflows import Context
 from workflows.workflow import Workflow
-from workflows.server.abstract_workflow_store import PersistentHandler
+from workflows.server.abstract_workflow_store import HandlerQuery, PersistentHandler
 
 from .memory_workflow_store import MemoryWorkflowStore
 from .util import wait_for_passing
@@ -64,8 +64,9 @@ async def test_store_is_updated_on_step_completion(
     assert isinstance(item, RequestedExternalEvent)
 
     # much sure its stored and running
-    assert handler_id in memory_store.handlers
-    persistent = memory_store.handlers[handler_id]
+    persistent_list = await memory_store.query(HandlerQuery(handler_id_in=[handler_id]))
+    assert persistent_list
+    persistent = persistent_list[0]
     assert persistent.workflow_name == "test"
     assert persistent.status == "running"
     assert isinstance(persistent.ctx, dict)
@@ -114,6 +115,46 @@ async def test_resume_active_handlers_across_server_restart(
 
 
 @pytest.mark.asyncio
+async def test_startup_marks_invalid_persisted_context_as_failed(
+    memory_store: MemoryWorkflowStore, simple_test_workflow: Workflow
+) -> None:
+    """Server should not crash on invalid persisted context; it should mark it failed."""
+    # Seed an invalid context payload that will fail Context.from_dict
+    # Make the context structurally valid but with an invalid streaming_queue JSON
+    invalid_ctx = {
+        "state": {},
+        "streaming_queue": "not-json",
+        "queues": {},
+        "event_buffers": {},
+        "in_progress": {},
+        "accepted_events": [],
+        "broker_log": [],
+        "is_running": False,
+        "waiting_ids": [],
+    }
+
+    handler_id = "bad-ctx-1"
+    await memory_store.update(
+        PersistentHandler(
+            handler_id=handler_id,
+            workflow_name="test",
+            status="running",
+            ctx=invalid_ctx,
+        )
+    )
+
+    server = WorkflowServer(workflow_store=memory_store)
+    server.add_workflow("test", simple_test_workflow)
+    async with server.contextmanager():
+        # Invalid handler should not be registered
+        assert handler_id not in server._handlers
+
+    # After startup attempt, it should be marked as failed in the store
+    persisted = memory_store.handlers[handler_id]
+    assert persisted.status == "failed"
+
+
+@pytest.mark.asyncio
 async def test_store_is_updated_on_workflow_failure(
     memory_store: MemoryWorkflowStore, error_workflow: Workflow
 ) -> None:
@@ -135,8 +176,11 @@ async def test_store_is_updated_on_workflow_failure(
         await asyncio.sleep(0)
 
         # Verify store captured the failed status and has a context snapshot
-        assert handler_id in memory_store.handlers
-        persistent = memory_store.handlers[handler_id]
+        persistent_list = await memory_store.query(
+            HandlerQuery(handler_id_in=[handler_id])
+        )
+        assert persistent_list
+        persistent = persistent_list[0]
         assert persistent.workflow_name == "error"
         assert persistent.status == "failed"
         assert isinstance(persistent.ctx, dict)
@@ -234,8 +278,9 @@ async def test_persistence_retries_on_failure(
         # There can be multiple checkpoints (initial running, step completion, final completion)
         # so attempts will be >= initial + retries
         assert attempts["count"] >= 3  # Initial + 2 retries
-        assert handler_id in store.handlers
-        persistent = store.handlers[handler_id]
+        persistent_list = await store.query(HandlerQuery(handler_id_in=[handler_id]))
+        assert persistent_list
+        persistent = persistent_list[0]
         assert persistent.status == "completed"
 
 
@@ -276,7 +321,10 @@ async def test_workflow_cancelled_after_all_retries_fail(
             # Verify that all retry attempts were made
             assert attempts["count"] == 3  # Initial + 2 retries
             # Handler should not be successfully stored due to persistent failures
-            assert handler_id not in store.handlers
+            persistent_list = await store.query(
+                HandlerQuery(handler_id_in=[handler_id])
+            )
+            assert not persistent_list
         finally:  # clean up log noise. Wait for underlying cancelled workflows to fully resolve
             tasks = [
                 handler.run_handler._run_task
@@ -317,7 +365,11 @@ async def test_resume_across_runs(
             await asyncio.sleep(0.1)
 
             # Verify it's persisted in the store as completed
-            persisted = memory_store.handlers[handler_id]
+            persisted_list = await memory_store.query(
+                HandlerQuery(handler_id_in=[handler_id])
+            )
+            assert persisted_list
+            persisted = persisted_list[0]
             assert persisted.status == "completed"
 
             # Second run - should start with count=5, increment by 3
