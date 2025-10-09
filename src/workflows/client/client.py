@@ -1,15 +1,13 @@
 import httpx
-import time
 import json
 
 from typing import Literal, Any, Union, AsyncGenerator, AsyncIterator
 from contextlib import asynccontextmanager
-from logging import getLogger
 from workflows.events import StartEvent, Event
 from workflows import Context
-
-
-logger = getLogger(__name__)
+from workflows.server.server import HandlerDict
+from workflows.server.utils import serdes_event
+from workflows.types import RunResultT
 
 
 class WorkflowClient:
@@ -19,19 +17,22 @@ class WorkflowClient:
         host: str | None = None,
         port: int | None = None,
         timeout: int | None = None,
+        httpx_kwargs: dict[str, Any] | None = None,
     ):
         # TODO: middleware-related logic
         self.protocol = protocol or "http"
         self.host = host or "localhost"
         self.port = port or 8000
         self.timeout = timeout or 600
+        self.httpx_kwargs = httpx_kwargs or {}
         # TODO: add some basic TLS/verification and auth features
 
     @asynccontextmanager
-    async def _get_client(self) -> AsyncIterator:
+    async def _get_client(self) -> AsyncIterator[httpx.AsyncClient]:
         async with httpx.AsyncClient(
             base_url=self.protocol + "://" + self.host + ":" + str(self.port),
             timeout=self.timeout,
+            **self.httpx_kwargs,
         ) as client:
             yield client
 
@@ -44,27 +45,8 @@ class WorkflowClient:
         """
         async with self._get_client() as client:
             response = await client.get("/health")
-        if response.status_code == 200:
+            response.raise_for_status()
             return response.json().get("status", "") == "healthy"
-        return False
-
-    async def ping(self) -> float:
-        """
-        Ping the workflow and get the latency in milliseconds
-
-        Returns:
-            float: latency in milliseconds
-        """
-        async with self._get_client() as client:
-            start = time.time()
-            response = await client.get("/health")
-            if response.status_code == 200:
-                end = time.time()
-                return (end - start) * 1000
-            else:
-                raise httpx.ConnectError(
-                    f"Failed to establish a connection with server running on: {self.protocol}://{self.host}:{self.port}"
-                )
 
     async def list_workflows(self) -> list[str]:
         """
@@ -83,9 +65,8 @@ class WorkflowClient:
     async def run_workflow(
         self,
         workflow_name: str,
-        start_event: Union[StartEvent, dict[str, Any], None] = None,
+        start_event: Union[StartEvent, dict[str, Any], str, None] = None,
         context: Union[Context, dict[str, Any], None] = None,
-        **kwargs: Any,
     ) -> Any:
         """
         Run the workflow and wait until completion.
@@ -93,14 +74,13 @@ class WorkflowClient:
         Args:
             start_event (Union[StartEvent, dict[str, Any], None]): start event class or dictionary representation (optional, defaults to None and get passed as an empty dictionary if not provided).
             context: Context or serialized representation of it (optional, defaults to None if not provided)
-            **kwargs: Any number of keyword arguments that would be passed on as additional keyword arguments to the workflow.
 
         Returns:
             Any: Result of the workflow
         """
-        if isinstance(start_event, StartEvent):
+        if start_event is not None:
             try:
-                start_event = start_event.model_dump()
+                start_event = serdes_event(start_event)
             except Exception as e:
                 raise ValueError(
                     f"Impossible to serialize the start event because of: {e}"
@@ -111,9 +91,8 @@ class WorkflowClient:
             except Exception as e:
                 raise ValueError(f"Impossible to serialize the context because of: {e}")
         request_body = {
-            "start_event": start_event or {},
+            "start_event": start_event or "",
             "context": context or {},
-            "additional_kwargs": kwargs,
         }
         async with self._get_client() as client:
             response = await client.post(
@@ -129,7 +108,6 @@ class WorkflowClient:
         workflow_name: str,
         start_event: Union[StartEvent, dict[str, Any], None] = None,
         context: Union[Context, dict[str, Any], None] = None,
-        **kwargs: Any,
     ) -> dict[str, Any]:
         """
         Run the workflow in the background.
@@ -137,14 +115,13 @@ class WorkflowClient:
         Args:
             start_event (Union[StartEvent, dict[str, Any], None]): start event class or dictionary representation (optional, defaults to None and get passed as an empty dictionary if not provided).
             context: Context or serialized representation of it (optional, defaults to None if not provided)
-            **kwargs: Any number of keyword arguments that would be passed on as additional keyword arguments to the workflow.
 
         Returns:
             dict[str, Any]: JSON representation of the handler running the workflow
         """
-        if isinstance(start_event, StartEvent):
+        if start_event is not None:
             try:
-                start_event = start_event.model_dump()
+                start_event = serdes_event(start_event)
             except Exception as e:
                 raise ValueError(
                     f"Impossible to serialize the start event because of: {e}"
@@ -155,9 +132,8 @@ class WorkflowClient:
             except Exception as e:
                 raise ValueError(f"Impossible to serialize the context because of: {e}")
         request_body = {
-            "start_event": start_event or {},
+            "start_event": start_event or "{}",
             "context": context or {},
-            "additional_kwargs": kwargs,
         }
         async with self._get_client() as client:
             response = await client.post(
@@ -171,21 +147,34 @@ class WorkflowClient:
     async def get_workflow_events(
         self,
         handler_id: str,
+        include_internal_events: bool = False,
+        lock_timeout: float = 1,
     ) -> AsyncGenerator[dict[str, Any], None]:
         """
         Stream events as they are produced by the workflow.
 
         Args:
             handler_id (str): ID of the handler running the workflow
+            include_internal_events (bool): Include internal workflow events. Defaults to False.
+            lock_timeout (float): Timeout (in seconds) for acquiring the lock to iterate over the events.
 
         Returns:
             AsyncGenerator[dict[str, Any], None]: Generator for the events that are streamed in the form of dictionaries.
         """
-        url = f"/events/{handler_id}?sse=false"
+        incl_inter = "true" if include_internal_events else "false"
+        url = f"/events/{handler_id}"
 
         async with self._get_client() as client:
             try:
-                async with client.stream("GET", url) as response:
+                async with client.stream(
+                    "GET",
+                    url,
+                    params={
+                        "sse": "false",
+                        "include_internal": incl_inter,
+                        "acquire_timeout": lock_timeout,
+                    },
+                ) as response:
                     # Handle different response codes
                     if response.status_code == 404:
                         raise ValueError("Handler not found")
@@ -228,16 +217,10 @@ class WorkflowClient:
         Returns:
             bool: Success status of the send operation
         """
-        if isinstance(event, Event):
-            try:
-                event = event.model_dump_json()
-            except Exception as e:
-                raise ValueError(f"Error while serializing the provided event: {e}")
-        elif isinstance(event, dict):
-            try:
-                event = json.dumps(event)
-            except Exception as e:
-                raise ValueError(f"Error while serializing the provided event: {e}")
+        try:
+            event = serdes_event(event)
+        except Exception as e:
+            raise ValueError(f"Error while serializing the provided event: {e}")
         request_body = {"event": event}
         if step:
             request_body.update({"step": step})
@@ -247,21 +230,40 @@ class WorkflowClient:
 
             return response.json()["status"] == "sent"
 
-    async def get_result(self, handler_id: str) -> Any:
+    async def get_result(
+        self, handler_id: str, as_handler: bool = False
+    ) -> Union[RunResultT, None, HandlerDict]:
         """
         Get the result of the workflow associated with the specified handler ID.
 
         Args:
             handler_id (str): ID of the handler running the workflow
+            as_handler (bool): Return the workflow handler. Defaults to False.
 
         Returns:
-            Any: Result of the workflow
+            Any: Result of the workflow, if available, or workflow handler (when `as_handler` is set to `True`)
         """
         async with self._get_client() as client:
             response = await client.get(f"/results/{handler_id}")
             response.raise_for_status()
 
             if response.status_code == 202:
-                return
+                return None
 
-            return response.json()["result"]
+            if not as_handler:
+                return response.json()["result"]
+            else:
+                return response.json()
+
+    async def get_handlers(self) -> list[HandlerDict]:
+        """
+        Get all the workflow handlers.
+
+        Returns:
+            list[HandlerDict]: List of dictionaries representing workflow handlers.
+        """
+        async with self._get_client() as client:
+            response = await client.get("/handlers")
+            response.raise_for_status()
+
+            return response.json()["handlers"]

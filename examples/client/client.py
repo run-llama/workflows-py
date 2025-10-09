@@ -29,9 +29,6 @@ async def main() -> None:
     is_healthy = await client.is_healthy()
     print("==== HEALTH CHECK ====")
     print("Healthy" if is_healthy else "Not Healty :(")
-    ping_time = await client.ping()
-    print("==== PING TIME ====")
-    print(ping_time, "ms")
     handler = await client.run_workflow_nowait(
         "add_or_subtract",
         start_event=InputNumbers(a=1, b=3, operation="sum"),
