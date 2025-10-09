@@ -14,10 +14,10 @@ class WorkflowClient:
     def __init__(
         self,
         protocol: Optional[Literal["http", "https"]] = None,
-        host: str | None = None,
-        port: int | None = None,
-        timeout: int | None = None,
-        httpx_kwargs: dict[str, Any] | None = None,
+        host: Optional[str] = None,
+        port: Optional[int] = None,
+        timeout: Optional[int] = None,
+        httpx_kwargs: Optional[dict[str, Any]] = None,
     ):
         # TODO: middleware-related logic
         self.protocol = protocol or "http"
@@ -203,8 +203,8 @@ class WorkflowClient:
     async def send_event(
         self,
         handler_id: str,
-        event: Event | dict[str, Any] | str,
-        step: str | None = None,
+        event: Union[Event, dict[str, Any], str],
+        step: Optional[str] = None,
     ) -> bool:
         """
         Send an event to the workflow.
@@ -212,7 +212,7 @@ class WorkflowClient:
         Args:
             handler_id (str): ID of the handler of the running workflow to send the event to
             event (Event | dict[str, Any] | str): Event to send, represented as an Event object, a dictionary or a serialized string.
-            step (str | None): Step to send the event to (optional, defaults to None)
+            step (Optional[str]): Step to send the event to (optional, defaults to None)
 
         Returns:
             bool: Success status of the send operation
