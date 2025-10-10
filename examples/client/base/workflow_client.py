@@ -15,7 +15,7 @@ class InputNumbers(StartEvent):
 
 
 async def main() -> None:
-    client = WorkflowClient(protocol="http", host="localhost", port=8000)
+    client = WorkflowClient(base_url="http://localhost:8000")
     workflows = await client.list_workflows()
     print("===== AVAILABLE WORKFLOWS ====")
     print(workflows)
