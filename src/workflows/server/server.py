@@ -365,12 +365,12 @@ class WorkflowServer:
         summary: List workflow events
         description: Returns the list of registered workflow event schemas.
         parameters:
-          - name: workflow_name
-            in: query
-            description: Name of the workflow to list events for
+          - in: path
+            name: name
             required: true
             schema:
               type: string
+            description: Registered workflow name.
         responses:
           200:
             description: List of workflow event schemas
