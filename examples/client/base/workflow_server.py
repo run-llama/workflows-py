@@ -9,7 +9,7 @@ from typing import Literal
 class InputNumbers(StartEvent):
     a: int
     b: int
-    operation: Literal["sum", "subtraction"] = Field(default="sum")
+    operation: Literal["addition", "subtraction"] = Field(default="addition")
 
 
 class CalculationEvent(Event):
@@ -22,24 +22,12 @@ class OutputEvent(StopEvent):
 
 class AddOrSubtractWorkflow(Workflow):
     @step
-    async def first_step(
-        self, ev: InputNumbers, ctx: Context
-    ) -> CalculationEvent | None:
+    async def first_step(self, ev: InputNumbers, ctx: Context) -> OutputEvent | None:
         ctx.write_event_to_stream(ev)
-        result = ev.a + ev.b if ev.operation == "sum" else ev.a - ev.b
-        async with ctx.store.edit_state() as state:
-            state.operation = ev.operation
-            state.a = ev.a
-            state.b = ev.b
-            state.result = result
+        result = ev.a + ev.b if ev.operation == "addition" else ev.a - ev.b
         ctx.write_event_to_stream(CalculationEvent(result=result))
-        return CalculationEvent(result=result)
-
-    @step
-    async def second_step(self, ev: CalculationEvent, ctx: Context) -> OutputEvent:
-        state = await ctx.store.get_state()
         return OutputEvent(
-            message=f"You approved the result from your operation ({state.operation}) between {state.a} and {state.b}: {ev.result}"
+            message=f"You {ev.operation} operation ({ev.operation}) between {ev.a} and {ev.b}: {result}"
         )
 
 

@@ -3,11 +3,16 @@ import json
 
 from typing import Literal, Any, Union, AsyncGenerator, AsyncIterator, Optional
 from contextlib import asynccontextmanager
+from workflows.context.serializers import JsonSerializer
 from workflows.events import StartEvent, Event
 from workflows import Context
-from workflows.server.server import HandlerDict
-from workflows.server.utils import serdes_event
-from workflows.types import RunResultT
+from workflows.protocol import (
+    HandlerData,
+    HandlersListResponse,
+    HealthResponse,
+    SendEventResponse,
+    WorkflowsListResponse,
+)
 
 
 class WorkflowClient:
@@ -36,7 +41,7 @@ class WorkflowClient:
         ) as client:
             yield client
 
-    async def is_healthy(self) -> bool:
+    async def is_healthy(self) -> HealthResponse:
         """
         Check whether the workflow server is helathy or not
 
@@ -46,9 +51,9 @@ class WorkflowClient:
         async with self._get_client() as client:
             response = await client.get("/health")
             response.raise_for_status()
-            return response.json().get("status", "") == "healthy"
+            return HealthResponse.model_validate(response.json())
 
-    async def list_workflows(self) -> list[str]:
+    async def list_workflows(self) -> WorkflowsListResponse:
         """
         List workflows
 
@@ -60,15 +65,15 @@ class WorkflowClient:
 
             response.raise_for_status()
 
-            return response.json()["workflows"]
+            return WorkflowsListResponse.model_validate(response.json())
 
     async def run_workflow(
         self,
         workflow_name: str,
         handler_id: Optional[str] = None,
-        start_event: Union[StartEvent, dict[str, Any], str, None] = None,
+        start_event: Union[StartEvent, dict[str, Any], None] = None,
         context: Union[Context, dict[str, Any], None] = None,
-    ) -> Any:
+    ) -> HandlerData:
         """
         Run the workflow and wait until completion.
 
@@ -78,11 +83,11 @@ class WorkflowClient:
             handler_id (Optional[str]): Workflow handler identifier to continue from a previous completed run.
 
         Returns:
-            Any: Result of the workflow
+            HandlerDict: Handler state including result and metadata
         """
         if start_event is not None:
             try:
-                start_event = serdes_event(start_event)
+                start_event = _serialize_event(start_event)
             except Exception as e:
                 raise ValueError(
                     f"Impossible to serialize the start event because of: {e}"
@@ -105,7 +110,7 @@ class WorkflowClient:
 
             response.raise_for_status()
 
-            return response.json()["result"]
+            return HandlerData.model_validate(response.json())
 
     async def run_workflow_nowait(
         self,
@@ -113,7 +118,7 @@ class WorkflowClient:
         handler_id: Optional[str] = None,
         start_event: Union[StartEvent, dict[str, Any], None] = None,
         context: Union[Context, dict[str, Any], None] = None,
-    ) -> dict[str, Any]:
+    ) -> HandlerData:
         """
         Run the workflow in the background.
 
@@ -123,11 +128,11 @@ class WorkflowClient:
             handler_id (Optional[str]): Workflow handler identifier to continue from a previous completed run.
 
         Returns:
-            dict[str, Any]: JSON representation of the handler running the workflow
+            HandlerDict: JSON representation of the handler running the workflow
         """
         if start_event is not None:
             try:
-                start_event = serdes_event(start_event)
+                start_event = _serialize_event(start_event)
             except Exception as e:
                 raise ValueError(
                     f"Impossible to serialize the start event because of: {e}"
@@ -137,8 +142,8 @@ class WorkflowClient:
                 context = context.to_dict()
             except Exception as e:
                 raise ValueError(f"Impossible to serialize the context because of: {e}")
-        request_body = {
-            "start_event": start_event or serdes_event(StartEvent()),
+        request_body: dict[str, Any] = {
+            "start_event": start_event or _serialize_event(StartEvent()),
             "context": context or {},
         }
         if handler_id:
@@ -150,7 +155,7 @@ class WorkflowClient:
 
             response.raise_for_status()
 
-            return response.json()
+            return HandlerData.model_validate(response.json())
 
     async def get_workflow_events(
         self,
@@ -211,9 +216,11 @@ class WorkflowClient:
     async def send_event(
         self,
         handler_id: str,
-        event: Union[Event, dict[str, Any], str],
+        event: Union[
+            Event, dict[str, Any]
+        ],  # either an Event object, or a dictionary representation (with type metadata and embedded value)
         step: Optional[str] = None,
-    ) -> bool:
+    ) -> SendEventResponse:
         """
         Send an event to the workflow.
 
@@ -223,24 +230,22 @@ class WorkflowClient:
             step (Optional[str]): Step to send the event to (optional, defaults to None)
 
         Returns:
-            bool: Success status of the send operation
+            SendEventResponse: Confirmation of the send operation
         """
         try:
-            event = serdes_event(event)
+            serialized_event: dict[str, Any] = _serialize_event(event)
         except Exception as e:
             raise ValueError(f"Error while serializing the provided event: {e}")
-        request_body = {"event": event}
+        request_body: dict[str, Any] = {"event": serialized_event}
         if step:
-            request_body.update({"step": step})
+            request_body["step"] = step
         async with self._get_client() as client:
             response = await client.post(f"/events/{handler_id}", json=request_body)
             response.raise_for_status()
 
-            return response.json()["status"] == "sent"
+            return SendEventResponse.model_validate(response.json())
 
-    async def get_result(
-        self, handler_id: str, as_handler: bool = False
-    ) -> Union[RunResultT, None, HandlerDict]:
+    async def get_result(self, handler_id: str) -> HandlerData:
         """
         Get the result of the workflow associated with the specified handler ID.
 
@@ -255,15 +260,9 @@ class WorkflowClient:
             response = await client.get(f"/results/{handler_id}")
             response.raise_for_status()
 
-            if response.status_code == 202:
-                return None
+            return HandlerData.model_validate(response.json())
 
-            if not as_handler:
-                return response.json()["result"]
-            else:
-                return response.json()
-
-    async def get_handlers(self) -> list[HandlerDict]:
+    async def get_handlers(self) -> HandlersListResponse:
         """
         Get all the workflow handlers.
 
@@ -274,4 +273,10 @@ class WorkflowClient:
             response = await client.get("/handlers")
             response.raise_for_status()
 
-            return response.json()["handlers"]
+            return HandlersListResponse.model_validate(response.json())
+
+
+def _serialize_event(event: Union[Event, dict[str, Any]]) -> dict[str, Any]:
+    if isinstance(event, dict):
+        return event  # assumes you know what you are doing. In many cases this needs to be a dict that contains type metadata and the value
+    return JsonSerializer().serialize_value(event)

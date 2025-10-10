@@ -1,10 +1,7 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2025 LlamaIndex Inc.
-import pytest
 
-from typing import Union
-from workflows.server.utils import nanoid, serdes_event
-from workflows.events import StartEvent
+from workflows.server.utils import nanoid
 
 
 def test_nanoid_default_length() -> None:
@@ -46,39 +43,3 @@ def test_nanoid_negative_length() -> None:
 
     result = nanoid(-10)
     assert result == ""
-
-
-def test_serdes_event_serialization() -> None:
-    event: Union[str, dict, StartEvent] = {"hello": "world"}
-    ser_event = serdes_event(event)
-    assert isinstance(ser_event, str)
-    assert ser_event == '{"hello": "world"}'
-    event = StartEvent(message="hello")  # type: ignore
-    ser_event = serdes_event(event)
-    assert isinstance(ser_event, str)
-    assert (
-        ser_event
-        == '{"__is_pydantic": true, "value": {"_data": {"message": "hello"}}, "qualified_name": "workflows.events.StartEvent"}'
-    )
-    event = '{"hello": "world"}'
-    ser_event = serdes_event(event)
-    assert isinstance(ser_event, str)
-    assert ser_event == '{"hello": "world"}'
-    event = {"type": str}
-    with pytest.raises(ValueError):
-        serdes_event(event)
-
-
-def test_serdes_event_deserialization() -> None:
-    event: Union[str, dict] = '{"hello": "world"}'
-    deser_event = serdes_event(event, serialize=False)
-    assert isinstance(deser_event, dict)
-    assert deser_event == {"hello": "world"}
-    event = '{"__is_pydantic": true, "value": {"_data": {"message": "hello"}}, "qualified_name": "workflows.events.StartEvent"}'
-    deser_event = serdes_event(event, serialize=False)
-    assert isinstance(deser_event, StartEvent)
-    assert deser_event == StartEvent(message="hello")  # type: ignore
-    event = {"hello": "world"}
-    ser_event = serdes_event(event, serialize=False)
-    assert isinstance(ser_event, dict)
-    assert ser_event == {"hello": "world"}

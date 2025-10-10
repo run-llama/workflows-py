@@ -10,6 +10,7 @@ import pytest
 
 from workflows.events import StopEvent, Event
 from workflows.handler import WorkflowHandler
+from workflows.protocol import HandlerData
 from workflows.server.server import _WorkflowHandler
 
 
@@ -44,10 +45,11 @@ async def test__workflow_handler_to_dict_json_roundtrip() -> None:
         completed_at=now,
     )
 
-    d = wrapper.to_dict()
+    response_model = wrapper.to_response_model()
     # JSON serialization should not error
-    s = json.dumps(d)
-    reparsed = json.loads(s)
+    s = json.dumps(response_model.model_dump())
+    reparsed_dict = json.loads(s)
+    reparsed = HandlerData.model_validate(reparsed_dict)
 
     # Round-trip consistency
-    assert reparsed == d
+    assert reparsed == response_model
