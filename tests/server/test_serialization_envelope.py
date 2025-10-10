@@ -18,27 +18,21 @@ def test_envelope_user_defined_event() -> None:
     ev = MyEvent(x=1)
     env = build_event_envelope(ev, JsonSerializer())
 
-    # Back-compat and metadata (use safe access for TypedDict optional keys)
-    assert env.get("__is_pydantic", False) is True
     assert isinstance(env.get("value", {}), dict)
-    mro = env.get("mro", [])
-    assert isinstance(mro, list)
+    types = env.get("types")
+    assert types is None
     # User-defined event
-    assert env.get("origin", "") == "user"
-    # MRO should include our class and base Event
-    assert "tests.server.test_serialization_envelope.MyEvent" in mro
-    assert "workflows.events.Event" in mro
+    assert env.get("type", "") == "MyEvent"
 
 
 def test_envelope_builtin_stop_event() -> None:
     ev = StopEvent()
     env = build_event_envelope(ev, JsonSerializer())
 
-    assert env.get("__is_pydantic", False) is True
     assert isinstance(env.get("value", {}), dict)
-    assert env.get("origin", "") == "builtin"
-    mro = env.get("mro", [])
-    assert "workflows.events.StopEvent" in mro
+    types = env.get("types")
+    assert types is None
+    assert env.get("type", "") == "StopEvent"
 
 
 def test_envelope_stop_event_subclass() -> None:
@@ -48,14 +42,13 @@ def test_envelope_stop_event_subclass() -> None:
     ev = MyStop()
     env = build_event_envelope(ev, JsonSerializer())
 
-    assert env.get("__is_pydantic", False) is True
     assert isinstance(env.get("value", {}), dict)
     # Subclass is user-defined
-    assert env.get("origin", "") == "user"
+    assert env.get("type", "") == "MyStop"
     # Must include base StopEvent in MRO
-    mro = env.get("mro", [])
-    assert "workflows.events.StopEvent" in mro
-    assert "tests.server.test_serialization_envelope.MyStop" in mro
+    types = env.get("types")
+    assert types is not None
+    assert "StopEvent" in types
 
 
 def test_envelope_internal_event() -> None:
@@ -67,10 +60,11 @@ def test_envelope_internal_event() -> None:
     )
     env = build_event_envelope(ev, JsonSerializer())
 
-    assert env.get("__is_pydantic", False) is True
     assert isinstance(env.get("value", {}), dict)
-    assert env.get("origin", "") == "builtin"
-    # Internal event MRO contains specific class and base Event
-    mro = env.get("mro", [])
-    assert "workflows.events.StepStateChanged" in mro
-    assert "workflows.events.Event" in mro
+    assert env.get("type", "") == "StepStateChanged"
+    # Internal event types contains specific class and base Event
+    types = env.get("types")
+    assert types is not None
+    assert "InternalDispatchEvent" in types
+
+

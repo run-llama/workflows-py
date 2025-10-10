@@ -3,45 +3,43 @@
 
 from __future__ import annotations
 
-from typing import Any, TypedDict, Literal
-from enum import Enum
+from typing import Any, TypedDict
 
 from workflows.context.serializers import JsonSerializer
 from workflows.events import (
     Event,
 )
 
-
-class EventOrigin(str, Enum):
-    BUILTIN = "builtin"
-    USER = "user"
-
-
 class EventEnvelope(TypedDict):
-    # Back-compat fields from serializer
-    __is_pydantic: bool
     value: Any
 
-    # deprecated, use mro instead
+    # deprecated, use type instead
     qualified_name: str
 
     # New metadata
-    mro: list[str]
-    origin: Literal["builtin", "user"]
+    type: str
+    types: list[str] | None
 
 
-def _qualified_name_of_class(cls: type) -> str:
-    return f"{cls.__module__}.{cls.__name__}"
-
-
-def _mro_qualified_names(cls: type) -> list[str]:
+def _mro_names(cls: type) -> list[str] | None:
+    built_in_mros = [
+        "Event",
+        "DictLikeModel",
+        "BaseModel",
+        "object"
+    ]
     names: list[str] = []
-    for c in cls.mro():
+    # Skip the class itself by starting from the second MRO entry
+    for c in cls.mro()[1:]:
+        if c.__name__ in built_in_mros:
+            continue
         try:
-            names.append(_qualified_name_of_class(c))
+            names.append(c.__name__)
         except Exception:
             # Best effort; skip if class is unusual
             continue
+    if not names:
+        return None
     return names
 
 
@@ -60,12 +58,11 @@ def build_event_envelope(event: Event, serializer: JsonSerializer) -> EventEnvel
     envelope = EventEnvelope(
         value=base.get("value", {}),
         qualified_name=base.get("qualified_name", ""),
-        __is_pydantic=base.get("__is_pydantic", False),
-        mro=_mro_qualified_names(type(event)),
-        origin=(
-            EventOrigin.BUILTIN.value
-            if event.__class__.__module__ == "workflows.events"
-            else EventOrigin.USER.value
-        ),
+        types=_mro_names(type(event)),
+        type=type(event).__name__,
     )
     return envelope
+
+
+
+
