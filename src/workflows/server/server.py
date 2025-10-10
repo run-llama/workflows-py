@@ -9,7 +9,7 @@ import json
 import logging
 from importlib.metadata import version
 from pathlib import Path
-from typing import Any, AsyncGenerator, TypedDict
+from typing import Any, AsyncGenerator
 from datetime import datetime, timezone
 
 from pydantic import BaseModel
@@ -37,6 +37,16 @@ from workflows.events import (
 from workflows.handler import WorkflowHandler
 
 
+from workflows.protocol import (
+    CancelHandlerResponse,
+    HandlerData,
+    HandlersListResponse,
+    HealthResponse,
+    SendEventResponse,
+    WorkflowEventsListResponse,
+    WorkflowGraphResponse,
+    WorkflowSchemaResponse,
+)
 from workflows.server.abstract_workflow_store import (
     AbstractWorkflowStore,
     EmptyWorkflowStore,
@@ -45,23 +55,13 @@ from workflows.server.abstract_workflow_store import (
     Status,
 )
 from workflows.types import RunResultT
+
+# Protocol models are used on the client side; server responds with plain dicts
 from .utils import nanoid
 from .representation_utils import _extract_workflow_structure
 from .serialization import build_event_envelope
 
 logger = logging.getLogger()
-
-
-class HandlerDict(TypedDict):
-    handler_id: str
-    workflow_name: str
-    run_id: str | None  # run_id of the handler, easier for debugging
-    error: str | None
-    result: RunResultT | None
-    status: Status
-    started_at: str
-    updated_at: str | None
-    completed_at: str | None
 
 
 class WorkflowServer:
@@ -336,7 +336,7 @@ class WorkflowServer:
                       example: healthy
                   required: [status]
         """
-        return JSONResponse({"status": "healthy"})
+        return JSONResponse(HealthResponse(status="healthy").model_dump())
 
     async def _list_workflows(self, request: Request) -> JSONResponse:
         """
@@ -403,7 +403,7 @@ class WorkflowServer:
         for event in events:
             event_objs.append(event.model_json_schema())
 
-        return JSONResponse({"events": event_objs})
+        return JSONResponse(WorkflowEventsListResponse(events=event_objs).model_dump())
 
     async def _run_workflow(self, request: Request) -> JSONResponse:
         """
@@ -470,7 +470,7 @@ class WorkflowServer:
             )
             wrapper = self._run_workflow_handler(handler_id, workflow.name, handler)
             await handler
-            return JSONResponse(wrapper.to_dict())
+            return JSONResponse(wrapper.to_response_model().model_dump())
         except Exception as e:
             raise HTTPException(detail=f"Error running workflow: {e}", status_code=500)
 
@@ -523,7 +523,11 @@ class WorkflowServer:
                 status_code=500,
             )
 
-        return JSONResponse({"start": start_event_schema, "stop": stop_event_schema})
+        return JSONResponse(
+            WorkflowSchemaResponse(
+                start=start_event_schema, stop=stop_event_schema
+            ).model_dump()
+        )
 
     async def _get_workflow_representation(self, request: Request) -> JSONResponse:
         """
@@ -564,8 +568,9 @@ class WorkflowServer:
                 detail=f"Error while getting JSON workflow representation: {e}",
                 status_code=500,
             )
-
-        return JSONResponse({"graph": workflow_graph.to_dict()})
+        return JSONResponse(
+            WorkflowGraphResponse(graph=workflow_graph.to_response_model()).model_dump()
+        )
 
     async def _run_workflow_nowait(self, request: Request) -> JSONResponse:
         """
@@ -631,7 +636,7 @@ class WorkflowServer:
             workflow.name,
             handler,
         )
-        return JSONResponse(wrapper.to_dict())
+        return JSONResponse(wrapper.to_response_model().model_dump())
 
     async def _get_workflow_result(self, request: Request) -> JSONResponse:
         """
@@ -675,14 +680,15 @@ class WorkflowServer:
 
         handler = wrapper.run_handler
         if not handler.done():
-            resp = wrapper.to_dict()
-            return JSONResponse(resp, status_code=202)
+            return JSONResponse(
+                wrapper.to_response_model().model_dump(), status_code=202
+            )
 
         try:
             result = await handler
             self._results[handler_id] = result
 
-            return JSONResponse(wrapper.to_dict())
+            return JSONResponse(wrapper.to_response_model().model_dump())
         except Exception as e:
             raise HTTPException(
                 detail=f"Error getting workflow result: {e}", status_code=500
@@ -819,8 +825,8 @@ class WorkflowServer:
                 schema:
                   $ref: '#/components/schemas/HandlersList'
         """
-        items = [wrapper.to_dict() for wrapper in self._handlers.values()]
-        return JSONResponse({"handlers": items})
+        items = [wrapper.to_response_model() for wrapper in self._handlers.values()]
+        return JSONResponse(HandlersListResponse(handlers=items).model_dump())
 
     async def _post_event(self, request: Request) -> JSONResponse:
         """
@@ -931,7 +937,7 @@ class WorkflowServer:
                     detail=f"Failed to send event: {e}", status_code=400
                 )
 
-            return JSONResponse({"status": "sent"})
+            return JSONResponse(SendEventResponse(status="sent").model_dump())
 
         except HTTPException:
             raise
@@ -1014,7 +1020,11 @@ class WorkflowServer:
                     )
                 )
 
-        return JSONResponse({"status": "deleted" if purge else "cancelled"})
+        return JSONResponse(
+            CancelHandlerResponse(
+                status="deleted" if purge else "cancelled"
+            ).model_dump()
+        )
 
     #
     # Private methods
@@ -1234,8 +1244,8 @@ class _WorkflowHandler:
     updated_at: datetime
     completed_at: datetime | None
 
-    def to_dict(self) -> HandlerDict:
-        return HandlerDict(
+    def to_response_model(self) -> HandlerData:
+        return HandlerData(
             handler_id=self.handler_id,
             workflow_name=self.workflow_name,
             run_id=self.run_handler.run_id,

@@ -1,5 +1,5 @@
-from dataclasses import dataclass, asdict
-from typing import List, Optional, Any
+from dataclasses import dataclass
+from typing import List, Optional
 
 from workflows.events import (
     StopEvent,
@@ -7,6 +7,11 @@ from workflows.events import (
     HumanResponseEvent,
 )
 from workflows.decorators import StepConfig
+from workflows.protocol import (
+    WorkflowGraphEdge,
+    WorkflowGraphNode,
+    WorkflowGraphNodeEdges,
+)
 from workflows.utils import (
     get_steps_from_class,
     get_steps_from_instance,
@@ -26,14 +31,14 @@ class DrawWorkflowNode:
         None  # Store the actual event type for styling decisions
     )
 
-    def to_dict(self) -> dict[str, Any]:
-        d = asdict(self)
-        ev_type = d.pop("event_type")
-        if ev_type:
-            d["event_type"] = ev_type.__name__
-        else:
-            d["event_type"] = ev_type
-        return d
+    def to_response_model(self) -> WorkflowGraphNode:
+        return WorkflowGraphNode(
+            id=self.id,
+            label=self.label,
+            node_type=self.node_type,
+            title=self.title,
+            event_type=self.event_type.__name__ if self.event_type else None,
+        )
 
 
 @dataclass
@@ -43,8 +48,11 @@ class DrawWorkflowEdge:
     source: str
     target: str
 
-    def to_dict(self) -> dict[str, str]:
-        return asdict(self)
+    def to_response_model(self) -> WorkflowGraphEdge:
+        return WorkflowGraphEdge(
+            source=self.source,
+            target=self.target,
+        )
 
 
 @dataclass
@@ -54,11 +62,11 @@ class DrawWorkflowGraph:
     nodes: List[DrawWorkflowNode]
     edges: List[DrawWorkflowEdge]
 
-    def to_dict(self) -> dict[str, list]:
-        return {
-            "nodes": [node.to_dict() for node in self.nodes],
-            "edges": [edge.to_dict() for edge in self.edges],
-        }
+    def to_response_model(self) -> WorkflowGraphNodeEdges:
+        return WorkflowGraphNodeEdges(
+            nodes=[node.to_response_model() for node in self.nodes],
+            edges=[edge.to_response_model() for edge in self.edges],
+        )
 
 
 def _truncate_label(label: str, max_length: int) -> str:
