@@ -262,7 +262,6 @@ class WorkflowBroker(Generic[MODEL_T]):
                 self._state.is_running = False
 
                 if exception_raised:
-                    print("exception_raised", exception_raised)
                     # cancel the stream
                     self.write_event_to_stream(StopEvent())
 
