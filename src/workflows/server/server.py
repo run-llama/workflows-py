@@ -9,7 +9,7 @@ import json
 import logging
 from importlib.metadata import version
 from pathlib import Path
-from typing import Any, AsyncGenerator, TypedDict
+from typing import Any, AsyncGenerator
 from datetime import datetime, timezone
 
 from pydantic import BaseModel
@@ -45,22 +45,11 @@ from workflows.server.abstract_workflow_store import (
     Status,
 )
 from workflows.types import RunResultT
+from workflows.protocol import HandlerDict
 from .utils import nanoid, serdes_event
 from .representation_utils import _extract_workflow_structure
 
 logger = logging.getLogger()
-
-
-class HandlerDict(TypedDict):
-    handler_id: str
-    workflow_name: str
-    run_id: str | None  # run_id of the handler, easier for debugging
-    error: str | None
-    result: RunResultT | None
-    status: Status
-    started_at: str
-    updated_at: str | None
-    completed_at: str | None
 
 
 class WorkflowServer:
@@ -469,7 +458,8 @@ class WorkflowServer:
             )
             wrapper = self._run_workflow_handler(handler_id, workflow.name, handler)
             await handler
-            return JSONResponse(wrapper.to_dict())
+            resp: HandlerDict = wrapper.to_dict()
+            return JSONResponse(resp)
         except Exception as e:
             raise HTTPException(detail=f"Error running workflow: {e}", status_code=500)
 
@@ -563,7 +553,6 @@ class WorkflowServer:
                 detail=f"Error while getting JSON workflow representation: {e}",
                 status_code=500,
             )
-
         return JSONResponse({"graph": workflow_graph.to_dict()})
 
     async def _run_workflow_nowait(self, request: Request) -> JSONResponse:
@@ -630,7 +619,8 @@ class WorkflowServer:
             workflow.name,
             handler,
         )
-        return JSONResponse(wrapper.to_dict())
+        resp: HandlerDict = wrapper.to_dict()
+        return JSONResponse(resp)
 
     async def _get_workflow_result(self, request: Request) -> JSONResponse:
         """
@@ -674,14 +664,15 @@ class WorkflowServer:
 
         handler = wrapper.run_handler
         if not handler.done():
-            resp = wrapper.to_dict()
-            return JSONResponse(resp, status_code=202)
+            handler_dict_pending: HandlerDict = wrapper.to_dict()
+            return JSONResponse(handler_dict_pending, status_code=202)
 
         try:
             result = await handler
             self._results[handler_id] = result
 
-            return JSONResponse(wrapper.to_dict())
+            handler_dict_ready: HandlerDict = wrapper.to_dict()
+            return JSONResponse(handler_dict_ready)
         except Exception as e:
             raise HTTPException(
                 detail=f"Error getting workflow result: {e}", status_code=500

@@ -20,9 +20,8 @@ async def test_client(server: WorkflowServer) -> None:
     is_healthy = await client.is_healthy()
     assert is_healthy
     wfs = await client.list_workflows()
-    assert isinstance(wfs, list)
-    assert len(wfs) == 1
-    assert wfs[0] == "greeting"
+    assert len(wfs["workflows"]) == 1
+    assert wfs["workflows"][0] == "greeting"
     handler = await client.run_workflow_nowait(
         "greeting", start_event=InputEvent(greeting="hello", name="John")
     )
@@ -37,13 +36,11 @@ async def test_client(server: WorkflowServer) -> None:
     assert result is not None
     res = OutputEvent.model_validate(result)
     assert "John" in res.greeting and "!" in res.greeting and "hello" in res.greeting
-    result = await client.get_result(handler_id, as_handler=True)
-    assert isinstance(result, dict)
+    result = await client.get_result(handler_id)
     assert result["handler_id"] == handler_id
     handlers = await client.get_handlers()
-    assert isinstance(handlers, list)
-    assert len(handlers) == 1
-    assert handlers[0] == result
+    assert len(handlers["handlers"]) == 1
+    assert handlers["handlers"][0]["handler_id"] == handler_id
     result = await client.run_workflow(
         "greeting", start_event=InputEvent(greeting="hello", name="John")
     )

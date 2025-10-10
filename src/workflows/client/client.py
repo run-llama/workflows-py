@@ -5,9 +5,19 @@ from typing import Literal, Any, Union, AsyncGenerator, AsyncIterator, Optional
 from contextlib import asynccontextmanager
 from workflows.events import StartEvent, Event
 from workflows import Context
-from workflows.server.server import HandlerDict
+from workflows.protocol import (
+    HandlerDict,
+    HandlersListResponse,
+    HealthResponse,
+    SendEventResponse,
+    WorkflowsListResponse,
+    HandlerDictValidator,
+    HandlersListResponseValidator,
+    HealthResponseValidator,
+    SendEventResponseValidator,
+    WorkflowsListResponseValidator,
+)
 from workflows.server.utils import serdes_event
-from workflows.types import RunResultT
 
 
 class WorkflowClient:
@@ -36,7 +46,7 @@ class WorkflowClient:
         ) as client:
             yield client
 
-    async def is_healthy(self) -> bool:
+    async def is_healthy(self) -> HealthResponse:
         """
         Check whether the workflow server is helathy or not
 
@@ -46,9 +56,9 @@ class WorkflowClient:
         async with self._get_client() as client:
             response = await client.get("/health")
             response.raise_for_status()
-            return response.json().get("status", "") == "healthy"
+            return HealthResponseValidator.validate_python(response.json())
 
-    async def list_workflows(self) -> list[str]:
+    async def list_workflows(self) -> WorkflowsListResponse:
         """
         List workflows
 
@@ -60,7 +70,7 @@ class WorkflowClient:
 
             response.raise_for_status()
 
-            return response.json()["workflows"]
+            return WorkflowsListResponseValidator.validate_python(response.json())
 
     async def run_workflow(
         self,
@@ -68,7 +78,7 @@ class WorkflowClient:
         handler_id: Optional[str] = None,
         start_event: Union[StartEvent, dict[str, Any], str, None] = None,
         context: Union[Context, dict[str, Any], None] = None,
-    ) -> Any:
+    ) -> HandlerDict:
         """
         Run the workflow and wait until completion.
 
@@ -78,7 +88,7 @@ class WorkflowClient:
             handler_id (Optional[str]): Workflow handler identifier to continue from a previous completed run.
 
         Returns:
-            Any: Result of the workflow
+            HandlerDict: Handler state including result and metadata
         """
         if start_event is not None:
             try:
@@ -105,7 +115,7 @@ class WorkflowClient:
 
             response.raise_for_status()
 
-            return response.json()["result"]
+            return HandlerDictValidator.validate_python(response.json())
 
     async def run_workflow_nowait(
         self,
@@ -113,7 +123,7 @@ class WorkflowClient:
         handler_id: Optional[str] = None,
         start_event: Union[StartEvent, dict[str, Any], None] = None,
         context: Union[Context, dict[str, Any], None] = None,
-    ) -> dict[str, Any]:
+    ) -> HandlerDict:
         """
         Run the workflow in the background.
 
@@ -123,7 +133,7 @@ class WorkflowClient:
             handler_id (Optional[str]): Workflow handler identifier to continue from a previous completed run.
 
         Returns:
-            dict[str, Any]: JSON representation of the handler running the workflow
+            HandlerDict: JSON representation of the handler running the workflow
         """
         if start_event is not None:
             try:
@@ -150,7 +160,7 @@ class WorkflowClient:
 
             response.raise_for_status()
 
-            return response.json()
+            return HandlerDictValidator.validate_python(response.json())
 
     async def get_workflow_events(
         self,
@@ -213,7 +223,7 @@ class WorkflowClient:
         handler_id: str,
         event: Union[Event, dict[str, Any], str],
         step: Optional[str] = None,
-    ) -> bool:
+    ) -> SendEventResponse:
         """
         Send an event to the workflow.
 
@@ -223,7 +233,7 @@ class WorkflowClient:
             step (Optional[str]): Step to send the event to (optional, defaults to None)
 
         Returns:
-            bool: Success status of the send operation
+            SendEventResponse: Confirmation of the send operation
         """
         try:
             event = serdes_event(event)
@@ -236,11 +246,9 @@ class WorkflowClient:
             response = await client.post(f"/events/{handler_id}", json=request_body)
             response.raise_for_status()
 
-            return response.json()["status"] == "sent"
+            return SendEventResponseValidator.validate_python(response.json())
 
-    async def get_result(
-        self, handler_id: str, as_handler: bool = False
-    ) -> Union[RunResultT, None, HandlerDict]:
+    async def get_result(self, handler_id: str) -> HandlerDict:
         """
         Get the result of the workflow associated with the specified handler ID.
 
@@ -255,15 +263,9 @@ class WorkflowClient:
             response = await client.get(f"/results/{handler_id}")
             response.raise_for_status()
 
-            if response.status_code == 202:
-                return None
+            return HandlerDictValidator.validate_python(response.json())
 
-            if not as_handler:
-                return response.json()["result"]
-            else:
-                return response.json()
-
-    async def get_handlers(self) -> list[HandlerDict]:
+    async def get_handlers(self) -> HandlersListResponse:
         """
         Get all the workflow handlers.
 
@@ -274,4 +276,4 @@ class WorkflowClient:
             response = await client.get("/handlers")
             response.raise_for_status()
 
-            return response.json()["handlers"]
+            return HandlersListResponseValidator.validate_python(response.json())
