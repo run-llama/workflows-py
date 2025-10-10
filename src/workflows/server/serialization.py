@@ -28,11 +28,10 @@ def _mro_names(cls: type) -> list[str] | None:
     # Skip the class itself by starting from the second MRO entry
     for c in cls.mro()[1:]:
         if c.__name__ in built_in_mros:
-            continue
+            break
         try:
             names.append(c.__name__)
         except Exception:
-            # Best effort; skip if class is unusual
             continue
     if not names:
         return None
