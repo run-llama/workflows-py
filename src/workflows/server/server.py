@@ -46,7 +46,7 @@ from workflows.server.abstract_workflow_store import (
 )
 from workflows.types import RunResultT
 from workflows.protocol import HandlerDict
-from .utils import nanoid, serdes_event
+from .utils import nanoid
 from .representation_utils import _extract_workflow_structure
 
 logger = logging.getLogger()
@@ -1029,8 +1029,13 @@ class WorkflowServer:
             # Extract custom StartEvent if present
             start_event = None
             if start_event_data is not None:
+                serializer = JsonSerializer()
                 try:
-                    start_event = serdes_event(start_event_data, False)
+                    start_event = (
+                        serializer.deserialize(start_event_data)
+                        if isinstance(start_event_data, str)
+                        else serializer.deserialize_value(start_event_data)
+                    )
                     if isinstance(start_event, dict):
                         start_event = workflow.start_event_class.model_validate(
                             start_event

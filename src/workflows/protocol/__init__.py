@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 from typing_extensions import TypedDict
-from pydantic import TypeAdapter, ConfigDict
+from pydantic import TypeAdapter
 
 # Shared protocol types between client and server
 
@@ -75,23 +75,12 @@ class WorkflowGraphNodeEdges(TypedDict):
 
 
 # Pydantic TypeAdapter validators for lightweight runtime validation/casting
-_ignore_extra = ConfigDict(extra="ignore")
-HandlerDictValidator = TypeAdapter(HandlerDict, config=_ignore_extra)
-HandlersListResponseValidator = TypeAdapter(HandlersListResponse, config=_ignore_extra)
-HealthResponseValidator = TypeAdapter(HealthResponse, config=_ignore_extra)
-WorkflowsListResponseValidator = TypeAdapter(
-    WorkflowsListResponse, config=_ignore_extra
-)
-SendEventResponseValidator = TypeAdapter(SendEventResponse, config=_ignore_extra)
-CancelHandlerResponseValidator = TypeAdapter(
-    CancelHandlerResponse, config=_ignore_extra
-)
-WorkflowSchemaResponseValidator = TypeAdapter(
-    WorkflowSchemaResponse, config=_ignore_extra
-)
-WorkflowEventsListResponseValidator = TypeAdapter(
-    WorkflowEventsListResponse, config=_ignore_extra
-)
-WorkflowGraphResponseValidator = TypeAdapter(
-    WorkflowGraphResponse, config=_ignore_extra
-)
+HandlerDictValidator = TypeAdapter(HandlerDict)
+HandlersListResponseValidator = TypeAdapter(HandlersListResponse)
+HealthResponseValidator = TypeAdapter(HealthResponse)
+WorkflowsListResponseValidator = TypeAdapter(WorkflowsListResponse)
+SendEventResponseValidator = TypeAdapter(SendEventResponse)
+CancelHandlerResponseValidator = TypeAdapter(CancelHandlerResponse)
+WorkflowSchemaResponseValidator = TypeAdapter(WorkflowSchemaResponse)
+WorkflowEventsListResponseValidator = TypeAdapter(WorkflowEventsListResponse)
+WorkflowGraphResponseValidator = TypeAdapter(WorkflowGraphResponse)

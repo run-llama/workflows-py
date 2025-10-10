@@ -3,6 +3,7 @@ import json
 
 from typing import Literal, Any, Union, AsyncGenerator, AsyncIterator, Optional
 from contextlib import asynccontextmanager
+from workflows.context.serializers import JsonSerializer
 from workflows.events import StartEvent, Event
 from workflows import Context
 from workflows.protocol import (
@@ -17,7 +18,6 @@ from workflows.protocol import (
     SendEventResponseValidator,
     WorkflowsListResponseValidator,
 )
-from workflows.server.utils import serdes_event
 
 
 class WorkflowClient:
@@ -76,7 +76,7 @@ class WorkflowClient:
         self,
         workflow_name: str,
         handler_id: Optional[str] = None,
-        start_event: Union[StartEvent, dict[str, Any], str, None] = None,
+        start_event: Union[StartEvent, dict[str, Any], None] = None,
         context: Union[Context, dict[str, Any], None] = None,
     ) -> HandlerDict:
         """
@@ -92,7 +92,11 @@ class WorkflowClient:
         """
         if start_event is not None:
             try:
-                start_event = serdes_event(start_event)
+                start_event = (
+                    start_event
+                    if isinstance(start_event, dict)
+                    else JsonSerializer().serialize_value(start_event)
+                )
             except Exception as e:
                 raise ValueError(
                     f"Impossible to serialize the start event because of: {e}"
@@ -137,7 +141,7 @@ class WorkflowClient:
         """
         if start_event is not None:
             try:
-                start_event = serdes_event(start_event)
+                start_event = _serialize_event(start_event)
             except Exception as e:
                 raise ValueError(
                     f"Impossible to serialize the start event because of: {e}"
@@ -147,8 +151,8 @@ class WorkflowClient:
                 context = context.to_dict()
             except Exception as e:
                 raise ValueError(f"Impossible to serialize the context because of: {e}")
-        request_body = {
-            "start_event": start_event or serdes_event(StartEvent()),
+        request_body: dict[str, Any] = {
+            "start_event": start_event or _serialize_event(StartEvent()),
             "context": context or {},
         }
         if handler_id:
@@ -221,7 +225,9 @@ class WorkflowClient:
     async def send_event(
         self,
         handler_id: str,
-        event: Union[Event, dict[str, Any], str],
+        event: Union[
+            Event, dict[str, Any]
+        ],  # either an Event object, or a dictionary representation (with type metadata and embedded value)
         step: Optional[str] = None,
     ) -> SendEventResponse:
         """
@@ -236,12 +242,16 @@ class WorkflowClient:
             SendEventResponse: Confirmation of the send operation
         """
         try:
-            event = serdes_event(event)
+            serialized_event: dict[str, Any] = (
+                event
+                if isinstance(event, dict)
+                else JsonSerializer().serialize_value(event)
+            )
         except Exception as e:
             raise ValueError(f"Error while serializing the provided event: {e}")
-        request_body = {"event": event}
+        request_body: dict[str, Any] = {"event": serialized_event}
         if step:
-            request_body.update({"step": step})
+            request_body["step"] = step
         async with self._get_client() as client:
             response = await client.post(f"/events/{handler_id}", json=request_body)
             response.raise_for_status()
@@ -277,3 +287,9 @@ class WorkflowClient:
             response.raise_for_status()
 
             return HandlersListResponseValidator.validate_python(response.json())
+
+
+def _serialize_event(event: Union[Event, dict[str, Any]]) -> dict[str, Any]:
+    if isinstance(event, dict):
+        return event  # assumes you know what you are doing. In many cases this needs to be a dict that contains type metadata and the value
+    return JsonSerializer().serialize_value(event)
