@@ -4,14 +4,12 @@ from httpx import ASGITransport
 from workflows.server.server import WorkflowServer
 from workflows.client import WorkflowClient
 from .greeting_workflow import greeting_wf, InputEvent, OutputEvent
-from .hitl_workflow import hitl_wf
 
 
 @pytest.fixture()
 def server() -> WorkflowServer:
     ws = WorkflowServer()
     ws.add_workflow(name="greeting", workflow=greeting_wf)
-    ws.add_workflow(name="human", workflow=hitl_wf)
     return ws
 
 
@@ -23,9 +21,8 @@ async def test_client(server: WorkflowServer) -> None:
     assert is_healthy
     wfs = await client.list_workflows()
     assert isinstance(wfs, list)
-    assert len(wfs) == 2
+    assert len(wfs) == 1
     assert wfs[0] == "greeting"
-    assert wfs[1] == "human"
     handler = await client.run_workflow_nowait(
         "greeting", start_event=InputEvent(greeting="hello", name="John")
     )
@@ -64,16 +61,3 @@ async def test_client(server: WorkflowServer) -> None:
         assert isinstance(event, dict)
         events.append(event)
     assert len(events) > 3
-    # handler = await client.run_workflow_nowait("human")
-    # handler_id = handler["handler_id"]
-    # async for event in client.get_workflow_events(handler_id=handler_id):
-    #     if event.get("qualified_name", "") == "tests.client.hitl_workflow.RequestEvent":
-    #         sent_event = await client.send_event(handler_id=handler_id, event=ResponseEvent(response="John"))
-    #         assert sent_event
-    #     if event.get("qualified_name", "") == "tests.client.hitl_workflow.HiddenEvent":
-    #         sent_event = await client.send_event(handler_id=handler_id, event=ResponseEvent(response="Yes"))
-    #         assert sent_event
-    # result = await client.get_result(handler_id)
-    # assert result is not None
-    # res = OutEvent.model_validate(result)
-    # assert res.output == "Got it!: Yes"

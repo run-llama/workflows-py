@@ -1,0 +1,42 @@
+import asyncio
+
+from workflows.client import WorkflowClient
+from workflows.events import (
+    StopEvent,
+    HumanResponseEvent,
+)
+
+
+class ResponseEvent(HumanResponseEvent):
+    response: str
+
+
+class OutEvent(StopEvent):
+    output: str
+
+
+async def main() -> None:
+    client = WorkflowClient(protocol="http", port=8000, host="localhost")
+    handler = await client.run_workflow_nowait("human")
+    handler_id = handler["handler_id"]
+    print(handler_id)
+    async for event in client.get_workflow_events(handler_id=handler_id):
+        if "RequestEvent" in event.get("qualified_name", ""):
+            print(
+                "Workflow is requiring human input:",
+                event.get("value", {}).get("prompt", ""),
+            )
+            name = input("Reply here: ")
+            sent_event = await client.send_event(
+                handler_id=handler_id,
+                event=ResponseEvent(response=name.capitalize().strip()),
+            )
+            msg = "Event has been sent" if sent_event else "Event failed to send"
+            print(msg)
+    result = await client.get_result(handler_id)
+    res = OutEvent.model_validate(result)
+    print("Received final message:", res.output)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

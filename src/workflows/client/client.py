@@ -138,7 +138,7 @@ class WorkflowClient:
             except Exception as e:
                 raise ValueError(f"Impossible to serialize the context because of: {e}")
         request_body = {
-            "start_event": start_event or "{}",
+            "start_event": start_event or serdes_event(StartEvent()),
             "context": context or {},
         }
         if handler_id:
