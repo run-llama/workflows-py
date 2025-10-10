@@ -1,7 +1,14 @@
 import httpx
 import json
 
-from typing import Literal, Any, Union, AsyncGenerator, AsyncIterator, Optional
+from typing import (
+    Any,
+    Union,
+    AsyncGenerator,
+    AsyncIterator,
+    Optional,
+    overload,
+)
 from contextlib import asynccontextmanager
 from workflows.context.serializers import JsonSerializer
 from workflows.events import StartEvent, Event
@@ -16,30 +23,35 @@ from workflows.protocol import (
 
 
 class WorkflowClient:
+    @overload
+    def __init__(self, *, httpx_client: httpx.AsyncClient): ...
+    @overload
     def __init__(
         self,
-        protocol: Optional[Literal["http", "https"]] = None,
-        host: Optional[str] = None,
-        port: Optional[int] = None,
-        timeout: Optional[int] = None,
-        httpx_kwargs: Optional[dict[str, Any]] = None,
+        *,
+        base_url: str,
+    ): ...
+
+    def __init__(
+        self,
+        *,
+        httpx_client: Union[httpx.AsyncClient, None] = None,
+        base_url: Union[str, None] = None,
     ):
-        # TODO: middleware-related logic
-        self.protocol = protocol or "http"
-        self.host = host or "localhost"
-        self.port = port or 8000
-        self.timeout = timeout or 600
-        self.httpx_kwargs = httpx_kwargs or {}
-        # TODO: add some basic TLS/verification and auth features
+        if httpx_client is None and base_url is None:
+            raise ValueError("Either httpx_client or base_url must be provided")
+        if httpx_client is not None and base_url is not None:
+            raise ValueError("Only one of httpx_client or base_url must be provided")
+        self.httpx_client = httpx_client
+        self.base_url = base_url
 
     @asynccontextmanager
     async def _get_client(self) -> AsyncIterator[httpx.AsyncClient]:
-        async with httpx.AsyncClient(
-            base_url=self.protocol + "://" + self.host + ":" + str(self.port),
-            timeout=self.timeout,
-            **self.httpx_kwargs,
-        ) as client:
-            yield client
+        if self.httpx_client:
+            yield self.httpx_client
+        else:
+            async with httpx.AsyncClient(base_url=self.base_url or "") as client:
+                yield client
 
     async def is_healthy(self) -> HealthResponse:
         """

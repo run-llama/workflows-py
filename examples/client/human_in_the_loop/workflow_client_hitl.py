@@ -16,7 +16,7 @@ class OutEvent(StopEvent):
 
 
 async def main() -> None:
-    client = WorkflowClient(protocol="http", port=8000, host="localhost")
+    client = WorkflowClient(base_url="http://localhost:8000")
     handler = await client.run_workflow_nowait("human")
     handler_id = handler.handler_id
     print(handler_id)

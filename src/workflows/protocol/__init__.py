@@ -52,7 +52,7 @@ class WorkflowEventsListResponse(BaseModel):
 
 
 class WorkflowGraphResponse(BaseModel):
-    graph: "WorkflowGraphNodeEdges"
+    graph: WorkflowGraphNodeEdges
 
 
 class WorkflowGraphNode(BaseModel):

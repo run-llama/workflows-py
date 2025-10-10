@@ -1,6 +1,6 @@
 import pytest
 
-from httpx import ASGITransport
+from httpx import ASGITransport, AsyncClient
 from workflows.server.server import WorkflowServer
 from workflows.client import WorkflowClient
 from .greeting_workflow import greeting_wf, InputEvent, OutputEvent
@@ -16,7 +16,8 @@ def server() -> WorkflowServer:
 @pytest.fixture()
 def client(server: WorkflowServer) -> WorkflowClient:
     transport = ASGITransport(server.app)
-    return WorkflowClient(httpx_kwargs={"transport": transport})
+    httpx_client = AsyncClient(transport=transport, base_url="http://test")
+    return WorkflowClient(httpx_client=httpx_client)
 
 
 @pytest.mark.asyncio
