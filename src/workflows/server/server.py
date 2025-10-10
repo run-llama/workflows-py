@@ -47,6 +47,7 @@ from workflows.server.abstract_workflow_store import (
 from workflows.types import RunResultT
 from .utils import nanoid
 from .representation_utils import _extract_workflow_structure
+from .serialization import build_event_envelope
 
 logger = logging.getLogger()
 
@@ -636,12 +637,14 @@ class WorkflowServer:
         description: |
           Streams events produced by a workflow execution. Events are emitted as
           newline-delimited JSON by default, or as Server-Sent Events when `sse=true`.
-          Event data is formatted according to llama-index's json serializer. For
-          pydantic serializable python types, it returns:
+          Event data is returned as an envelope that preserves backward-compatible fields
+          and adds metadata for type-safety on the client:
           {
-            "__is_pydantic": True,
+            "__is_pydantic": true,
             "value": <pydantic serialized value>,
-            "qualified_name": <python path to pydantic class>
+            "qualified_name": <python path to pydantic class>,  # deprecated, prefer `mro`
+            "mro": [<qualified class names from most to least specific>],
+            "origin": "builtin" | "user"
           }
 
           Event queue is mutable. Elements are added to the queue by the workflow handler, and removed by any consumer of the queue.
@@ -733,12 +736,13 @@ class WorkflowServer:
             async for event in generator:
                 if not include_internal and isinstance(event, InternalDispatchEvent):
                     continue
-                serialized_event = serializer.serialize(event)
+                envelope = build_event_envelope(event, serializer)
+                payload = json.dumps(envelope)
                 if sse:
                     # emit as untyped data. Difficult to subscribe to dynamic event types with SSE.
-                    yield f"data: {serialized_event}\n\n"
+                    yield f"data: {payload}\n\n"
                 else:
-                    yield f"{serialized_event}\n"
+                    yield f"{payload}\n"
 
                 await asyncio.sleep(0)
 
