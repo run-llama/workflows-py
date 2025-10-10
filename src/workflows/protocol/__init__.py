@@ -1,8 +1,7 @@
 from __future__ import annotations
 
 from typing import Any, Literal
-from typing_extensions import TypedDict
-from pydantic import TypeAdapter
+from pydantic import BaseModel
 
 # Shared protocol types between client and server
 
@@ -10,7 +9,7 @@ from pydantic import TypeAdapter
 Status = Literal["running", "completed", "failed", "cancelled"]
 
 
-class HandlerDict(TypedDict):
+class HandlerData(BaseModel):
     handler_id: str
     workflow_name: str
     run_id: str | None
@@ -23,40 +22,40 @@ class HandlerDict(TypedDict):
     completed_at: str | None
 
 
-class HandlersListResponse(TypedDict):
-    handlers: list[HandlerDict]
+class HandlersListResponse(BaseModel):
+    handlers: list[HandlerData]
 
 
-class HealthResponse(TypedDict):
+class HealthResponse(BaseModel):
     status: Literal["healthy"]
 
 
-class WorkflowsListResponse(TypedDict):
+class WorkflowsListResponse(BaseModel):
     workflows: list[str]
 
 
-class SendEventResponse(TypedDict):
+class SendEventResponse(BaseModel):
     status: Literal["sent"]
 
 
-class CancelHandlerResponse(TypedDict):
+class CancelHandlerResponse(BaseModel):
     status: Literal["deleted", "cancelled"]
 
 
-class WorkflowSchemaResponse(TypedDict):
+class WorkflowSchemaResponse(BaseModel):
     start: dict[str, Any]
     stop: dict[str, Any]
 
 
-class WorkflowEventsListResponse(TypedDict):
+class WorkflowEventsListResponse(BaseModel):
     events: list[dict[str, Any]]
 
 
-class WorkflowGraphResponse(TypedDict):
-    graph: WorkflowGraphNodeEdges
+class WorkflowGraphResponse(BaseModel):
+    graph: "WorkflowGraphNodeEdges"
 
 
-class WorkflowGraphNode(TypedDict):
+class WorkflowGraphNode(BaseModel):
     id: str
     label: str
     node_type: str
@@ -64,23 +63,28 @@ class WorkflowGraphNode(TypedDict):
     event_type: str | None
 
 
-class WorkflowGraphEdge(TypedDict):
+class WorkflowGraphEdge(BaseModel):
     source: str
     target: str
 
 
-class WorkflowGraphNodeEdges(TypedDict):
+class WorkflowGraphNodeEdges(BaseModel):
     nodes: list[WorkflowGraphNode]
     edges: list[WorkflowGraphEdge]
 
 
-# Pydantic TypeAdapter validators for lightweight runtime validation/casting
-HandlerDictValidator = TypeAdapter(HandlerDict)
-HandlersListResponseValidator = TypeAdapter(HandlersListResponse)
-HealthResponseValidator = TypeAdapter(HealthResponse)
-WorkflowsListResponseValidator = TypeAdapter(WorkflowsListResponse)
-SendEventResponseValidator = TypeAdapter(SendEventResponse)
-CancelHandlerResponseValidator = TypeAdapter(CancelHandlerResponse)
-WorkflowSchemaResponseValidator = TypeAdapter(WorkflowSchemaResponse)
-WorkflowEventsListResponseValidator = TypeAdapter(WorkflowEventsListResponse)
-WorkflowGraphResponseValidator = TypeAdapter(WorkflowGraphResponse)
+__all__ = [
+    "Status",
+    "HandlerData",
+    "HandlersListResponse",
+    "HealthResponse",
+    "WorkflowsListResponse",
+    "SendEventResponse",
+    "CancelHandlerResponse",
+    "WorkflowSchemaResponse",
+    "WorkflowEventsListResponse",
+    "WorkflowGraphResponse",
+    "WorkflowGraphNode",
+    "WorkflowGraphEdge",
+    "WorkflowGraphNodeEdges",
+]

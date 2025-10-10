@@ -31,7 +31,7 @@ class DrawWorkflowNode:
         None  # Store the actual event type for styling decisions
     )
 
-    def to_dict(self) -> WorkflowGraphNode:
+    def to_response_model(self) -> WorkflowGraphNode:
         return WorkflowGraphNode(
             id=self.id,
             label=self.label,
@@ -48,7 +48,7 @@ class DrawWorkflowEdge:
     source: str
     target: str
 
-    def to_dict(self) -> WorkflowGraphEdge:
+    def to_response_model(self) -> WorkflowGraphEdge:
         return WorkflowGraphEdge(
             source=self.source,
             target=self.target,
@@ -62,10 +62,10 @@ class DrawWorkflowGraph:
     nodes: List[DrawWorkflowNode]
     edges: List[DrawWorkflowEdge]
 
-    def to_dict(self) -> WorkflowGraphNodeEdges:
+    def to_response_model(self) -> WorkflowGraphNodeEdges:
         return WorkflowGraphNodeEdges(
-            nodes=[node.to_dict() for node in self.nodes],
-            edges=[edge.to_dict() for edge in self.edges],
+            nodes=[node.to_response_model() for node in self.nodes],
+            edges=[edge.to_response_model() for edge in self.edges],
         )
 
 

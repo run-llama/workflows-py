@@ -25,7 +25,7 @@ async def main() -> None:
         start_event=InputNumbers(a=1, b=3, operation="addition"),
         context=None,
     )
-    handler_id = handler["handler_id"]
+    handler_id = handler.handler_id
     print("==== STARTING THE WORKFLOW ===")
     print(f"Workflow running with handler ID: {handler_id}")
     print("=== STREAMING EVENTS ===")
@@ -34,7 +34,7 @@ async def main() -> None:
         print("Received data:", event)
     result = await client.get_result(handler_id)
 
-    print(f"Final result: {result['result']} (status: {result['status']})")
+    print(f"Final result: {result.result} (status: {result.status})")
 
 
 if __name__ == "__main__":

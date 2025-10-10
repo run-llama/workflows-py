@@ -18,7 +18,7 @@ class OutEvent(StopEvent):
 async def main() -> None:
     client = WorkflowClient(protocol="http", port=8000, host="localhost")
     handler = await client.run_workflow_nowait("human")
-    handler_id = handler["handler_id"]
+    handler_id = handler.handler_id
     print(handler_id)
     async for event in client.get_workflow_events(handler_id=handler_id):
         if "RequestEvent" in event.get("qualified_name", ""):
@@ -34,8 +34,8 @@ async def main() -> None:
             msg = "Event has been sent" if sent_event else "Event failed to send"
             print(msg)
     result = await client.get_result(handler_id)
-    print(f"Workflow complete with status: {result['status']})")
-    res = OutEvent.model_validate(result["result"])
+    print(f"Workflow complete with status: {result.status})")
+    res = OutEvent.model_validate(result.result)
     print("Received final message:", res.output)
 
 

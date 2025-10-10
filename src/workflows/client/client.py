@@ -7,16 +7,11 @@ from workflows.context.serializers import JsonSerializer
 from workflows.events import StartEvent, Event
 from workflows import Context
 from workflows.protocol import (
-    HandlerDict,
+    HandlerData,
     HandlersListResponse,
     HealthResponse,
     SendEventResponse,
     WorkflowsListResponse,
-    HandlerDictValidator,
-    HandlersListResponseValidator,
-    HealthResponseValidator,
-    SendEventResponseValidator,
-    WorkflowsListResponseValidator,
 )
 
 
@@ -56,7 +51,7 @@ class WorkflowClient:
         async with self._get_client() as client:
             response = await client.get("/health")
             response.raise_for_status()
-            return HealthResponseValidator.validate_python(response.json())
+            return HealthResponse.model_validate(response.json())
 
     async def list_workflows(self) -> WorkflowsListResponse:
         """
@@ -70,7 +65,7 @@ class WorkflowClient:
 
             response.raise_for_status()
 
-            return WorkflowsListResponseValidator.validate_python(response.json())
+            return WorkflowsListResponse.model_validate(response.json())
 
     async def run_workflow(
         self,
@@ -78,7 +73,7 @@ class WorkflowClient:
         handler_id: Optional[str] = None,
         start_event: Union[StartEvent, dict[str, Any], None] = None,
         context: Union[Context, dict[str, Any], None] = None,
-    ) -> HandlerDict:
+    ) -> HandlerData:
         """
         Run the workflow and wait until completion.
 
@@ -119,7 +114,7 @@ class WorkflowClient:
 
             response.raise_for_status()
 
-            return HandlerDictValidator.validate_python(response.json())
+            return HandlerData.model_validate(response.json())
 
     async def run_workflow_nowait(
         self,
@@ -127,7 +122,7 @@ class WorkflowClient:
         handler_id: Optional[str] = None,
         start_event: Union[StartEvent, dict[str, Any], None] = None,
         context: Union[Context, dict[str, Any], None] = None,
-    ) -> HandlerDict:
+    ) -> HandlerData:
         """
         Run the workflow in the background.
 
@@ -164,7 +159,7 @@ class WorkflowClient:
 
             response.raise_for_status()
 
-            return HandlerDictValidator.validate_python(response.json())
+            return HandlerData.model_validate(response.json())
 
     async def get_workflow_events(
         self,
@@ -256,9 +251,9 @@ class WorkflowClient:
             response = await client.post(f"/events/{handler_id}", json=request_body)
             response.raise_for_status()
 
-            return SendEventResponseValidator.validate_python(response.json())
+            return SendEventResponse.model_validate(response.json())
 
-    async def get_result(self, handler_id: str) -> HandlerDict:
+    async def get_result(self, handler_id: str) -> HandlerData:
         """
         Get the result of the workflow associated with the specified handler ID.
 
@@ -273,7 +268,7 @@ class WorkflowClient:
             response = await client.get(f"/results/{handler_id}")
             response.raise_for_status()
 
-            return HandlerDictValidator.validate_python(response.json())
+            return HandlerData.model_validate(response.json())
 
     async def get_handlers(self) -> HandlersListResponse:
         """
@@ -286,7 +281,7 @@ class WorkflowClient:
             response = await client.get("/handlers")
             response.raise_for_status()
 
-            return HandlersListResponseValidator.validate_python(response.json())
+            return HandlersListResponse.model_validate(response.json())
 
 
 def _serialize_event(event: Union[Event, dict[str, Any]]) -> dict[str, Any]:
