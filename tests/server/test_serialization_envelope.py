@@ -74,5 +74,3 @@ def test_envelope_internal_event() -> None:
     mro = env.get("mro", [])
     assert "workflows.events.StepStateChanged" in mro
     assert "workflows.events.Event" in mro
-
-

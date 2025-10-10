@@ -11,6 +11,7 @@ from workflows.events import (
     Event,
 )
 
+
 class EventOrigin(str, Enum):
     BUILTIN = "builtin"
     USER = "user"
@@ -68,7 +69,3 @@ def build_event_envelope(event: Event, serializer: JsonSerializer) -> EventEnvel
         ),
     )
     return envelope
-
-
-
-
