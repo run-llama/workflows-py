@@ -10,6 +10,7 @@ from workflows.events import (
     Event,
 )
 
+
 class EventEnvelope(TypedDict):
     value: Any
 
@@ -22,12 +23,7 @@ class EventEnvelope(TypedDict):
 
 
 def _mro_names(cls: type) -> list[str] | None:
-    built_in_mros = [
-        "Event",
-        "DictLikeModel",
-        "BaseModel",
-        "object"
-    ]
+    built_in_mros = ["Event", "DictLikeModel", "BaseModel", "object"]
     names: list[str] = []
     # Skip the class itself by starting from the second MRO entry
     for c in cls.mro()[1:]:
@@ -62,7 +58,3 @@ def build_event_envelope(event: Event, serializer: JsonSerializer) -> EventEnvel
         type=type(event).__name__,
     )
     return envelope
-
-
-
-

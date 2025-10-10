@@ -66,5 +66,3 @@ def test_envelope_internal_event() -> None:
     types = env.get("types")
     assert types is not None
     assert "InternalDispatchEvent" in types
-
-
