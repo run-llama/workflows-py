@@ -87,11 +87,7 @@ class WorkflowClient:
         """
         if start_event is not None:
             try:
-                start_event = (
-                    start_event
-                    if isinstance(start_event, dict)
-                    else JsonSerializer().serialize_value(start_event)
-                )
+                start_event = _serialize_event(start_event)
             except Exception as e:
                 raise ValueError(
                     f"Impossible to serialize the start event because of: {e}"
@@ -237,11 +233,7 @@ class WorkflowClient:
             SendEventResponse: Confirmation of the send operation
         """
         try:
-            serialized_event: dict[str, Any] = (
-                event
-                if isinstance(event, dict)
-                else JsonSerializer().serialize_value(event)
-            )
+            serialized_event: dict[str, Any] = _serialize_event(event)
         except Exception as e:
             raise ValueError(f"Error while serializing the provided event: {e}")
         request_body: dict[str, Any] = {"event": serialized_event}
