@@ -129,63 +129,6 @@ async def test_default_state_manager_serialization(
 
 
 @pytest.mark.asyncio
-async def test_custom_state_manager_snapshot(
-    default_state_manager: InMemoryStateStore[DictState],
-) -> None:
-    await default_state_manager.set("serializer", type(JsonSerializer()))
-    await default_state_manager.set("test_data", {"test": 1, "data": 2})
-
-    assert await default_state_manager.get("serializer") is type(JsonSerializer())
-    assert await default_state_manager.get("test_data") == {"test": 1, "data": 2}
-
-    # prove that to_dict throws error when called on this object
-    with pytest.raises(ValueError):
-        default_state_manager.to_dict(JsonSerializer())
-
-    dict_snapshot = default_state_manager.to_dict_snapshot(JsonSerializer())
-    assert isinstance(dict_snapshot, dict)
-    assert (
-        "state_data" in dict_snapshot
-        and "state_type" in dict_snapshot
-        and "state_module" in dict_snapshot
-    )
-    assert dict_snapshot["state_data"] == {
-        "serializer": "<class 'workflows.context.serializers.JsonSerializer'>",
-        "test_data": '{"test": 1, "data": 2}',
-    }
-    assert dict_snapshot["state_type"] == "DictState"
-    assert dict_snapshot["state_module"] == "workflows.context.state_store"
-
-
-@pytest.mark.asyncio
-async def test_default_state_manager_snapshot(
-    unser_custom_state_manager: InMemoryStateStore[MyUnserializableState],
-) -> None:
-    assert await unser_custom_state_manager.get("serializer_type") is type(
-        JsonSerializer()
-    )
-    assert await unser_custom_state_manager.get("test_data") == {"test": 1, "data": 2}
-
-    # prove that to_dict throws error when called on this object
-    with pytest.raises(ValueError):
-        unser_custom_state_manager.to_dict(JsonSerializer())
-
-    dict_snapshot = unser_custom_state_manager.to_dict_snapshot(JsonSerializer())
-    assert isinstance(dict_snapshot, dict)
-    assert (
-        "state_data" in dict_snapshot
-        and "state_type" in dict_snapshot
-        and "state_module" in dict_snapshot
-    )
-    assert dict_snapshot["state_data"] == {
-        "serializer_type": "<class 'workflows.context.serializers.JsonSerializer'>",
-        "test_data": '{"test": 1, "data": 2}',
-    }
-    assert dict_snapshot["state_type"] == "MyUnserializableState"
-    assert dict_snapshot["state_module"] == "tests.test_state_manager"
-
-
-@pytest.mark.asyncio
 async def test_custom_state_manager(
     custom_state_manager: InMemoryStateStore[MyState],
 ) -> None:

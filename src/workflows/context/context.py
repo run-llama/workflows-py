@@ -10,6 +10,7 @@ import warnings
 from typing import (
     TYPE_CHECKING,
     Any,
+    AsyncGenerator,
     Generic,
     Type,
     TypeVar,
@@ -27,9 +28,12 @@ from workflows.errors import (
 from workflows.events import (
     Event,
     StartEvent,
+    StopEvent,
 )
-from workflows.runtime.state import WorkflowBrokerState
+from workflows.runtime.types.internal_state import BrokerState
 from workflows.runtime.broker import WorkflowBroker
+from workflows.runtime.basic_runtime import basic_runtime
+from workflows.runtime.types.plugin import Plugin, WorkflowRuntime
 from workflows.types import RunResultT
 from workflows.handler import WorkflowHandler
 
@@ -120,22 +124,32 @@ class Context(Generic[MODEL_T]):
     # Backing state store; serialized as `state`
     _state_store: InMemoryStateStore[MODEL_T]
     _broker_run: WorkflowBroker[MODEL_T] | None
+    _plugin: Plugin
+    _workflow: Workflow
 
     def __init__(
         self,
         workflow: Workflow,
         previous_context: dict[str, Any] | None = None,
         serializer: BaseSerializer | None = None,
+        plugin: Plugin = basic_runtime,
     ) -> None:
         self._serializer = serializer or JsonSerializer()
         self._broker_run = None
+        self._plugin = plugin
+        self._workflow = workflow
 
         # parse the serialized context
         serializer = serializer or JsonSerializer()
         if previous_context is not None:
             try:
-                previous_context_parsed = SerializedContext.model_validate(
+                # Auto-detect and convert V0 to V1 if needed
+                previous_context_parsed = SerializedContext.from_dict_auto(
                     previous_context
+                )
+                # validate it fully parses synchronously to avoid delayed validation errors
+                BrokerState.from_serialized(
+                    previous_context_parsed, workflow, serializer
                 )
             except ValidationError as e:
                 raise ContextSerdeError(
@@ -193,19 +207,19 @@ class Context(Generic[MODEL_T]):
         else:
             return self._broker_run.is_running
 
-    def _init_broker(self, workflow: Workflow) -> WorkflowBroker[MODEL_T]:
+    def _init_broker(
+        self, workflow: Workflow, plugin: WorkflowRuntime | None = None
+    ) -> WorkflowBroker[MODEL_T]:
         if self._broker_run is not None:
             raise WorkflowRuntimeError("Broker already initialized")
-        run_id = str(uuid.uuid4())
-
-        broker_state = WorkflowBrokerState.from_serialized(
-            self._init_snapshot, self._serializer
-        )
+        # Initialize a runtime plugin (asyncio-based by default)
+        runtime: WorkflowRuntime = plugin or self._plugin.new_runtime(str(uuid.uuid4()))
+        # Initialize the new broker implementation (broker2)
         self._broker_run = WorkflowBroker(
             workflow=workflow,
             context=self,
-            state=broker_state,
-            run_id=run_id,
+            plugin=runtime,
+            plugin_host=self._plugin,
         )
         return self._broker_run
 
@@ -238,8 +252,12 @@ class Context(Generic[MODEL_T]):
             if semaphore is not None:
                 semaphore.release()
 
+        state = BrokerState.from_serialized(
+            self._init_snapshot, workflow, self._serializer
+        )
         return self._broker_run.start(
             workflow=workflow,
+            previous=state,
             start_event=start_event,
             before_start=before_start,
             after_complete=after_complete,
@@ -308,11 +326,17 @@ class Context(Generic[MODEL_T]):
         if self._state_store is not None:
             state_data = self._state_store.to_dict(serializer)
 
-        context = (
-            self._broker_run._state
-            if self._broker_run is not None
-            else WorkflowBrokerState()
-        ).to_serialized(serializer)
+        # Get the broker state - either from the running broker or from the init snapshot
+        if self._broker_run is not None:
+            broker_state = self._broker_run._state
+        else:
+            # Deserialize the init snapshot to get a BrokerState, then re-serialize it
+            # This ensures we always output the current format
+            broker_state = BrokerState.from_serialized(
+                self._init_snapshot, self._workflow, serializer
+            )
+
+        context = broker_state.to_serialized(serializer)
         context.state = state_data
         # mode="python" to support pickling over json if one so chooses. This should perhaps be moved into the serializers
         return context.model_dump(mode="python")
@@ -531,12 +555,36 @@ class Context(Generic[MODEL_T]):
             RunResultT: The value provided via a `StopEvent`.
         """
         _warn_get_result()
-        return self._running_broker._retval
+        if self._running_broker._handler is None:
+            raise WorkflowRuntimeError("Workflow handler is not set")
+        return self._running_broker._handler.result()
+
+    def stream_events(self) -> AsyncGenerator[Event, None]:
+        """The internal queue used for streaming events to callers."""
+        return self._running_broker.stream_published_events()
 
     @property
     def streaming_queue(self) -> asyncio.Queue:
-        """The internal queue used for streaming events to callers."""
-        return self._running_broker.streaming_queue
+        """Deprecated queue-based event stream.
+
+        Returns an asyncio.Queue that is populated by iterating this context's
+        stream_events(). A deprecation warning is emitted once per process.
+        """
+        _warn_streaming_queue()
+        q: asyncio.Queue[Event] = asyncio.Queue()
+
+        async def _pump() -> None:
+            async for ev in self.stream_events():
+                await q.put(ev)
+                if isinstance(ev, StopEvent):
+                    break
+
+        try:
+            asyncio.create_task(_pump())
+        except RuntimeError:
+            loop = asyncio.get_event_loop()
+            loop.create_task(_pump())
+        return q
 
 
 @functools.lru_cache(maxsize=1)
@@ -546,6 +594,19 @@ def _warn_get_result() -> None:
             "Context.get_result() is deprecated and will be removed in a future "
             "release. Prefer awaiting the WorkflowHandler returned by "
             "Workflow.run: `result = await workflow.run(..., ctx=ctx)`."
+        ),
+        DeprecationWarning,
+        stacklevel=2,
+    )
+
+
+@functools.lru_cache(maxsize=1)
+def _warn_streaming_queue() -> None:
+    warnings.warn(
+        (
+            "Context.streaming_queue is deprecated and will be removed in a future "
+            "release. Prefer iterating Context.stream_events(): "
+            "`async for ev in ctx.stream_events(): ...`"
         ),
         DeprecationWarning,
         stacklevel=2,

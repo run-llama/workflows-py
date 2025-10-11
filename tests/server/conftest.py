@@ -22,6 +22,7 @@ class SimpleTestWorkflow(Workflow):
         message = await ctx.store.get("test_param", None)
         if message is None:
             message = getattr(ev, "message", "default")
+
         return StopEvent(result=f"processed: {message}")
 
 
