@@ -1,7 +1,7 @@
 import asyncio
 import warnings
 from contextlib import asynccontextmanager
-from typing import Any, AsyncGenerator, Generic, Optional
+from typing import Any, AsyncGenerator, Generic, Optional, Type
 
 from pydantic import BaseModel, ValidationError
 from typing_extensions import TypeVar
@@ -46,7 +46,7 @@ class DictState(DictLikeModel):
 
 
 # Default state type is DictState for the generic type
-MODEL_T = TypeVar("MODEL_T", bound=BaseModel, default=DictState)
+MODEL_T = TypeVar("MODEL_T", bound=BaseModel, default=DictState)  # type: ignore
 
 
 class InMemoryStateStore(Generic[MODEL_T]):
@@ -95,9 +95,12 @@ class InMemoryStateStore(Generic[MODEL_T]):
     # are known to be unserializable in some cases.
     known_unserializable_keys = ("memory",)
 
+    state_type: Type[MODEL_T]
+
     def __init__(self, initial_state: MODEL_T):
         self._state = initial_state
         self._lock = asyncio.Lock()
+        self.state_type = type(initial_state)
 
     async def get_state(self) -> MODEL_T:
         """Return a shallow copy of the current state model.
