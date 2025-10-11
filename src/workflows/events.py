@@ -271,12 +271,12 @@ class InternalDispatchEvent(Event):
 
 
 class StepState(Enum):
+    # is enqueued, but no capacity yet available to run
     PREPARING = "preparing"
+    # is running now on a worker. Skips PREPARING if there is capacity available.
     RUNNING = "running"
-    IN_PROGRESS = "in_progress"
+    # is no longer running.
     NOT_RUNNING = "not_running"
-    NOT_IN_PROGRESS = "not_in_progress"
-    EXITED = "exited"
 
 
 class StepStateChanged(InternalDispatchEvent):
@@ -301,19 +301,6 @@ class StepStateChanged(InternalDispatchEvent):
     output_event_name: Optional[str] = Field(
         description="Name of the output event", default=None
     )
-
-
-class EventsQueueChanged(InternalDispatchEvent):
-    """
-    A special event that reports the state of internal queues.
-
-    Attributes:
-        name (str): Name of the queue
-        size (int): Size of the queue
-    """
-
-    name: str = Field(description="Name of the queue")
-    size: int = Field(description="Size of the queue")
 
 
 EventType = Type[Event]

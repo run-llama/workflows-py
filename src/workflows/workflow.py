@@ -13,7 +13,10 @@ from typing import (
 from llama_index_instrumentation import get_dispatcher
 from pydantic import ValidationError
 
-from .context import Context
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # pragma: no cover
+    from .context import Context
 from .decorators import StepConfig, StepFunction
 from .errors import (
     WorkflowConfigurationError,
@@ -321,6 +324,7 @@ class Workflow(metaclass=WorkflowMeta):
             result = await my_workflow.run(start_event=MyStartEvent(topic="Pirates"))
             ```
         """
+        from workflows.context import Context
 
         # Validate the workflow
         self._validate()

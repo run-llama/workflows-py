@@ -8,7 +8,6 @@ from pydantic import Field
 from workflows.context import Context
 from workflows.decorators import step
 from workflows.events import Event, StartEvent, StopEvent
-from workflows.runtime.broker import WorkflowBroker
 from workflows.workflow import Workflow
 
 
@@ -56,11 +55,3 @@ async def ctx(workflow: Workflow) -> AsyncGenerator[Context, None]:
         yield ctx
     finally:
         await broker.shutdown()
-
-
-@pytest.fixture()
-def broker(
-    ctx: Context,
-) -> WorkflowBroker:
-    assert ctx._broker_run is not None
-    return ctx._broker_run
