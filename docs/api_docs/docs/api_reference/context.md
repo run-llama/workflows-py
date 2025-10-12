@@ -3,7 +3,6 @@
       show_root_heading: true
       show_root_full_path: false
       members:
-        - __init__
         - collect_events
         - from_dict
         - get_result

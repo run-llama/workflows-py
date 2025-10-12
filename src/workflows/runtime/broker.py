@@ -18,7 +18,6 @@ from typing import (
     Generic,
     Type,
     TypeVar,
-    cast,
 )
 
 from llama_index_instrumentation.dispatcher import Dispatcher
@@ -41,13 +40,15 @@ from workflows.events import (
 from workflows.resource import ResourceManager
 from workflows.types import RunResultT
 
-from ..context.state_store import MODEL_T, DictState
+from ..context.state_store import MODEL_T
 from workflows.runtime.state import WorkflowBrokerState
 
-if TYPE_CHECKING:  # pragma: no cover
+from workflows.handler import WorkflowHandler
+
+if TYPE_CHECKING:
     from workflows import Workflow
-    from workflows.handler import WorkflowHandler
     from workflows.context.context import Context
+
 
 T = TypeVar("T", bound=Event)
 EventBuffer = dict[str, list[Event]]
@@ -201,9 +202,6 @@ class WorkflowBroker(Generic[MODEL_T]):
         before_start: Callable[[], Awaitable[None]] | None = None,
         after_complete: Callable[[], Awaitable[None]] | None = None,
     ) -> WorkflowHandler:
-        from workflows.handler import WorkflowHandler
-        from workflows.context.context import Context
-
         """Start the workflow run. Can only be called once."""
         if self._handler is not None:
             raise WorkflowRuntimeError(
@@ -290,7 +288,7 @@ class WorkflowBroker(Generic[MODEL_T]):
 
         run_task = asyncio.create_task(_run_workflow())
         result = WorkflowHandler(
-            ctx=cast(Context[DictState], self._context),
+            ctx=self._context,  # type: ignore
             run_id=run_id,
             run_task=run_task,
         )
