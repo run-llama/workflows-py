@@ -4,12 +4,16 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, AsyncGenerator
+from typing import Any, AsyncGenerator, TYPE_CHECKING
 
-from .context import Context
+
 from .errors import WorkflowRuntimeError
 from .events import Event, StopEvent, InternalDispatchEvent
 from .types import RunResultT
+
+
+if TYPE_CHECKING:
+    from .context import Context
 
 
 class WorkflowHandler(asyncio.Future[RunResultT]):

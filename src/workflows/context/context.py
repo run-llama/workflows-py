@@ -31,13 +31,15 @@ from workflows.events import (
 from workflows.runtime.state import WorkflowBrokerState
 from workflows.runtime.broker import WorkflowBroker
 from workflows.types import RunResultT
+from workflows.handler import WorkflowHandler
 
 from .serializers import BaseSerializer, JsonSerializer
 from .state_store import MODEL_T, DictState, InMemoryStateStore
 
+
 if TYPE_CHECKING:  # pragma: no cover
     from workflows import Workflow
-    from workflows.handler import WorkflowHandler
+
 
 T = TypeVar("T", bound=Event)
 EventBuffer = dict[str, list[Event]]
@@ -247,9 +249,15 @@ class Context(Generic[MODEL_T]):
         """
         Called internally from the handler to cancel a context's run
         """
+        self._running_broker.cancel_run()
+
+    @property
+    def _running_broker(self) -> WorkflowBroker[MODEL_T]:
         if self._broker_run is None:
-            raise WorkflowRuntimeError("Workflow run is not yet running")
-        self._broker_run.cancel_run()
+            raise WorkflowRuntimeError(
+                "Workflow run is not yet running. Make sure to only call this method after the context has been passed to a workflow.run call."
+            )
+        return self._broker_run
 
     @property
     def store(self) -> InMemoryStateStore[MODEL_T]:
@@ -356,9 +364,7 @@ class Context(Generic[MODEL_T]):
         Returns:
             list[str]: Names of steps that have at least one active worker.
         """
-        if self._broker_run is None:
-            raise WorkflowRuntimeError("Workflow run is not yet running")
-        return await self._broker_run.running_steps()
+        return await self._running_broker.running_steps()
 
     def collect_events(
         self, ev: Event, expected: list[Type[Event]], buffer_id: str | None = None
@@ -397,9 +403,7 @@ class Context(Generic[MODEL_T]):
         See Also:
             - [Event][workflows.events.Event]
         """
-        if self._broker_run is None:
-            raise WorkflowRuntimeError("Workflow run is not yet running")
-        return self._broker_run.collect_events(ev, expected, buffer_id)
+        return self._running_broker.collect_events(ev, expected, buffer_id)
 
     def send_event(self, message: Event, step: str | None = None) -> None:
         """Dispatch an event to one or all workflow steps.
@@ -439,9 +443,7 @@ class Context(Generic[MODEL_T]):
             result = await handler
             ```
         """
-        if self._broker_run is None:
-            raise WorkflowRuntimeError("Workflow run is not yet running")
-        return self._broker_run.send_event(message, step)
+        return self._running_broker.send_event(message, step)
 
     async def wait_for_event(
         self,
@@ -487,9 +489,7 @@ class Context(Generic[MODEL_T]):
                 return StopEvent(result=response.response)
             ```
         """
-        if self._broker_run is None:
-            raise WorkflowRuntimeError("Workflow run is not yet running")
-        return await self._broker_run.wait_for_event(
+        return await self._running_broker.wait_for_event(
             event_type, waiter_event, waiter_id, requirements, timeout
         )
 
@@ -508,9 +508,7 @@ class Context(Generic[MODEL_T]):
                 return StopEvent(result="ok")
             ```
         """
-        if self._broker_run is None:
-            raise WorkflowRuntimeError("Workflow run is not yet running")
-        self._broker_run.write_event_to_stream(ev)
+        self._running_broker.write_event_to_stream(ev)
 
     def get_result(self) -> RunResultT:
         """Return the final result of the workflow run.
@@ -533,16 +531,12 @@ class Context(Generic[MODEL_T]):
             RunResultT: The value provided via a `StopEvent`.
         """
         _warn_get_result()
-        if self._broker_run is None:
-            raise WorkflowRuntimeError("Workflow run is not yet running")
-        return self._broker_run._retval
+        return self._running_broker._retval
 
     @property
     def streaming_queue(self) -> asyncio.Queue:
         """The internal queue used for streaming events to callers."""
-        if self._broker_run is None:
-            raise WorkflowRuntimeError("Workflow run is not yet running")
-        return self._broker_run.streaming_queue
+        return self._running_broker.streaming_queue
 
 
 @functools.lru_cache(maxsize=1)
