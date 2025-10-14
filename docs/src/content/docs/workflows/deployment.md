@@ -2,12 +2,11 @@
 title: Deploying a Workflow
 ---
 
-## Deploying with `WorkflowServer`
+The `workflows` library includes a `WorkflowServer` class that allows you to easily expose your workflows over an HTTP API. This provides a flexible way to run and manage workflows from any HTTP-capable client.
 
-The `workflows` library includes a `WorkflowServer` class that allows you to easily expose your workflows over an HTTP
-API. This provides a flexible way to run and manage workflows from any HTTP-capable client.
+Additionally, the `WorkflowServer` is deployed with a static debugging application that allows you to visualize, run, and debug workflows. This is automatically mounted at the root `/` path of the running server.
 
-### Programmatic Usage
+## Programmatic Usage
 
 You can create a server, add your workflows, and run it programmatically. This is useful when you want to embed the
 workflow server in a larger application.
@@ -55,7 +54,7 @@ server.add_workflow("greet", greet_wf)
 #     asyncio.run(main())
 ```
 
-### Command-Line Interface (CLI)
+## Command-Line Interface (CLI)
 
 The library also provides a convenient CLI to run a server from a file containing a `WorkflowServer` instance.
 
@@ -68,7 +67,21 @@ python -m workflows.server my_server.py
 The server will start on `0.0.0.0:8080` by default. You can configure the host and port using the
 `WORKFLOWS_PY_SERVER_HOST` and `WORKFLOWS_PY_SERVER_PORT` environment variables.
 
-### API Endpoints
+## Workflow Debugger UI
+
+The `WorkflowServer` is deployed with a static debugging application that allows you to visualize, run, and debug workflows. This is automatically mounted at the root `/` path of the running server.
+
+![Workflow Debugger UI](./assets/ui_sample.png)
+
+The Workflow Debugging UI offers a few key features:
+- **Workflow Visualization**: The UI provides a visual representation of the workflow's structure both statically and while it is running. You can re-arrange the nodes as needed.
+- **Automatic schema detection**: If you customize the schemas of your start/stop events, or internal events, the UI will automatically detect and display UI appropriate for the schema.
+- **Human-in-the-loop**: While a workflow is running, you can send any event into the workflow. This is useful for workflows that rely on human input to continue execution. See the `Send Event` button on the top of the events log.
+- **Events Log**: All streamed events are logged in the UI, allowing you to inspect the workflow's execution in real-time in the right side-panel.
+- **Multiple Runs**: Debug and compare multiple runs. Each time you run a workflow, the left-side panel tracks that run.
+- **Multiple Workflows**: The UI will let you run any workflow that is mounted within the `WorkflowServer`.
+
+## API Endpoints
 
 The `WorkflowServer` exposes the following RESTful endpoints:
 
@@ -81,7 +94,7 @@ The `WorkflowServer` exposes the following RESTful endpoints:
 | `GET`  | `/results/{handler_id}`        | Retrieves the result of an asynchronously run workflow. Returns `202 Accepted` if still running.       |
 | `GET`  | `/events/{handler_id}`         | Streams all events from a running workflow as newline-delimited JSON (`application/x-ndjson`).          |
 
-#### Running a Workflow (`/run`)
+### Running a Workflow (`/run`)
 
 To run a workflow and wait for its completion, send a `POST` request to `/workflows/{name}/run`.
 
@@ -104,7 +117,7 @@ To run a workflow and wait for its completion, send a `POST` request to `/workfl
 }
 ```
 
-#### Running a Workflow Asynchronously (`/run-nowait`)
+### Running a Workflow Asynchronously (`/run-nowait`)
 
 To start a workflow without waiting for it to finish, use the `/run-nowait` endpoint.
 
