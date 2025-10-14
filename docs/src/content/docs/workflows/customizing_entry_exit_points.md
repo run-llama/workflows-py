@@ -2,7 +2,7 @@
 title: Customizing entry and exit points
 ---
 
-Most of the times, relying on the default entry and exit points we have seen in the [Getting Started] section is enough.
+Most of the times, relying on the default entry and exit points we have seen in the [Getting Started](/python/workflows/) section is enough.
 However, workflows support custom events where you normally would expect `StartEvent` and `StopEvent`, let's see how.
 
 ## Using a custom `StartEvent`
