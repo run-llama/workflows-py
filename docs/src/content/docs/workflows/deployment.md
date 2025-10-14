@@ -81,6 +81,10 @@ The Workflow Debugging UI offers a few key features:
 - **Multiple Runs**: Debug and compare multiple runs. Each time you run a workflow, the left-side panel tracks that run.
 - **Multiple Workflows**: The UI will let you run any workflow that is mounted within the `WorkflowServer`.
 
+### Handling "Hidden" Events
+
+Sometimes, workflows will send/accept events that are annotated in the workflow (like using `ctx.wait_for_event()`). In these cases, you can still inform the UI about these events using the `server.add_workflow(..., additional_events=[...])` API to inject those events. Then, UI elements like the `Send Event` functionality will be aware of these events.
+
 ## API Endpoints
 
 The `WorkflowServer` exposes the following RESTful endpoints:
