@@ -2,7 +2,13 @@ import asyncio
 
 from workflows import Workflow, step
 from workflows.context import Context
-from workflows.events import Event, StartEvent, StopEvent
+from workflows.events import (
+    Event,
+    StartEvent,
+    StopEvent,
+    InputRequiredEvent,
+    HumanResponseEvent,
+)
 from workflows.server import WorkflowServer
 
 
@@ -211,14 +217,56 @@ class ComplicatedWorkflow(Workflow):
             return StopEvent(result="Xyubpifhabpmfsh!")
 
 
+class RequestEvent(InputRequiredEvent):
+    prompt: str
+
+
+class ResponseEvent(HumanResponseEvent):
+    response: str
+
+
+class RunEvent(StartEvent):
+    input_str: str
+
+
+class HumanInTheLoopWorkflow(Workflow):
+    @step
+    async def prompt_human(self, ev: RunEvent) -> RequestEvent:
+        await asyncio.sleep(1)
+        return RequestEvent(
+            prompt=f"Wow, pretty crazy you just said '{ev.input_str}'. What is your name anyways?"
+        )
+
+    @step
+    async def greet_human(self, ctx: Context, ev: ResponseEvent) -> StopEvent:
+        follow_up = f"Nice to meet you, {ev.response}!"
+        return StopEvent(result=follow_up)
+
+
 async def main() -> None:
     server = WorkflowServer()
 
     # Register workflows
-    server.add_workflow("universe_communication", ComplicatedWorkflow())
-    server.add_workflow("greeting", GreetingWorkflow())
-    server.add_workflow("math", MathWorkflow())
-    server.add_workflow("processing", ProcessingWorkflow())
+    server.add_workflow(
+        "greeting",
+        GreetingWorkflow(),
+    )
+    server.add_workflow(
+        "processing",
+        ProcessingWorkflow(),
+    )
+    server.add_workflow(
+        "math",
+        MathWorkflow(),
+    )
+    server.add_workflow(
+        "complicated",
+        ComplicatedWorkflow(),
+    )
+    server.add_workflow(
+        "human_in_the_loop",
+        HumanInTheLoopWorkflow(),
+    )
 
     await server.serve(host="0.0.0.0", port=8000)
 
