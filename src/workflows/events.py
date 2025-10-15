@@ -190,6 +190,14 @@ class StopEvent(Event):
     def result(self) -> Any:
         return self._get_result()
 
+    @model_serializer(mode="wrap")
+    def custom_model_dump(self, handler: Any) -> dict[str, Any]:
+        data = handler(self)
+        # include _result in serialization for base StopEvent
+        if self._result is not None:
+            data["result"] = self._result
+        return data
+
 
 class InputRequiredEvent(Event):
     """Emitted when human input is required to proceed.

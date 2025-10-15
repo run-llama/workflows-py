@@ -7,7 +7,7 @@ import pytest
 from pydantic import PrivateAttr
 
 from workflows.context import JsonSerializer
-from workflows.events import Event
+from workflows.events import Event, StopEvent
 
 
 class _TestEvent(Event):
@@ -112,3 +112,43 @@ def test_event_serialization() -> None:
 
 def test_bool() -> None:
     assert bool(_TestEvent(param="foo")) is True
+
+
+def test_stop_event_serialization() -> None:
+    ev = StopEvent(result="foo")
+    data_dict = ev.model_dump()
+    assert data_dict == {"result": "foo"}
+
+    serializer = JsonSerializer()
+    serialized_ev = serializer.serialize(ev)
+    deseriazlied_ev = serializer.deserialize(serialized_ev)
+
+    assert type(deseriazlied_ev).__name__ == type(ev).__name__
+    deseriazlied_ev = cast(
+        StopEvent,
+        deseriazlied_ev,
+    )
+    assert ev.result == deseriazlied_ev.result
+
+
+class CustomStopEvent(StopEvent):
+    foo: str
+    bar: int
+
+
+def test_custom_stop_event_serialization() -> None:
+    ev = CustomStopEvent(foo="foo", bar=42)
+    data_dict = ev.model_dump()
+    assert data_dict == {"foo": "foo", "bar": 42}
+
+    serializer = JsonSerializer()
+    serialized_ev = serializer.serialize(ev)
+    deseriazlied_ev = serializer.deserialize(serialized_ev)
+
+    assert type(deseriazlied_ev).__name__ == type(ev).__name__
+    deseriazlied_ev = cast(
+        CustomStopEvent,
+        deseriazlied_ev,
+    )
+    assert ev.foo == deseriazlied_ev.foo
+    assert ev.bar == deseriazlied_ev.bar
