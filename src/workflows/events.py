@@ -198,6 +198,9 @@ class StopEvent(Event):
             data["result"] = self._result
         return data
 
+    def __str__(self) -> str:
+        return str(self._result)
+
 
 class InputRequiredEvent(Event):
     """Emitted when human input is required to proceed.
