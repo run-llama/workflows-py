@@ -26,6 +26,7 @@ from starlette.staticfiles import StaticFiles
 
 from workflows import Context, Workflow
 from workflows.context.serializers import JsonSerializer
+from workflows.context.utils import import_module_from_qualified_name
 from workflows.events import (
     Event,
     InternalDispatchEvent,
@@ -883,9 +884,10 @@ class WorkflowServer:
             raise HTTPException(detail="Handler not found", status_code=404)
 
         handler = wrapper.run_handler
-        events_by_title = {
-            e.__name__: e for e in self._workflows[wrapper.workflow_name].events
-        }
+        # Build event type mapping including any additional events
+        base_events = list(self._workflows[wrapper.workflow_name].events)
+        extra_events = self._additional_events.get(wrapper.workflow_name, []) or []
+        events_by_title = {e.__name__: e for e in [*base_events, *extra_events]}
 
         # Check if workflow is still running
         if handler.done():
@@ -899,31 +901,75 @@ class WorkflowServer:
         # Parse request body
         try:
             body = await request.json()
-            event_str = body.get("event")
             step = body.get("step")
 
-            if not event_str:
-                raise HTTPException(detail="Event data is required", status_code=400)
-
-            # Deserialize the event
+            # Determine payload source:
+            # - Legacy: body["event"] is a JSON string or object
+            # - New: body itself is the event envelope (optionally with top-level step)
             serializer = JsonSerializer()
+            raw_payload = body.get("event", None)
             try:
-                event_data = serializer.deserialize(event_str)
-                if (
-                    isinstance(event_data, dict)
-                    and "type" in event_data
-                    and "data" in event_data
-                ):
-                    event_title = event_data["type"]
-                    event = events_by_title[event_title].model_validate(
-                        event_data["data"]
+                if raw_payload is not None:
+                    event_payload = (
+                        serializer.deserialize(raw_payload)
+                        if isinstance(raw_payload, str)
+                        else serializer.deserialize_value(raw_payload)
                     )
-                elif isinstance(event_data, Event):
-                    event = event_data
+                else:
+                    # Use body as the event payload, excluding control keys
+                    # If no recognizable event keys, treat as missing event data for backward-compatibility
+                    if not any(k in body for k in ("type", "qualified_name")):
+                        raise HTTPException(
+                            detail="Event data is required", status_code=400
+                        )
+                    event_payload = dict(body)
+                    event_payload.pop("step", None)
+                    event_payload = serializer.deserialize_value(event_payload)
+
+                # Normalize to Event instance
+                if isinstance(event_payload, Event):
+                    event = event_payload
+                elif isinstance(event_payload, dict):
+                    # Accept new format {type, value} and legacy {type, data}
+                    type_name = event_payload.get("type")
+                    qualified_name = event_payload.get("qualified_name")
+                    if "value" in event_payload:
+                        payload_value = event_payload["value"]
+                    elif "data" in event_payload:
+                        payload_value = event_payload["data"]
+                    else:
+                        payload_value = None
+
+                    if qualified_name:
+                        try:
+                            cls = import_module_from_qualified_name(qualified_name)
+                        except Exception as e:
+                            raise HTTPException(
+                                detail=f"Unknown qualified_name '{qualified_name}': {e}",
+                                status_code=400,
+                            )
+                        # If no explicit value/data, treat dict as value
+                        value = payload_value if payload_value is not None else event_payload
+                        event = cls.model_validate(value)
+                    elif type_name:
+                        if type_name not in events_by_title:
+                            raise HTTPException(
+                                detail=f"Unknown event type '{type_name}'",
+                                status_code=400,
+                            )
+                        cls = events_by_title[type_name]
+                        value = payload_value if payload_value is not None else event_payload
+                        event = cls.model_validate(value)
+                    else:
+                        raise ValueError(
+                            "Invalid event data. Provide {'type': 'EventName', 'value': {...}} or {'qualified_name': 'pkg.Event', 'value': {...}} or a serialized event."
+                        )
                 else:
                     raise ValueError(
-                        "Invalid event data. Should be a dictionary of {'type': 'event_type', 'data': {...}} or a serialized event"
+                        "Invalid event data. Provide {'type': 'EventName', 'value': {...}} or {'qualified_name': 'pkg.Event', 'value': {...}} or a serialized event."
                     )
+            except HTTPException:
+                raise
             except Exception as e:
                 raise HTTPException(
                     detail=f"Failed to deserialize event: {e}", status_code=400
@@ -1044,24 +1090,58 @@ class WorkflowServer:
     ) -> tuple[Context | None, StartEvent | None, str]:
         try:
             body = await request.json()
-            context_data = body.get("context")
-            run_kwargs = body.get("kwargs", {})
-            start_event_data = body.get("start_event", run_kwargs)
-            handler_id = body.get("handler_id")
+            # Determine how to interpret the body:
+            # - If any control keys are present, use existing behavior reading from 'start_event' (or kwargs as fallback)
+            # - Otherwise, treat the entire body as the start_event payload, supporting
+            #   {type,value}, {qualified_name,value}, legacy pydantic envelope, or plain dict
+            control_keys = {"context", "kwargs", "start_event", "handler_id"}
+            has_control = any(k in body for k in control_keys)
+
+            if has_control:
+                context_data = body.get("context")
+                run_kwargs = body.get("kwargs", {})
+                start_event_data = body.get("start_event", run_kwargs)
+                handler_id = body.get("handler_id")
+            else:
+                context_data = None
+                start_event_data = body
+                handler_id = None
 
             # Extract custom StartEvent if present
             start_event = None
             if start_event_data is not None:
                 serializer = JsonSerializer()
                 try:
-                    start_event = (
+                    parsed = (
                         serializer.deserialize(start_event_data)
                         if isinstance(start_event_data, str)
                         else serializer.deserialize_value(start_event_data)
                     )
-                    if isinstance(start_event, dict):
-                        start_event = workflow.start_event_class.model_validate(
-                            start_event
+
+                    # Accept multiple forms for start_event
+                    if isinstance(parsed, workflow.start_event_class):
+                        start_event = parsed
+                    elif isinstance(parsed, dict):
+                        # New: {type, value} or {qualified_name, value}
+                        qualified_name = parsed.get("qualified_name")
+                        if qualified_name:
+                            cls = import_module_from_qualified_name(qualified_name)
+                            value = parsed.get("value", parsed.get("data", parsed))
+                            start_event = cls.model_validate(value)
+                        elif "type" in parsed and ("value" in parsed or "data" in parsed):
+                            value = parsed.get("value", parsed.get("data"))
+                            start_event = workflow.start_event_class.model_validate(value)
+                        else:
+                            # Plain dict: validate directly as the known StartEvent
+                            start_event = workflow.start_event_class.model_validate(parsed)
+                    elif isinstance(parsed, Event):
+                        # Parsed into a concrete Event instance but not necessarily the expected StartEvent
+                        # Defer type validation to the common check below to keep error message consistent
+                        start_event = parsed
+                    else:
+                        # Unsupported type
+                        raise TypeError(
+                            f"Unsupported start_event payload type: {type(parsed)}"
                         )
                 except Exception as e:
                     raise HTTPException(
