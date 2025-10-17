@@ -12,7 +12,8 @@ dev = [
   "hatch>=1.14.1",
   "pyyaml>=6.0.2",
   "packaging>=21.0",
-  "pytest-xdist>=3.8.0"
+  "pytest-xdist>=3.8.0",
+  "pytest-timeout>=2.4.0"
 ]
 
 [project]
