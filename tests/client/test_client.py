@@ -1,4 +1,5 @@
 import pytest
+import httpx
 
 from httpx import ASGITransport, AsyncClient
 from workflows.server.server import WorkflowServer
@@ -128,3 +129,21 @@ async def test_send_event(client: WorkflowClient) -> None:
     # Verify workflow completed successfully
     result = await client.get_result(handler_id)
     assert result.result is not None
+
+
+@pytest.mark.asyncio
+async def test_error_message_format(client: WorkflowClient) -> None:
+    """Test that error messages include method, URL, status code, and response body preview."""
+    with pytest.raises(httpx.HTTPStatusError) as exc_info:
+        await client.run_workflow(
+            "nonexistent_workflow",
+            start_event=InputEvent(greeting="hello", name="John"),
+        )
+
+    error_message = str(exc_info.value)
+
+    # Verify error message contains the expected components
+    assert (
+        "404 Not Found for POST http://test/workflows/nonexistent_workflow/run. Response: Workflow not found"
+        == error_message
+    )  # Status code
