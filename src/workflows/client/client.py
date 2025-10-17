@@ -22,6 +22,27 @@ from workflows.protocol import (
 )
 
 
+def _raise_for_status_with_body(response: httpx.Response) -> None:
+    """
+    Raise an HTTPStatusError with the first 200 characters of the response body
+    for 400 and 500 level errors.
+    """
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError as e:
+        if 400 <= e.response.status_code < 600:
+            body_preview = e.response.text[:200]
+            method = e.request.method
+            url = e.request.url
+            status_code = e.response.status_code
+            raise httpx.HTTPStatusError(
+                f"{status_code} {e.response.reason_phrase} for {method} {url}. Response: {body_preview}",
+                request=e.request,
+                response=e.response,
+            ) from e
+        raise
+
+
 class WorkflowClient:
     @overload
     def __init__(self, *, httpx_client: httpx.AsyncClient): ...
@@ -62,7 +83,7 @@ class WorkflowClient:
         """
         async with self._get_client() as client:
             response = await client.get("/health")
-            response.raise_for_status()
+            _raise_for_status_with_body(response)
             return HealthResponse.model_validate(response.json())
 
     async def list_workflows(self) -> WorkflowsListResponse:
@@ -75,7 +96,7 @@ class WorkflowClient:
         async with self._get_client() as client:
             response = await client.get("/workflows")
 
-            response.raise_for_status()
+            _raise_for_status_with_body(response)
 
             return WorkflowsListResponse.model_validate(response.json())
 
@@ -120,7 +141,7 @@ class WorkflowClient:
                 f"/workflows/{workflow_name}/run", json=request_body
             )
 
-            response.raise_for_status()
+            _raise_for_status_with_body(response)
 
             return HandlerData.model_validate(response.json())
 
@@ -165,7 +186,7 @@ class WorkflowClient:
                 f"/workflows/{workflow_name}/run-nowait", json=request_body
             )
 
-            response.raise_for_status()
+            _raise_for_status_with_body(response)
 
             return HandlerData.model_validate(response.json())
 
@@ -207,7 +228,7 @@ class WorkflowClient:
                         # Handler completed, no more events
                         return
 
-                    response.raise_for_status()
+                    _raise_for_status_with_body(response)
 
                     async for line in response.aiter_lines():
                         if line.strip():  # Skip empty lines
@@ -245,7 +266,7 @@ class WorkflowClient:
             SendEventResponse: Confirmation of the send operation
         """
         try:
-            serialized_event: dict[str, Any] = _serialize_event(event)
+            serialized_event: str = _serialize_event_to_string(event)
         except Exception as e:
             raise ValueError(f"Error while serializing the provided event: {e}")
         request_body: dict[str, Any] = {"event": serialized_event}
@@ -253,7 +274,7 @@ class WorkflowClient:
             request_body["step"] = step
         async with self._get_client() as client:
             response = await client.post(f"/events/{handler_id}", json=request_body)
-            response.raise_for_status()
+            _raise_for_status_with_body(response)
 
             return SendEventResponse.model_validate(response.json())
 
@@ -270,7 +291,7 @@ class WorkflowClient:
         """
         async with self._get_client() as client:
             response = await client.get(f"/results/{handler_id}")
-            response.raise_for_status()
+            _raise_for_status_with_body(response)
 
             return HandlerData.model_validate(response.json())
 
@@ -283,7 +304,7 @@ class WorkflowClient:
         """
         async with self._get_client() as client:
             response = await client.get("/handlers")
-            response.raise_for_status()
+            _raise_for_status_with_body(response)
 
             return HandlersListResponse.model_validate(response.json())
 
@@ -292,3 +313,11 @@ def _serialize_event(event: Union[Event, dict[str, Any]]) -> dict[str, Any]:
     if isinstance(event, dict):
         return event  # assumes you know what you are doing. In many cases this needs to be a dict that contains type metadata and the value
     return JsonSerializer().serialize_value(event)
+
+
+def _serialize_event_to_string(event: Union[Event, dict[str, Any]]) -> str:
+    if isinstance(event, dict):
+        return json.dumps(
+            event
+        )  # assumes you know what you are doing. In many cases this needs to be a dict that contains type metadata and the value
+    return JsonSerializer().serialize(event)

@@ -723,7 +723,7 @@ async def test_post_event_simple_schema_to_running_workflow(
     # Wait a bit for workflow to start
     await asyncio.sleep(0.1)
 
-    # Send the event
+    # Send the event using type/data dict format
     event_str = '{"type": "ExternalEvent", "data": {"response": "Hello from test"}}'
     response = await client.post(f"/events/{handler_id}", json={"event": event_str})
     assert response.status_code == 200
@@ -734,6 +734,36 @@ async def test_post_event_simple_schema_to_running_workflow(
     )
 
     assert result["result"] == "received: Hello from test"
+
+
+@pytest.mark.asyncio
+async def test_post_event_with_discriminators_to_running_workflow(
+    client: AsyncClient,
+) -> None:
+    """Test posting event using JSON serializer dict format with discriminators."""
+    # Start an interactive workflow
+    response = await client.post("/workflows/interactive/run-nowait", json={})
+    assert response.status_code == 200
+    handler_id = response.json()["handler_id"]
+
+    # Wait a bit for workflow to start
+    await asyncio.sleep(0.1)
+
+    # Send event as a dict with discriminators (not as a string)
+    # This is the format returned by JsonSerializer().serialize_value()
+    serializer = JsonSerializer()
+    event = ExternalEvent(response="Hello with discriminators")
+    event_dict = serializer.serialize_value(event)
+
+    response = await client.post(f"/events/{handler_id}", json={"event": event_dict})
+    assert response.status_code == 200
+    assert response.json() == {"status": "sent"}
+
+    result = await wait_for_passing(
+        lambda: validate_result_response(handler_id, client)
+    )
+
+    assert result["result"] == "received: Hello with discriminators"
 
 
 @pytest.mark.asyncio
