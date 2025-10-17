@@ -32,8 +32,11 @@ def _raise_for_status_with_body(response: httpx.Response) -> None:
     except httpx.HTTPStatusError as e:
         if 400 <= e.response.status_code < 600:
             body_preview = e.response.text[:200]
+            method = e.request.method
+            url = e.request.url
+            status_code = e.response.status_code
             raise httpx.HTTPStatusError(
-                f"{e.response.status_code} error: {body_preview}",
+                f"{status_code} {e.response.reason_phrase} for {method} {url}. Response: {body_preview}",
                 request=e.request,
                 response=e.response,
             ) from e
