@@ -908,7 +908,11 @@ class WorkflowServer:
             # Deserialize the event
             serializer = JsonSerializer()
             try:
-                event_data = serializer.deserialize(event_str)
+                event_data = (
+                    serializer.deserialize(event_str)
+                    if isinstance(event_str, str)
+                    else serializer.deserialize_value(event_str)
+                )
                 if (
                     isinstance(event_data, dict)
                     and "type" in event_data
