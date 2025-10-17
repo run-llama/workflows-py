@@ -379,3 +379,113 @@ def test_detect_change_type_github_output() -> None:
         # Check output file
         output_content = output_file.read_text()
         assert "change_type=patch" in output_content
+
+
+def test_update_index_html_success() -> None:
+    """Test updating index.html with new URLs."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Create a mock index.html
+        index_path = Path(tmpdir) / "index.html"
+        index_path.write_text("""<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>workflow-debugger</title>
+    <script type="module" crossorigin src="https://cdn.jsdelivr.net/npm/@llamaindex/workflow-debugger@latest/dist/app.js"></script>
+    <link rel="stylesheet" crossorigin href="https://cdn.jsdelivr.net/npm/@llamaindex/workflow-debugger@latest/dist/app.css">
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>
+""")
+        
+        # Copy the script
+        script_path = Path(tmpdir) / "update_index_html.py"
+        original_script = Path("scripts/update_index_html.py")
+        script_path.write_text(original_script.read_text())
+        
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(script_path),
+                "--js-url",
+                "https://example.com/new-app.js",
+                "--css-url",
+                "https://example.com/new-app.css",
+                "--index-path",
+                str(index_path),
+            ],
+            capture_output=True,
+            text=True,
+            cwd=tmpdir,
+        )
+        
+        assert result.returncode == 0
+        assert "Updated index.html" in result.stdout
+        
+        # Check that the file was updated
+        updated_content = index_path.read_text()
+        assert "https://example.com/new-app.js" in updated_content
+        assert "https://example.com/new-app.css" in updated_content
+        # Old URLs should not be present
+        assert "@llamaindex/workflow-debugger@latest" not in updated_content
+
+
+def test_update_index_html_missing_file() -> None:
+    """Test that script handles missing index.html gracefully."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        script_path = Path(tmpdir) / "update_index_html.py"
+        original_script = Path("scripts/update_index_html.py")
+        script_path.write_text(original_script.read_text())
+        
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(script_path),
+                "--js-url",
+                "https://example.com/app.js",
+                "--css-url",
+                "https://example.com/app.css",
+                "--index-path",
+                str(Path(tmpdir) / "nonexistent.html"),
+            ],
+            capture_output=True,
+            text=True,
+            cwd=tmpdir,
+        )
+        
+        assert result.returncode == 1
+        assert "Error" in result.stderr
+
+
+def test_update_index_html_invalid_html() -> None:
+    """Test that script handles invalid HTML structure gracefully."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Create invalid HTML without required tags
+        index_path = Path(tmpdir) / "index.html"
+        index_path.write_text("<html><body>Invalid</body></html>")
+        
+        script_path = Path(tmpdir) / "update_index_html.py"
+        original_script = Path("scripts/update_index_html.py")
+        script_path.write_text(original_script.read_text())
+        
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(script_path),
+                "--js-url",
+                "https://example.com/app.js",
+                "--css-url",
+                "https://example.com/app.css",
+                "--index-path",
+                str(index_path),
+            ],
+            capture_output=True,
+            text=True,
+            cwd=tmpdir,
+        )
+        
+        assert result.returncode == 1
+        assert "Error" in result.stderr
