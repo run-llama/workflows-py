@@ -400,12 +400,12 @@ def test_update_index_html_success() -> None:
   </body>
 </html>
 """)
-        
+
         # Copy the script
         script_path = Path(tmpdir) / "update_index_html.py"
         original_script = Path("scripts/update_index_html.py")
         script_path.write_text(original_script.read_text())
-        
+
         result = subprocess.run(
             [
                 sys.executable,
@@ -421,10 +421,10 @@ def test_update_index_html_success() -> None:
             text=True,
             cwd=tmpdir,
         )
-        
+
         assert result.returncode == 0
         assert "Updated index.html" in result.stdout
-        
+
         # Check that the file was updated
         updated_content = index_path.read_text()
         assert "https://example.com/new-app.js" in updated_content
@@ -439,7 +439,7 @@ def test_update_index_html_missing_file() -> None:
         script_path = Path(tmpdir) / "update_index_html.py"
         original_script = Path("scripts/update_index_html.py")
         script_path.write_text(original_script.read_text())
-        
+
         result = subprocess.run(
             [
                 sys.executable,
@@ -455,7 +455,7 @@ def test_update_index_html_missing_file() -> None:
             text=True,
             cwd=tmpdir,
         )
-        
+
         assert result.returncode == 1
         assert "Error" in result.stderr
 
@@ -466,11 +466,11 @@ def test_update_index_html_invalid_html() -> None:
         # Create invalid HTML without required tags
         index_path = Path(tmpdir) / "index.html"
         index_path.write_text("<html><body>Invalid</body></html>")
-        
+
         script_path = Path(tmpdir) / "update_index_html.py"
         original_script = Path("scripts/update_index_html.py")
         script_path.write_text(original_script.read_text())
-        
+
         result = subprocess.run(
             [
                 sys.executable,
@@ -486,6 +486,6 @@ def test_update_index_html_invalid_html() -> None:
             text=True,
             cwd=tmpdir,
         )
-        
+
         assert result.returncode == 1
         assert "Error" in result.stderr
