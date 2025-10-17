@@ -5,9 +5,10 @@ import argparse
 import re
 import sys
 from pathlib import Path
+from typing import Optional
 
 
-def update_index_html(js_url: str, css_url: str, index_path: Path | None = None) -> None:
+def update_index_html(js_url: str, css_url: str, index_path: Optional[Path] = None) -> None:
     """Update the script and CSS URLs in index.html.
     
     Args:
