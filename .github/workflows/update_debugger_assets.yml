@@ -1,0 +1,73 @@
+name: Update Debugger Assets
+
+on:
+  repository_dispatch:
+    types: [debugger-assets-update]
+  workflow_dispatch:
+    inputs:
+      js_url:
+        description: 'JavaScript URL'
+        required: true
+      css_url:
+        description: 'CSS URL'
+        required: true
+
+jobs:
+  update-assets:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Extract payload data
+        id: payload
+        run: |
+          # Handle both repository_dispatch and workflow_dispatch
+          if [ -n "${{ github.event.inputs.js_url }}" ]; then
+            echo "js_url=${{ github.event.inputs.js_url }}" >> $GITHUB_OUTPUT
+            echo "css_url=${{ github.event.inputs.css_url }}" >> $GITHUB_OUTPUT
+          else
+            echo "js_url=${{ github.event.client_payload.js_url }}" >> $GITHUB_OUTPUT
+            echo "css_url=${{ github.event.client_payload.css_url }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Update index.html
+        run: |
+          python scripts/update_index_html.py \
+            --js-url "${{ steps.payload.outputs.js_url }}" \
+            --css-url "${{ steps.payload.outputs.css_url }}"
+
+      - name: Create Pull Request
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          commit-message: "chore: update debugger assets"
+          branch: update-debugger-assets
+          delete-branch: true
+          title: "Update debugger assets"
+          body: |
+            ## Update Debugger Assets
+
+            This PR updates the workflow debugger assets.
+
+            ### Changes
+            - Updated `src/workflows/server/static/index.html`
+              - JavaScript: ${{ steps.payload.outputs.js_url }}
+              - CSS: ${{ steps.payload.outputs.css_url }}
+
+            ---
+            *This PR was automatically created by the [update-debugger-assets workflow](https://github.com/${{ github.repository }}/actions/workflows/update_debugger_assets.yml)*
+          labels: |
+            dependencies
+            automated
