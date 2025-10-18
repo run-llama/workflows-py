@@ -1,14 +1,13 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2025 LlamaIndex Inc.
 
-from workflows.context.serializers import JsonSerializer
 from workflows.events import (
     Event,
     StopEvent,
     StepStateChanged,
     StepState,
 )
-from workflows.server.serialization import build_event_envelope
+from workflows.protocol.serializable_events import EventEnvelopeWithMetadata
 
 
 def test_envelope_user_defined_event() -> None:
@@ -16,7 +15,7 @@ def test_envelope_user_defined_event() -> None:
         x: int
 
     ev = MyEvent(x=1)
-    env = build_event_envelope(ev, JsonSerializer())
+    env = EventEnvelopeWithMetadata.from_event(ev).model_dump()
 
     assert isinstance(env.get("value", {}), dict)
     types = env.get("types")
@@ -27,7 +26,7 @@ def test_envelope_user_defined_event() -> None:
 
 def test_envelope_builtin_stop_event() -> None:
     ev = StopEvent()
-    env = build_event_envelope(ev, JsonSerializer())
+    env = EventEnvelopeWithMetadata.from_event(ev).model_dump()
 
     assert isinstance(env.get("value", {}), dict)
     types = env.get("types")
@@ -40,7 +39,7 @@ def test_envelope_stop_event_subclass() -> None:
         pass
 
     ev = MyStop()
-    env = build_event_envelope(ev, JsonSerializer())
+    env = EventEnvelopeWithMetadata.from_event(ev).model_dump()
 
     assert isinstance(env.get("value", {}), dict)
     # Subclass is user-defined
@@ -58,7 +57,7 @@ def test_envelope_internal_event() -> None:
         worker_id="w1",
         input_event_name="X",
     )
-    env = build_event_envelope(ev, JsonSerializer())
+    env = EventEnvelopeWithMetadata.from_event(ev).model_dump()
 
     assert isinstance(env.get("value", {}), dict)
     assert env.get("type", "") == "StepStateChanged"

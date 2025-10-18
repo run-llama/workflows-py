@@ -59,7 +59,11 @@ from workflows.types import RunResultT
 # Protocol models are used on the client side; server responds with plain dicts
 from .utils import nanoid
 from .representation_utils import _extract_workflow_structure
-from .serialization import build_event_envelope
+from workflows.protocol.serializable_events import (
+    EventValidationError,
+    EventEnvelopeWithMetadata,
+    EventEnvelope,
+)
 
 logger = logging.getLogger()
 
@@ -795,13 +799,13 @@ class WorkflowServer:
             ) from e
 
         async def event_stream(handler: _WorkflowHandler) -> AsyncGenerator[str, None]:
-            serializer = JsonSerializer()
-
             async for event in generator:
                 if not include_internal and isinstance(event, InternalDispatchEvent):
                     continue
-                envelope = build_event_envelope(event, serializer)
-                payload = json.dumps(envelope)
+                envelope = EventEnvelopeWithMetadata.from_event(
+                    event, include_qualified_name=True
+                )
+                payload = envelope.model_dump_json()
                 if sse:
                     # emit as untyped data. Difficult to subscribe to dynamic event types with SSE.
                     yield f"data: {payload}\n\n"
@@ -883,9 +887,6 @@ class WorkflowServer:
             raise HTTPException(detail="Handler not found", status_code=404)
 
         handler = wrapper.run_handler
-        events_by_title = {
-            e.__name__: e for e in self._workflows[wrapper.workflow_name].events
-        }
 
         # Check if workflow is still running
         if handler.done():
@@ -906,28 +907,13 @@ class WorkflowServer:
                 raise HTTPException(detail="Event data is required", status_code=400)
 
             # Deserialize the event
-            serializer = JsonSerializer()
+
             try:
-                event_data = (
-                    serializer.deserialize(event_str)
-                    if isinstance(event_str, str)
-                    else serializer.deserialize_value(event_str)
+                event = EventEnvelope.parse(
+                    event_str, self._event_registry(wrapper.workflow_name)
                 )
-                if (
-                    isinstance(event_data, dict)
-                    and "type" in event_data
-                    and "data" in event_data
-                ):
-                    event_title = event_data["type"]
-                    event = events_by_title[event_title].model_validate(
-                        event_data["data"]
-                    )
-                elif isinstance(event_data, Event):
-                    event = event_data
-                else:
-                    raise ValueError(
-                        "Invalid event data. Should be a dictionary of {'type': 'event_type', 'data': {...}} or a serialized event"
-                    )
+            except EventValidationError as e:
+                raise HTTPException(detail=str(e), status_code=400)
             except Exception as e:
                 raise HTTPException(
                     detail=f"Failed to deserialize event: {e}", status_code=400
@@ -1056,17 +1042,13 @@ class WorkflowServer:
             # Extract custom StartEvent if present
             start_event = None
             if start_event_data is not None:
-                serializer = JsonSerializer()
                 try:
-                    start_event = (
-                        serializer.deserialize(start_event_data)
-                        if isinstance(start_event_data, str)
-                        else serializer.deserialize_value(start_event_data)
+                    start_event = EventEnvelope.parse(
+                        start_event_data,
+                        self._event_registry(workflow_name),
+                        explicit_event=workflow.start_event_class,
                     )
-                    if isinstance(start_event, dict):
-                        start_event = workflow.start_event_class.model_validate(
-                            start_event
-                        )
+
                 except Exception as e:
                     raise HTTPException(
                         detail=f"Validation error for 'start_event': {e}",
@@ -1229,6 +1211,16 @@ class WorkflowServer:
                 pass
         self._handlers.pop(handler.handler_id, None)
         self._results.pop(handler.handler_id, None)
+
+    def _event_registry(self, workflow_name: str) -> dict[str, type[Event]]:
+        items = {e.__name__: e for e in self._workflows[workflow_name].events}
+        items.update(
+            {
+                e.__name__: e
+                for e in self._additional_events.get(workflow_name, None) or []
+            }
+        )
+        return items
 
 
 @dataclass
