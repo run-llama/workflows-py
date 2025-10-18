@@ -1,16 +1,18 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 LlamaIndex Inc.
+
+from __future__ import annotations
+
 import httpx
 import json
 
 from typing import (
     Any,
-    Union,
     AsyncGenerator,
     AsyncIterator,
-    Optional,
     overload,
 )
 from contextlib import asynccontextmanager
-from workflows.context.serializers import JsonSerializer
 from workflows.events import StartEvent, Event
 from workflows import Context
 from workflows.protocol import (
@@ -19,6 +21,10 @@ from workflows.protocol import (
     HealthResponse,
     SendEventResponse,
     WorkflowsListResponse,
+)
+from workflows.protocol.serializable_events import (
+    EventEnvelope,
+    EventEnvelopeWithMetadata,
 )
 
 
@@ -56,8 +62,8 @@ class WorkflowClient:
     def __init__(
         self,
         *,
-        httpx_client: Union[httpx.AsyncClient, None] = None,
-        base_url: Union[str, None] = None,
+        httpx_client: httpx.AsyncClient | None = None,
+        base_url: str | None = None,
     ):
         if httpx_client is None and base_url is None:
             raise ValueError("Either httpx_client or base_url must be provided")
@@ -103,9 +109,9 @@ class WorkflowClient:
     async def run_workflow(
         self,
         workflow_name: str,
-        handler_id: Optional[str] = None,
-        start_event: Union[StartEvent, dict[str, Any], None] = None,
-        context: Union[Context, dict[str, Any], None] = None,
+        handler_id: str | None = None,
+        start_event: StartEvent | dict[str, Any] | None = None,
+        context: Context | dict[str, Any] | None = None,
     ) -> HandlerData:
         """
         Run the workflow and wait until completion.
@@ -120,7 +126,7 @@ class WorkflowClient:
         """
         if start_event is not None:
             try:
-                start_event = _serialize_event(start_event)
+                start_event = _serialize_event(start_event, bare=True)
             except Exception as e:
                 raise ValueError(
                     f"Impossible to serialize the start event because of: {e}"
@@ -148,9 +154,9 @@ class WorkflowClient:
     async def run_workflow_nowait(
         self,
         workflow_name: str,
-        handler_id: Optional[str] = None,
-        start_event: Union[StartEvent, dict[str, Any], None] = None,
-        context: Union[Context, dict[str, Any], None] = None,
+        handler_id: str | None = None,
+        start_event: StartEvent | dict[str, Any] | None = None,
+        context: Context | dict[str, Any] | None = None,
     ) -> HandlerData:
         """
         Run the workflow in the background.
@@ -195,7 +201,7 @@ class WorkflowClient:
         handler_id: str,
         include_internal_events: bool = False,
         lock_timeout: float = 1,
-    ) -> AsyncGenerator[dict[str, Any], None]:
+    ) -> AsyncGenerator[EventEnvelopeWithMetadata, None]:
         """
         Stream events as they are produced by the workflow.
 
@@ -233,7 +239,9 @@ class WorkflowClient:
                     async for line in response.aiter_lines():
                         if line.strip():  # Skip empty lines
                             try:
-                                event = json.loads(line.replace("\n", ""))
+                                event = EventEnvelopeWithMetadata.model_validate_json(
+                                    line
+                                )
                                 yield event
                             except json.JSONDecodeError as e:
                                 print(f"Failed to parse JSON: {e}, data: {line}")
@@ -249,10 +257,8 @@ class WorkflowClient:
     async def send_event(
         self,
         handler_id: str,
-        event: Union[
-            Event, dict[str, Any]
-        ],  # either an Event object, or a dictionary representation (with type metadata and embedded value)
-        step: Optional[str] = None,
+        event: Event | dict[str, Any],
+        step: str | None = None,
     ) -> SendEventResponse:
         """
         Send an event to the workflow.
@@ -266,7 +272,7 @@ class WorkflowClient:
             SendEventResponse: Confirmation of the send operation
         """
         try:
-            serialized_event: str = _serialize_event_to_string(event)
+            serialized_event: dict[str, Any] = _serialize_event(event)
         except Exception as e:
             raise ValueError(f"Error while serializing the provided event: {e}")
         request_body: dict[str, Any] = {"event": serialized_event}
@@ -309,15 +315,13 @@ class WorkflowClient:
             return HandlersListResponse.model_validate(response.json())
 
 
-def _serialize_event(event: Union[Event, dict[str, Any]]) -> dict[str, Any]:
+def _serialize_event(
+    event: Event | dict[str, Any], bare: bool = False
+) -> dict[str, Any]:
     if isinstance(event, dict):
         return event  # assumes you know what you are doing. In many cases this needs to be a dict that contains type metadata and the value
-    return JsonSerializer().serialize_value(event)
-
-
-def _serialize_event_to_string(event: Union[Event, dict[str, Any]]) -> str:
-    if isinstance(event, dict):
-        return json.dumps(
-            event
-        )  # assumes you know what you are doing. In many cases this needs to be a dict that contains type metadata and the value
-    return JsonSerializer().serialize(event)
+    return (
+        event.model_dump()
+        if bare
+        else EventEnvelope.from_event(event=event).model_dump()
+    )

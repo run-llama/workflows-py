@@ -62,9 +62,8 @@ class JsonSerializer(BaseSerializer):
 
     def serialize_value(self, value: Any) -> Any:
         """
-        serialize a single value to a json friendly type. Converts a json-ifiable value
-        (e.g. pydantic model, llama index component, dict, list, string, number, or boolean)
-        to a dict or other json-friendly type that may contain discriminator fields to help with future deserialization.
+        Events with a wrapper type that includes type metadata, so that they can be reserialized into the original Event type.
+        Traverses dicts and lists recursively.
 
         Args:
             value (Any): The value to serialize.
@@ -72,9 +71,7 @@ class JsonSerializer(BaseSerializer):
         Returns:
             Any: The serialized value. A dict, list, string, number, or boolean.
         """
-        # Note: to avoid circular dependencies we cannot import BaseComponent from llama_index.core
-        # if we want to use isinstance(value, BaseComponent) instead of guessing type from the presence
-        # of class_name, we need to move BaseComponent out of core
+        # This has something to do with BaseComponent from llama_index.core. Is it still needed?
         if hasattr(value, "class_name"):
             retval = {
                 "__is_component": True,
