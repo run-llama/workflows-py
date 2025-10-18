@@ -64,7 +64,7 @@ class JsonSerializer(BaseSerializer):
         """
         Events with a wrapper type that includes type metadata, so that they can be reserialized into the original Event type.
         Traverses dicts and lists recursively.
-        
+
         Args:
             value (Any): The value to serialize.
 

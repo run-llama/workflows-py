@@ -25,7 +25,6 @@ from starlette.schemas import SchemaGenerator
 from starlette.staticfiles import StaticFiles
 
 from workflows import Context, Workflow
-from workflows.context.serializers import JsonSerializer
 from workflows.events import (
     Event,
     InternalDispatchEvent,
@@ -708,11 +707,10 @@ class WorkflowServer:
           Event data is returned as an envelope that preserves backward-compatible fields
           and adds metadata for type-safety on the client:
           {
-            "__is_pydantic": true,
             "value": <pydantic serialized value>,
-            "qualified_name": <python path to pydantic class>,  # deprecated, prefer `mro`
-            "mro": [<qualified class names from most to least specific>],
-            "origin": "builtin" | "user"
+            "types": [<class names from MRO excluding the event class and base Event>],
+            "type": <class name>,
+            "qualified_name": <python module path + class name>,
           }
 
           Event queue is mutable. Elements are added to the queue by the workflow handler, and removed by any consumer of the queue.
@@ -746,6 +744,13 @@ class WorkflowServer:
               type: number
               default: 1
             description: Timeout for acquiring the lock to iterate over the events.
+          - in: query
+            name: include_qualified_name
+            required: false
+            schema:
+              type: boolean
+              default: true
+            description: If true, include the qualified name of the event in the response body.
         responses:
           200:
             description: Streaming started
@@ -758,10 +763,18 @@ class WorkflowServer:
                     value:
                       type: object
                       description: The event value.
+                    type:
+                      type: string
+                      description: The class name of the event.
+                    types:
+                      type: array
+                      description: Superclass names from MRO (excluding the event class and base Event).
+                      items:
+                        type: string
                     qualified_name:
                       type: string
                       description: The qualified name of the event.
-                  required: [value, qualified_name]
+                  required: [value, type]
           404:
             description: Handler not found
         """
@@ -769,6 +782,9 @@ class WorkflowServer:
         timeout = request.query_params.get("acquire_timeout", "1").lower()
         include_internal = (
             request.query_params.get("include_internal", "false").lower() == "true"
+        )
+        include_qualified_name = (
+            request.query_params.get("include_qualified_name", "true").lower() == "true"
         )
         sse = request.query_params.get("sse", "true").lower() == "true"
         try:
@@ -803,7 +819,7 @@ class WorkflowServer:
                 if not include_internal and isinstance(event, InternalDispatchEvent):
                     continue
                 envelope = EventEnvelopeWithMetadata.from_event(
-                    event, include_qualified_name=True
+                    event, include_qualified_name=include_qualified_name
                 )
                 payload = envelope.model_dump_json()
                 if sse:
@@ -852,10 +868,21 @@ class WorkflowServer:
                 type: object
                 properties:
                   event:
-                    type: string
-                    description: Serialized event in JSON format.
-                    examples:
-                        {"type": "event_name", "data": {"key": "value"}}
+                    description: Serialized event. Accepts object or JSON-encoded string for backward compatibility.
+                    oneOf:
+                      - type: string
+                        description: JSON string of the event envelope or value.
+                        examples:
+                          - '{"type": "ExternalEvent", "value": {"response": "hi"}}'
+                      - type: object
+                        properties:
+                          type:
+                            type: string
+                            description: The class name of the event.
+                          value:
+                            type: object
+                            description: The event value object (preferred over data).
+                        additionalProperties: true
                   step:
                     type: string
                     description: Optional target step name. If not provided, event is sent to all steps.

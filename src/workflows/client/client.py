@@ -239,7 +239,9 @@ class WorkflowClient:
                     async for line in response.aiter_lines():
                         if line.strip():  # Skip empty lines
                             try:
-                                event = json.loads(line.replace("\n", ""))
+                                event = EventEnvelopeWithMetadata.model_validate_json(
+                                    line
+                                )
                                 yield event
                             except json.JSONDecodeError as e:
                                 print(f"Failed to parse JSON: {e}, data: {line}")

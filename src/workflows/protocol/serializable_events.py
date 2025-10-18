@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Type
 
 from pydantic import BaseModel, ValidationError, model_validator
 from workflows.context.utils import import_module_from_qualified_name
@@ -26,10 +26,10 @@ class EventEnvelopeWithMetadata(BaseModel):
     type: str
     types: list[str] | None
 
-    def load_event(self, registry: list[type[Event]]) -> Event:
+    def load_event(self, registry: list[Type[Event]] = []) -> Event:
         """
-        Attempts to load the event from the envelope. Looks up the event from the registry, if provided.
-        Falls back to the qualified_name, attempting to load the module.
+        Attempts to load the event data as a python class based on the envelope metadata.
+        Looks up the event from the registry, if provided. Falls back to the qualified_name, attempting to load from the module path.
         """
         registry_lookup = {e.__name__: e for e in registry}
         as_event_envelope = EventEnvelope(
@@ -98,8 +98,8 @@ class EventEnvelope(BaseModel):
     def parse(
         cls,
         client_data: dict[str, Any] | str,
-        registry: dict[str, type[Event]] = {},
-        explicit_event: type[Event] | None = None,
+        registry: dict[str, Type[Event]] | None = None,
+        explicit_event: Type[Event] | None = None,
     ) -> Event:
         """
         Parse client data into an Event. Raises an EventValidationError if the client data is invalid.
@@ -112,7 +112,7 @@ class EventEnvelope(BaseModel):
         Returns:
             The parsed Event.
         """
-
+        registry = registry or {}
         errors: list[str] = []
         try:
             as_dict = (
@@ -128,8 +128,9 @@ class EventEnvelope(BaseModel):
             "qualified_name" not in as_dict or "type" not in as_dict
         ) and "value" not in as_dict
         if missing_qualifiers and explicit_event:
+            if explicit_event.__name__ not in registry:
+                registry = {**registry, explicit_event.__name__: explicit_event}
             as_dict = {
-                "qualified_name": _get_qualified_name(explicit_event),
                 "type": explicit_event.__name__,
                 "value": as_dict,
             }
@@ -150,7 +151,6 @@ class EventEnvelope(BaseModel):
                         f"Invalid client data. Qualified name {event.qualified_name} does not correspond to an Event subclass"
                     )
                 else:
-                    print(f"event.value: {event.value} for {module_class}")
                     return module_class.model_validate(event.value)
         except ValidationError as e:
             errors.append(f"Failed to deserialize event: {str(e)}")
@@ -164,7 +164,7 @@ class EventEnvelope(BaseModel):
         raise EventValidationError(" ".join(errors))
 
 
-def _get_event_subtypes(cls: type) -> list[str] | None:
+def _get_event_subtypes(cls: Type[Event]) -> list[str] | None:
     """
     Traverses the MRO (Module Resolution Order) of a class and returns the list of only Event subclasses.
     """
@@ -180,7 +180,7 @@ def _get_event_subtypes(cls: type) -> list[str] | None:
     return names
 
 
-def _get_qualified_name(event: type[Event]) -> str:
+def _get_qualified_name(event: Type[Event]) -> str:
     return f"{event.__module__}.{event.__name__}"
 
 
