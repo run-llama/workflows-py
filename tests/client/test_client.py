@@ -2,6 +2,7 @@ import pytest
 import httpx
 
 from httpx import ASGITransport, AsyncClient
+from workflows.protocol.serializable_events import EventEnvelopeWithMetadata
 from workflows.server.server import WorkflowServer
 from workflows.client import WorkflowClient
 from .greeting_workflow import greeting_wf, InputEvent, OutputEvent
@@ -45,9 +46,10 @@ async def test_run_nowait_and_stream_events(client: WorkflowClient) -> None:
 
     events = []
     async for event in client.get_workflow_events(handler_id=handler_id):
-        assert isinstance(event, dict)
-        events.append(event)
+        assert isinstance(event, EventEnvelopeWithMetadata)
+        events.append(event.load_event())
     assert len(events) == 3
+    assert events[0] == InputEvent(greeting="hello", name="John")
 
 
 @pytest.mark.asyncio
@@ -103,8 +105,8 @@ async def test_stream_events_including_internal(client: WorkflowClient) -> None:
     async for event in client.get_workflow_events(
         handler_id=handler_id, include_internal_events=True
     ):
-        assert isinstance(event, dict)
-        events.append(event)
+        assert isinstance(event, EventEnvelopeWithMetadata)
+        events.append(event.load_event())
     assert len(events) > 3
 
 

@@ -31,7 +31,7 @@ async def main() -> None:
     print("=== STREAMING EVENTS ===")
 
     async for event in client.get_workflow_events(handler_id=handler_id):
-        print("Received data:", event)
+        print(f"Received event type={event.type} data={event.value}")
     result = await client.get_result(handler_id)
 
     print(f"Final result: {result.result} (status: {result.status})")
