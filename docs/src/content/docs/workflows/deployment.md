@@ -214,7 +214,7 @@ handler = await client.run_workflow_nowait("human")
 handler_id = handler.handler_id
 print(handler_id)
 async for event in client.get_workflow_events(handler_id=handler_id):
-    if "RequestEvent" in event.get("qualified_name", ""):
+    if "RequestEvent" == event.type
         print(
             "Workflow is requiring human input:",
             event.get("value", {}).get("prompt", ""),
