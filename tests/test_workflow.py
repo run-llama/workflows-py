@@ -257,7 +257,7 @@ async def test_workflow_step_send_event() -> None:
     r = await WorkflowTestRunner(workflow).run()
     assert r.result == "step2"
     ctx = r.ctx
-    replay = ctx._broker_run._plugin.replay()  # type:ignore
+    replay = ctx._broker_run._runtime.replay()  # type:ignore
     assert TickAddEvent(OneTestEvent(), step_name="step2") in replay
 
 
@@ -276,7 +276,7 @@ async def test_workflow_step_send_event_to_None() -> None:
     workflow = StepSendEventToNoneWorkflow(verbose=True)
     result = await WorkflowTestRunner(workflow).run()
     assert result.ctx._broker_run is not None
-    replay = result.ctx._broker_run._plugin.replay()  # type:ignore
+    replay = result.ctx._broker_run._runtime.replay()  # type:ignore
     assert TickAddEvent(OneTestEvent()) in replay
 
 

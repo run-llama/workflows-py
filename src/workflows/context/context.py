@@ -218,8 +218,8 @@ class Context(Generic[MODEL_T]):
         self._broker_run = WorkflowBroker(
             workflow=workflow,
             context=self,
-            plugin=runtime,
-            plugin_host=self._plugin,
+            runtime=runtime,
+            plugin=self._plugin,
         )
         return self._broker_run
 

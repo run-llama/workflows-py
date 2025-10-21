@@ -65,8 +65,8 @@ class UnserializableKeyWarning(Warning):
 
 class WorkflowBroker(Generic[MODEL_T]):
     _context: Context[MODEL_T]
-    _plugin: WorkflowRuntime
-    _plugin_host: Plugin
+    _runtime: WorkflowRuntime
+    _plugin: Plugin
     _is_running: bool
     _handler: WorkflowHandler | None
     _workflow: Workflow
@@ -78,12 +78,12 @@ class WorkflowBroker(Generic[MODEL_T]):
         self,
         workflow: Workflow,
         context: Context[MODEL_T],
-        plugin: WorkflowRuntime,
-        plugin_host: Plugin,
+        runtime: WorkflowRuntime,
+        plugin: Plugin,
     ) -> None:
         self._context = context
+        self._runtime = runtime
         self._plugin = plugin
-        self._plugin_host = plugin_host
         self._is_running = False
         self._handler = None
         self._workflow = workflow
@@ -135,13 +135,13 @@ class WorkflowBroker(Generic[MODEL_T]):
                         workflow,
                     )
                     registered = workflow_registry.get_registered_workflow(
-                        workflow, self._plugin_host, control_loop_fn, step_workers
+                        workflow, self._plugin, control_loop_fn, step_workers
                     )
 
                     workflow_result = await registered.workflow_function(
                         start_event,
                         init_state,
-                        self._plugin,
+                        self._runtime,
                         cast(Context, self._context),
                         registered.steps,
                     )
@@ -179,7 +179,7 @@ class WorkflowBroker(Generic[MODEL_T]):
 
     # outer handler API
     def cancel_run(self) -> None:
-        self._execute_task(self._plugin.send_event(TickCancelRun()))
+        self._execute_task(self._runtime.send_event(TickCancelRun()))
 
     @property
     def is_running(self) -> bool:
@@ -194,7 +194,7 @@ class WorkflowBroker(Generic[MODEL_T]):
 
     @property
     def _replay_ticks(self) -> list[WorkflowTick]:
-        snapshottable = as_snapshottable(self._plugin)
+        snapshottable = as_snapshottable(self._runtime)
         if snapshottable is None:
             raise WorkflowRuntimeError("Plugin is not snapshottable")
         return snapshottable.replay()
@@ -253,7 +253,7 @@ class WorkflowBroker(Generic[MODEL_T]):
                 )
 
         self._execute_task(
-            self._plugin.send_event(TickAddEvent(event=message, step_name=step))
+            self._runtime.send_event(TickAddEvent(event=message, step_name=step))
         )
 
     def _get_step_ctx(self, fn: str) -> StepWorkerContext:
@@ -302,13 +302,13 @@ class WorkflowBroker(Generic[MODEL_T]):
 
     def stream_published_events(self) -> AsyncGenerator[Event, None]:
         """The internal queue used for streaming events to callers."""
-        return self._plugin.stream_published_events()
+        return self._runtime.stream_published_events()
 
     # step API only
     # signal API (no response needed)
     def write_event_to_stream(self, ev: Event | None) -> None:
         if ev is not None:
-            self._execute_task(self._plugin.write_to_event_stream(ev))
+            self._execute_task(self._runtime.write_to_event_stream(ev))
 
     async def shutdown(self) -> None:
         """Cancels the running workflow loop
@@ -317,8 +317,8 @@ class WorkflowBroker(Generic[MODEL_T]):
         broker as not running. Queues and state remain available so callers can
         inspect or drain leftover events.
         """
-        await self._plugin.send_event(TickCancelRun())
+        await self._runtime.send_event(TickCancelRun())
         for worker in self._workers:
             worker.cancel()
         self._workers.clear()
-        await self._plugin.close()
+        await self._runtime.close()
