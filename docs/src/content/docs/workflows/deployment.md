@@ -217,7 +217,7 @@ async for event in client.get_workflow_events(handler_id=handler_id):
     if "RequestEvent" == event.type
         print(
             "Workflow is requiring human input:",
-            event.get("value", {}).get("prompt", ""),
+            event.value.get("prompt", ""),
         )
         name = input("Reply here: ")
         sent_event = await client.send_event(
