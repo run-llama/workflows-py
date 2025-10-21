@@ -3,9 +3,11 @@ from workflows.server.abstract_workflow_store import (
     HandlerQuery,
     PersistentHandler,
 )
+from workflows.server.sqlite.migrate import run_migrations
 from typing import List, Optional, Sequence, Tuple
 import sqlite3
 import json
+from datetime import datetime
 
 
 class SqliteWorkflowStore(AbstractWorkflowStore):
@@ -15,22 +17,11 @@ class SqliteWorkflowStore(AbstractWorkflowStore):
 
     def _init_db(self) -> None:
         conn = sqlite3.connect(self.db_path)
-        conn.execute(
-            """CREATE TABLE IF NOT EXISTS handlers (
-                handler_id TEXT PRIMARY KEY,
-                workflow_name TEXT,
-                status TEXT,
-                run_id TEXT,
-                error TEXT,
-                result TEXT,
-                started_at TEXT,
-                updated_at TEXT,
-                completed_at TEXT,
-                ctx TEXT
-            )"""
-        )
-        conn.commit()
-        conn.close()
+        try:
+            run_migrations(conn)
+            conn.commit()
+        finally:
+            conn.close()
 
     async def query(self, query: HandlerQuery) -> List[PersistentHandler]:
         filter_spec = self._build_filters(query)
@@ -142,8 +133,6 @@ class SqliteWorkflowStore(AbstractWorkflowStore):
 
 
 def _row_to_persistent_handler(row: tuple) -> PersistentHandler:
-    from datetime import datetime
-
     return PersistentHandler(
         handler_id=row[0],
         workflow_name=row[1],

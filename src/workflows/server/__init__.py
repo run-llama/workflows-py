@@ -7,7 +7,7 @@ from .abstract_workflow_store import (
     HandlerQuery,
     PersistentHandler,
 )
-from .sqlite_workflow_store import SqliteWorkflowStore
+from .sqlite.sqlite_workflow_store import SqliteWorkflowStore
 
 __all__ = [
     "WorkflowServer",
