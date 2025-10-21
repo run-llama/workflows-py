@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2025 LlamaIndex Inc.
 
+from __future__ import annotations
+
 import asyncio
 import logging
-import sys
-import time
-from typing import Any, Type, Union
+from typing import Any, Callable, Union
 from unittest import mock
 
 import pytest
@@ -26,8 +26,9 @@ from workflows.events import (
     StopEvent,
 )
 from workflows.handler import WorkflowHandler
-from workflows.workflow import Workflow
+from workflows.runtime.types.ticks import TickAddEvent
 from workflows.testing import WorkflowTestRunner
+from workflows.workflow import Workflow
 
 from .conftest import (
     AnotherTestEvent,
@@ -179,6 +180,19 @@ async def test_workflow_sync_steps_only() -> None:
 
 @pytest.mark.asyncio
 async def test_workflow_num_workers() -> None:
+    signal = asyncio.Event()
+    lock = asyncio.Lock()
+    counter = 0
+
+    async def await_count(count: int) -> None:
+        nonlocal counter
+        async with lock:
+            counter += 1
+            if counter == count:
+                signal.set()
+                return
+        await signal.wait()
+
     class NumWorkersWorkflow(Workflow):
         @step
         async def original_step(
@@ -196,7 +210,8 @@ async def test_workflow_num_workers() -> None:
 
         @step(num_workers=3)
         async def test_step(self, ev: OneTestEvent) -> AnotherTestEvent:
-            await asyncio.sleep(1.0)
+            await await_count(3)  # wait for all 3 to be waiting
+
             return AnotherTestEvent(another_test_param=ev.test_param)
 
         @step
@@ -209,29 +224,17 @@ async def test_workflow_num_workers() -> None:
                 return None  # type: ignore
             return StopEvent(result=[ev.another_test_param for ev in events])
 
-    workflow = NumWorkersWorkflow()
-    start_time = time.time()
+    workflow = NumWorkersWorkflow(timeout=1)
     r = await WorkflowTestRunner(workflow).run()
-    end_time = time.time()
 
-    assert set(r.result) == {"test1", "test2", "test4"}
+    assert "test4" in set(r.result)
+    assert len({"test1", "test2", "test3"} - set(r.result)) == 1
 
-    # ctx should have 1 extra event
+    # Ensure ctx is serializable
     ctx = r.ctx
     assert ctx
     assert ctx._broker_run is not None
-    assert "final_step" in ctx._broker_run._state.event_buffers
-    event_buffer = ctx._broker_run._state.event_buffers["final_step"]
-    assert len(event_buffer["tests.conftest.AnotherTestEvent"]) == 1
-
-    # ensure ctx is serializable
     ctx.to_dict()
-
-    # Check if the execution time is close to 1 second (with some tolerance)
-    execution_time = end_time - start_time
-    assert 1.0 <= execution_time < 1.1, (
-        f"Execution time was {execution_time:.2f} seconds"
-    )
 
 
 @pytest.mark.asyncio
@@ -254,9 +257,8 @@ async def test_workflow_step_send_event() -> None:
     r = await WorkflowTestRunner(workflow).run()
     assert r.result == "step2"
     ctx = r.ctx
-    assert ctx._broker_run is not None
-    assert ("step2", "OneTestEvent") in ctx._broker_run._state.accepted_events
-    assert ("step3", "OneTestEvent") not in ctx._broker_run._state.accepted_events
+    replay = ctx._broker_run._runtime.replay()  # type:ignore
+    assert TickAddEvent(OneTestEvent(), step_name="step2") in replay
 
 
 @pytest.mark.asyncio
@@ -274,7 +276,8 @@ async def test_workflow_step_send_event_to_None() -> None:
     workflow = StepSendEventToNoneWorkflow(verbose=True)
     result = await WorkflowTestRunner(workflow).run()
     assert result.ctx._broker_run is not None
-    assert ("step2", "OneTestEvent") in result.ctx._broker_run._state.accepted_events
+    replay = result.ctx._broker_run._runtime.replay()  # type:ignore
+    assert TickAddEvent(OneTestEvent()) in replay
 
 
 @pytest.mark.asyncio
@@ -413,7 +416,7 @@ async def test_workflow_pickle() -> None:
             await ctx.store.set("test_fn", test_fn)
             return StopEvent(result="Done")
 
-    wf = DummyWorkflow()
+    wf = DummyWorkflow(timeout=1)
     r = await WorkflowTestRunner(wf).run()
     ctx = r.ctx
     assert ctx
@@ -441,27 +444,42 @@ async def test_workflow_pickle() -> None:
 
 
 @pytest.mark.asyncio
-async def test_workflow_context_to_dict(workflow: Workflow) -> None:
+async def test_workflow_context_to_dict() -> None:
     ctx: Union[Context, None] = None
     new_ctx: Union[Context, None] = None
+    signal_continue = asyncio.Event()
+    signal_ready = asyncio.Event()
+    run_count = 0
+
+    class StallableWorkflow(Workflow):
+        @step
+        async def step1(self, ev: StartEvent) -> EventWithName:
+            nonlocal run_count
+            run_count += 1
+            if run_count > 1:
+                raise ValueError("Start ran more than once")
+            return EventWithName(name="test")
+
+        @step
+        async def step2(self, ev: EventWithName) -> StopEvent:
+            signal_ready.set()
+            await signal_continue.wait()
+            return StopEvent(result="Done")
+
+    workflow = StallableWorkflow()
     try:
         handler = workflow.run()
         ctx = handler.ctx
-
-        ctx.send_event(EventWithName(name="test"))  # type:ignore
-
+        await signal_ready.wait()
         # get the context dict
         data = ctx.to_dict()  # type:ignore
 
-        # finish workflow
-        await handler
+        await handler.cancel_run()
 
         new_ctx = Context.from_dict(workflow, data)
-        new_ctx._init_broker(workflow)
-        assert new_ctx._broker_run is not None
-        assert (
-            new_ctx._broker_run._state.queues["start_step"].get_nowait().name == "test"
-        )
+        handler2 = workflow.run(ctx=new_ctx)
+        signal_continue.set()
+        await handler2
     finally:
         if ctx is not None and ctx._broker_run is not None:
             await ctx._broker_run.shutdown()
@@ -487,7 +505,7 @@ class HumanInTheLoopWorkflow(Workflow):
 async def test_human_in_the_loop() -> None:
     # workflow should raise a timeout error because hitl only works with streaming
     with pytest.raises(WorkflowTimeoutError):
-        await WorkflowTestRunner(HumanInTheLoopWorkflow(timeout=1)).run()
+        await WorkflowTestRunner(HumanInTheLoopWorkflow(timeout=0.01)).run()
 
     # workflow should work with streaming
     workflow = HumanInTheLoopWorkflow()
@@ -538,83 +556,49 @@ class DummyWorkflowForConcurrentRunsTest(Workflow):
         super().__init__(**kwargs)
         self._lock = asyncio.Lock()
         self.num_active_runs = 0
+        self.num_active_runs_history: list[int] = []
 
     @step
     async def step_one(self, ev: StartEvent) -> StopEvent:
         run_num = ev.get("run_num")
         async with self._lock:
             self.num_active_runs += 1
+            self.num_active_runs_history.append(self.num_active_runs)
         await asyncio.sleep(0.01)
         async with self._lock:
             self.num_active_runs -= 1
         return StopEvent(result=f"Run {run_num}: Done")
 
-    async def get_active_runs(self) -> Any:
-        async with self._lock:
-            return self.num_active_runs
-
-
-class NumConcurrentRunsException(Exception):
-    pass
+    async def get_active_runs(self) -> list[int]:
+        return self.num_active_runs_history
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     (
-        "workflow",
-        "desired_max_concurrent_runs",
-        "expected_exception",
+        "workflow_factory",
+        "validate_max_concurrent_runs",
     ),
     [
         (
-            DummyWorkflowForConcurrentRunsTest(num_concurrent_runs=1),
-            1,
-            type(None),
+            lambda: DummyWorkflowForConcurrentRunsTest(num_concurrent_runs=1),
+            lambda actual_max_concurrent_runs: actual_max_concurrent_runs == 1,
         ),
         # This workflow is not protected, and so NumConcurrentRunsException is raised
         (
-            DummyWorkflowForConcurrentRunsTest(),
-            1,
-            NumConcurrentRunsException,
+            lambda: DummyWorkflowForConcurrentRunsTest(),
+            lambda actual_max_concurrent_runs: actual_max_concurrent_runs > 1,
         ),
     ],
 )
 async def test_workflow_run_num_concurrent(
-    workflow: DummyWorkflowForConcurrentRunsTest,
-    desired_max_concurrent_runs: int,
-    expected_exception: Type,
+    workflow_factory: Callable[[], DummyWorkflowForConcurrentRunsTest],
+    validate_max_concurrent_runs: Callable[[int], bool],
 ) -> None:
-    # skip test if python version is 3.9 or lower
-    if sys.version_info < (3, 10):
-        pytest.skip("Skipping test for Python 3.9 or lower")
-
-    async def _poll_workflow(
-        wf: DummyWorkflowForConcurrentRunsTest, desired_max_concurrent_runs: int
-    ) -> None:
-        """Check that number of concurrent runs is less than desired max amount."""
-        for _ in range(100):
-            num_active_runs = await wf.get_active_runs()
-            if num_active_runs > desired_max_concurrent_runs:
-                raise NumConcurrentRunsException
-            await asyncio.sleep(0.01)
-
-    poll_task = asyncio.create_task(
-        _poll_workflow(
-            wf=workflow, desired_max_concurrent_runs=desired_max_concurrent_runs
-        ),
-    )
-
-    tasks = []
-    for ix in range(1, 5):
-        tasks.append(workflow.run(run_num=ix))
-
-    results = await asyncio.gather(*tasks)
-
-    if not poll_task.done():
-        await poll_task
-    e = poll_task.exception()
-
-    assert type(e) is expected_exception
+    workflow = workflow_factory()
+    results = await asyncio.gather(*[workflow.run(run_num=ix) for ix in range(1, 5)])
+    max_concurrent_runs = max(workflow.num_active_runs_history)
+    assert validate_max_concurrent_runs(max_concurrent_runs)
     assert results == [f"Run {ix}: Done" for ix in range(1, 5)]
 
 
@@ -686,25 +670,28 @@ async def test_workflow_stream_events_exits() -> None:
     assert result.outcome == "Workflow completed"
 
 
+class RandomEvent(Event):
+    pass
+
+
+class InvalidStopWorkflow(Workflow):
+    @step
+    async def a_step(self, ev: MyStart) -> RandomEvent:
+        return RandomEvent()
+
+
+class InvalidStartWorkflow(Workflow):
+    @step
+    async def a_step(self, ev: RandomEvent) -> StopEvent:
+        return StopEvent()
+
+
 def test_wrong_event_types() -> None:
-    class RandomEvent(Event):
-        pass
-
-    class InvalidStopWorkflow(Workflow):
-        @step
-        async def a_step(self, ev: MyStart) -> RandomEvent:
-            return RandomEvent()
-
     with pytest.raises(
         WorkflowConfigurationError,
         match="At least one Event of type StopEvent must be returned by any step.",
     ):
         InvalidStopWorkflow()
-
-    class InvalidStartWorkflow(Workflow):
-        @step
-        async def a_step(self, ev: RandomEvent) -> StopEvent:
-            return StopEvent()
 
     with pytest.raises(
         WorkflowConfigurationError,

@@ -51,10 +51,11 @@ class StepConfig(BaseModel):
 
 
 P = ParamSpec("P")
-R = TypeVar("R", covariant=True)
+R = TypeVar("R")
+R_co = TypeVar("R_co", covariant=True)
 
 
-class StepFunction(Protocol, Generic[P, R]):
+class StepFunction(Protocol, Generic[P, R_co]):
     """A decorated function, that has some _step_config metadata from the @step decorator"""
 
     _step_config: StepConfig
@@ -62,7 +63,7 @@ class StepFunction(Protocol, Generic[P, R]):
     __name__: str
     __qualname__: str
 
-    def __call__(self, *args: P.args, **kwargs: P.kwargs) -> R: ...
+    def __call__(self, *args: P.args, **kwargs: P.kwargs) -> R_co: ...
 
 
 @overload
