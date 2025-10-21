@@ -59,7 +59,7 @@ class WorkflowTestRunner:
             ```
             wf = GreetingWorkflow()
             runner = WorkflowTestRunner(wf)
-            test_result = runner.run(start_even=StartEvent(message="hello"), expose_internal = True, exclude_events = [EventsQueueChanged])
+            test_result = runner.run(start_even=StartEvent(message="hello"), expose_internal = True, exclude_events = [StepStateChanged])
             assert test_result.collected == 22
             assert test_result.event_types.get(StepStateChanged, 0) == 8
             assert str(test_result.result) == "hello Adam!"
