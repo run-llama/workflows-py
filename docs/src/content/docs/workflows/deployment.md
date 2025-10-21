@@ -166,7 +166,7 @@ To stream events either as Server-Sent Events (SSE) or as multi-line JSON payloa
 
 **Query parameters**
 
-- `sse` (set to either "true" or "false", not required): stream the events as Server Sent Events (`text/event-stream`) if true, else stream them as a multi-line JSON payload (`application/x-ndjson`). Defaults to true. 
+- `sse` (set to either "true" or "false", not required): stream the events as Server Sent Events (`text/event-stream`) if true, else stream them as a multi-line JSON payload (`application/x-ndjson`). Defaults to true.
 - `acquire_timeout` (a float-convertible string, not required): timeout for acquiring the lock to iterate over events
 - `include_internal` (set to either "true" or "false", not required): stream internal workfloe events if set to true. Defaults to false.
 - `include_qualified_name` (set to either "true" or "false", not required): include the qualified name of the event in the response body. Defaults to true.
@@ -186,7 +186,7 @@ Single event payload:
   "value": {"result": 12},
   "qualified_name": "__main__.MathEvent",
   "type": "__main__.MathEvent",
-  "types": ["workflows.events.Event", "__main__.MathEvent"], 
+  "types": ["workflows.events.Event", "__main__.MathEvent"],
 }
 ```
 

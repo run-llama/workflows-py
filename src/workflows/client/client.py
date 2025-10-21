@@ -21,7 +21,7 @@ from workflows.protocol import (
     HealthResponse,
     SendEventResponse,
     WorkflowsListResponse,
-    CancelHandlerResponse
+    CancelHandlerResponse,
 )
 from workflows.protocol.serializable_events import (
     EventEnvelope,
@@ -313,17 +313,22 @@ class WorkflowClient:
             _raise_for_status_with_body(response)
 
             return HandlersListResponse.model_validate(response.json())
-        
-    async def cancel_handler(self, handler_id: str, purge: bool = False) -> CancelHandlerResponse:
+
+    async def cancel_handler(
+        self, handler_id: str, purge: bool = False
+    ) -> CancelHandlerResponse:
         """
         Stop and cancel a workflow run.
 
         Args:
             handler_id (str): ID of the handler associated with the workflow run
-            purge (bool): Whether or not to delete the run also from the persisten storage. Defaults to false
+            purge (bool): Whether or not to delete the run also from the persistent storage. Defaults to false
         """
         async with self._get_client() as client:
-            response = await client.get(f"/handlers/{handler_id}", params={"purge": "true" if purge else "false"})
+            response = await client.get(
+                f"/handlers/{handler_id}",
+                params={"purge": "true" if purge else "false"},
+            )
             _raise_for_status_with_body(response)
 
             return CancelHandlerResponse.model_validate(response.json())
