@@ -32,7 +32,7 @@ from workflows.events import (
 )
 from workflows.runtime.types.internal_state import BrokerState
 from workflows.runtime.broker import WorkflowBroker
-from workflows.runtime.basic_runtime import basic_runtime
+from workflows.plugins.basic import basic_runtime
 from workflows.runtime.types.plugin import Plugin, WorkflowRuntime
 from workflows.types import RunResultT
 from workflows.handler import WorkflowHandler

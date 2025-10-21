@@ -27,7 +27,7 @@ from workflows.events import (
     StartEvent,
     StopEvent,
 )
-from workflows.runtime.control_loop import create_control_loop, rebuild_state_from_ticks
+from workflows.runtime.control_loop import control_loop, rebuild_state_from_ticks
 from workflows.runtime.types.internal_state import BrokerState
 from workflows.runtime.types.plugin import Plugin, WorkflowRuntime, as_snapshottable
 from workflows.runtime.types.results import (
@@ -39,7 +39,10 @@ from workflows.runtime.types.results import (
     StepWorkerStateContextVar,
     WaitingForEvent,
 )
-from workflows.runtime.types.step_function import as_step_worker_function
+from workflows.runtime.types.step_function import (
+    StepWorkerFunction,
+    as_step_worker_function,
+)
 from workflows.runtime.types.ticks import TickAddEvent, TickCancelRun, WorkflowTick
 from workflows.runtime.workflow_registry import workflow_registry
 
@@ -118,8 +121,6 @@ class WorkflowBroker(Generic[MODEL_T]):
         self._init_state = previous
 
         async def _run_workflow() -> None:
-            from workflows.context.context import Context
-
             # defer execution to make sure the task can be captured and passed
             # to the handler as async exception, protecting against exceptions from before_start
             self._is_running = True
@@ -132,27 +133,35 @@ class WorkflowBroker(Generic[MODEL_T]):
                 try:
                     exception_raised = None
 
-                    step_workers = {}
+                    step_workers: dict[str, StepWorkerFunction] = {}
                     for name, step_func in workflow._get_steps().items():
                         # Avoid capturing a bound method (which retains the instance).
                         # If it's a bound method, extract the unbound function from the class.
                         unbound = getattr(step_func, "__func__", step_func)
                         step_workers[name] = as_step_worker_function(unbound)
 
-                    control_loop_fn = create_control_loop(
-                        workflow,
-                    )
                     registered = workflow_registry.get_registered_workflow(
-                        workflow, self._plugin, control_loop_fn, step_workers
+                        workflow, self._plugin, control_loop, step_workers
                     )
 
-                    workflow_result = await registered.workflow_function(
-                        start_event,
-                        init_state,
-                        self._runtime,
-                        cast(Context, self._context),
-                        registered.steps,
+                    # Register run context prior to invoking control loop
+                    workflow_registry.register_run(
+                        run_id=run_id,
+                        workflow=workflow,
+                        plugin=self._runtime,
+                        context=self._context,  # type: ignore
+                        steps=registered.steps,
                     )
+
+                    try:
+                        workflow_result = await registered.workflow_function(
+                            start_event,
+                            init_state,
+                            run_id,
+                        )
+                    finally:
+                        # ensure run context is cleaned up even on failure
+                        workflow_registry.delete_run(run_id)
                     result.set_result(
                         workflow_result.result
                         if type(workflow_result) is StopEvent
@@ -163,7 +172,6 @@ class WorkflowBroker(Generic[MODEL_T]):
 
                 if exception_raised:
                     # cancel the stream
-                    self.write_event_to_stream(StopEvent())
                     if not result.done():
                         result.set_exception(exception_raised)
             finally:
