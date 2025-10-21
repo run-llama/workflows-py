@@ -134,7 +134,10 @@ class WorkflowBroker(Generic[MODEL_T]):
 
                     step_workers = {}
                     for name, step_func in workflow._get_steps().items():
-                        step_workers[name] = as_step_worker_function(step_func)
+                        # Avoid capturing a bound method (which retains the instance).
+                        # If it's a bound method, extract the unbound function from the class.
+                        unbound = getattr(step_func, "__func__", step_func)
+                        step_workers[name] = as_step_worker_function(unbound)
 
                     control_loop_fn = create_control_loop(
                         workflow,
