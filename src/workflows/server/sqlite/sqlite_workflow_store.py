@@ -3,10 +3,11 @@ from workflows.server.abstract_workflow_store import (
     HandlerQuery,
     PersistentHandler,
 )
+from workflows.server.sqlite.migrate import run_migrations
 from typing import List, Optional, Sequence, Tuple
 import sqlite3
 import json
-from workflows.server.sqlite.migrate import run_migrations
+from datetime import datetime
 
 
 class SqliteWorkflowStore(AbstractWorkflowStore):
@@ -132,8 +133,6 @@ class SqliteWorkflowStore(AbstractWorkflowStore):
 
 
 def _row_to_persistent_handler(row: tuple) -> PersistentHandler:
-    from datetime import datetime
-
     return PersistentHandler(
         handler_id=row[0],
         workflow_name=row[1],
