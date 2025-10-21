@@ -8,7 +8,6 @@ from contextvars import copy_context
 import functools
 import time
 from typing import Any, Awaitable, Callable, TYPE_CHECKING, Generic, Protocol
-import weakref
 
 
 from workflows.decorators import P, R, StepConfig
@@ -63,28 +62,19 @@ async def partial(
     return functools.partial(func, **kwargs)
 
 
-# TODO - make sure this is serializable for distributed step workers
 def as_step_worker_function(func: Callable[P, Awaitable[R]]) -> StepWorkerFunction[R]:
     """
     Wrap a step function, setting context variables and handling exceptions to instead
     return the appropriate StepFunctionResult.
     """
 
-    # If func is a bound method, avoid capturing a strong reference to the instance.
-    # Capture a weakref to the instance and the attribute name, then rebind at call time.
-    bound_instance_ref: weakref.ReferenceType[Any] | None = None
-    bound_attr_name: str | None = None
-    unbound_func: Callable[..., Awaitable[R]] | None = None
+    # Keep original function reference for free-function steps; for methods we
+    # will resolve the currently-bound method from the provided workflow at call time.
+    original_func: Callable[..., Awaitable[R]] = func
 
-    owner = getattr(func, "__self__", None)
-    if owner is not None:
-        bound_instance_ref = weakref.ref(owner)
-        bound_attr_name = getattr(func, "__name__", None)
-        # keep original for tracing name, but we will resolve later
-    else:
-        unbound_func = func
-
-    @functools.wraps(func)
+    # Avoid functools.wraps here because it would set __wrapped__ to the bound
+    # method (when present), which would strongly reference the workflow
+    # instance and prevent garbage collection under high churn.
     async def wrapper(
         state: StepWorkerState,
         step_name: str,
@@ -100,17 +90,14 @@ def as_step_worker_function(func: Callable[P, Awaitable[R]]) -> StepWorkerFuncti
 
         try:
             config = workflow._get_steps()[step_name]._step_config
-            # Resolve the callable without keeping a strong ref in the registry wrapper
-            call_func: Callable[..., Awaitable[R]]
-            if bound_instance_ref is not None and bound_attr_name is not None:
-                inst = bound_instance_ref()
-                if inst is None:
-                    raise WorkflowRuntimeError(
-                        "Workflow instance for step has been collected"
-                    )
-                call_func = getattr(inst, bound_attr_name)
-            else:
-                call_func = unbound_func if unbound_func is not None else func
+            # Resolve callable at call time:
+            # - If the workflow has an attribute with the step name, use it
+            #   (this yields a bound method for instance-defined steps).
+            # - Otherwise, fall back to the original function (free function step).
+            try:
+                call_func = getattr(workflow, step_name)
+            except AttributeError:
+                call_func = original_func
             partial_func = await partial(
                 func=workflow._dispatcher.span(call_func),
                 step_config=config,
@@ -148,5 +135,17 @@ def as_step_worker_function(func: Callable[P, Awaitable[R]]) -> StepWorkerFuncti
                 StepWorkerStateContextVar.reset(token)
             except Exception:
                 pass
+
+    # Manually set minimal metadata without retaining bound instance references.
+    try:
+        unbound_for_wrapped = getattr(func, "__func__", func)
+        wrapper.__name__ = getattr(func, "__name__", wrapper.__name__)
+        wrapper.__qualname__ = getattr(func, "__qualname__", wrapper.__qualname__)
+        # Point __wrapped__ to the unbound function when available to avoid
+        # strong refs to the instance via a bound method object.
+        setattr(wrapper, "__wrapped__", unbound_for_wrapped)
+    except Exception:
+        # Best-effort; lack of these attributes is non-fatal.
+        pass
 
     return wrapper

@@ -30,7 +30,6 @@ class WorkflowPluginRegistry:
         workflow_function: ControlLoopFunction,
         steps: dict[str, StepWorkerFunction[R]],
     ) -> RegisteredWorkflow:
-        return RegisteredWorkflow(workflow_function, steps)
         plugin_type = type(plugin)
 
         # Fast path without lock
