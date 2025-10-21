@@ -256,8 +256,7 @@ class Runtime(ABC):
     Abstract base class for workflow execution runtimes.
 
     Runtimes control how workflows are registered, launched, and executed.
-    The default BasicRuntime uses asyncio; other runtimes can add durability
-    or distributed execution.
+    The default BasicRuntime uses asyncio; DBOSRuntime adds durability.
 
     Lifecycle:
     1. Create runtime instance
@@ -284,7 +283,7 @@ class Runtime(ABC):
         Register a workflow with the runtime.
 
         Called at launch() time for each tracked workflow. Runtimes can
-        wrap the control_loop and steps with their own decorators or handlers.
+        wrap the control_loop and steps (e.g., with DBOS decorators).
 
         Returns RegisteredWorkflow with wrapped functions
         """
@@ -343,8 +342,8 @@ class Runtime(ABC):
         """
         Launch the runtime and register all tracked workflows.
 
-        For BasicRuntime, this is a no-op. Other runtimes may wrap workflows
-        with decorators and initialize backend connections.
+        For DBOS, this wraps workflows with decorators and calls DBOS.launch().
+        For BasicRuntime, this is a no-op.
 
         Must be called before running workflows.
         """
@@ -363,7 +362,7 @@ class Runtime(ABC):
         Track a workflow instance for registration at launch time.
 
         Called by Workflow.__init__ to register with the runtime.
-        Override in runtimes that need to track workflows for deferred registration.
+        Override in runtimes that need to track workflows (e.g., DBOSRuntime).
         Default implementation is a no-op.
         """
         pass
