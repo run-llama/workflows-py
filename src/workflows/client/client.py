@@ -21,6 +21,7 @@ from workflows.protocol import (
     HealthResponse,
     SendEventResponse,
     WorkflowsListResponse,
+    CancelHandlerResponse
 )
 from workflows.protocol.serializable_events import (
     EventEnvelope,
@@ -85,7 +86,7 @@ class WorkflowClient:
         Check whether the workflow server is helathy or not
 
         Returns:
-            bool: True if the workflow server is healthy, false if not
+            HealthResponse: health response from the workflow
         """
         async with self._get_client() as client:
             response = await client.get("/health")
@@ -97,7 +98,7 @@ class WorkflowClient:
         List workflows
 
         Returns:
-            list: List of workflow names available through the server.
+            WorkflowsListResponse: List of workflow names available through the server.
         """
         async with self._get_client() as client:
             response = await client.get("/workflows")
@@ -122,7 +123,7 @@ class WorkflowClient:
             handler_id (Optional[str]): Workflow handler identifier to continue from a previous completed run.
 
         Returns:
-            HandlerDict: Handler state including result and metadata
+            HandlerData: Data representing the handler running the workflow (including result and metadata)
         """
         if start_event is not None:
             try:
@@ -167,7 +168,7 @@ class WorkflowClient:
             handler_id (Optional[str]): Workflow handler identifier to continue from a previous completed run.
 
         Returns:
-            HandlerDict: JSON representation of the handler running the workflow
+            HandlerData: data representing the handler running the workflow.
         """
         if start_event is not None:
             try:
@@ -211,7 +212,7 @@ class WorkflowClient:
             lock_timeout (float): Timeout (in seconds) for acquiring the lock to iterate over the events.
 
         Returns:
-            AsyncGenerator[dict[str, Any], None]: Generator for the events that are streamed in the form of dictionaries.
+            AsyncGenerator[EventEnvelopeWithMetadata, None]: Generator for the events that are streamed as instances of `EventEnvelopeWithMetadata`.
         """
         incl_inter = "true" if include_internal_events else "false"
         url = f"/events/{handler_id}"
@@ -290,10 +291,9 @@ class WorkflowClient:
 
         Args:
             handler_id (str): ID of the handler running the workflow
-            as_handler (bool): Return the workflow handler. Defaults to False.
 
         Returns:
-            Any: Result of the workflow, if available, or workflow handler (when `as_handler` is set to `True`)
+            HandlerData: Complete handler data for the workflow
         """
         async with self._get_client() as client:
             response = await client.get(f"/results/{handler_id}")
@@ -306,13 +306,27 @@ class WorkflowClient:
         Get all the workflow handlers.
 
         Returns:
-            list[HandlerDict]: List of dictionaries representing workflow handlers.
+            HandlersListResponse: List of workflow handlers.
         """
         async with self._get_client() as client:
             response = await client.get("/handlers")
             _raise_for_status_with_body(response)
 
             return HandlersListResponse.model_validate(response.json())
+        
+    async def cancel_handler(self, handler_id: str, purge: bool = False) -> CancelHandlerResponse:
+        """
+        Stop and cancel a workflow run.
+
+        Args:
+            handler_id (str): ID of the handler associated with the workflow run
+            purge (bool): Whether or not to delete the run also from the persisten storage. Defaults to false
+        """
+        async with self._get_client() as client:
+            response = await client.get(f"/handlers/{handler_id}", params={"purge": "true" if purge else "false"})
+            _raise_for_status_with_body(response)
+
+            return CancelHandlerResponse.model_validate(response.json())
 
 
 def _serialize_event(

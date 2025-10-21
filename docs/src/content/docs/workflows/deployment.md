@@ -96,7 +96,11 @@ The `WorkflowServer` exposes the following RESTful endpoints:
 | `POST` | `/workflows/{name}/run`        | Runs the specified workflow synchronously and returns the final result.                                 |
 | `POST` | `/workflows/{name}/run-nowait` | Starts the specified workflow asynchronously and returns a `handler_id`.                                |
 | `GET`  | `/results/{handler_id}`        | Retrieves the result of an asynchronously run workflow. Returns `202 Accepted` if still running.       |
-| `GET`  | `/events/{handler_id}`         | Streams all events from a running workflow as newline-delimited JSON (`application/x-ndjson`).          |
+| `GET`  | `/events/{handler_id}`         | Streams all events from a running workflow as newline-delimited JSON (`application/x-ndjson` and `text/event-stream` if SSE are enabled).          |
+| `POST`  | `/events/{handler_id}`         | Sends an event to a workflow during its execution (useful for human-in-the-loop)         |
+| `GET`  | `/handlers`         |  Get all the workflow handlers (running and completed)        |
+| `POST`  | `/handlers/{handler_id}/cancel`         | Stop and cancel the execution of a workflow.        |
+
 
 ### Running a Workflow (`/run`)
 
@@ -106,18 +110,23 @@ To run a workflow and wait for its completion, send a `POST` request to `/workfl
 
 ```json
 {
-  "kwargs": {
-    "a": 5,
-    "b": 10
-  }
+  "start_event": {},
+  "context": {},
+  "handler_id": "",
+  "kwargs": {}
 }
 ```
+
+- `start_event`: serialized representation of a StartEvent or a subclass of it. Using this as a workflow input is recommended.
+- `context`: serialized representation of the workflow context
+- `handler_id`: workflow handler identifier to continue from a previous completed run.
+- `kwargs`: additional keyword arguments for the workflow (usage not recommended).
 
 **Successful Response (`200 OK`):**
 
 ```json
 {
-  "result": 15
+  "result": "The workflow has been successfully run"
 }
 ```
 
@@ -129,12 +138,14 @@ To start a workflow without waiting for it to finish, use the `/run-nowait` endp
 
 ```json
 {
-  "kwargs": {
-    "a": 5,
-    "b": 10
-  }
+  "start_event": {},
+  "context": {},
+  "handler_id": "",
+  "kwargs": {}
 }
 ```
+
+The request body has the same arguments as the `/run` endpoint.
 
 **Successful Response (`200 OK`):**
 
@@ -146,3 +157,118 @@ To start a workflow without waiting for it to finish, use the `/run-nowait` endp
 ```
 
 You can then use the `handler_id` to check for the result or stream events.
+
+## Streaming events (`GET /events/{handler_id}`)
+
+> _This endpoint only works if you previously started a workflow asynchronously with `/run-nowait`_
+
+To stream events either as Server-Sent Events (SSE) or as multi-line JSON payloads, you can send a request to the `/events/{handler_id}` endpoint with the handler ID of an asynchronous workflow run you previously started.
+
+**Query parameters**
+
+- `sse` (set to either "true" or "false", not required): stream the events as Server Sent Events (`text/event-stream`) if true, else stream them as a multi-line JSON payload (`application/x-ndjson`). Defaults to true. 
+- `acquire_timeout` (a float-convertible string, not required): timeout for acquiring the lock to iterate over events
+- `include_internal` (set to either "true" or "false", not required): stream internal workfloe events if set to true. Defaults to false.
+- `include_qualified_name` (set to either "true" or "false", not required): include the qualified name of the event in the response body. Defaults to true.
+
+**Example request**
+
+```bash
+curl http://localhost:80/events/someUniqueId123?sse=false&acquire_timeout=1&include_internal=false&include_qualified_name=true
+```
+
+**Successful response (`200 OK`)**
+
+Single event payload:
+
+```json
+{
+  "value": {"result": 12},
+  "qualified_name": "__main__.MathEvent",
+  "type": "__main__.MathEvent",
+  "types": ["workflows.events.Event", "__main__.MathEvent"], 
+}
+```
+
+## Getting the result from a workflow execution (`/results/{handler_id}`)
+
+> _This endpoint only works if you previously started a workflow asynchronously with `/run-nowait`_
+
+To get the result of a previously started asynchronous workflow run, you can use the `/results/{handler_id}` endpoint passing the handler ID of the run.
+
+**Example request**
+
+```bash
+curl http://localhost:80/results/someUniqueId123
+```
+
+**Successful response (`200 OK`)**
+
+```json
+{
+  "handler_id": "someUniqueId123",
+  "workflow_name": "math_workflow",
+  "run_id": "uniqueRunId456",
+  "error": null,
+  "result": {
+    "sum": 15,
+    "subtraction": 9,
+    "multiplication": 36,
+    "division": 4,
+  },
+  "status": "completed",
+  "started_at": "2024-10-21T14:32:15.123Z",
+  "updated_at": "2024-10-21T14:45:30.456Z",
+  "completed_at": "2024-10-21T14:45:30.456Z"
+}
+```
+
+**Accepted response (`202 ACCEPTED`)**
+
+Status code `202` is returned when the workflow is still running, and thus has not produce a result yet.
+
+## Sending an event (`POST /events/{handler_id}`)
+
+In cases where external input is needed for the workflow to run (human in the loop, e.g.), you can send a POST request to the `events/{handler_id}` endpoint with the event data to send (and, optionally, the step of the workflow to send them to) in order to provide said external input.
+
+**Request body**
+
+```json
+{
+  "event": {},
+  "step": ""
+}
+```
+
+- `event`: serialized representation of a workflow Event.
+- `step` (optional): name of the step to send the event to.
+
+**Successful response (`200 OK`)**
+
+```json
+{
+  "status": "sent"
+}
+```
+
+## Canceling a workflow run (`/handlers/{handler_id}/cancel`)
+
+To stop a running workflow handler by cancelling its tasks, and optionally removing the associated handler from the persistence store, you can use `/handlers/{handler_id}/cancel`.
+
+**Query parameters**
+
+- `purge` (can be set to either "true" or "false", not required): whether or not to remove the handler associated with the workflow from the persistence store. Defaults to false.
+
+**Example request**
+
+```bash
+curl -X POST http://localhost:80/handlers/someUniqueId123/cancel?purge=true
+```
+
+**Successful response (`200 OK`)**
+
+```js
+{
+  "status": "canceled", // or deleted if purge is true
+}
+```
