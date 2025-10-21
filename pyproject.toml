@@ -119,6 +119,7 @@ llama-index-utils-workflow = {workspace = true}
 llama-index-integration-tests = {workspace = true}
 llama-index-workflows-client = {workspace = true}
 llama-index-workflows-server = {workspace = true}
+llama-index-workflows-dbos = {workspace = true}
 workflows-dev = {workspace = true}
 
 [tool.uv.workspace]
@@ -129,5 +130,6 @@ members = [
   "packages/workflows-dev",
   "packages/llama-index-integration-tests",
   "packages/llama-index-workflows-client",
-  "packages/llama-index-workflows-server"
+  "packages/llama-index-workflows-server",
+  "packages/llama-index-workflows-dbos"
 ]

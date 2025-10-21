@@ -4,22 +4,22 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
-  "pytest>=8.4.2",
-  "pytest-asyncio>=0.24.0",
-  "pytest-cov>=7.0.0",
-  "pytest-timeout>=2.3.1"
+  "pytest>=8.4.0",
+  "pytest-asyncio>=1.0.0",
+  "pytest-cov>=6.1.1",
+  "pytest-timeout>=2.4.0"
 ]
 
 [project]
-name = "llama-index-integration-tests"
+name = "llama-index-workflows-dbos"
 version = "0.1.0"
-description = "Integration tests for llama-index-core workflow abstractions against the workflows package"
+description = "DBOS durable runtime plugin for LlamaIndex Workflows"
 readme = "README.md"
+license = "MIT"
 requires-python = ">=3.10"
 dependencies = [
-  "llama-index-core>=0.14.13",
-  "llama-index-workflows",
-  "llama-index-workflows-dbos"
+  "dbos>=2.10.0",
+  "llama-index-workflows>=2.12.0,<3.0.0"
 ]
 
 [tool.pytest.ini_options]
@@ -28,6 +28,8 @@ asyncio_default_fixture_loop_scope = "module"
 asyncio_default_test_loop_scope = "module"
 testpaths = ["tests"]
 
+[tool.uv.build-backend]
+module-name = "llama_agents.runtime.dbos"
+
 [tool.uv.sources]
 llama-index-workflows = {workspace = true}
-llama-index-workflows-dbos = {workspace = true}

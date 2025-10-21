@@ -7,9 +7,12 @@ DBOS once at module initialization time, avoiding repeated init/destroy cycles.
 from __future__ import annotations
 
 import asyncio
-from typing import AsyncGenerator, Optional, Union
+from pathlib import Path
+from typing import AsyncGenerator, Generator, Union
 
 import pytest
+from dbos import DBOS, DBOSConfig
+from llama_agents.runtime.dbos import DBOSRuntime
 from pydantic import Field
 from workflows.context import Context
 from workflows.decorators import step
@@ -29,13 +32,35 @@ from workflows.workflow import Workflow
 # -- Fixtures --
 
 
+@pytest.fixture(scope="module")
+def dbos_runtime(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> Generator[DBOSRuntime, None, None]:
+    """Module-scoped DBOS runtime - initialized and launched once."""
+    db_file: Path = tmp_path_factory.mktemp("dbos") / "dbos_test.sqlite3"
+    system_db_url: str = f"sqlite+pysqlite:///{db_file}?check_same_thread=false"
+    config: DBOSConfig = {
+        "name": "workflows-py-dbostest",
+        "system_database_url": system_db_url,
+        "run_admin_server": False,
+    }
+    DBOS(config=config)
+    runtime = DBOSRuntime(polling_interval_sec=0.01)
+    try:
+        yield runtime
+    finally:
+        runtime.destroy()
+
+
 @pytest.fixture(
     params=[
         pytest.param("basic", id="basic"),
+        pytest.param("dbos", id="dbos"),
     ]
 )
 async def runtime(
     request: pytest.FixtureRequest,
+    dbos_runtime: DBOSRuntime,
 ) -> AsyncGenerator[Runtime, None]:
     """Yield an unlaunched runtime.
 
@@ -48,6 +73,8 @@ async def runtime(
             yield rt
         finally:
             rt.destroy()
+    elif request.param == "dbos":
+        yield dbos_runtime
 
 
 # -- Shared event types --
@@ -340,55 +367,69 @@ async def test_workflow_step_send_event(runtime: Runtime) -> None:
 
 @pytest.mark.asyncio
 async def test_workflow_num_workers(runtime: Runtime) -> None:
-    signal = asyncio.Event()
+    """Test that num_workers limits concurrent step executions.
+
+    This test verifies that:
+    1. A step with num_workers=5 can process up to 5 events concurrently
+    2. All 5 workers can run simultaneously (they synchronize to prove concurrency)
+    3. The workflow completes successfully with all events processed
+    """
+    num_workers = 5
+    num_events = 10
+    # Track max concurrent executions
     lock = asyncio.Lock()
-    counter = 0
+    current_workers = 0
+    max_concurrent = 0
+    # Barrier to ensure all workers reach this point before any proceed
+    barrier_count = 0
+    barrier_event = asyncio.Event()
 
-    async def await_count(count: int) -> None:
-        nonlocal counter
-        async with lock:
-            counter += 1
-            if counter == count:
-                signal.set()
-                return
-        await signal.wait()
-
-    class LocalNumWorkersWorkflow(Workflow):
+    class NumWorkersWorkflow(Workflow):
         @step
-        async def original_step(
-            self, ctx: Context, ev: StartEvent
-        ) -> Union[OneTestEvent, LastEvent]:
-            await ctx.store.set("num_to_collect", 3)
-            # Send test4 first to ensure it's pulled from receive_queue
-            # before test_step workers complete. Events are pulled one per
-            # iteration, so ordering in receive_queue determines delivery order.
-            ctx.send_event(AnotherTestEvent(another_test_param="test4"))
-            ctx.send_event(OneTestEvent(test_param="test1"))
-            ctx.send_event(OneTestEvent(test_param="test2"))
-            ctx.send_event(OneTestEvent(test_param="test3"))
-            return LastEvent()
+        async def fan_out(self, ctx: Context, ev: StartEvent) -> OneTestEvent:
+            # Send more events than num_workers to test queuing
+            for i in range(num_events):
+                ctx.send_event(OneTestEvent(test_param=str(i)))
+            return None  # type: ignore
 
-        @step(num_workers=3)
-        async def test_step(self, ev: OneTestEvent) -> AnotherTestEvent:
-            await await_count(3)
+        @step(num_workers=num_workers)
+        async def worker_step(self, ev: OneTestEvent) -> AnotherTestEvent:
+            nonlocal current_workers, max_concurrent, barrier_count
+
+            async with lock:
+                current_workers += 1
+                max_concurrent = max(max_concurrent, current_workers)
+                barrier_count += 1
+                if barrier_count == num_workers:
+                    # All workers have arrived, release them
+                    barrier_event.set()
+
+            # Wait for all workers to arrive (proves concurrency)
+            await barrier_event.wait()
+
+            async with lock:
+                current_workers -= 1
+
             return AnotherTestEvent(another_test_param=ev.test_param)
 
         @step
-        async def final_step(
-            self, ctx: Context, ev: Union[AnotherTestEvent, LastEvent]
-        ) -> Optional[StopEvent]:
-            n = await ctx.store.get("num_to_collect")
-            events = ctx.collect_events(ev, [AnotherTestEvent] * n)
+        async def collect_step(
+            self, ctx: Context, ev: AnotherTestEvent
+        ) -> StopEvent | None:
+            events = ctx.collect_events(ev, [AnotherTestEvent] * num_events)
             if events is None:
                 return None
-            return StopEvent(result=[ev.another_test_param for ev in events])
+            return StopEvent(result=[e.another_test_param for e in events])
 
-    workflow = LocalNumWorkersWorkflow(timeout=10, runtime=runtime)
+    workflow = NumWorkersWorkflow(timeout=10, runtime=runtime)
     runtime.launch()
     r = await WorkflowTestRunner(workflow).run()
 
-    assert "test4" in set(r.result)
-    assert len({"test1", "test2", "test3"} - set(r.result)) == 1
+    # Verify all events were processed
+    assert len(r.result) == num_events
+    assert set(r.result) == {str(i) for i in range(num_events)}
+    # Verify we achieved the expected concurrency (all 5 workers ran together)
+    assert max_concurrent == num_workers
 
 
 @pytest.mark.asyncio
