@@ -1,5 +1,6 @@
 from __future__ import annotations
 from abc import abstractmethod, ABC
+from datetime import datetime
 from typing import Literal, Optional, List, Any
 from dataclasses import dataclass
 from pydantic import BaseModel
@@ -22,7 +23,13 @@ class PersistentHandler(BaseModel):
     handler_id: str
     workflow_name: str
     status: Status
-    ctx: dict[str, Any]
+    run_id: str | None = None
+    error: str | None = None
+    result: Any | None = None
+    started_at: datetime | None = None
+    updated_at: datetime | None = None
+    completed_at: datetime | None = None
+    ctx: dict[str, Any] = {}
 
 
 class AbstractWorkflowStore(ABC):

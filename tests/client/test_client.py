@@ -7,11 +7,13 @@ from workflows.server.server import WorkflowServer
 from workflows.client import WorkflowClient
 from .greeting_workflow import greeting_wf, InputEvent, OutputEvent
 from .greeting_workflow import GreetEvent
+from ..server.memory_workflow_store import MemoryWorkflowStore
 
 
 @pytest.fixture()
 def server() -> WorkflowServer:
-    ws = WorkflowServer()
+    # Use MemoryWorkflowStore so get_handlers() can retrieve from persistence
+    ws = WorkflowServer(workflow_store=MemoryWorkflowStore())
     ws.add_workflow(name="greeting", workflow=greeting_wf)
     return ws
 
@@ -83,6 +85,30 @@ async def test_get_handlers(client: WorkflowClient) -> None:
     assert len(handlers.handlers) == 1
     assert handlers.handlers[0].handler_id == handler_id
 
+@pytest.mark.asyncio
+async def test_get_handlers_for_complex_workflows(client: WorkflowClient, server: WorkflowServer) -> None:
+    handler1 = await client.run_workflow_nowait(
+        "greeting", start_event=InputEvent(greeting="hello", name="John")
+    )
+    handler1_id = handler1.handler_id
+
+    handlers = await client.get_handlers()
+    assert len(handlers.handlers) == 1
+    assert handlers.handlers[0].handler_id == handler1_id
+
+    handler2 = await client.run_workflow(
+        "greeting", start_event=InputEvent(greeting="hello", name="Jane")
+    )
+    handler2_id = handler2.handler_id
+    
+    # Restart the server
+    await server.stop()
+    await server.start()
+
+    handlers = await client.get_handlers()
+    assert len(handlers.handlers) == 2
+    assert handlers.handlers[0].handler_id == handler1_id
+    assert handlers.handlers[1].handler_id == handler2_id
 
 @pytest.mark.asyncio
 async def test_run_workflow_sync_result(client: WorkflowClient) -> None:

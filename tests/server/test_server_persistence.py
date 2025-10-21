@@ -50,7 +50,7 @@ async def test_store_is_updated_on_step_completion(
     # Start a workflow through internal runner to exercise persistence updates
     handler_id = "persist-1"
     handler = server._workflows["test"].run()
-    server._run_workflow_handler(handler_id, "test", handler)
+    await server._run_workflow_handler(handler_id, "test", handler)
     handler = server._handlers[handler_id]
 
     # wait for first step to complete
@@ -78,7 +78,9 @@ async def test_store_is_updated_on_step_completion(
     ctx.send_event(ExternalEvent(response="pong"))
     result = await handler
     # wait for event loop to resolve all tasks
-    await server._handlers[handler_id].task
+    task = server._handlers[handler_id].task
+    assert task is not None
+    await task
     await asyncio.sleep(0)  # let even loop resolve other waiters on the internal
     assert result == "received: pong"
     updated = memory_store.handlers[handler_id]
@@ -165,14 +167,16 @@ async def test_store_is_updated_on_workflow_failure(
         # Start a workflow through internal runner to exercise persistence updates
         handler_id = "fail-1"
         handler = server._workflows["error"].run()
-        server._run_workflow_handler(handler_id, "error", handler)
+        await server._run_workflow_handler(handler_id, "error", handler)
 
         # Await the failure of the handler itself
         with pytest.raises(ValueError, match="Test error"):
             await handler
 
         # Ensure the background streaming task has completed and persisted status
-        await server._handlers[handler_id].task
+        task = server._handlers[handler_id].task
+        assert task is not None
+        await task
         await asyncio.sleep(0)
 
         # Verify store captured the failed status and has a context snapshot
@@ -260,7 +264,7 @@ async def test_persistence_retries_on_failure(
         # Start a workflow to trigger persistence
         handler_id = "retry-test"
         handler = server._workflows["test"].run()
-        server._run_workflow_handler(handler_id, "test", handler)
+        await server._run_workflow_handler(handler_id, "test", handler)
 
         # Wait for workflow completion
         result = await server._handlers[handler_id].run_handler
@@ -269,6 +273,7 @@ async def test_persistence_retries_on_failure(
         # Wait for background streaming task to complete, ignoring its expected exception
         task = server._handlers[handler_id].task
         try:
+            assert task is not None
             await task
         except Exception:
             pass
@@ -302,41 +307,21 @@ async def test_workflow_cancelled_after_all_retries_fail(
     )
     server.add_workflow("test", streaming_workflow)
     async with server.contextmanager():
-        try:
-            # Start a workflow to trigger persistence
-            handler_id = "cancel-test"
-            handler = server._workflows["test"].run()
-            server._run_workflow_handler(handler_id, "test", handler)
+        # Start a workflow to trigger persistence
+        handler_id = "cancel-test"
+        handler = server._workflows["test"].run()
 
-            # The handler should be cancelled due to persistence failures
-            with pytest.raises(asyncio.CancelledError):
-                await server._handlers[handler_id].run_handler
+        # Should raise HTTPException if persistence fails on initial checkpoint
+        with pytest.raises(Exception):
+            await server._run_workflow_handler(handler_id, "test", handler)
 
-            # Wait for background streaming task to complete; it raises due to failed checkpoint
-            task = server._handlers[handler_id].task
-            with pytest.raises(Exception):
-                await task
-            await asyncio.sleep(0)
-
-            # Verify that all retry attempts were made
-            assert attempts["count"] == 3  # Initial + 2 retries
-            # Handler should not be successfully stored due to persistent failures
-            persistent_list = await store.query(
-                HandlerQuery(handler_id_in=[handler_id])
-            )
-            assert not persistent_list
-        finally:  # clean up log noise. Wait for underlying cancelled workflows to fully resolve
-            tasks = [
-                handler.run_handler._run_task
-                for handler in server._handlers.values()
-                if handler.run_handler._run_task
-            ]
-            for task in tasks:
-                try:
-                    task.cancel()
-                except Exception:
-                    pass
-            await asyncio.sleep(0)
+        # Verify retry attempts and no registration/persistence on failure
+        assert attempts["count"] == 3  # Initial + 2 retries
+        assert handler_id not in server._handlers
+        persistent_list = await store.query(
+            HandlerQuery(handler_id_in=[handler_id])
+        )
+        assert not persistent_list
 
 
 @pytest.mark.asyncio
