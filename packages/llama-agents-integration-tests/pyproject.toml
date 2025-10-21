@@ -24,7 +24,8 @@ readme = "README.md"
 requires-python = ">=3.9"
 dependencies = [
   "llama-index-core>=0.14.13",
-  "llama-index-workflows"
+  "llama-index-workflows",
+  "llama-agents-dbos; python_full_version > '3.9'"
 ]
 
 [tool.basedpyright]
@@ -55,4 +56,4 @@ filterwarnings = [
 
 [tool.uv.sources]
 llama-index-workflows = {workspace = true}
-llama-index-workflows-dbos = {workspace = true}
+llama-agents-dbos = {workspace = true}

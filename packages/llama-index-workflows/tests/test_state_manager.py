@@ -5,7 +5,7 @@
 
 Full state store protocol tests are in the integration test package
 (llama-index-integration-tests/tests/test_state_store_matrix.py),
-which tests InMemoryStateStore alongside SqliteStateStore.
+which tests InMemoryStateStore alongside SqlStateStore.
 
 These tests provide fast feedback during development of the base package.
 """
