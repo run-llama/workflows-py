@@ -64,6 +64,11 @@ class UnserializableKeyWarning(Warning):
 
 
 class WorkflowBroker(Generic[MODEL_T]):
+    """
+    The workflow broker manages starting up and connecting a workflow handler, a runtime, and triggering the
+    execution of the workflow. From there it manages communication between the workflow and the outside world.
+    """
+
     _context: Context[MODEL_T]
     _runtime: WorkflowRuntime
     _plugin: Plugin
@@ -177,7 +182,7 @@ class WorkflowBroker(Generic[MODEL_T]):
         self._handler = result
         return result
 
-    # outer handler API
+    # outer handler API to cancel the workflow run
     def cancel_run(self) -> None:
         self._execute_task(self._runtime.send_event(TickCancelRun()))
 
@@ -199,6 +204,7 @@ class WorkflowBroker(Generic[MODEL_T]):
             raise WorkflowRuntimeError("Plugin is not snapshottable")
         return snapshottable.replay()
 
+    # mostly a debug API. May be removed in the future.
     async def running_steps(self) -> list[str]:
         return [
             step
@@ -206,6 +212,7 @@ class WorkflowBroker(Generic[MODEL_T]):
             if self._state.workers[step].in_progress
         ]
 
+    # step api only
     def collect_events(
         self, ev: Event, expected: list[Type[Event]], buffer_id: str | None = None
     ) -> list[Event] | None:
@@ -237,8 +244,7 @@ class WorkflowBroker(Generic[MODEL_T]):
         step_ctx.returns.return_values.append(DeleteCollectedEvent(event_id=buffer_id))
         return total
 
-    # step API and outer handler API
-    # signal API (no response needed)
+    # may be called from both step API and outer handler API
     def send_event(self, message: Event, step: str | None = None) -> None:
         if step is not None:
             if step not in self._workflow._get_steps():
@@ -264,6 +270,7 @@ class WorkflowBroker(Generic[MODEL_T]):
                 f"{fn} may only be called from within a step function"
             )
 
+    # step api only
     async def wait_for_event(
         self,
         event_type: Type[T],
@@ -305,7 +312,6 @@ class WorkflowBroker(Generic[MODEL_T]):
         return self._runtime.stream_published_events()
 
     # step API only
-    # signal API (no response needed)
     def write_event_to_stream(self, ev: Event | None) -> None:
         if ev is not None:
             self._execute_task(self._runtime.write_to_event_stream(ev))

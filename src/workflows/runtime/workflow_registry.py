@@ -1,5 +1,5 @@
 from threading import Lock
-from typing import Any
+from weakref import WeakKeyDictionary
 from workflows.runtime.types.plugin import (
     ControlLoopFunction,
     Plugin,
@@ -16,7 +16,11 @@ class WorkflowPluginRegistry:
     """
 
     def __init__(self) -> None:
-        self.workflows: dict[tuple[Any, type[Plugin]], RegisteredWorkflow] = {}
+        # Map each workflow instance to its plugin registrations.
+        # Weakly references workflow keys so entries are GC'd when workflows are.
+        self.workflows: WeakKeyDictionary[
+            Workflow, dict[type[Plugin], RegisteredWorkflow]
+        ] = WeakKeyDictionary()
         self.lock = Lock()
 
     def get_registered_workflow(
@@ -26,20 +30,26 @@ class WorkflowPluginRegistry:
         workflow_function: ControlLoopFunction,
         steps: dict[str, StepWorkerFunction[R]],
     ) -> RegisteredWorkflow:
-        workflow_id = id(
-            workflow
-        )  # type(workflow) - consider making this configurable? There's some weird scenarios where different workflow instances are used as stateful things across runs (some tests use the same workflow instance for multiple runs)
+        return RegisteredWorkflow(workflow_function, steps)
         plugin_type = type(plugin)
-        if (workflow_id, plugin_type) in self.workflows:
-            return self.workflows[(workflow_id, plugin_type)]
+
+        # Fast path without lock
+        plugin_map = self.workflows.get(workflow)
+        if plugin_map is not None and plugin_type in plugin_map:
+            return plugin_map[plugin_type]
         with self.lock:
-            if (workflow_id, plugin_type) in self.workflows:
-                return self.workflows[(workflow_id, plugin_type)]
+            # Double-check after acquiring lock
+            plugin_map = self.workflows.get(workflow)
+            if plugin_map is not None and plugin_type in plugin_map:
+                return plugin_map[plugin_type]
 
             registered_workflow = plugin.register(workflow, workflow_function, steps)
             if registered_workflow is None:
                 registered_workflow = RegisteredWorkflow(workflow_function, steps)
-            self.workflows[(workflow_id, plugin_type)] = registered_workflow
+            if plugin_map is None:
+                plugin_map = {}
+                self.workflows[workflow] = plugin_map
+            plugin_map[plugin_type] = registered_workflow
             return registered_workflow
 
 
