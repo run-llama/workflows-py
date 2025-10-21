@@ -325,8 +325,8 @@ class WorkflowClient:
             purge (bool): Whether or not to delete the run also from the persistent storage. Defaults to false
         """
         async with self._get_client() as client:
-            response = await client.get(
-                f"/handlers/{handler_id}",
+            response = await client.post(
+                f"/handlers/{handler_id}/cancel",
                 params={"purge": "true" if purge else "false"},
             )
             _raise_for_status_with_body(response)
