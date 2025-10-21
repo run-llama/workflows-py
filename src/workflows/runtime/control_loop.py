@@ -8,7 +8,7 @@ from dataclasses import replace
 from copy import deepcopy
 import time
 from typing import TYPE_CHECKING
-
+import weakref
 
 from workflows.decorators import R
 from workflows.errors import (
@@ -292,6 +292,8 @@ def create_control_loop(
     Returns a function that can be called to start a workflow run.
     """
 
+    workflow_ref = weakref.ref(workflow)
+
     async def control_loop(
         start_event: Event | None,
         init_state: BrokerState | None,
@@ -303,8 +305,11 @@ def create_control_loop(
         """
         The main async control loop for a workflow run.
         """
-        state = init_state or BrokerState.from_workflow(workflow)
-        runner = _ControlLoopRunner(workflow, plugin, context, step_workers, state)
+        wf = workflow_ref()
+        if wf is None:
+            raise WorkflowRuntimeError("Workflow instance no longer available")
+        state = init_state or BrokerState.from_workflow(wf)
+        runner = _ControlLoopRunner(wf, plugin, context, step_workers, state)
         return await runner.run(start_event=start_event)
 
     return control_loop

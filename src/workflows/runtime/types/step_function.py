@@ -8,6 +8,7 @@ from contextvars import copy_context
 import functools
 import time
 from typing import Any, Awaitable, Callable, TYPE_CHECKING, Generic, Protocol
+import weakref
 
 
 from workflows.decorators import P, R, StepConfig
@@ -69,6 +70,20 @@ def as_step_worker_function(func: Callable[P, Awaitable[R]]) -> StepWorkerFuncti
     return the appropriate StepFunctionResult.
     """
 
+    # If func is a bound method, avoid capturing a strong reference to the instance.
+    # Capture a weakref to the instance and the attribute name, then rebind at call time.
+    bound_instance_ref: weakref.ReferenceType[Any] | None = None
+    bound_attr_name: str | None = None
+    unbound_func: Callable[..., Awaitable[R]] | None = None
+
+    owner = getattr(func, "__self__", None)
+    if owner is not None:
+        bound_instance_ref = weakref.ref(owner)
+        bound_attr_name = getattr(func, "__name__", None)
+        # keep original for tracing name, but we will resolve later
+    else:
+        unbound_func = func
+
     @functools.wraps(func)
     async def wrapper(
         state: StepWorkerState,
@@ -85,8 +100,17 @@ def as_step_worker_function(func: Callable[P, Awaitable[R]]) -> StepWorkerFuncti
 
         try:
             config = workflow._get_steps()[step_name]._step_config
+            # Resolve the callable without keeping a strong ref in the registry wrapper
+            call_func: Callable[..., Awaitable[R]]
+            if bound_instance_ref is not None and bound_attr_name is not None:
+                inst = bound_instance_ref()
+                if inst is None:
+                    raise WorkflowRuntimeError("Workflow instance for step has been collected")
+                call_func = getattr(inst, bound_attr_name)
+            else:
+                call_func = unbound_func if unbound_func is not None else func
             partial_func = await partial(
-                func=workflow._dispatcher.span(func),
+                func=workflow._dispatcher.span(call_func),
                 step_config=config,
                 event=event,
                 context=context,
@@ -95,7 +119,7 @@ def as_step_worker_function(func: Callable[P, Awaitable[R]]) -> StepWorkerFuncti
 
             try:
                 # coerce to coroutine function
-                if not asyncio.iscoroutinefunction(func):
+                if not asyncio.iscoroutinefunction(call_func):
                     # run_in_executor doesn't accept **kwargs, so we need to use partial
                     copy = copy_context()
 
