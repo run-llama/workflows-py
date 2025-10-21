@@ -224,9 +224,10 @@ class WorkflowServer:
                     pass
                 continue
 
-            await self._run_workflow_handler(
-                persistent.handler_id, persistent.workflow_name, handler
-            )
+            if handler is not None:
+                await self._run_workflow_handler(
+                    persistent.handler_id, persistent.workflow_name, handler
+                )
         return self
 
     @asynccontextmanager
@@ -482,7 +483,9 @@ class WorkflowServer:
                 ctx=context,
                 start_event=input_ev,
             )
-            wrapper = await self._run_workflow_handler(handler_id, workflow.name, handler)
+            wrapper = await self._run_workflow_handler(
+                handler_id, workflow.name, handler
+            )
             await handler
             return JSONResponse(wrapper.to_response_model().model_dump())
         except Exception as e:
@@ -652,7 +655,9 @@ class WorkflowServer:
                 handler,
             )
         except Exception as e:
-            raise HTTPException(detail=f"Initial persistence failed: {e}", status_code=500)
+            raise HTTPException(
+                detail=f"Initial persistence failed: {e}", status_code=500
+            )
         return JSONResponse(wrapper.to_response_model().model_dump())
 
     async def _get_workflow_result(self, request: Request) -> JSONResponse:
@@ -1168,7 +1173,7 @@ class WorkflowServer:
                 await handler.run_handler.cancel_run()
             except Exception:
                 pass
-        
+
         if handler.task is not None:
             await handler.task
 
@@ -1202,7 +1207,7 @@ class _WorkflowHandler:
     started_at: datetime
     updated_at: datetime
     completed_at: datetime | None
-    
+
     # Dependencies for persistence
     _workflow_store: AbstractWorkflowStore
     _persistence_backoff: list[float]
@@ -1311,7 +1316,7 @@ class _WorkflowHandler:
     def start_streaming(self) -> None:
         """Start streaming events from the handler and managing state."""
         self.task = asyncio.create_task(self._stream_events())
-    
+
     async def _stream_events(self) -> None:
         """Internal method that streams events, updates status, and persists state."""
         await self.checkpoint()
@@ -1341,8 +1346,6 @@ class _WorkflowHandler:
 
         await self.checkpoint()
 
-    
-
     async def acquire_events_stream(
         self, timeout: float = 1
     ) -> AsyncGenerator[Event, None]:
@@ -1364,7 +1367,9 @@ class _WorkflowHandler:
         """
 
         try:
-            while not self.queue.empty() or (self.task is not None and not self.task.done()):
+            while not self.queue.empty() or (
+                self.task is not None and not self.task.done()
+            ):
                 available_events = []
                 while not self.queue.empty():
                     available_events.append(self.queue.get_nowait())
@@ -1375,7 +1380,10 @@ class _WorkflowHandler:
                 )
                 task_waitable = self.task
                 done, pending = await asyncio.wait(
-                    {queue_get_task, task_waitable} if task_waitable is not None else {queue_get_task}, return_when=asyncio.FIRST_COMPLETED
+                    {queue_get_task, task_waitable}
+                    if task_waitable is not None
+                    else {queue_get_task},
+                    return_when=asyncio.FIRST_COMPLETED,
                 )
                 if queue_get_task in done:
                     yield await queue_get_task

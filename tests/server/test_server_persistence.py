@@ -318,9 +318,7 @@ async def test_workflow_cancelled_after_all_retries_fail(
         # Verify retry attempts and no registration/persistence on failure
         assert attempts["count"] == 3  # Initial + 2 retries
         assert handler_id not in server._handlers
-        persistent_list = await store.query(
-            HandlerQuery(handler_id_in=[handler_id])
-        )
+        persistent_list = await store.query(HandlerQuery(handler_id_in=[handler_id]))
         assert not persistent_list
 
 

@@ -85,8 +85,11 @@ async def test_get_handlers(client: WorkflowClient) -> None:
     assert len(handlers.handlers) == 1
     assert handlers.handlers[0].handler_id == handler_id
 
+
 @pytest.mark.asyncio
-async def test_get_handlers_for_complex_workflows(client: WorkflowClient, server: WorkflowServer) -> None:
+async def test_get_handlers_for_complex_workflows(
+    client: WorkflowClient, server: WorkflowServer
+) -> None:
     handler1 = await client.run_workflow_nowait(
         "greeting", start_event=InputEvent(greeting="hello", name="John")
     )
@@ -100,7 +103,7 @@ async def test_get_handlers_for_complex_workflows(client: WorkflowClient, server
         "greeting", start_event=InputEvent(greeting="hello", name="Jane")
     )
     handler2_id = handler2.handler_id
-    
+
     # Restart the server
     await server.stop()
     await server.start()
@@ -109,6 +112,7 @@ async def test_get_handlers_for_complex_workflows(client: WorkflowClient, server
     assert len(handlers.handlers) == 2
     assert handlers.handlers[0].handler_id == handler1_id
     assert handlers.handlers[1].handler_id == handler2_id
+
 
 @pytest.mark.asyncio
 async def test_run_workflow_sync_result(client: WorkflowClient) -> None:

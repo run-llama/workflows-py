@@ -143,7 +143,7 @@ class SqliteWorkflowStore(AbstractWorkflowStore):
 
 def _row_to_persistent_handler(row: tuple) -> PersistentHandler:
     from datetime import datetime
-    
+
     return PersistentHandler(
         handler_id=row[0],
         workflow_name=row[1],
