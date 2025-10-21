@@ -105,7 +105,9 @@ def as_step_worker_function(func: Callable[P, Awaitable[R]]) -> StepWorkerFuncti
             if bound_instance_ref is not None and bound_attr_name is not None:
                 inst = bound_instance_ref()
                 if inst is None:
-                    raise WorkflowRuntimeError("Workflow instance for step has been collected")
+                    raise WorkflowRuntimeError(
+                        "Workflow instance for step has been collected"
+                    )
                 call_func = getattr(inst, bound_attr_name)
             else:
                 call_func = unbound_func if unbound_func is not None else func
