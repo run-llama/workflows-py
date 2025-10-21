@@ -583,7 +583,6 @@ async def test_stream_events_include_internal_true(client: AsyncClient) -> None:
     event_types = [e["qualified_name"] for e in events]
     # Expect internal event types to be present along with StopEvent
     assert "workflows.events.StopEvent" in event_types
-    assert "workflows.events.EventsQueueChanged" in event_types
     assert "workflows.events.StepStateChanged" in event_types
 
 
@@ -951,11 +950,9 @@ async def test_cancel_handler_persists_cancelled_status(
             json={},
         )
         handler_id = response.json()["handler_id"]
-
         resp_cancel = await client.post(f"/handlers/{handler_id}/cancel?purge=false")
         assert resp_cancel.status_code == 200
         assert resp_cancel.json() == {"status": "cancelled"}
-
         persisted_cancelled = await store.query(
             HandlerQuery(handler_id_in=[handler_id])
         )

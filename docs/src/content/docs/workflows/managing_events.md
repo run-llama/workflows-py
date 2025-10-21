@@ -117,12 +117,11 @@ async for event in handler.stream_events():
 result = await handler
 ```
 
-There is also the possibility of streaming internal events (such as changes occurring while the step is running, modifications of the workflow state or variations in the size of the internal queues). In order to do so, you need to pass `expose_internal = True` to `stream_events`.
+There is also the possibility of streaming internal events (such as changes occurring while the step is running and modifications of the workflow state). In order to do so, you need to pass `expose_internal = True` to `stream_events`.
 
-All the internal events are instances of `InternalDispatchEvent`, but they can be divided into two sub-classes:
+All the internal events are instances of `InternalDispatchEvent`. The primary internal event is:
 
-- `StepStateChanged`: exposes internal changes in the state of the event, including whether the step is running or in progress, what worker it is running on and what events it takes as input and output, as well as changes in the workflow state.
-- `EventsQueueChanged`: reports the state of the internal queues.
+- `StepStateChanged`: exposes internal changes in the state of the event, including whether the step is PREPARING (queued), RUNNING, or NOT_RUNNING, what worker it is running on and what events it takes as input and output.
 
 Here is how you can stream these internal events:
 
@@ -138,9 +137,6 @@ async for event in handler.stream_events(expose_internal=True):
         print("Input event for current step:", event.input_event_name)
         print("Workflow state at current step:", event.context_state or "No state reported")
         print("Output event of current step:", event.output_event_name or "No output event yet")
-    elif isinstance(event, EventsQueueChanged):
-        print("Queue name:", event.name)
-        print("Queue size:", event.size)
     # other event streaming logic here
 
 result = await handler

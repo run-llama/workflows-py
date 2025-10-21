@@ -108,9 +108,7 @@ class WorkflowHandler(asyncio.Future[RunResultT]):
             msg = "All the streamed events have already been consumed."
             raise WorkflowRuntimeError(msg)
 
-        while True:
-            ev = await self.ctx.streaming_queue.get()
-
+        async for ev in self.ctx.stream_events():
             if isinstance(ev, InternalDispatchEvent) and not expose_internal:
                 continue
             yield ev

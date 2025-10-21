@@ -245,8 +245,9 @@ class WorkflowServer:
         logger.info(
             f"Shutting down Workflow server. Cancelling {len(self._handlers)} handlers."
         )
-        for handler in list(self._handlers.values()):
-            await self._close_handler(handler)
+        await asyncio.gather(
+            *[self._close_handler(handler) for handler in list(self._handlers.values())]
+        )
         self._handlers.clear()
         self._results.clear()
 

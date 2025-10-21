@@ -5,7 +5,6 @@ from workflows.events import (
     StopEvent,
     Event,
     StepStateChanged,
-    EventsQueueChanged,
 )
 from workflows import Context, Workflow, step
 from workflows.testing import WorkflowTestRunner
@@ -37,13 +36,11 @@ async def test_testing_utils() -> None:
     runner = WorkflowTestRunner(wf)
     wf_test_run = await runner.run(
         start_event=StartEvent(message="hi"),  # type: ignore
-        exclude_events=[EventsQueueChanged],
     )
     assert isinstance(wf_test_run, WorkflowTestResult)
     assert len(wf_test_run.collected) == sum(
         [wf_test_run.event_types[k] for k in wf_test_run.event_types]
     )
-    assert wf_test_run.event_types.get(EventsQueueChanged, 0) == 0
     assert wf_test_run.event_types.get(SecondEvent, 0) == 1
     assert wf_test_run.event_types.get(StopEvent, 0) == 1
     assert wf_test_run.event_types.get(StepStateChanged, 0) == len(
