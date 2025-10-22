@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import asyncio
+import gc
 import logging
+import weakref
 from typing import Any, Callable, Union
 from unittest import mock
 
@@ -29,6 +31,7 @@ from workflows.handler import WorkflowHandler
 from workflows.runtime.types.ticks import TickAddEvent
 from workflows.testing import WorkflowTestRunner
 from workflows.workflow import Workflow
+from workflows.runtime.workflow_registry import workflow_registry
 
 from .conftest import (
     AnotherTestEvent,
@@ -789,3 +792,28 @@ def test_get_workflow_events() -> None:
     event_names = [e.__name__ for e in events]
     assert "MyStop" in event_names
     assert "MyStart" in event_names
+
+
+@pytest.mark.asyncio
+async def test_workflow_instances_garbage_collected_after_completion() -> None:
+    class TinyWorkflow(Workflow):
+        @step
+        async def only(self, ev: StartEvent) -> StopEvent:
+            return StopEvent(result="done")
+
+    refs: list[weakref.ReferenceType[Workflow]] = []
+
+    for _ in range(10):
+        wf = TinyWorkflow()
+        refs.append(weakref.ref(wf))
+        await WorkflowTestRunner(wf).run()
+        # Drop strong reference before next iteration
+        del wf
+
+    # Force GC to clear weakly-referenced registry entries
+    for _ in range(3):
+        gc.collect()
+        await asyncio.sleep(0)
+
+    # All weakrefs should be cleared
+    assert all([r() is None for r in refs])
