@@ -66,29 +66,23 @@ class AsyncioWorkflowRuntime:
                 break
 
     async def send_event(self, tick: WorkflowTick) -> None:
-        """called externally to control the workflow from the outside world"""
         self.receive_queue.put_nowait(tick)
 
     async def register_step_worker(
         self, step_name: str, step_worker: StepWorkerFunction[R]
     ) -> StepWorkerFunction[R]:
-        """API that the broker calls to convert a regular function to a registered step function as defined in the plugin's runtime. e.g. to register a task/activity that is cached on replay"""
         return step_worker
 
     async def register_workflow_function(
         self, workflow_function: Callable[P, R]
     ) -> Callable[P, R]:
-        """API that the broker calls to convert a regular function to a registered workflow function as defined in the plugin's runtime."""
         return workflow_function
 
     async def get_now(self) -> float:
-        """API that the broker calls to get the current time in seconds since epoch"""
         return time.monotonic()
 
     async def sleep(self, seconds: float) -> None:
-        """API that the broker calls to sleep for a given number of seconds"""
         await asyncio.sleep(seconds)
 
     async def close(self) -> None:
-        """API that the broker calls to close the plugin after a workflow run is complete"""
         pass

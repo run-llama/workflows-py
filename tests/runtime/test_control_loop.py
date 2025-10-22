@@ -12,6 +12,7 @@ The control loop is the core event processing engine that:
 """
 
 import asyncio
+import uuid
 from typing import Coroutine, Optional, Union
 
 import pytest
@@ -30,7 +31,8 @@ from workflows.runtime.types.internal_state import BrokerState
 from workflows.runtime.types.step_function import as_step_worker_function
 from workflows.workflow import Workflow
 from workflows.context import Context
-from workflows.runtime.control_loop import create_control_loop
+from workflows.runtime.control_loop import control_loop
+from workflows.runtime.workflow_registry import workflow_registry
 from workflows.runtime.types.ticks import TickAddEvent, TickCancelRun
 from workflows.retry_policy import ConstantDelayRetryPolicy
 
@@ -139,19 +141,32 @@ class CollectWorkflow(Workflow):
 def run_control_loop(
     workflow: Workflow, start_event: Optional[StartEvent], plugin: MockRuntimePlugin
 ) -> Coroutine[None, None, StopEvent]:
-    control_loop = create_control_loop(workflow)
     step_workers = {}
     for name, step_func in workflow._get_steps().items():
-        step_workers[name] = as_step_worker_function(step_func)
+        unbound = getattr(step_func, "__func__", step_func)
+        step_workers[name] = as_step_worker_function(unbound)
     ctx = Context(workflow=workflow)
     ctx._broker_run = ctx._init_broker(workflow, plugin=plugin)
-    return control_loop(
+    run_id = str(uuid.uuid4())
+    workflow_registry.register_run(
+        run_id=run_id,
+        workflow=workflow,
         plugin=plugin,
         context=ctx,
-        step_workers=step_workers,
-        start_event=start_event,
-        init_state=BrokerState.from_workflow(workflow),
+        steps=step_workers,
     )
+
+    async def _run() -> StopEvent:
+        try:
+            return await control_loop(
+                start_event=start_event,
+                init_state=BrokerState.from_workflow(workflow),
+                run_id=run_id,
+            )
+        finally:
+            workflow_registry.delete_run(run_id)
+
+    return _run()
 
 
 async def wait_for_stop_event(

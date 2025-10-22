@@ -1,13 +1,19 @@
 from threading import Lock
 from weakref import WeakKeyDictionary
+from dataclasses import dataclass
+from typing import Optional
 from workflows.runtime.types.plugin import (
     ControlLoopFunction,
     Plugin,
     RegisteredWorkflow,
+    WorkflowRuntime,
 )
 from workflows.workflow import Workflow
 from workflows.runtime.types.step_function import StepWorkerFunction
-from workflows.decorators import R
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from workflows.context.context import Context
 
 
 class WorkflowPluginRegistry:
@@ -22,13 +28,14 @@ class WorkflowPluginRegistry:
             Workflow, dict[type[Plugin], RegisteredWorkflow]
         ] = WeakKeyDictionary()
         self.lock = Lock()
+        self.run_contexts: dict[str, RegisteredRunContext] = {}
 
     def get_registered_workflow(
         self,
         workflow: Workflow,
         plugin: Plugin,
         workflow_function: ControlLoopFunction,
-        steps: dict[str, StepWorkerFunction[R]],
+        steps: dict[str, StepWorkerFunction],
     ) -> RegisteredWorkflow:
         plugin_type = type(plugin)
 
@@ -51,5 +58,36 @@ class WorkflowPluginRegistry:
             plugin_map[plugin_type] = registered_workflow
             return registered_workflow
 
+    def register_run(
+        self,
+        run_id: str,
+        workflow: Workflow,
+        plugin: WorkflowRuntime,
+        context: "Context",
+        steps: dict[str, StepWorkerFunction],
+    ) -> None:
+        self.run_contexts[run_id] = RegisteredRunContext(
+            run_id=run_id,
+            workflow=workflow,
+            plugin=plugin,
+            context=context,
+            steps=steps,
+        )
+
+    def get_run(self, run_id: str) -> Optional["RegisteredRunContext"]:
+        return self.run_contexts.get(run_id)
+
+    def delete_run(self, run_id: str) -> None:
+        self.run_contexts.pop(run_id, None)
+
 
 workflow_registry = WorkflowPluginRegistry()
+
+
+@dataclass
+class RegisteredRunContext:
+    run_id: str
+    workflow: Workflow
+    plugin: WorkflowRuntime
+    context: "Context"
+    steps: dict[str, StepWorkerFunction]
