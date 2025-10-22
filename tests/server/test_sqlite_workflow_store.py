@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 
 from workflows.server.abstract_workflow_store import HandlerQuery, PersistentHandler
-from workflows.server.sqlite_workflow_store import SqliteWorkflowStore
+from workflows.server.sqlite.sqlite_workflow_store import SqliteWorkflowStore
 
 
 @pytest.mark.asyncio

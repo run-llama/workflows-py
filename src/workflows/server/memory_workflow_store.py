@@ -7,18 +7,25 @@ from workflows.server.abstract_workflow_store import (
 
 
 def _matches_query(handler: PersistentHandler, query: HandlerQuery) -> bool:
-    if (
-        query.handler_id_in is not None
-        and handler.handler_id not in query.handler_id_in
-    ):
-        return False
-    if (
-        query.workflow_name_in is not None
-        and handler.workflow_name not in query.workflow_name_in
-    ):
-        return False
-    if query.status_in is not None and handler.status not in query.status_in:
-        return False
+    # Empty lists should match nothing (short-circuit)
+    if query.handler_id_in is not None:
+        if len(query.handler_id_in) == 0:
+            return False
+        if handler.handler_id not in query.handler_id_in:
+            return False
+
+    if query.workflow_name_in is not None:
+        if len(query.workflow_name_in) == 0:
+            return False
+        if handler.workflow_name not in query.workflow_name_in:
+            return False
+
+    if query.status_in is not None:
+        if len(query.status_in) == 0:
+            return False
+        if handler.status not in query.status_in:
+            return False
+
     return True
 
 
