@@ -47,11 +47,11 @@ from workflows.protocol import (
 )
 from workflows.server.abstract_workflow_store import (
     AbstractWorkflowStore,
-    EmptyWorkflowStore,
     HandlerQuery,
     PersistentHandler,
     Status,
 )
+from workflows.server.memory_workflow_store import MemoryWorkflowStore
 from workflows.types import RunResultT
 
 # Protocol models are used on the client side; server responds with plain dicts
@@ -71,7 +71,7 @@ class WorkflowServer:
         self,
         *,
         middleware: list[Middleware] | None = None,
-        workflow_store: AbstractWorkflowStore = EmptyWorkflowStore(),
+        workflow_store: AbstractWorkflowStore | None = None,
         # retry/backoff seconds for persisting the handler state in the store after failures. Configurable mainly for testing.
         persistence_backoff: list[float] = [0.5, 3],
     ):
@@ -80,7 +80,7 @@ class WorkflowServer:
         self._contexts: dict[str, Context] = {}
         self._handlers: dict[str, _WorkflowHandler] = {}
         self._results: dict[str, RunResultT] = {}
-        self._workflow_store = workflow_store
+        self._workflow_store = workflow_store if workflow_store is not None else MemoryWorkflowStore()
         self._assets_path = Path(__file__).parent / "static"
         self._persistence_backoff = persistence_backoff
 

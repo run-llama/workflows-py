@@ -42,13 +42,3 @@ class AbstractWorkflowStore(ABC):
     @abstractmethod
     async def delete(self, query: HandlerQuery) -> int: ...
 
-
-class EmptyWorkflowStore(AbstractWorkflowStore):
-    async def query(self, query: HandlerQuery) -> List[PersistentHandler]:
-        return []
-
-    async def update(self, handler: PersistentHandler) -> None:
-        pass
-
-    async def delete(self, query: HandlerQuery) -> int:
-        return 1  # otherwise deletion calls will 404
