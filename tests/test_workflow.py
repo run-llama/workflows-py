@@ -31,7 +31,6 @@ from workflows.handler import WorkflowHandler
 from workflows.runtime.types.ticks import TickAddEvent
 from workflows.testing import WorkflowTestRunner
 from workflows.workflow import Workflow
-from workflows.runtime.workflow_registry import workflow_registry
 
 from .conftest import (
     AnotherTestEvent,

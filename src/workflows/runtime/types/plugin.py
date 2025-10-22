@@ -27,7 +27,6 @@ from workflows.runtime.types.ticks import WorkflowTick
 
 if TYPE_CHECKING:
     from workflows.workflow import Workflow
-    from workflows.context.context import Context
 
 
 @dataclass
@@ -130,8 +129,5 @@ class ControlLoopFunction(Protocol):
         self,
         start_event: Event | None,
         init_state: BrokerState | None,
-        # these will likely be refactored out from the control loop function in the future.
-        plugin: WorkflowRuntime,
-        context: Context,
-        step_workers: dict[str, StepWorkerFunction],
+        run_id: str,
     ) -> Coroutine[None, None, StopEvent]: ...
