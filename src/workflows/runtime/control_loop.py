@@ -8,7 +8,7 @@ from dataclasses import replace
 from copy import deepcopy
 import time
 from typing import TYPE_CHECKING
-import weakref
+
 
 from workflows.decorators import R
 from workflows.errors import (
@@ -41,7 +41,6 @@ from workflows.runtime.types.internal_state import (
     InternalStepWorkerState,
 )
 from workflows.runtime.types.plugin import (
-    ControlLoopFunction,
     WorkflowRuntime,
     as_snapshottable,
 )
@@ -69,6 +68,7 @@ from workflows.runtime.types.ticks import (
 import logging
 
 from workflows.workflow import Workflow
+from workflows.runtime.workflow_registry import workflow_registry
 
 if TYPE_CHECKING:
     from workflows.context.context import Context
@@ -282,37 +282,23 @@ class _ControlLoopRunner:
             await self.cleanup_tasks()
 
 
-def create_control_loop(
-    workflow: Workflow,
-) -> ControlLoopFunction:
+async def control_loop(
+    start_event: Event | None,
+    init_state: BrokerState | None,
+    run_id: str,
+) -> StopEvent:
     """
-    Creates a control loop for a workflow run. Dependencies are provided as initial args, and returns a simple function
-    with only start event and an optional start state as an arg, that can be easily decorated.
-
-    Returns a function that can be called to start a workflow run.
+    The main async control loop for a workflow run.
     """
-
-    workflow_ref = weakref.ref(workflow)
-
-    async def control_loop(
-        start_event: Event | None,
-        init_state: BrokerState | None,
-        # TODO - get these 3 out of here! Needs to be inferred from scope somehow for proper distributed, static execution
-        plugin: WorkflowRuntime,
-        context: Context,
-        step_workers: dict[str, StepWorkerFunction],
-    ) -> StopEvent:
-        """
-        The main async control loop for a workflow run.
-        """
-        wf = workflow_ref()
-        if wf is None:
-            raise WorkflowRuntimeError("Workflow instance no longer available")
-        state = init_state or BrokerState.from_workflow(wf)
-        runner = _ControlLoopRunner(wf, plugin, context, step_workers, state)
-        return await runner.run(start_event=start_event)
-
-    return control_loop
+    # Prefer run-scoped context if available (set by broker)
+    current = workflow_registry.get_run(run_id)
+    if current is None:
+        raise WorkflowRuntimeError("Run context not found for control loop")
+    state = init_state or BrokerState.from_workflow(current.workflow)
+    runner = _ControlLoopRunner(
+        current.workflow, current.plugin, current.context, current.steps, state
+    )
+    return await runner.run(start_event=start_event)
 
 
 def rebuild_state_from_ticks(
