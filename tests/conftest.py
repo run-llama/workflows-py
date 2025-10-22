@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2025 LlamaIndex Inc.
 
+from typing import AsyncGenerator
 import pytest
 from pydantic import Field
 
@@ -47,5 +48,10 @@ def events() -> list:
 
 
 @pytest.fixture()
-def ctx() -> Context:
-    return Context(workflow=DummyWorkflow())
+async def ctx(workflow: Workflow) -> AsyncGenerator[Context, None]:
+    ctx = Context(workflow=workflow)
+    broker = ctx._init_broker(workflow)
+    try:
+        yield ctx
+    finally:
+        await broker.shutdown()

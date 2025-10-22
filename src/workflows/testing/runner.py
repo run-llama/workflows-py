@@ -1,9 +1,8 @@
-from typing import Any, Optional, TYPE_CHECKING
+from typing import Any, Optional
 from collections import Counter
 from dataclasses import dataclass
 
-if TYPE_CHECKING:
-    from workflows import Workflow, Context
+from workflows import Workflow, Context
 from workflows.events import StartEvent, Event, EventType
 
 
@@ -21,6 +20,7 @@ class WorkflowTestResult:
     collected: list[Event]
     event_types: dict[EventType, int]
     result: Any
+    ctx: Context
 
 
 class WorkflowTestRunner:
@@ -59,7 +59,7 @@ class WorkflowTestRunner:
             ```
             wf = GreetingWorkflow()
             runner = WorkflowTestRunner(wf)
-            test_result = runner.run(start_even=StartEvent(message="hello"), expose_internal = True, exclude_events = [EventsQueueChanged])
+            test_result = runner.run(start_even=StartEvent(message="hello"), expose_internal = True, exclude_events = [StepStateChanged])
             assert test_result.collected == 22
             assert test_result.event_types.get(StepStateChanged, 0) == 8
             assert str(test_result.result) == "hello Adam!"
@@ -75,6 +75,10 @@ class WorkflowTestRunner:
         event_freqs: dict[EventType, int] = dict(
             Counter([type(ev) for ev in collected_events])
         )
+        assert handler.ctx is not None
         return WorkflowTestResult(
-            collected=collected_events, result=result, event_types=event_freqs
+            collected=collected_events,
+            result=result,
+            event_types=event_freqs,
+            ctx=handler.ctx,
         )

@@ -5,6 +5,7 @@ import pytest
 from typing import AsyncGenerator
 from httpx import AsyncClient, ASGITransport
 
+
 from .conftest import ExternalEvent, RequestedExternalEvent
 from workflows.events import Event, InternalDispatchEvent
 from workflows.server import WorkflowServer
@@ -123,13 +124,13 @@ async def test_startup_marks_invalid_persisted_context_as_failed(
     # Make the context structurally valid but with an invalid streaming_queue JSON
     invalid_ctx = {
         "state": {},
-        "streaming_queue": "not-json",
-        "queues": {},
+        "streaming_queue": "[]",
+        "queues": {"process": "not-deserializable-as-a-queue"},
         "event_buffers": {},
         "in_progress": {},
         "accepted_events": [],
         "broker_log": [],
-        "is_running": False,
+        "is_running": True,
         "waiting_ids": [],
     }
 
@@ -336,7 +337,6 @@ async def test_workflow_cancelled_after_all_retries_fail(
                     task.cancel()
                 except Exception:
                     pass
-            await asyncio.sleep(0)
 
 
 @pytest.mark.asyncio
