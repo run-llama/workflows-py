@@ -41,4 +41,3 @@ class AbstractWorkflowStore(ABC):
 
     @abstractmethod
     async def delete(self, query: HandlerQuery) -> int: ...
-

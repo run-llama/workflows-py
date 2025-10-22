@@ -80,7 +80,9 @@ class WorkflowServer:
         self._contexts: dict[str, Context] = {}
         self._handlers: dict[str, _WorkflowHandler] = {}
         self._results: dict[str, RunResultT] = {}
-        self._workflow_store = workflow_store if workflow_store is not None else MemoryWorkflowStore()
+        self._workflow_store = (
+            workflow_store if workflow_store is not None else MemoryWorkflowStore()
+        )
         self._assets_path = Path(__file__).parent / "static"
         self._persistence_backoff = persistence_backoff
 

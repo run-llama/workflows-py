@@ -7,7 +7,7 @@ from workflows.server.server import WorkflowServer
 from workflows.client import WorkflowClient
 from .greeting_workflow import greeting_wf, InputEvent, OutputEvent
 from .greeting_workflow import GreetEvent
-from ..server.memory_workflow_store import MemoryWorkflowStore
+from workflows.server.memory_workflow_store import MemoryWorkflowStore
 
 
 @pytest.fixture()
