@@ -12,7 +12,7 @@ from workflows import Context
 from workflows.workflow import Workflow
 from workflows.server.abstract_workflow_store import HandlerQuery, PersistentHandler
 
-from .memory_workflow_store import MemoryWorkflowStore
+from workflows.server.memory_workflow_store import MemoryWorkflowStore
 from .util import wait_for_passing
 
 

@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from .memory_workflow_store import MemoryWorkflowStore
+from workflows.server.memory_workflow_store import MemoryWorkflowStore
 from workflows.events import StopEvent, Event
 from workflows.handler import WorkflowHandler
 from workflows.protocol import HandlerData

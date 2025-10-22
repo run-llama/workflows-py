@@ -22,7 +22,7 @@ from datetime import datetime
 # Prepare the event to send
 from workflows.context.serializers import JsonSerializer
 from .conftest import ExternalEvent
-from .memory_workflow_store import MemoryWorkflowStore
+from workflows.server.memory_workflow_store import MemoryWorkflowStore
 
 
 @pytest.fixture
