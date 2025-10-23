@@ -1,5 +1,5 @@
 ---
-title: Deploying a Workflow
+title: Run Your Workflow as a Server
 ---
 
 The `workflows` library includes a `WorkflowServer` class that allows you to easily expose your workflows over an HTTP API. This provides a flexible way to run and manage workflows from any HTTP-capable client.
@@ -113,14 +113,12 @@ To run a workflow and wait for its completion, send a `POST` request to `/workfl
   "start_event": {},
   "context": {},
   "handler_id": "",
-  "kwargs": {}
 }
 ```
 
 - `start_event`: serialized representation of a StartEvent or a subclass of it. Using this as a workflow input is recommended.
 - `context`: serialized representation of the workflow context
 - `handler_id`: workflow handler identifier to continue from a previous completed run.
-- `kwargs`: additional keyword arguments for the workflow (usage not recommended).
 
 **Successful Response (`200 OK`):**
 
@@ -140,8 +138,7 @@ To start a workflow without waiting for it to finish, use the `/run-nowait` endp
 {
   "start_event": {},
   "context": {},
-  "handler_id": "",
-  "kwargs": {}
+  "handler_id": ""
 }
 ```
 
@@ -190,6 +187,13 @@ Single event payload:
 }
 ```
 
+**Important considerations**
+
+- Only one reader is allowed to stream the events per workflow run
+- Once the events have been streamed, they cannot be recovered (unless you implemented some persistence logic on the client side)
+
+> _We are working to improve both these aspects, so changes in the server behavior might be expected_
+
 ## Getting the result from a workflow execution (`/results/{handler_id}`)
 
 > _This endpoint only works if you previously started a workflow asynchronously with `/run-nowait`_
@@ -235,8 +239,8 @@ In cases where external input is needed for the workflow to run (human in the lo
 
 ```json
 {
-  "event": {},
-  "step": ""
+  "event": {"__is_pydantic": true, "value": {"feedback": "This is great!", "approved": true}, "qualified_name": "__main__.HumanFeedbackEvent"},
+  "step": "process_human_feedback"
 }
 ```
 
@@ -269,6 +273,6 @@ curl -X POST http://localhost:80/handlers/someUniqueId123/cancel?purge=true
 
 ```js
 {
-  "status": "canceled", // or deleted if purge is true
+  "status": "deleted", // or canceled if purge is false
 }
 ```
