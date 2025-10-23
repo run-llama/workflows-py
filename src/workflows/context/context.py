@@ -653,12 +653,20 @@ class Context(Generic[MODEL_T]):
                 )
             )
 
-    def write_event_to_stream(self, ev: Event | None) -> None:
+    def write_event_to_stream(self, ev: Event | None, wait: bool = False):
         """Enqueue an event for streaming to [WorkflowHandler]](workflows.handler.WorkflowHandler).
 
         Args:
             ev (Event | None): The event to stream. `None` can be used as a
                 sentinel in some streaming modes.
+            wait (bool): If True, returns a coroutine that waits for event listeners
+                to process the event. This allows listeners to modify the event and
+                have those changes visible to the caller. Must be awaited when True.
+                Defaults to False.
+
+        Returns:
+            None when wait=False (fire-and-forget, no await needed)
+            Coroutine when wait=True (must be awaited)
 
         Examples:
             ```python
@@ -667,8 +675,30 @@ class Context(Generic[MODEL_T]):
                 ctx.write_event_to_stream(ev)
                 return StopEvent(result="ok")
             ```
+
+            ```python
+            @step
+            async def my_step(self, ctx: Context, ev: CoolEvent) -> StopEvent:
+                # Wait for listeners to process and modify the event
+                await ctx.write_event_to_stream(ev, wait=True)
+                # Event modifications from listeners are now visible
+                return StopEvent(result=ev.is_cool)
+            ```
         """
-        self._streaming_queue.put_nowait(ev)
+        # fire and forget
+        if not wait:
+            self._streaming_queue.put_nowait(ev)
+            return
+
+        # wait for listener
+        async def _wait_for_listener_processing():
+            completion_future: asyncio.Future = asyncio.Future()
+            # wrap event with completion future
+            self._streaming_queue.put_nowait((ev, completion_future))
+            # wait for listener to signal completion
+            await completion_future
+
+        return _wait_for_listener_processing()
 
     def get_result(self) -> RunResultT:
         """Return the final result of the workflow run.

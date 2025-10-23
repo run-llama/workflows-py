@@ -107,9 +107,21 @@ class WorkflowHandler(asyncio.Future[RunResultT]):
         while True:
             ev = await self.ctx.streaming_queue.get()
 
+            # Check if wrapped with completion future
+            completion_future = None
+            if isinstance(ev, tuple) and len(ev) == 2:
+                actual_event, completion_future = ev
+                ev = actual_event
+
             if isinstance(ev, InternalDispatchEvent) and not expose_internal:
+                if completion_future and not completion_future.done():
+                    completion_future.set_result(None)
                 continue
             yield ev
+
+            # listener processed the event
+            if completion_future and not completion_future.done():
+                completion_future.set_result(None)
 
             if isinstance(ev, StopEvent):
                 self._all_events_consumed = True
