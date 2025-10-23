@@ -141,6 +141,24 @@ async def test_stream_events_including_internal(client: WorkflowClient) -> None:
 
 
 @pytest.mark.asyncio
+async def test_cancel_handler(client: WorkflowClient) -> None:
+    handler = await client.run_workflow_nowait(
+        "greeting", start_event=InputEvent(greeting="hello", name="John")
+    )
+    handler_id = handler.handler_id
+
+    cancel_resp = await client.cancel_handler(handler_id=handler_id)
+    assert cancel_resp.status == "cancelled"
+    handler = await client.run_workflow_nowait(
+        "greeting", start_event=InputEvent(greeting="hello", name="John")
+    )
+    handler_id = handler.handler_id
+
+    cancel_resp = await client.cancel_handler(handler_id=handler_id, purge=True)
+    assert cancel_resp.status == "deleted"
+
+
+@pytest.mark.asyncio
 async def test_send_event(client: WorkflowClient) -> None:
     handler = await client.run_workflow_nowait(
         "greeting", start_event=InputEvent(greeting="hello", name="John")
