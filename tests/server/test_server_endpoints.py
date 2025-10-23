@@ -22,7 +22,7 @@ from datetime import datetime
 # Prepare the event to send
 from workflows.context.serializers import JsonSerializer
 from .conftest import ExternalEvent
-from .memory_workflow_store import MemoryWorkflowStore
+from workflows.server.memory_workflow_store import MemoryWorkflowStore
 
 
 @pytest.fixture
@@ -32,7 +32,8 @@ def server(
     streaming_workflow: Workflow,
     interactive_workflow: Workflow,
 ) -> WorkflowServer:
-    server = WorkflowServer()
+    # Use MemoryWorkflowStore so get_handlers() can retrieve from persistence
+    server = WorkflowServer(workflow_store=MemoryWorkflowStore())
     server.add_workflow("test", simple_test_workflow)
     server.add_workflow("error", error_workflow)
     server.add_workflow("streaming", streaming_workflow)

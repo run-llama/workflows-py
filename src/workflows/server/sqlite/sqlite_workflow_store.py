@@ -3,9 +3,11 @@ from workflows.server.abstract_workflow_store import (
     HandlerQuery,
     PersistentHandler,
 )
+from workflows.server.sqlite.migrate import run_migrations
 from typing import List, Optional, Sequence, Tuple
 import sqlite3
 import json
+from datetime import datetime
 
 
 class SqliteWorkflowStore(AbstractWorkflowStore):
@@ -15,11 +17,11 @@ class SqliteWorkflowStore(AbstractWorkflowStore):
 
     def _init_db(self) -> None:
         conn = sqlite3.connect(self.db_path)
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS handlers (handler_id TEXT PRIMARY KEY, workflow_name TEXT, status TEXT, ctx TEXT)"
-        )
-        conn.commit()
-        conn.close()
+        try:
+            run_migrations(conn)
+            conn.commit()
+        finally:
+            conn.close()
 
     async def query(self, query: HandlerQuery) -> List[PersistentHandler]:
         filter_spec = self._build_filters(query)
@@ -27,7 +29,8 @@ class SqliteWorkflowStore(AbstractWorkflowStore):
             return []
 
         clauses, params = filter_spec
-        sql = "SELECT handler_id, workflow_name, status, ctx FROM handlers"
+        sql = """SELECT handler_id, workflow_name, status, run_id, error, result,
+                        started_at, updated_at, completed_at, ctx FROM handlers"""
         if clauses:
             sql = f"{sql} WHERE {' AND '.join(clauses)}"
         conn = sqlite3.connect(self.db_path)
@@ -43,19 +46,33 @@ class SqliteWorkflowStore(AbstractWorkflowStore):
     async def update(self, handler: PersistentHandler) -> None:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
+
         cursor.execute(
             """
-            INSERT INTO handlers (handler_id, workflow_name, status, ctx)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO handlers (handler_id, workflow_name, status, run_id, error, result,
+                                  started_at, updated_at, completed_at, ctx)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(handler_id) DO UPDATE SET
                 workflow_name = excluded.workflow_name,
                 status = excluded.status,
+                run_id = excluded.run_id,
+                error = excluded.error,
+                result = excluded.result,
+                started_at = excluded.started_at,
+                updated_at = excluded.updated_at,
+                completed_at = excluded.completed_at,
                 ctx = excluded.ctx
             """,
             (
                 handler.handler_id,
                 handler.workflow_name,
                 handler.status,
+                handler.run_id,
+                handler.error,
+                json.dumps(handler.result) if handler.result is not None else None,
+                handler.started_at.isoformat() if handler.started_at else None,
+                handler.updated_at.isoformat() if handler.updated_at else None,
+                handler.completed_at.isoformat() if handler.completed_at else None,
                 json.dumps(handler.ctx),
             ),
         )
@@ -120,5 +137,11 @@ def _row_to_persistent_handler(row: tuple) -> PersistentHandler:
         handler_id=row[0],
         workflow_name=row[1],
         status=row[2],
-        ctx=json.loads(row[3]),
+        run_id=row[3],
+        error=row[4],
+        result=json.loads(row[5]) if row[5] else None,
+        started_at=datetime.fromisoformat(row[6]) if row[6] else None,
+        updated_at=datetime.fromisoformat(row[7]) if row[7] else None,
+        completed_at=datetime.fromisoformat(row[8]) if row[8] else None,
+        ctx=json.loads(row[9]),
     )

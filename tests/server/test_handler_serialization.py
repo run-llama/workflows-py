@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 
 import pytest
 
+from workflows.server.memory_workflow_store import MemoryWorkflowStore
 from workflows.events import StopEvent, Event
 from workflows.handler import WorkflowHandler
 from workflows.protocol import HandlerData
@@ -34,6 +35,8 @@ async def test__workflow_handler_to_dict_json_roundtrip() -> None:
 
     now = datetime.now(timezone.utc)
     wrapper = _WorkflowHandler(
+        _workflow_store=MemoryWorkflowStore(),
+        _persistence_backoff=[0.0, 0.0],
         run_handler=handler,
         queue=queue,
         task=task,
