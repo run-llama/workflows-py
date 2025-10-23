@@ -13,6 +13,7 @@ from typing import (
     TYPE_CHECKING,
     Any,
     Callable,
+    Coroutine,
     DefaultDict,
     Generic,
     Tuple,
@@ -653,7 +654,9 @@ class Context(Generic[MODEL_T]):
                 )
             )
 
-    def write_event_to_stream(self, ev: Event | None, wait: bool = False):
+    def write_event_to_stream(
+        self, ev: Event | None, wait: bool = False
+    ) -> None | Coroutine[Any, Any, None]:
         """Enqueue an event for streaming to [WorkflowHandler]](workflows.handler.WorkflowHandler).
 
         Args:
@@ -688,10 +691,10 @@ class Context(Generic[MODEL_T]):
         # fire and forget
         if not wait:
             self._streaming_queue.put_nowait(ev)
-            return
+            return None
 
         # wait for listener
-        async def _wait_for_listener_processing():
+        async def _wait_for_listener_processing() -> None:
             completion_future: asyncio.Future = asyncio.Future()
             # wrap event with completion future
             self._streaming_queue.put_nowait((ev, completion_future))

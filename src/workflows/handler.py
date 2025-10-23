@@ -105,13 +105,14 @@ class WorkflowHandler(asyncio.Future[RunResultT]):
             raise WorkflowRuntimeError(msg)
 
         while True:
-            ev = await self.ctx.streaming_queue.get()
+            queue_item = await self.ctx.streaming_queue.get()
 
             # Check if wrapped with completion future
             completion_future = None
-            if isinstance(ev, tuple) and len(ev) == 2:
-                actual_event, completion_future = ev
-                ev = actual_event
+            if isinstance(queue_item, tuple):
+                ev, completion_future = queue_item
+            else:
+                ev = queue_item
 
             if isinstance(ev, InternalDispatchEvent) and not expose_internal:
                 if completion_future and not completion_future.done():
