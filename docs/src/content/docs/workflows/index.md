@@ -177,6 +177,8 @@ You can also decorate and attach steps to a workflow without subclassing it.
 Below is the `JokeFlow` from earlier, but defined without subclassing.
 
 ```python
+import asyncio
+
 from workflows import Workflow, step
 from workflows.events import (
     Event,
@@ -190,7 +192,7 @@ class JokeEvent(Event):
     joke: str
 
 
-joke_flow = Workflow(timeout=60, verbose=True)
+joke_flow = Workflow
 
 
 @step(workflow=joke_flow)
@@ -211,8 +213,16 @@ async def critique_joke(ev: JokeEvent) -> StopEvent:
     prompt = (
         f"Give a thorough analysis and critique of the following joke: {joke}"
     )
+
+    llm = OpenAI()
     response = await llm.acomplete(prompt)
     return StopEvent(result=str(response))
+
+async def main():
+    res = await joke_flow(timeout=60, verbose=True).run(topic="pirates")
+    print(res)
+
+asyncio.run(main())
 ```
 
 ## Examples
