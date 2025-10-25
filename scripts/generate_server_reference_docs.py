@@ -60,14 +60,29 @@ def md_escape(text: str) -> str:
     )
 
 
-def render_schema(schema: Json) -> str:
+def _to_jsonable(value: object) -> Json:
+    """Best-effort conversion of arbitrary mappings/sequences to JSON-serializable types."""
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value  # type: ignore[return-value]
+    if isinstance(value, Mapping):
+        return {str(k): _to_jsonable(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_to_jsonable(v) for v in value]
+    if isinstance(value, tuple):
+        return [_to_jsonable(v) for v in value]
+    # Fallback to string representation to avoid serialization errors
+    return str(value)
+
+
+def render_schema(schema: object) -> str:
     try:
-        return "```json\n" + json.dumps(schema, indent=2, ensure_ascii=False) + "\n```\n"
+        jsonable = _to_jsonable(schema)
+        return "```json\n" + json.dumps(jsonable, indent=2, ensure_ascii=False) + "\n```\n"
     except Exception:
         return "```json\n{}\n```\n"
 
 
-def resolve_ref(ref: str, components: Mapping[str, Any]) -> Tuple[str, Optional[Json]]:
+def resolve_ref(ref: str, components: Mapping[str, Any]) -> Tuple[str, Optional[object]]:
     # Specs like '#/components/schemas/Handler'
     if not ref.startswith("#/"):
         return ref, None
@@ -205,7 +220,6 @@ def build_index_md(openapi: Mapping[str, Any]) -> str:
             if not isinstance(op, Mapping):
                 continue
             verb = method.upper()
-            op_id = op.get("operationId")
             summary = str(op.get("summary", "")).strip()
             description = str(op.get("description", "")).strip()
             header.append(f"#### {verb}\n")
