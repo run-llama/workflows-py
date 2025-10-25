@@ -261,6 +261,9 @@ def build_index_md(openapi: Mapping[str, Any]) -> str:
 def write_index(dest_dir: Path, content: str) -> None:
     ensure_out_dir(dest_dir)
     out_path = dest_dir / "index.md"
+    # Ensure trailing newline to satisfy end-of-file linters
+    if not content.endswith("\n"):
+        content = content + "\n"
     out_path.write_text(content, encoding="utf-8")
 
 
