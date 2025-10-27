@@ -595,7 +595,7 @@ def draw_all_possible_flows(
     _render_pyvis(graph, filename, notebook)
 
 
-def draw_execution(
+def draw_most_recent_execution(
     handler: WorkflowHandler,
     filename: str = "workflow_recent_execution.html",
     notebook: bool = False,
@@ -611,8 +611,6 @@ def draw_execution(
         max_label_length: Maximum label length before truncation (None = no limit)
 
     """
-    from pyvis.network import Network
-
     net = Network(directed=True, height="750px", width="100%")
 
     if handler.ctx is None or handler.ctx._broker_run is None:

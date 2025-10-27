@@ -66,7 +66,7 @@ openapi = "python -m workflows.server.server --output openapi.json"
 asyncio_mode = "auto"
 
 [tool.uv.workspace]
-members = ["packages/workflows-visualization"]
+members = ["packages/llama-index-utils-workflow"]
 
 [tool.uv.sources]
 llama-index-workflows = {workspace = true}

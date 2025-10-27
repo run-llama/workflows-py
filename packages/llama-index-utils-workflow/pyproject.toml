@@ -3,12 +3,12 @@ name = "llama-index-utils-workflow"
 version = "0.4.1"
 description = "llama-index utils for workflows"
 readme = "README.md"
-authors = [{ name = "Adrian Lyjak", email = "adrianlyjak@gmail.com" }]
+authors = [{name = "Adrian Lyjak", email = "adrianlyjak@gmail.com"}]
 requires-python = ">=3.9"
 dependencies = [
-    "llama-index-core>=0.14,<0.15.0",
-    "llama-index-workflows>=2.8.3,<3.0.0",
-    "pyvis>=0.3.2",
+  "llama-index-core>=0.14,<0.15.0",
+  "llama-index-workflows>=2.8.3,<3.0.0",
+  "pyvis>=0.3.2"
 ]
 
 
@@ -16,11 +16,14 @@ dependencies = [
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
+[tool.hatch.build.targets.sdist]
+only-include = ["src/llama_index"]
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/llama_index"]
 
 [dependency-groups]
 dev = [
     "pytest>=8.4.2",
+    "pytest-asyncio>=1.0.0",
 ]
-
