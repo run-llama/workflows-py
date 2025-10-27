@@ -64,3 +64,9 @@ openapi = "python -m workflows.server.server --output openapi.json"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+
+[tool.uv.workspace]
+members = ["packages/workflows-visualization"]
+
+[tool.uv.sources]
+llama-index-workflows = {workspace = true}
