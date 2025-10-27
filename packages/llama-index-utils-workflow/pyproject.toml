@@ -26,4 +26,5 @@ packages = ["src/llama_index"]
 dev = [
     "pytest>=8.4.2",
     "pytest-asyncio>=1.0.0",
+    "pytest-cov>=6.1.1",
 ]
