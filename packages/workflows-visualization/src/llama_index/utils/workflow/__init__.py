@@ -3,6 +3,8 @@ from typing import List, Optional, Dict, Tuple, Union, cast
 
 from workflows.events import (
     StartEvent,
+    StepState,
+    StepStateChanged,
     StopEvent,
     InputRequiredEvent,
     HumanResponseEvent,
@@ -19,6 +21,8 @@ from llama_index.core.agent.workflow import (
 )
 from llama_index.core.tools import BaseTool, AsyncBaseTool
 from pyvis.network import Network
+
+from workflows.runtime.types.ticks import TickStepResult
 
 
 @dataclass
@@ -615,28 +619,40 @@ def draw_execution(
         raise ValueError("No context/run info in this handler. Has it been run yet?")
     history = handler.ctx._broker_run._replay_ticks
 
+    i = 0
     for tick in history:
-        event_node = f"{event}_{i}"
-        step_node = f"{step}_{i}"
+        if isinstance(tick, TickStepResult):
+            if isinstance(tick.event, StepStateChanged):
+                if tick.event.step_state == StepState.NOT_RUNNING:
+                    my_id = i
+                    i += 1
+                    tick.event.input_event_name 
+                    event = tick.event.input_event_name
+                    step = tick.event.name
+                    event_node = f"{event}_{i}"
+                    step_node = f"{tick.event.name}_{i}"
+                    
 
-        if max_label_length is not None:
-            event_label = _truncate_label(event, max_label_length)
-            step_label = _truncate_label(step, max_label_length)
-        else:
-            event_label = event
-            step_label = step
+                    if max_label_length is not None:
+                        event_label = _truncate_label(tick.event.input_event_name, max_label_length)
+                        step_label = _truncate_label(tick.event.name, max_label_length)
+                    else:
+                        event_label = event
+                        step_label = step
 
-        net.add_node(
-            event_node, label=event_label, color="#90EE90", shape="ellipse"
-        )  # Light green for events
-        net.add_node(
-            step_node, label=step_label, color="#ADD8E6", shape="box"
-        )  # Light blue for steps
-        net.add_edge(event_node, step_node)
+                    net.add_node(
+                        event_node, label=event_label, color="#90EE90", shape="ellipse"
+                    )  # Light green for events
+                    net.add_node(
+                        step_node, label=step_label, color="#ADD8E6", shape="box"
+                    )  # Light blue for steps
+                    net.add_edge(event_node, step_node)
 
-        if i > 0:
-            prev_step_node = f"{existing_context._accepted_events[i - 1][0]}_{i - 1}"
-            net.add_edge(prev_step_node, event_node)
+                    if i > 0:
+                        prev_step_node = f"{existing_context._accepted_events[i - 1][0]}_{i - 1}"
+                        net.add_edge(prev_step_node, event_node)
+
+        
 
     net.show(filename, notebook=notebook)
 
