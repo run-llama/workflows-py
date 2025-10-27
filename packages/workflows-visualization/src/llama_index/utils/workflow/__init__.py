@@ -9,10 +9,6 @@ from workflows.events import (
 )
 from workflows.decorators import StepConfig
 from workflows.handler import WorkflowHandler
-from workflows.utils import (
-    get_steps_from_class,
-    get_steps_from_instance,
-)
 from workflows import Workflow
 
 from llama_index.core.agent.workflow import (
@@ -64,10 +60,7 @@ def _extract_workflow_structure(
 ) -> DrawWorkflowGraph:
     """Extract workflow structure into an intermediate representation."""
     # Get workflow steps
-    steps = get_steps_from_class(workflow)
-    if not steps:
-        steps = get_steps_from_instance(workflow)
-
+    steps = workflow._get_steps()
     nodes = []
     edges = []
     added_nodes = set()  # Track added node IDs to avoid duplicates
@@ -78,9 +71,7 @@ def _extract_workflow_structure(
     # Assuming that `Workflow` is validated before drawing, it's enough to find the first one.
     current_stop_event = None
     for step_name, step_func in steps.items():
-        step_config = getattr(step_func, "__step_config", None)
-        if step_config is None:
-            continue
+        step_config = step_func._step_config
 
         for return_type in step_config.return_types:
             if issubclass(return_type, StopEvent):
@@ -92,10 +83,7 @@ def _extract_workflow_structure(
 
     # First pass: Add all nodes
     for step_name, step_func in steps.items():
-        step_config = getattr(step_func, "__step_config", None)
-        if step_config is None:
-            continue
-
+        step_config = step_func._step_config
         # Add step node
         step_label = (
             _truncate_label(step_name, max_label_length)
@@ -191,10 +179,7 @@ def _extract_workflow_structure(
 
     # Second pass: Add edges
     for step_name, step_func in steps.items():
-        step_config = getattr(step_func, "__step_config", None)
-        if step_config is None:
-            continue
-
+        step_config = step_func._step_config
         # Edges from steps to return types
         for return_type in step_config.return_types:
             if return_type is not type(None):
@@ -205,13 +190,7 @@ def _extract_workflow_structure(
 
         # Edges from events to steps
         for event_type in step_config.accepted_events:
-            if step_name == "_done" and issubclass(event_type, StopEvent):
-                if current_stop_event:
-                    edges.append(
-                        DrawWorkflowEdge(current_stop_event.__name__, step_name)
-                    )
-            else:
-                edges.append(DrawWorkflowEdge(event_type.__name__, step_name))
+            edges.append(DrawWorkflowEdge(event_type.__name__, step_name))
 
             if issubclass(event_type, HumanResponseEvent):
                 edges.append(DrawWorkflowEdge("external_step", event_type.__name__))
