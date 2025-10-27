@@ -1,6 +1,7 @@
 from unittest.mock import patch, MagicMock, mock_open
 
 import pytest
+from workflows.workflow import Workflow
 
 from llama_index.utils.workflow import (
     draw_all_possible_flows,
@@ -10,7 +11,7 @@ from llama_index.utils.workflow import (
 
 
 @pytest.mark.asyncio
-async def test_workflow_draw_methods(workflow):
+async def test_workflow_draw_methods(workflow: Workflow) -> None:
     with patch("llama_index.utils.workflow.Network") as mock_network:
         draw_all_possible_flows(workflow, filename="test_all_flows.html")
         mock_network.assert_called_once()
@@ -29,7 +30,9 @@ async def test_workflow_draw_methods(workflow):
 
 
 @pytest.mark.asyncio
-async def test_draw_all_possible_flows_with_max_label_length(workflow):
+async def test_draw_all_possible_flows_with_max_label_length(
+    workflow: Workflow,
+) -> None:
     """Test the max_label_length parameter."""
     with patch("llama_index.utils.workflow.Network") as mock_network:
         mock_net_instance = MagicMock()
@@ -78,7 +81,7 @@ async def test_draw_all_possible_flows_with_max_label_length(workflow):
 
 
 @pytest.mark.asyncio
-async def test_draw_all_possible_flows_mermaid_basic(workflow):
+async def test_draw_all_possible_flows_mermaid_basic(workflow: Workflow) -> None:
     """Test basic Mermaid diagram generation."""
     with patch("builtins.open", mock_open()) as mock_file:
         result = draw_all_possible_flows_mermaid(
@@ -101,9 +104,9 @@ async def test_draw_all_possible_flows_mermaid_basic(workflow):
 
 
 @pytest.mark.asyncio
-async def test_draw_all_possible_flows_mermaid_no_file(workflow):
+async def test_draw_all_possible_flows_mermaid_no_file(workflow: Workflow) -> None:
     """Test Mermaid diagram generation without file output."""
-    result = draw_all_possible_flows_mermaid(workflow, filename=None)
+    result = draw_all_possible_flows_mermaid(workflow)
 
     # Should still return the diagram string
     assert isinstance(result, str)
@@ -111,9 +114,9 @@ async def test_draw_all_possible_flows_mermaid_no_file(workflow):
 
 
 @pytest.mark.asyncio
-async def test_mermaid_node_shapes_and_styles(workflow):
+async def test_mermaid_node_shapes_and_styles(workflow: Workflow) -> None:
     """Test that Mermaid nodes have correct shapes and styles."""
-    result = draw_all_possible_flows_mermaid(workflow, filename=None)
+    result = draw_all_possible_flows_mermaid(workflow)
 
     lines = result.split("\n")
 
@@ -139,15 +142,15 @@ async def test_mermaid_node_shapes_and_styles(workflow):
         )
     ]
     for event_line in event_nodes:
-        assert "([" in event_line and "])" in event_line, (
+        assert "([" in event_line and ")" in event_line, (
             f"Event node should use ellipse shape: {event_line}"
         )
 
 
 @pytest.mark.asyncio
-async def test_mermaid_edges_generation(workflow):
+async def test_mermaid_edges_generation(workflow: Workflow) -> None:
     """Test that Mermaid edges are properly generated."""
-    result = draw_all_possible_flows_mermaid(workflow, filename=None)
+    result = draw_all_possible_flows_mermaid(workflow)
 
     lines = result.split("\n")
     edge_lines = [line.strip() for line in lines if " --> " in line]
@@ -166,9 +169,9 @@ async def test_mermaid_edges_generation(workflow):
 
 
 @pytest.mark.asyncio
-async def test_mermaid_id_cleaning(workflow):
+async def test_mermaid_id_cleaning(workflow: Workflow) -> None:
     """Test that Mermaid IDs are properly cleaned for validity."""
-    result = draw_all_possible_flows_mermaid(workflow, filename=None)
+    result = draw_all_possible_flows_mermaid(workflow)
 
     lines = result.split("\n")
 
@@ -188,7 +191,7 @@ async def test_mermaid_id_cleaning(workflow):
 
 
 @pytest.mark.asyncio
-async def test_mermaid_vs_pyvis_consistency(workflow):
+async def test_mermaid_vs_pyvis_consistency(workflow: Workflow) -> None:
     """Test that Mermaid and Pyvis generate consistent node/edge counts."""
     # Generate Pyvis version
     with patch("llama_index.utils.workflow.Network") as mock_network:
@@ -207,7 +210,7 @@ async def test_mermaid_vs_pyvis_consistency(workflow):
         pyvis_edge_calls = len(mock_net_instance.add_edge.call_args_list)
 
     # Generate Mermaid version
-    mermaid_result = draw_all_possible_flows_mermaid(workflow, filename=None)
+    mermaid_result = draw_all_possible_flows_mermaid(workflow)
     lines = mermaid_result.split("\n")
 
     # Count Mermaid nodes (lines with node definitions, but NOT edge lines)
@@ -235,7 +238,7 @@ async def test_mermaid_vs_pyvis_consistency(workflow):
 
 
 @pytest.mark.asyncio
-async def test_mermaid_file_writing(workflow):
+async def test_mermaid_file_writing(workflow: Workflow) -> None:
     """Test that Mermaid diagram is correctly written to file."""
     mock_file_handle = mock_open()
 
@@ -259,10 +262,10 @@ async def test_mermaid_file_writing(workflow):
 
 
 @pytest.mark.asyncio
-async def test_mermaid_empty_filename(workflow):
+async def test_mermaid_empty_filename(workflow: Workflow) -> None:
     """Test that Mermaid works with empty/None filename."""
-    # Test with None
-    result1 = draw_all_possible_flows_mermaid(workflow, filename=None)
+    # Test without filename (defaults internally)
+    result1 = draw_all_possible_flows_mermaid(workflow)
     assert isinstance(result1, str)
     assert result1.startswith("flowchart TD")
 

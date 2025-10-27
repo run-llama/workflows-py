@@ -1,3 +1,7 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2025 LlamaIndex Inc.
+
+from __future__ import annotations
 from dataclasses import dataclass
 from typing import List, Optional, Dict, Tuple, Union, cast, Any
 
@@ -543,8 +547,8 @@ def _extract_agent_workflow_structure(
     agent_workflow: AgentWorkflow,
 ) -> DrawWorkflowGraph:
     """Extract the structure of an agent workflow."""
-    nodes = []
-    edges = []
+    nodes: List[DrawWorkflowNode] = []
+    edges: List[DrawWorkflowEdge] = []
 
     # Add base workflow node
     user_node = DrawWorkflowNode(
@@ -558,7 +562,7 @@ def _extract_agent_workflow_structure(
     nodes.extend([user_node, output_node])
 
     agents = agent_workflow.agents
-    processed_agents = []
+    processed_agents: List[str] = []
     for v in agents.values():
         nodes, edges, processed_agents = _process_tools_and_handoffs(
             agent=v,
@@ -618,7 +622,7 @@ def draw_most_recent_execution(
     ticks: List[WorkflowTick] = handler.ctx._broker_run._replay_ticks
 
     # Build execution DAG from ticks
-    nodes: Dict[str, Tuple[str, str, Optional[type]] ] = {}
+    nodes: Dict[str, Tuple[str, str, Optional[type]]] = {}
     edges: List[Tuple[str, str]] = []
     event_node_by_identity: Dict[int, str] = {}
     step_seq: Dict[str, int] = {}

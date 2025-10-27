@@ -1,3 +1,14 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+  "pytest>=8.4.2",
+  "pytest-asyncio>=1.0.0",
+  "pytest-cov>=6.1.1"
+]
+
 [project]
 name = "llama-index-utils-workflow"
 version = "0.4.1"
@@ -11,20 +22,8 @@ dependencies = [
   "pyvis>=0.3.2"
 ]
 
-
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
-
 [tool.hatch.build.targets.sdist]
 only-include = ["src/llama_index"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/llama_index"]
-
-[dependency-groups]
-dev = [
-    "pytest>=8.4.2",
-    "pytest-asyncio>=1.0.0",
-    "pytest-cov>=6.1.1",
-]
