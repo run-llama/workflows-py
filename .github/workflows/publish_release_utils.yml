@@ -28,9 +28,3 @@ jobs:
         run: |
           uv build --package llama-index-utils-workflow
           uv publish
-
-      - name: Create GitHub Release
-        uses: ncipollo/release-action@v1
-        with:
-          artifacts: "packages/llama-index-utils-workflow/dist/*"
-          generateReleaseNotes: true
