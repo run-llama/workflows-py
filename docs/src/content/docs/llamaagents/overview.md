@@ -6,7 +6,7 @@ sidebar:
 
 ## LlamaAgents at a Glance
 
-LlamaAgents helps you build, serve and deploy small, workflow‑driven agentic apps using LlamaIndex, locally and on LlamaCloud. Define LlamaIndex [workflows]((/python/llamaagents/workflows)), run them as durable APIs that can pause for input, optionally add a UI, and deploy to LlamaCloud in seconds.
+LlamaAgents helps you build, serve and deploy small, workflow‑driven agentic apps using LlamaIndex, locally and on LlamaCloud. Define LlamaIndex [workflows](/python/llamaagents/workflows), run them as durable APIs that can pause for input, optionally add a UI, and deploy to LlamaCloud in seconds.
 
 LlamaAgents is for developers and teams building automation, internal tools, and app‑like agent experiences without heavy infrastructure work.
 
