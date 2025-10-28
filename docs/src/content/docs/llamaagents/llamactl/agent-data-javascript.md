@@ -5,7 +5,7 @@ sidebar:
 ---
 
 :::caution
-LlamaAgents is still in alpha. You can try it out locally, or [request access by contacting us](https://landing.llamaindex.ai/llamaagents?utm_source=docs)
+Cloud deployments of LlamaAgents is still in alpha. You can try it out locally, or [request access by contacting us](https://landing.llamaindex.ai/llamaagents?utm_source=docs)
 :::
 
 Agent Data is a JSON store tied to a `deploymentName` and `collection`. Use the official JavaScript SDK with strong typing for CRUD, search, and aggregation.

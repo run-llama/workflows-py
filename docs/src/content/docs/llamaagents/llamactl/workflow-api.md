@@ -4,9 +4,8 @@ sidebar:
   order: 5
 ---
 :::caution
-LlamaAgents is still in alpha. You can try it out locally, or [request access by contacting us](https://landing.llamaindex.ai/llamaagents?utm_source=docs)
+Cloud deployments of LlamaAgents is still in alpha. You can try it out locally, or [request access by contacting us](https://landing.llamaindex.ai/llamaagents?utm_source=docs)
 :::
-
 LlamaAgents runs your LlamaIndex workflows locally and in the cloud. Author your workflows, add minimal configuration, and `llamactl` wraps them in an application server that exposes them as HTTP APIs.
 
 ## Learn the basics (LlamaIndex Workflows)

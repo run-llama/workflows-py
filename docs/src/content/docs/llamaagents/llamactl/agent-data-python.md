@@ -4,7 +4,7 @@ sidebar:
   order: 21
 ---
 :::caution
-LlamaAgents is still in alpha. You can try it out locally, or [request access by contacting us](https://landing.llamaindex.ai/llamaagents?utm_source=docs)
+Cloud deployments of LlamaAgents is still in alpha. You can try it out locally, or [request access by contacting us](https://landing.llamaindex.ai/llamaagents?utm_source=docs)
 :::
 
 See the [Agent Data Overview](/python/cloud/llamaagents/agent-data-overview) for concepts, constraints, and environment details.
