@@ -146,7 +146,7 @@ async def test_send_event_step_is_none(workflow: Workflow, ctx: Context) -> None
     ctx.send_event(ev)
     await asyncio.sleep(0.01)
     assert ctx._broker_run is not None
-    replay = ctx._broker_run._replay_ticks
+    replay = ctx._broker_run._tick_log
     assert TickAddEvent(event=ev, step_name=None) in replay
 
 

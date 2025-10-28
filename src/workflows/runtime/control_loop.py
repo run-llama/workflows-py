@@ -104,7 +104,7 @@ class _ControlLoopRunner:
         """Wait for the next tick from the internal queue."""
         return await self.queue.get()
 
-    def queue_event(self, tick: WorkflowTick, delay: float | None = None) -> None:
+    def queue_tick(self, tick: WorkflowTick, delay: float | None = None) -> None:
         """Queue a tick event for processing, optionally after a delay."""
         if delay:
 
@@ -144,7 +144,7 @@ class _ControlLoopRunner:
                     context=self.context,
                     workflow=self.workflow,
                 )
-                self.queue_event(
+                self.queue_tick(
                     TickStepResult(
                         step_name=command.step_name,
                         worker_id=command.id,
@@ -154,7 +154,7 @@ class _ControlLoopRunner:
                 )
             except Exception as e:
                 logger.error("error running step worker function: ", e, exc_info=True)
-                self.queue_event(
+                self.queue_tick(
                     TickStepResult(
                         step_name=command.step_name,
                         worker_id=command.id,
@@ -175,7 +175,7 @@ class _ControlLoopRunner:
     async def process_command(self, command: WorkflowCommand) -> None | StopEvent:
         """Process a single command returned from tick reduction."""
         if isinstance(command, CommandQueueEvent):
-            self.queue_event(
+            self.queue_tick(
                 TickAddEvent(
                     event=command.event,
                     step_name=command.step_name,
@@ -235,16 +235,16 @@ class _ControlLoopRunner:
         async def _pull() -> None:
             while True:
                 tick = await self.plugin.wait_receive()
-                self.queue_event(tick)
+                self.queue_tick(tick)
 
         self.workers.append(asyncio.create_task(_pull()))
 
         # Queue initial event and timeout
         if start_event is not None:
-            self.queue_event(TickAddEvent(event=start_event))
+            self.queue_tick(TickAddEvent(event=start_event))
 
         if start_with_timeout and self.workflow._timeout is not None:
-            self.queue_event(
+            self.queue_tick(
                 TickTimeout(timeout=self.workflow._timeout),
                 delay=self.workflow._timeout,
             )

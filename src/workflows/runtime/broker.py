@@ -203,13 +203,13 @@ class WorkflowBroker(Generic[MODEL_T]):
 
     @property
     def _state(self) -> BrokerState:
-        ticks = self._replay_ticks
+        ticks = self._tick_log
         state = self._init_state or BrokerState.from_workflow(self._workflow)
         new_state = rebuild_state_from_ticks(state, ticks)
         return new_state
 
     @property
-    def _replay_ticks(self) -> list[WorkflowTick]:
+    def _tick_log(self) -> list[WorkflowTick]:
         snapshottable = as_snapshottable(self._runtime)
         if snapshottable is None:
             raise WorkflowRuntimeError("Plugin is not snapshottable")

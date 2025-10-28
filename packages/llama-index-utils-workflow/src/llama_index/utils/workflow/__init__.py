@@ -619,7 +619,7 @@ def draw_most_recent_execution(
 
     if handler.ctx is None or handler.ctx._broker_run is None:
         raise ValueError("No context/run info in this handler. Has it been run yet?")
-    ticks: List[WorkflowTick] = handler.ctx._broker_run._replay_ticks
+    ticks: List[WorkflowTick] = handler.ctx._broker_run._tick_log
 
     # Build execution DAG from ticks
     nodes: Dict[str, Tuple[str, str, Optional[type]]] = {}
