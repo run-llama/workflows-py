@@ -34,7 +34,7 @@ Deployments can be configured to automatically inject authentication for LlamaCl
 llama_cloud = true
 ```
 
-When this is set: 
+When this is set:
 - During development, `llamactl` prompts you to log in to LlamaCloud if you're not already. After that, it injects `LLAMA_CLOUD_API_KEY`, `LLAMA_CLOUD_PROJECT_ID`, and `LLAMA_CLOUD_BASE_URL` into your Python server process and JavaScript build.
 - When deployed, LlamaCloud automatically injects a dedicated API key into the Python process. The frontend process receives a short-lived session cookie specific to each user visiting the application. Therefore, configure the project ID on the frontend API client so that LlamaCloud API requests from the frontend and backend are scoped to the same project ID.
 
@@ -97,7 +97,7 @@ Tip: Combine with `env_files` for local development or supply values via your de
 
 ## UI Integration via package.json
 
-Note: after setting `ui.directory` so that `package.json` can be found, you can configure the UI within it instead. 
+Note: after setting `ui.directory` so that `package.json` can be found, you can configure the UI within it instead.
 
 For example:
 

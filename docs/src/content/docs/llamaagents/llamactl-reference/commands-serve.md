@@ -29,4 +29,3 @@ llamactl serve [DEPLOYMENT_FILE] [options]
 - Prepares the server environment (installs dependencies unless `--no-install`)
 - In dev mode (default), proxies your UI dev server and reloads on change
 - In preview mode, builds the UI to static files and serves them without a proxy
-

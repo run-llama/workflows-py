@@ -62,7 +62,7 @@ Once you have a project, you can run the dev server for your application:
 llamactl serve
 ```
 
-`llamactl serve` will 
+`llamactl serve` will
 
 1. Install all required dependencies
 2. Read the workflows configured in your app’s `pyproject.toml` and serve them as an API
