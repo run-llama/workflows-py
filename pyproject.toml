@@ -64,3 +64,10 @@ openapi = "python -m workflows.server.server --output openapi.json"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.uv.sources]
+llama-index-workflows = {workspace = true}
+
+[tool.uv.workspace]
+members = ["packages/llama-index-utils-workflow"]

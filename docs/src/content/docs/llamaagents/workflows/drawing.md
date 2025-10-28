@@ -23,8 +23,9 @@ draw_all_possible_flows(JokeFlow, filename="joke_flow_all.html")
 
 # Draw an execution
 w = JokeFlow()
-await w.run(topic="Pirates")
-draw_most_recent_execution(w, filename="joke_flow_recent.html")
+handler = w.run(topic="Pirates")
+await handler
+draw_most_recent_execution(handler, filename="joke_flow_recent.html")
 ```
 
 <div id="working-with-global-context-state"></div>
