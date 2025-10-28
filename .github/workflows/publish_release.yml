@@ -19,7 +19,8 @@ on:
         type: string
   push:
     tags:
-      - "v*"
+      - "v*"                       # core package tags
+      - "*@v*"                    # package-scoped tags like package@v1.2.3
 
 jobs:
   build-n-publish:
@@ -28,6 +29,15 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [llama-index-workflows, llama-index-utils-workflow]
+        include:
+          - package: llama-index-workflows
+            is_core: true
+          - package: llama-index-utils-workflow
+            is_core: false
 
     steps:
       - uses: actions/checkout@v4
@@ -37,14 +47,45 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v6
 
-      - name: Validate version
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: Parse tag
+        id: tag
+        run: |
+          REF_NAME="${GITHUB_REF_NAME}"
+          if [[ "${REF_NAME}" == v* ]]; then
+            PKG="llama-index-workflows"
+            VERSION="${REF_NAME#v}"
+          else
+            # strip optional leading '@'
+            REF_TRIMMED="${REF_NAME#@}"
+            PKG_PART="${REF_TRIMMED%@v*}"
+            PKG="${PKG_PART}"
+            VERSION_PART="${REF_TRIMMED#*@v}"
+            VERSION="${VERSION_PART}"
+          fi
+          echo "package=${PKG}" >> $GITHUB_OUTPUT
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+
+      - name: Compute directory flag
+        id: dir
+        run: |
+          if [ "${{ matrix.is_core }}" = "true" ]; then
+            echo "dir_flag=" >> $GITHUB_OUTPUT
+          else
+            echo "dir_flag=--directory packages/${{ matrix.package }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Guard non-target matrix entry
+        if: steps.tag.outputs.package != matrix.package
+        run: echo "Skipping matrix package ${{ matrix.package }} for tag ${{ steps.tag.outputs.package }}" && exit 0
+
+      - name: Validate version (core only)
+        if: startsWith(github.ref, 'refs/tags/') && matrix.is_core == true
         run: uv run python scripts/validate_version.py
 
       - name: Set version output
         id: version
         run: |
-          VERSION=$(uv run python -c "from importlib.metadata import version; print(version('llama-index-workflows'))")
+          VERSION=$(uv run ${{ steps.dir.outputs.dir_flag }} python -c "from importlib.metadata import version; print(version('${{ matrix.package }}'))")
           echo "Version: $VERSION"
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
@@ -52,27 +93,30 @@ jobs:
         env:
           UV_PUBLISH_TOKEN: ${{ secrets.PYPI_TOKEN }}
         run: |
-          uv build
-          uv publish
+          uv build ${{ steps.dir.outputs.dir_flag }}
+          uv publish ${{ steps.dir.outputs.dir_flag }}
 
-      - name: Generate OpenAPI spec
+      - name: Generate OpenAPI spec (core only)
+        if: matrix.is_core == true
         run: |
           uv sync --all-extras
           uv run hatch run server:openapi
 
-      - name: Create GitHub Release
+      - name: Create GitHub Release (core only)
+        if: matrix.is_core == true
         uses: ncipollo/release-action@v1
         with:
           artifacts: "dist/*,openapi.json"
           generateReleaseNotes: true
 
-      - name: Detect change type for tags
+      - name: Detect change type for tags (core only)
         id: detect_change
-        if: startsWith(github.ref, 'refs/tags/')
+        if: startsWith(github.ref, 'refs/tags/') && matrix.is_core == true
         run: uv run python scripts/detect_change_type.py
 
       - name: Set SDK trigger parameters
         id: sdk_params
+        if: matrix.is_core == true
         run: |
           if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
             echo "change_type=${{ github.event.inputs.server_change_type }}" >> $GITHUB_OUTPUT
@@ -84,6 +128,7 @@ jobs:
 
       - name: Generate GitHub App Token
         id: app-token
+        if: matrix.is_core == true
         uses: actions/create-github-app-token@v1
         with:
           app-id: ${{ secrets.CI_BOT_APP_ID }}
@@ -91,7 +136,7 @@ jobs:
           owner: run-llama
 
       - name: Trigger SDK Update
-        if: steps.sdk_params.outputs.change_type != 'none' && steps.sdk_params.outputs.change_type != ''
+        if: matrix.is_core == true && steps.sdk_params.outputs.change_type != 'none' && steps.sdk_params.outputs.change_type != ''
         uses: peter-evans/repository-dispatch@v3
         with:
           token: ${{ steps.app-token.outputs.token }}

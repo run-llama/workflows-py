@@ -16,7 +16,7 @@ def test_decorated_config(workflow: Workflow) -> None:
         return Event()
 
     res = step(workflow=workflow.__class__)(f)
-    config = getattr(res, "__step_config")
+    config = res._step_config
     assert config.accepted_events == [Event]
     assert config.event_name == "ev"
     assert config.return_types == [Event]
@@ -33,8 +33,8 @@ def test_decorate_method() -> None:
             return StopEvent()
 
     wf = TestWorkflow()
-    assert getattr(wf.f1, "__step_config")
-    assert getattr(wf.f2, "__step_config")
+    assert wf.f1._step_config
+    assert wf.f2._step_config
 
 
 def test_decorate_wrong_signature() -> None:

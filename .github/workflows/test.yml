@@ -17,6 +17,14 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+        package: [llama-index-workflows, llama-index-utils-workflow]
+        include:
+          - package: llama-index-workflows
+            is_root: true
+            coverage_report: true
+          - package: llama-index-utils-workflow
+            is_root: false
+            coverage_report: false
     steps:
       - uses: actions/checkout@v4
         with:
@@ -28,16 +36,22 @@ jobs:
           python-version: ${{ matrix.python-version }}
           enable-cache: true
 
-      - name: Run tests
-        if: matrix.python-version != env.COV_PYTHON_VERSION
-        run: uv run --all-extras pytest
+      - name: Compute directory flag
+        run: |
+          if [ "${{ matrix.is_root }}" = "true" ]; then
+            echo "DIR_FLAG=" >> $GITHUB_ENV
+          else
+            echo "DIR_FLAG=--directory packages/${{ matrix.package }}" >> $GITHUB_ENV
+          fi
+
+      - name: Sync dev dependencies for selected package
+        run: uv sync --all-extras $DIR_FLAG --group dev
 
       - name: Run tests with coverage
-        if: matrix.python-version == env.COV_PYTHON_VERSION
-        run: uv run --all-extras -- pytest --cov --cov-report=xml
+        run: uv run --all-extras $DIR_FLAG -- pytest --cov --cov-report=xml
 
       - name: Report Coveralls
-        if: matrix.python-version == env.COV_PYTHON_VERSION
+        if: matrix.coverage_report == true && matrix.python-version == env.COV_PYTHON_VERSION
         uses: coverallsapp/github-action@v2
         env:
           COVERALLS_REPO_TOKEN: ${{ secrets.COVERALLS_REPO_TOKEN }}

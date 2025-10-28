@@ -1,7 +1,7 @@
 import asyncio
 import warnings
 from contextlib import asynccontextmanager
-from typing import Any, AsyncGenerator, Generic, Optional
+from typing import Any, AsyncGenerator, Generic, Optional, Type
 
 from pydantic import BaseModel, ValidationError
 from typing_extensions import TypeVar
@@ -46,7 +46,7 @@ class DictState(DictLikeModel):
 
 
 # Default state type is DictState for the generic type
-MODEL_T = TypeVar("MODEL_T", bound=BaseModel, default=DictState)
+MODEL_T = TypeVar("MODEL_T", bound=BaseModel, default=DictState)  # type: ignore
 
 
 class InMemoryStateStore(Generic[MODEL_T]):
@@ -95,9 +95,12 @@ class InMemoryStateStore(Generic[MODEL_T]):
     # are known to be unserializable in some cases.
     known_unserializable_keys = ("memory",)
 
+    state_type: Type[MODEL_T]
+
     def __init__(self, initial_state: MODEL_T):
         self._state = initial_state
         self._lock = asyncio.Lock()
+        self.state_type = type(initial_state)
 
     async def get_state(self) -> MODEL_T:
         """Return a shallow copy of the current state model.
@@ -169,46 +172,6 @@ class InMemoryStateStore(Generic[MODEL_T]):
                 "state_type": type(self._state).__name__,
                 "state_module": type(self._state).__module__,
             }
-
-    def to_dict_snapshot(self, serializer: "BaseSerializer") -> dict[str, Any]:
-        """Serialize the state and model metadata for exposure as a state snapshot.
-
-        This method uses a serializer to encode serializable values and, when this strategy produces errors, it falls back to casting the unserializable value to a string.
-
-        Note:
-            This method should **not** be used for persistency purposes.
-
-        Args:
-            serializer (BaseSerializer): Strategy used to encode values.
-
-        Returns:
-            dict[str, Any]: A payload suitable for
-            [StateSnapshot][workflows.events.StateSnapshot].
-        """
-        serialized_data = {}
-        state_dictionary_items = (
-            self._state.items()
-            if isinstance(self._state, DictState)
-            else self._state.model_dump().items()
-        )
-        for key, value in state_dictionary_items:
-            try:
-                serialized_data[key] = serializer.serialize(value)
-            except Exception:
-                try:
-                    serialized_data[key] = str(value)
-                except Exception:
-                    warnings.warn(
-                        f"Skipping safe serialization for key: {key} -- "
-                        "Impossible to cast the value to string.",
-                        category=UnserializableKeyWarning,
-                    )
-                    continue
-        return {
-            "state_data": serialized_data,
-            "state_type": type(self._state).__name__,
-            "state_module": type(self._state).__module__,
-        }
 
     @classmethod
     def from_dict(

@@ -3,7 +3,24 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, Callable, Type
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Callable,
+    Generic,
+    Protocol,
+    Type,
+    TypeVar,
+    cast,
+    overload,
+)
+
+import sys
+
+if sys.version_info >= (3, 10):
+    from typing import ParamSpec
+else:
+    from typing_extensions import ParamSpec
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -33,12 +50,42 @@ class StepConfig(BaseModel):
     context_state_type: Type[BaseModel] | None = Field(default=None)
 
 
+P = ParamSpec("P")
+R = TypeVar("R")
+R_co = TypeVar("R_co", covariant=True)
+
+
+class StepFunction(Protocol, Generic[P, R_co]):
+    """A decorated function, that has some _step_config metadata from the @step decorator"""
+
+    _step_config: StepConfig
+
+    __name__: str
+    __qualname__: str
+
+    def __call__(self, *args: P.args, **kwargs: P.kwargs) -> R_co: ...
+
+
+@overload
+def step(func: Callable[P, R]) -> StepFunction[P, R]: ...
+
+
+@overload
 def step(
-    *args: Any,
+    *,
     workflow: Type["Workflow"] | None = None,
     num_workers: int = 4,
     retry_policy: RetryPolicy | None = None,
-) -> Callable:
+) -> Callable[[Callable[P, R]], StepFunction[P, R]]: ...
+
+
+def step(
+    func: Callable[P, R] | None = None,
+    *,
+    workflow: Type["Workflow"] | None = None,
+    num_workers: int = 4,
+    retry_policy: RetryPolicy | None = None,
+) -> Callable[[Callable[P, R]], StepFunction[P, R]] | StepFunction[P, R]:
     """
     Decorate a callable to declare it as a workflow step.
 
@@ -83,28 +130,13 @@ def step(
         ```
     """
 
-    def decorator(func: Callable) -> Callable:
+    def decorator(func: Callable[P, R]) -> StepFunction[P, R]:
         if not isinstance(num_workers, int) or num_workers <= 0:
             raise WorkflowValidationError(
                 "num_workers must be an integer greater than 0"
             )
 
-        # This will raise providing a message with the specific validation failure
-        spec = inspect_signature(func)
-        validate_step_signature(spec)
-        event_name, accepted_events = next(iter(spec.accepted_events.items()))
-
-        # store the configuration in the function object
-        func.__step_config = StepConfig(  # type: ignore[attr-defined]
-            accepted_events=accepted_events,
-            event_name=event_name,
-            return_types=spec.return_types,
-            context_parameter=spec.context_parameter,
-            context_state_type=spec.context_state_type,
-            num_workers=num_workers,
-            retry_policy=retry_policy,
-            resources=spec.resources,
-        )
+        func = make_step_function(func, num_workers, retry_policy)
 
         # If this is a free function, call add_step() explicitly.
         if is_free_function(func.__qualname__):
@@ -115,9 +147,31 @@ def step(
 
         return func
 
-    if len(args):
+    if func is not None:
         # The decorator was used without parentheses, like `@step`
-        func = args[0]
-        decorator(func)
-        return func
+        return decorator(func)
     return decorator
+
+
+def make_step_function(
+    func: Callable[P, R], num_workers: int = 4, retry_policy: RetryPolicy | None = None
+) -> StepFunction[P, R]:
+    # This will raise providing a message with the specific validation failure
+    spec = inspect_signature(func)
+    validate_step_signature(spec)
+
+    event_name, accepted_events = next(iter(spec.accepted_events.items()))
+
+    casted = cast(StepFunction[P, R], func)
+    casted._step_config = StepConfig(
+        accepted_events=accepted_events,
+        event_name=event_name,
+        return_types=spec.return_types,
+        context_parameter=spec.context_parameter,
+        context_state_type=spec.context_state_type,
+        num_workers=num_workers,
+        retry_policy=retry_policy,
+        resources=spec.resources,
+    )
+
+    return casted

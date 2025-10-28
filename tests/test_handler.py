@@ -10,7 +10,8 @@ from workflows.errors import WorkflowRuntimeError
 from workflows.handler import WorkflowHandler
 
 
-def test_str() -> None:
+@pytest.mark.asyncio
+async def test_str() -> None:
     h = WorkflowHandler()
     h.set_result([])
     assert str(h) == "[]"

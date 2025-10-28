@@ -18,5 +18,5 @@ jobs:
       - name: Run linter
         shell: bash
         run: |
-          uv sync --all-extras
+          uv sync --all-extras --all-packages
           uv run -- pre-commit run -a
