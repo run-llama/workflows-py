@@ -17,7 +17,7 @@ Build and ship small, focused agentic apps—fast. Start from either our templat
 - Optionally add a UI for user-driven applications. Make custom chat applications, data extraction and review applications.
 - Deploy your app in seconds to LlamaCloud. Call it as an API with your API key, or visit it secured with your LlamaCloud login.
 
-LlamaAgents is built on top of [LlamaIndex Workflows](/python/llamaagents/workflows/). Use the [`llamactl`](/llamaagents/llamactl/) command line interface (CLI) to scaffold projects (`llamactl init`), run them locally (`llamactl serve`), and deploy to LlamaCloud (`llamactl deployments create`).
+LlamaAgents is built on top of [LlamaIndex Workflows](/python/llamaagents/workflows/). Use the [`llamactl`](/llamaagents/llamactl/getting-started) command line interface (CLI) to scaffold projects (`llamactl init`), run them locally (`llamactl serve`), and deploy to LlamaCloud (`llamactl deployments create`).
 
 In addition to LlamaAgents, LlamaIndex publishes additional SDKs to facilitate rapid development:
 - Our `llama-cloud-services` JS and Python SDKs offer a simple way to persist ad hoc Agent Data. [Read more here](/python/llamaagents/llamactl/agent-data-overview).
