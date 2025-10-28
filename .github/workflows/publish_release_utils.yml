@@ -26,8 +26,8 @@ jobs:
         env:
           UV_PUBLISH_TOKEN: ${{ secrets.PYPI_TOKEN }}
         run: |
-          uv build --directory packages/llama-index-utils-workflow
-          uv publish --directory packages/llama-index-utils-workflow
+          uv build --package llama-index-utils-workflow
+          uv publish
 
       - name: Create GitHub Release
         uses: ncipollo/release-action@v1
