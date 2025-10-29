@@ -217,7 +217,10 @@ async def test_run_workflow_not_found(client: AsyncClient) -> None:
 async def test_run_workflow_error(client: AsyncClient) -> None:
     response = await client.post("/workflows/error/run", json={})
     assert response.status_code == 500
-    assert "Test error" in response.text
+    data = response.json()
+    assert data["error"] is not None
+    assert "Test error" in data["error"]
+    assert data["status"] == "failed"
 
 
 @pytest.mark.asyncio
@@ -227,7 +230,7 @@ async def test_run_workflow_invalid_json(client: AsyncClient) -> None:
         content="invalid json",
         headers={"Content-Type": "application/json"},
     )
-    assert response.status_code == 500
+    assert response.status_code == 400
 
 
 @pytest.mark.asyncio
@@ -383,10 +386,10 @@ async def test_get_workflow_result_error(
     # get result
     response = await client.get(f"/results/{handler_id}")
     assert response.status_code == 500
-
-    # Verify the result content
-    # Now returns detailed error string body
-    assert "Test error" in response.text
+    data = response.json()
+    assert "error" in data
+    assert "Test error" in data["error"]
+    assert data["status"] == "failed"
 
 
 @pytest.mark.asyncio

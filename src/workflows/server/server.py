@@ -507,10 +507,22 @@ class WorkflowServer:
             wrapper = await self._run_workflow_handler(
                 handler_id, workflow.name, handler
             )
-            await handler
-            return JSONResponse(wrapper.to_response_model().model_dump())
+            try:
+                await handler
+                status = 200
+            except Exception as e:
+                status = 500
+                logger.error(f"Error running workflow: {e}", exc_info=True)
+
+            return JSONResponse(
+                wrapper.to_response_model().model_dump(), status_code=status
+            )
         except Exception as e:
-            raise HTTPException(detail=f"Error running workflow: {e}", status_code=500)
+            status = 500
+            logger.error(f"Error running workflow: {e}", exc_info=True)
+            raise HTTPException(
+                detail=f"Error running workflow: {e}", status_code=status
+            )
 
     async def _get_events_schema(self, request: Request) -> JSONResponse:
         """
@@ -716,25 +728,31 @@ class WorkflowServer:
                   type: string
         """
         handler_id = request.path_params["handler_id"]
+        if not handler_id:
+            raise HTTPException(detail="Handler ID is required", status_code=400)
 
         wrapper = self._handlers.get(handler_id)
         if wrapper is None:
-            raise HTTPException(detail="Handler not found", status_code=404)
-
-        handler = wrapper.run_handler
-        if not handler.done():
-            return JSONResponse(
-                wrapper.to_response_model().model_dump(), status_code=202
+            found = await self._workflow_store.query(
+                HandlerQuery(handler_id_in=[handler_id])
             )
+            if not found:
+                raise HTTPException(detail="Handler not found", status_code=404)
+            existing = found[0]
+            status = 200
+            response_model = _WorkflowHandler.handler_data_from_persistent(existing)
+        else:
+            status = 202 if not wrapper.run_handler.done() else 200
+            if wrapper.run_handler.done():
+                try:
+                    await wrapper.run_handler  # make sure its fully done
+                except Exception:
+                    # failed workflows raise their exception here
+                    status = 500
 
-        try:
-            result = await handler
-            self._results[handler_id] = result
-            return JSONResponse(wrapper.to_response_model().model_dump())
-        except Exception as e:
-            raise HTTPException(
-                detail=f"Error getting workflow result: {e}", status_code=500
-            )
+            response_model = wrapper.to_response_model()
+
+        return JSONResponse(response_model.model_dump(), status_code=status)
 
     async def _stream_events(self, request: Request) -> StreamingResponse:
         """
@@ -1097,7 +1115,10 @@ class WorkflowServer:
         self, request: Request, workflow: Workflow, workflow_name: str
     ) -> tuple[Context | None, StartEvent | None, str]:
         try:
-            body = await request.json()
+            try:
+                body = await request.json()
+            except Exception as e:
+                raise HTTPException(detail=f"Invalid JSON body: {e}", status_code=400)
             context_data = body.get("context")
             run_kwargs = body.get("kwargs", {})
             start_event_data = body.get("start_event", run_kwargs)
@@ -1296,6 +1317,28 @@ class _WorkflowHandler:
             error=self.error,
             result=EventEnvelopeWithMetadata.from_event(self.result)
             if self.result is not None
+            else None,
+        )
+
+    @staticmethod
+    def handler_data_from_persistent(persistent: PersistentHandler) -> HandlerData:
+        return HandlerData(
+            handler_id=persistent.handler_id,
+            workflow_name=persistent.workflow_name,
+            run_id=persistent.run_id,
+            status=persistent.status,
+            started_at=persistent.started_at.isoformat()
+            if persistent.started_at is not None
+            else datetime.now(timezone.utc).isoformat(),
+            updated_at=persistent.updated_at.isoformat()
+            if persistent.updated_at is not None
+            else None,
+            completed_at=persistent.completed_at.isoformat()
+            if persistent.completed_at is not None
+            else None,
+            error=persistent.error,
+            result=EventEnvelopeWithMetadata.from_event(persistent.result)
+            if persistent.result is not None
             else None,
         )
 
