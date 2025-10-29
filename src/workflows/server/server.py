@@ -976,7 +976,33 @@ class WorkflowServer:
         """
         ---
         summary: Get handlers
-        description: Returns all workflow handlers.
+        description: Returns workflow handlers, optionally filtered by query parameters.
+        parameters:
+          - in: query
+            name: status
+            required: false
+            schema:
+              type: array
+              items:
+                type: string
+                enum: [running, completed, failed, cancelled]
+            style: form
+            explode: true
+            description: |
+              Filter by handler status. Can be provided multiple times (e.g., status=running&status=failed)
+              or as a comma-separated list (e.g., status=running,failed).
+          - in: query
+            name: workflow_name
+            required: false
+            schema:
+              type: array
+              items:
+                type: string
+            style: form
+            explode: true
+            description: |
+              Filter by workflow name. Can be provided multiple times (e.g., workflow_name=test&workflow_name=other)
+              or as a comma-separated list (e.g., workflow_name=test,other).
         responses:
           200:
             description: List of handlers
@@ -985,7 +1011,27 @@ class WorkflowServer:
                 schema:
                   $ref: '#/components/schemas/HandlersList'
         """
-        persistent_handlers = await self._workflow_store.query(HandlerQuery())
+        def _parse_list_param(param_name: str) -> list[str] | None:
+            # Prefer repeated params first, also support comma-separated values
+            values = list(request.query_params.getlist(param_name))
+            if not values:
+                single = request.query_params.get(param_name)
+                if single is None:
+                    return None
+                values = [single]
+
+            parsed: list[str] = []
+            for raw in values:
+                parts = [p.strip() for p in raw.split(",")]
+                parsed.extend([p for p in parts if p])
+            return parsed or None
+
+        status_in = _parse_list_param("status")
+        workflow_name_in = _parse_list_param("workflow_name")
+
+        persistent_handlers = await self._workflow_store.query(
+            HandlerQuery(status_in=status_in, workflow_name_in=workflow_name_in)
+        )
         items = [
             HandlerData(
                 handler_id=h.handler_id,

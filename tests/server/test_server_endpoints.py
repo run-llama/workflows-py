@@ -749,6 +749,96 @@ async def test_get_handlers_with_failed_workflow(client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
+async def test_get_handlers_filters_status_and_workflow_name(
+    interactive_workflow: Workflow,
+):
+    # Seed persistence with mixed handlers
+    persisted = [
+        PersistentHandler(
+            handler_id="h1", workflow_name="interactive", status="running", ctx={}
+        ),
+        PersistentHandler(
+            handler_id="h2", workflow_name="interactive", status="completed", ctx={}
+        ),
+        PersistentHandler(
+            handler_id="h3", workflow_name="other", status="failed", ctx={}
+        ),
+    ]
+
+    async with server_with_persisted_handlers(
+        interactive_workflow, persisted_handlers=persisted
+    ) as (_server, client, _store):
+        # Filter by single status
+        r1 = await client.get("/handlers?status=completed")
+        assert r1.status_code == 200
+        ids1 = {h["handler_id"] for h in r1.json()["handlers"]}
+        assert ids1 == {"h2"}
+
+        # Filter by workflow name
+        r2 = await client.get("/handlers?workflow_name=interactive")
+        assert r2.status_code == 200
+        ids2 = {h["handler_id"] for h in r2.json()["handlers"]}
+        assert ids2 == {"h1", "h2"}
+
+        # Filter by both
+        r3 = await client.get(
+            "/handlers?workflow_name=interactive&status=running"
+        )
+        assert r3.status_code == 200
+        ids3 = {h["handler_id"] for h in r3.json()["handlers"]}
+        assert ids3 == {"h1"}
+
+
+@pytest.mark.asyncio
+async def test_get_handlers_filters_multiple_status_params(
+    interactive_workflow: Workflow,
+):
+    persisted = [
+        PersistentHandler(
+            handler_id="ha", workflow_name="interactive", status="completed", ctx={}
+        ),
+        PersistentHandler(
+            handler_id="hb", workflow_name="interactive", status="failed", ctx={}
+        ),
+        PersistentHandler(
+            handler_id="hc", workflow_name="interactive", status="running", ctx={}
+        ),
+    ]
+
+    async with server_with_persisted_handlers(
+        interactive_workflow, persisted_handlers=persisted
+    ) as (_server, client, _store):
+        r = await client.get("/handlers?status=completed&status=failed")
+        assert r.status_code == 200
+        ids = {h["handler_id"] for h in r.json()["handlers"]}
+        assert ids == {"ha", "hb"}
+
+
+@pytest.mark.asyncio
+async def test_get_handlers_filters_comma_separated_values(
+    interactive_workflow: Workflow,
+):
+    persisted = [
+        PersistentHandler(
+            handler_id="c1", workflow_name="interactive", status="completed", ctx={}
+        ),
+        PersistentHandler(
+            handler_id="c2", workflow_name="interactive", status="failed", ctx={}
+        ),
+        PersistentHandler(
+            handler_id="c3", workflow_name="interactive", status="running", ctx={}
+        ),
+    ]
+
+    async with server_with_persisted_handlers(
+        interactive_workflow, persisted_handlers=persisted
+    ) as (_server, client, _store):
+        r = await client.get("/handlers?status=completed,failed")
+        assert r.status_code == 200
+        ids = {h["handler_id"] for h in r.json()["handlers"]}
+        assert ids == {"c1", "c2"}
+
+@pytest.mark.asyncio
 async def test_post_event_to_running_workflow(client: AsyncClient) -> None:
     # Start an interactive workflow
     response = await client.post("/workflows/interactive/run-nowait", json={})
