@@ -8,7 +8,7 @@ on:
 
 env:
   # Which Python from the matrix will be used to run the coverage check
-  COV_PYTHON_VERSION: 3.13
+  COV_PYTHON_VERSION: 3.14
 
 jobs:
   test:
@@ -16,7 +16,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13"]
+        python-version: ["3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
         package: [llama-index-workflows, llama-index-utils-workflow]
         include:
           - package: llama-index-workflows
