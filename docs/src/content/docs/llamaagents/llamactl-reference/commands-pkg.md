@@ -5,16 +5,12 @@ sidebar:
 ---
 
 :::caution
-This command is currently limited to **agent workflows**.
+This command is currently limited to python **agent workflows**.
 Frontend packaging is **not yet supported**.
 :::
 
-The `pkg` command lets you package your application in different formats.
-Currently supported formats: **Docker** and **Podman**.
-
-It generates minimal, customizable build files from a deployment configuration, enabling you to easily package and deploy your application using container platforms.
-
-For details on configuring your deployment file, see the [Deployment Config Reference](/python/cloud/llamaagents/configuration-reference).
+The `pkg` command group lets you package and export your application for custom deployments.
+Currently it supports exporting a Dockerfile that can be built into an image with any OCI compliant image builder, such as `docker` or `podman`.
 
 
 ## Usage
@@ -25,7 +21,7 @@ llamactl pkg [COMMAND] [options]
 
 ### Available Commands
 
-- `container` – Generate a minimal, build-ready container file (e.g., `Dockerfile`) for your workflows using Docker or Podman.
+- `container` – Generate a minimal, build-ready container file (e.g., `Dockerfile`) for your workflows.
 
 
 ## Command: `container`
@@ -34,7 +30,7 @@ llamactl pkg [COMMAND] [options]
 llamactl pkg container [DEPLOYMENT_FILE] [options]
 ```
 
-Generates a container build file compatible with **Docker** and **Podman** from a given deployment file and user-specified options.
+Generates a container build file from a given deployment file and user-specified options.
 
 ### Options
 

@@ -135,14 +135,9 @@ After creation, the TUI will show deployment status and logs.
 
 ## Alternative Ways to Deploy
 
-If you prefer a self-hosted deployments, `llamactl` provides the possibility of exporting your workflows as minimal and customizable container files compatible with Docker and Podman, so that you can easily containerize and deploy your agent workflow anywhere.
+If you prefer a self-hosted deployments, `llamactl` has utilities to export your workflows to container files, so that you can easily build images and deploy your agent workflow anywhere.
 
 Read more about this in the [`pkg` command reference](/python/cloud/llamaagents/llamactl-reference/commands-pkg).
-
-:::caution
-This command is currently limited to **agent workflows**.
-Frontend packaging is **not yet supported**.
-:::
 
 ---
 
