@@ -10,7 +10,7 @@ LlamaAgents runs your LlamaIndex workflows locally and in the cloud. Author your
 
 ## Learn the basics (LlamaIndex Workflows)
 
-LlamaAgents is built on top of LlamaIndex workflows. If you're new to workflows, start here: [LlamaIndex Workflows](/python/workflows).
+LlamaAgents is built on top of LlamaIndex workflows. If you're new to workflows, start here: [LlamaIndex Workflows](/python/llamaagents/workflows).
 
 ## Author a workflow (quick example)
 

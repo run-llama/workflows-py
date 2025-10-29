@@ -16,7 +16,7 @@ The LlamaAgents toolchain is unopinionated about your UI stack — bring your ow
 
 ## How the integration works
 
-`llamactl` starts and proxies your frontend during development by calling your `npm run dev` command. When you deploy, it builds your UI statically with `npm run build`. These commands are configurable; see [UIConfig](/python/cloud/llamaagents/configuration-reference#uiconfig-fields) in the configuration reference. You can also use other package managers if you have [corepack](https://nodejs.org/download/release/v19.9.0/docs/api/corepack.html) enabled.
+`llamactl` starts and proxies your frontend during development by calling your `npm run dev` command. When you deploy, it builds your UI statically with `npm run build`. These commands are configurable; see [UIConfig](/python/llamaagents/llamactl/configuration-reference#uiconfig-fields) in the configuration reference. You can also use other package managers if you have [corepack](https://nodejs.org/download/release/v19.9.0/docs/api/corepack.html) enabled.
 
 During development, `llamactl` starts its workflow server (port `4501` by default) and starts the UI, passing a `PORT` environment variable (set to `4502` by default) and a `LLAMA_DEPLOY_DEPLOYMENT_BASE_PATH` (for example, `/deployments/<name>/ui`) where the UI will be served. It then proxies requests from the server to the client app from that base path.
 
@@ -27,7 +27,7 @@ Once deployed, the Kubernetes operator builds your application with the configur
 1. Serve the dev UI on the configured `PORT`. This environment variable tells your dev server which port to use during development. Many frameworks, such as Next.js, read this automatically.
 2. Set your app's base path to the value of `LLAMA_DEPLOY_DEPLOYMENT_BASE_PATH`. LlamaAgents applications rely on this path to route to multiple workflow deployments. The proxy leaves this path intact so your application can link internally using absolute paths. Your development server and router need to be aware of this base path. Most frameworks provide a way to configure it. For example, Vite uses [`base`](https://vite.dev/config/shared-options.html#base).
 3. Re-export the `LLAMA_DEPLOY_DEPLOYMENT_BASE_PATH` env var to your application. Read this value (for example, in React Router) to configure a base path. This is also often necessary to link static assets correctly.
-4. If you're integrating with LlamaCloud, re-export the `LLAMA_DEPLOY_PROJECT_ID` env var to your application and use it to scope your LlamaCloud requests to the same project. Read more in the [Configuration Reference](/python/cloud/llamaagents/configuration-reference#authorization).
+4. If you're integrating with LlamaCloud, re-export the `LLAMA_DEPLOY_PROJECT_ID` env var to your application and use it to scope your LlamaCloud requests to the same project. Read more in the [Configuration Reference](/python/llamaagents/llamactl/configuration-reference#authentication).
 5. We also recommend re-exporting `LLAMA_DEPLOY_DEPLOYMENT_NAME`, which can be helpful for routing requests to your workflow server correctly.
 
 ## Examples
@@ -138,4 +138,4 @@ export default function Logo() {
 
 ## Configure the UI output directory
 
-Your UI must output static assets that the platform can locate. Configure `ui.directory` and `ui.build_output_dir` as described in the [Deployment Config Reference](/python/cloud/llamaagents/configuration-reference#uiconfig-fields). Default: `${ui.directory}/dist`.
+Your UI must output static assets that the platform can locate. Configure `ui.directory` and `ui.build_output_dir` as described in the [Deployment Config Reference](/python/llamaagents/llamactl/configuration-reference#uiconfig-fields). Default: `${ui.directory}/dist`.
