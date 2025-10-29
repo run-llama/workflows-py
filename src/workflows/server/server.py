@@ -1011,6 +1011,7 @@ class WorkflowServer:
                 schema:
                   $ref: '#/components/schemas/HandlersList'
         """
+
         def _parse_list_param(param_name: str) -> list[str] | None:
             # Prefer repeated params first, also support comma-separated values
             values = list(request.query_params.getlist(param_name))
@@ -1026,8 +1027,20 @@ class WorkflowServer:
                 parsed.extend([p for p in parts if p])
             return parsed or None
 
-        status_in = _parse_list_param("status")
+        # Parse filters
+        status_values = _parse_list_param("status")
         workflow_name_in = _parse_list_param("workflow_name")
+
+        # Narrow types for status to match HandlerQuery expectations
+        allowed_status_values = {"running", "completed", "failed", "cancelled"}
+        from typing import cast, Optional, List
+
+        status_in = cast(
+            Optional[List[Status]],
+            [s for s in status_values if s in allowed_status_values]
+            if status_values is not None
+            else None,
+        )
 
         persistent_handlers = await self._workflow_store.query(
             HandlerQuery(status_in=status_in, workflow_name_in=workflow_name_in)

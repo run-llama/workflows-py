@@ -751,7 +751,7 @@ async def test_get_handlers_with_failed_workflow(client: AsyncClient) -> None:
 @pytest.mark.asyncio
 async def test_get_handlers_filters_status_and_workflow_name(
     interactive_workflow: Workflow,
-):
+) -> None:
     # Seed persistence with mixed handlers
     persisted = [
         PersistentHandler(
@@ -781,9 +781,7 @@ async def test_get_handlers_filters_status_and_workflow_name(
         assert ids2 == {"h1", "h2"}
 
         # Filter by both
-        r3 = await client.get(
-            "/handlers?workflow_name=interactive&status=running"
-        )
+        r3 = await client.get("/handlers?workflow_name=interactive&status=running")
         assert r3.status_code == 200
         ids3 = {h["handler_id"] for h in r3.json()["handlers"]}
         assert ids3 == {"h1"}
@@ -792,7 +790,7 @@ async def test_get_handlers_filters_status_and_workflow_name(
 @pytest.mark.asyncio
 async def test_get_handlers_filters_multiple_status_params(
     interactive_workflow: Workflow,
-):
+) -> None:
     persisted = [
         PersistentHandler(
             handler_id="ha", workflow_name="interactive", status="completed", ctx={}
@@ -817,7 +815,7 @@ async def test_get_handlers_filters_multiple_status_params(
 @pytest.mark.asyncio
 async def test_get_handlers_filters_comma_separated_values(
     interactive_workflow: Workflow,
-):
+) -> None:
     persisted = [
         PersistentHandler(
             handler_id="c1", workflow_name="interactive", status="completed", ctx={}
@@ -837,6 +835,7 @@ async def test_get_handlers_filters_comma_separated_values(
         assert r.status_code == 200
         ids = {h["handler_id"] for h in r.json()["handlers"]}
         assert ids == {"c1", "c2"}
+
 
 @pytest.mark.asyncio
 async def test_post_event_to_running_workflow(client: AsyncClient) -> None:
