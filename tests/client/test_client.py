@@ -74,7 +74,6 @@ async def test_get_result_for_handler(client: WorkflowClient) -> None:
     assert result_again == result
 
 
-
 @pytest.mark.asyncio
 async def test_get_handler(client: WorkflowClient) -> None:
     handler = await client.run_workflow(
@@ -91,6 +90,7 @@ async def test_get_handler(client: WorkflowClient) -> None:
     assert handler_data.started_at is not None
     assert handler_data.updated_at is not None
     assert handler_data.completed_at is not None
+
 
 @pytest.mark.asyncio
 async def test_get_handlers(client: WorkflowClient) -> None:

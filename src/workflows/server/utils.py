@@ -23,9 +23,7 @@ def handler_data_from_persistent(handler: PersistentHandler) -> HandlerData:
         status=handler.status,
         started_at=handler.started_at.isoformat() if handler.started_at else "",
         updated_at=handler.updated_at.isoformat() if handler.updated_at else None,
-        completed_at=handler.completed_at.isoformat()
-        if handler.completed_at
-        else None,
+        completed_at=handler.completed_at.isoformat() if handler.completed_at else None,
         error=handler.error,
         result=handler.result,
     )

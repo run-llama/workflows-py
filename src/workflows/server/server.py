@@ -52,7 +52,7 @@ from workflows.server.abstract_workflow_store import (
     Status,
 )
 from workflows.server.memory_workflow_store import MemoryWorkflowStore
-from workflows.types import RunResultT, StopEventT
+from workflows.types import RunResultT
 
 # Protocol models are used on the client side; server responds with plain dicts
 from .utils import nanoid, handler_data_from_persistent
@@ -984,7 +984,10 @@ class WorkflowServer:
                     yield f"{payload}\n"
 
                 await asyncio.sleep(0)
-        logging.info(f"Returning StreamingResponse for handler ID: {handler.handler_id}")
+
+        logging.info(
+            f"Returning StreamingResponse for handler ID: {handler.handler_id}"
+        )
         return StreamingResponse(event_stream(handler), media_type=media_type)
 
     async def _get_handlers(self, request: Request) -> JSONResponse:
@@ -1308,10 +1311,7 @@ class WorkflowServer:
             )
 
     async def _run_workflow_handler(
-        self,
-        handler_id: str,
-        workflow_name: str,
-        handler: WorkflowHandler
+        self, handler_id: str, workflow_name: str, handler: WorkflowHandler
     ) -> _WorkflowHandler:
         """
         Creates a wrapper for the handler and starts streaming events.
@@ -1516,7 +1516,6 @@ class _WorkflowHandler:
             return None
         except Exception:
             return None
-
 
     def start_streaming(self, on_finish: Callable[[], Awaitable[None]]) -> None:
         """Start streaming events from the handler and managing state."""

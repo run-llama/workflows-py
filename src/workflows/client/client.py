@@ -29,6 +29,7 @@ from workflows.protocol.serializable_events import (
     EventEnvelopeWithMetadata,
 )
 
+
 def _raise_for_status_with_body(response: httpx.Response) -> None:
     """
     Raise an HTTPStatusError with the first 200 characters of the response body
