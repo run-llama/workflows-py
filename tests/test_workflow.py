@@ -795,6 +795,7 @@ def test_get_workflow_events() -> None:
 
 @pytest.mark.asyncio
 async def test_workflow_instances_garbage_collected_after_completion() -> None:
+    # test for memory leaks
     class TinyWorkflow(Workflow):
         @step
         async def only(self, ev: StartEvent) -> StopEvent:
