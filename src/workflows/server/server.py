@@ -279,6 +279,16 @@ class WorkflowServer:
                 },
                 "components": {
                     "schemas": {
+                        "EventEnvelopeWithMetadata": {
+                            "type": "object",
+                            "properties": {
+                                "value": {"type": "object"},
+                                "types": {"type": "array", "items": {"type": "string"}},
+                                "type": {"type": "string"},
+                                "qualified_name": {"type": "string"},
+                            },
+                            "required": ["value", "type"],
+                        },
                         "Handler": {
                             "type": "object",
                             "properties": {
@@ -306,7 +316,15 @@ class WorkflowServer:
                                     "nullable": True,
                                 },
                                 "error": {"type": "string", "nullable": True},
-                                "result": {"description": "Workflow result value"},
+                                "result": {
+                                    "description": "Workflow result value",
+                                    "oneOf": [
+                                        {
+                                            "$ref": "#/components/schemas/EventEnvelopeWithMetadata"
+                                        },
+                                        {"type": "null"},
+                                    ],
+                                },
                             },
                             "required": [
                                 "handler_id",
