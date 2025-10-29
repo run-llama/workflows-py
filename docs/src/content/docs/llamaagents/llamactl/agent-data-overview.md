@@ -63,5 +63,5 @@ SDKs and environments:
 - The **Python SDK** runs server‑side and uses your API key and an optional base URL.
 
 Next steps:
-- Python usage: see [Agent Data (Python)](/python/cloud/llamaagents/agent-data-python)
-- JavaScript usage: see [Agent Data (JavaScript)](/python/cloud/llamaagents/agent-data-javascript)
+- Python usage: see [Agent Data (Python)](/python/llamaagents/llamactl/agent-data-python)
+- JavaScript usage: see [Agent Data (JavaScript)](/python/llamaagents/llamactl/agent-data-javascript)

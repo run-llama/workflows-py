@@ -52,7 +52,7 @@ This will prompt for some details, and create a Python module that contains Llam
 When you run `llamactl init`, the scaffold also includes AI assistant-facing docs: `AGENTS.md`, `CLAUDE.md`, and `GEMINI.md`. These contain quick references and instructions for using LlamaIndex libraries to assist coding. These files are optional and safe to customize or remove — they do not affect your builds, runtime, or deployments.
 :::
 
-Application configuration is managed within your project's `pyproject.toml`, where you can define Python workflow instances that should be served, environment details, and configuration for how the UI should be built. See the [Deployment Config Reference](/python/cloud/llamaagents/configuration-reference) for details on all configurable fields.
+Application configuration is managed within your project's `pyproject.toml`, where you can define Python workflow instances that should be served, environment details, and configuration for how the UI should be built. See the [Deployment Config Reference](/python/llamaagents/llamactl/configuration-reference) for details on all configurable fields.
 
 ## Develop and Run Locally
 
@@ -90,9 +90,9 @@ workflow = MyWorkflow()
 
 At this point, you can get to coding. The development server will detect changes as you save files. It will even resume in-progress workflows!
 
-For more information about CLI flags available, see [`llamactl serve`](/python/cloud/llamaagents/llamactl-reference/commands-serve).
+For more information about CLI flags available, see [`llamactl serve`](/python/llamaagents/llamactl-reference/commands-serve).
 
-For a more detailed reference on how to define and expose workflows, see [Workflows & App Server API](/python/cloud/llamaagents/workflow-api).
+For a more detailed reference on how to define and expose workflows, see [Workflows & App Server API](/python/llamaagents/llamactl/workflow-api).
 
 ## Create a Cloud Deployment
 
@@ -116,7 +116,7 @@ llamactl deployments create
 :::info
 The first time you run this, you'll be prompted to log into LlamaCloud.
 
-Username/password sign-in is not yet supported. If you do not have a supported social sign-in provider, you can use token-based authentication via `llamactl auth token`. See [`llamactl auth`](/python/cloud/llamaagents/llamactl-reference/commands-auth) for details.
+Username/password sign-in is not yet supported. If you do not have a supported social sign-in provider, you can use token-based authentication via `llamactl auth token`. See [`llamactl auth`](/python/llamaagents/llamactl-reference/commands-auth) for details.
 :::
 
 This will open an interactive Terminal UI (TUI). You can tab through fields, or even point and click with your mouse if your terminal supports it. All required fields should be automatically detected from your environment, but can be customized:
@@ -135,4 +135,4 @@ After creation, the TUI will show deployment status and logs.
 
 ---
 
-Next: Read about defining and exposing workflows in [Workflows & App Server API](/python/cloud/llamaagents/workflow-api).
+Next: Read about defining and exposing workflows in [Workflows & App Server API](/python/llamaagents/llamactl/workflow-api).
