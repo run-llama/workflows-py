@@ -1,7 +1,7 @@
 from threading import Lock
-from weakref import WeakKeyDictionary
 from dataclasses import dataclass
 from typing import Optional
+from workflows.runtime.types._identity_weak_ref import IdentityWeakKeyDict
 from workflows.runtime.types.plugin import (
     ControlLoopFunction,
     Plugin,
@@ -24,9 +24,9 @@ class WorkflowPluginRegistry:
     def __init__(self) -> None:
         # Map each workflow instance to its plugin registrations.
         # Weakly references workflow keys so entries are GC'd when workflows are.
-        self.workflows: WeakKeyDictionary[
+        self.workflows: IdentityWeakKeyDict[
             Workflow, dict[type[Plugin], RegisteredWorkflow]
-        ] = WeakKeyDictionary()
+        ] = IdentityWeakKeyDict()
         self.lock = Lock()
         self.run_contexts: dict[str, RegisteredRunContext] = {}
 
