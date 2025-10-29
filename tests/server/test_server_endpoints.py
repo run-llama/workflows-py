@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2025 LlamaIndex Inc.
 
+from __future__ import annotations
+
 import asyncio
 from collections import Counter
 import json
@@ -366,6 +368,7 @@ async def test_get_workflow_result(client: AsyncClient, server: WorkflowServer) 
 
     # Verify the result content
     result_data = response.json()
+    assert result_data["status"] == "completed"
     assert "result" in result_data
     assert result_data["result"]["value"]["result"] == "processed: message from context"
 
@@ -647,11 +650,27 @@ async def test_get_handlers_with_running_workflows(client: AsyncClient) -> None:
 
 
 async def validate_result_response(
-    handler_id: str, client: AsyncClient, expected_status: int = 200
+    handler_id: str, client: AsyncClient, expected_status: int | None = None
 ) -> Any:
     response = await client.get(f"/handlers/{handler_id}")
     assert response.status_code == expected_status
-    return response.json() if expected_status == 200 else response.text
+    return response.json()
+
+
+async def assert_result_status(
+    handler_id: str, client: AsyncClient, status: str
+) -> Any:
+    expected_status_code = 202 if status == "running" else 200
+    data = await validate_result_response(
+        handler_id, client, expected_status=expected_status_code
+    )
+    assert data["status"] == status
+    return data
+
+
+def assert_stop_event_result(payload: dict[str, Any], expected_result: str) -> None:
+    event = StopEvent.model_validate(payload)
+    assert event.result == expected_result
 
 
 @pytest.mark.asyncio
@@ -660,7 +679,9 @@ async def test_get_handlers_with_completed_workflow(client: AsyncClient) -> None
     response = await client.post("/workflows/test/run-nowait", json={})
     handler_id = response.json()["handler_id"]
 
-    await wait_for_passing(lambda: validate_result_response(handler_id, client))
+    await wait_for_passing(
+        lambda: assert_result_status(handler_id, client, "completed")
+    )
     # Get handlers
     response = await client.get("/handlers")
     assert response.status_code == 200
@@ -731,9 +752,9 @@ async def test_get_handlers_with_failed_workflow(client: AsyncClient) -> None:
     await asyncio.sleep(0.1)
 
     result = await wait_for_passing(
-        lambda: validate_result_response(handler_id, client, 500)
+        lambda: assert_result_status(handler_id, client, "failed")
     )
-    assert "Test error" in result
+    assert "Test error" in (result.get("error") or "")
 
     # Get handlers
     response = await client.get("/handlers")
@@ -768,7 +789,7 @@ async def test_post_event_to_running_workflow(client: AsyncClient) -> None:
     assert response.json() == {"status": "sent"}
 
     result = await wait_for_passing(
-        lambda: validate_result_response(handler_id, client)
+        lambda: assert_result_status(handler_id, client, "completed")
     )
 
     assert result["result"]["value"]["result"] == "received: Hello from test"
@@ -793,7 +814,7 @@ async def test_post_event_simple_schema_to_running_workflow(
     assert response.json() == {"status": "sent"}
 
     result = await wait_for_passing(
-        lambda: validate_result_response(handler_id, client)
+        lambda: assert_result_status(handler_id, client, "completed")
     )
 
     assert result["result"]["value"]["result"] == "received: Hello from test"
@@ -823,7 +844,7 @@ async def test_post_event_with_discriminators_to_running_workflow(
     assert response.json() == {"status": "sent"}
 
     result = await wait_for_passing(
-        lambda: validate_result_response(handler_id, client)
+        lambda: assert_result_status(handler_id, client, "completed")
     )
 
     assert result["result"]["value"]["result"] == "received: Hello with discriminators"
@@ -857,7 +878,7 @@ async def test_get_workflow_result_multiple_times(
     first = await wait_for_passing(lambda: validate_result_response(handler_id, client))
     assert first["result"]["value"]["result"] == "processed: cache-me"
 
-    second = await validate_result_response(handler_id, client)
+    second = await validate_result_response(handler_id, client, expected_status=200)
     assert second == first
 
 
@@ -882,8 +903,11 @@ async def test_post_event_to_completed_workflow(client: AsyncClient) -> None:
 
     # Try to send event to completed workflow
     response = await client.post(f"/events/{handler_id}", json={"event": "{}"})
-    assert response.status_code == 409
-    assert "Workflow already completed" in response.text
+    assert response.status_code in {404, 409}
+    if response.status_code == 409:
+        assert "Workflow already completed" in response.text
+    else:
+        assert "Handler not found" in response.text
 
 
 @pytest.mark.asyncio

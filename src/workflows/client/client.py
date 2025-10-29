@@ -17,6 +17,7 @@ from workflows.events import StartEvent, Event
 from workflows import Context
 from workflows.protocol import (
     HandlerData,
+    WorkflowResultResponse,
     HandlersListResponse,
     HealthResponse,
     SendEventResponse,
@@ -27,7 +28,6 @@ from workflows.protocol.serializable_events import (
     EventEnvelope,
     EventEnvelopeWithMetadata,
 )
-
 
 def _raise_for_status_with_body(response: httpx.Response) -> None:
     """
@@ -285,7 +285,7 @@ class WorkflowClient:
 
             return SendEventResponse.model_validate(response.json())
 
-    async def get_result(self, handler_id: str) -> HandlerData:
+    async def get_result(self, handler_id: str) -> WorkflowResultResponse:
         """
         Get the result of the workflow associated with the specified handler ID.
 
@@ -293,13 +293,13 @@ class WorkflowClient:
             handler_id (str): ID of the handler running the workflow
 
         Returns:
-            HandlerData: Complete handler data for the workflow
+            WorkflowResultResponse: Workflow execution status with result or error details.
         """
         async with self._get_client() as client:
             response = await client.get(f"/handlers/{handler_id}")
             _raise_for_status_with_body(response)
 
-            return HandlerData.model_validate(response.json())
+            return WorkflowResultResponse.model_validate(response.json())
 
     async def get_handlers(self) -> HandlersListResponse:
         """
@@ -313,6 +313,22 @@ class WorkflowClient:
             _raise_for_status_with_body(response)
 
             return HandlersListResponse.model_validate(response.json())
+
+    async def get_handler(self, handler_id: str) -> HandlerData:
+        """
+        Get a single workflow handler by identifier.
+
+        Args:
+            handler_id (str): ID of the handler associated with the workflow run
+
+        Returns:
+            HandlerData: Handler metadata persisted by the server.
+        """
+        async with self._get_client() as client:
+            response = await client.get(f"/handlers/{handler_id}")
+            _raise_for_status_with_body(response)
+
+            return HandlerData.model_validate(response.json())
 
     async def cancel_handler(
         self, handler_id: str, purge: bool = False

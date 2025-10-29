@@ -9,7 +9,7 @@ import json
 import logging
 from importlib.metadata import version
 from pathlib import Path
-from typing import Any, AsyncGenerator
+from typing import Any, AsyncGenerator, Callable, Awaitable, TypedDict, Literal
 from datetime import datetime, timezone
 
 import uvicorn
@@ -52,10 +52,10 @@ from workflows.server.abstract_workflow_store import (
     Status,
 )
 from workflows.server.memory_workflow_store import MemoryWorkflowStore
-from workflows.types import RunResultT
+from workflows.types import RunResultT, StopEventT
 
 # Protocol models are used on the client side; server responds with plain dicts
-from .utils import nanoid
+from .utils import nanoid, handler_data_from_persistent
 from .representation_utils import _extract_workflow_structure
 from workflows.protocol.serializable_events import (
     EventValidationError,
@@ -64,6 +64,12 @@ from workflows.protocol.serializable_events import (
 )
 
 logger = logging.getLogger()
+
+
+class WorkflowResultPayload(TypedDict):
+    status: Literal["completed", "failed", "cancelled", "running"]
+    result: RunResultT | None
+    error: str | None
 
 
 class WorkflowServer:
@@ -514,6 +520,8 @@ class WorkflowServer:
             )
             try:
                 await handler
+                if wrapper.task is not None:
+                    await wrapper.task
                 status = 200
             except Exception as e:
                 status = 500
@@ -794,25 +802,34 @@ class WorkflowServer:
             description: Workflow run identifier returned from the no-wait run endpoint.
         responses:
           200:
-            description: Result is available
+            description: Result is available or workflow failed
             content:
               application/json:
                 schema:
-                  $ref: '#/components/schemas/Handler'
+                  type: object
+                  properties:
+                    status:
+                      type: string
+                      enum: [completed, failed, cancelled]
+                    result:
+                      description: Workflow-defined result payload
+                    error:
+                      type: string
+                      description: Error details when status is failed
+                  required: [status]
           202:
-            description: Result not ready yet
+            description: Workflow still running
             content:
               application/json:
                 schema:
-                  $ref: '#/components/schemas/Handler'
+                  type: object
+                  properties:
+                    status:
+                      type: string
+                      enum: [running]
+                  required: [status]
           404:
             description: Handler not found
-          500:
-            description: Error computing result
-            content:
-              text/plain:
-                schema:
-                  type: string
         """
         handler_id = request.path_params["handler_id"]
         if not handler_id:
@@ -927,6 +944,13 @@ class WorkflowServer:
 
         handler = self._handlers.get(handler_id)
         if handler is None:
+            persisted = await self._workflow_store.query(
+                HandlerQuery(handler_id_in=[handler_id])
+            )
+            if persisted:
+                status = persisted[0].status
+                if status in {"completed", "failed", "cancelled"}:
+                    raise HTTPException(detail="Handler is completed", status_code=204)
             raise HTTPException(detail="Handler not found", status_code=404)
         if handler.queue.empty() and handler.task is not None and handler.task.done():
             # https://html.spec.whatwg.org/multipage/server-sent-events.html
@@ -960,7 +984,7 @@ class WorkflowServer:
                     yield f"{payload}\n"
 
                 await asyncio.sleep(0)
-
+        logging.info(f"Returning StreamingResponse for handler ID: {handler.handler_id}")
         return StreamingResponse(event_stream(handler), media_type=media_type)
 
     async def _get_handlers(self, request: Request) -> JSONResponse:
@@ -994,6 +1018,40 @@ class WorkflowServer:
             for h in persistent_handlers
         ]
         return JSONResponse(HandlersListResponse(handlers=items).model_dump())
+
+    async def _get_handler(self, request: Request) -> JSONResponse:
+        """
+        ---
+        summary: Get handler
+        description: Returns the persisted handler metadata.
+        parameters:
+          - in: path
+            name: handler_id
+            required: true
+            schema:
+              type: string
+            description: Workflow handler identifier.
+        responses:
+          200:
+            description: Handler found
+            content:
+              application/json:
+                schema:
+                  $ref: '#/components/schemas/Handler'
+          404:
+            description: Handler not found
+        """
+        handler_id = request.path_params["handler_id"]
+        results = await self._workflow_store.query(
+            HandlerQuery(handler_id_in=[handler_id])
+        )
+
+        if len(results) == 0:
+            raise HTTPException(detail="Handler not found", status_code=404)
+
+        handler = results[0]
+        item = handler_data_from_persistent(handler)
+        return JSONResponse(item.model_dump())
 
     async def _post_event(self, request: Request) -> JSONResponse:
         """
@@ -1250,7 +1308,10 @@ class WorkflowServer:
             )
 
     async def _run_workflow_handler(
-        self, handler_id: str, workflow_name: str, handler: WorkflowHandler
+        self,
+        handler_id: str,
+        workflow_name: str,
+        handler: WorkflowHandler
     ) -> _WorkflowHandler:
         """
         Creates a wrapper for the handler and starts streaming events.
@@ -1275,7 +1336,12 @@ class WorkflowServer:
         await wrapper.checkpoint()
         # Now register and start streaming
         self._handlers[handler_id] = wrapper
-        wrapper.start_streaming()
+
+        async def on_finish() -> None:
+            self._handlers.pop(handler_id, None)
+            self._results.pop(handler_id, None)
+
+        wrapper.start_streaming(on_finish=on_finish)
 
         return wrapper
 
@@ -1451,11 +1517,12 @@ class _WorkflowHandler:
         except Exception:
             return None
 
-    def start_streaming(self) -> None:
-        """Start streaming events from the handler and managing state."""
-        self.task = asyncio.create_task(self._stream_events())
 
-    async def _stream_events(self) -> None:
+    def start_streaming(self, on_finish: Callable[[], Awaitable[None]]) -> None:
+        """Start streaming events from the handler and managing state."""
+        self.task = asyncio.create_task(self._stream_events(on_finish=on_finish))
+
+    async def _stream_events(self, on_finish: Callable[[], Awaitable[None]]) -> None:
         """Internal method that streams events, updates status, and persists state."""
         await self.checkpoint()
         async for event in self.run_handler.stream_events(expose_internal=True):
@@ -1483,6 +1550,7 @@ class _WorkflowHandler:
             logger.error(f"Workflow run {self.handler_id} failed! {e}", exc_info=True)
 
         await self.checkpoint()
+        await on_finish()
 
     async def acquire_events_stream(
         self, timeout: float = 1

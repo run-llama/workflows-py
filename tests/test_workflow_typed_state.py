@@ -97,4 +97,4 @@ async def test_typed_state_with_context_manager() -> None:
     result = await test_runner.run()
 
     # Should only be 1 since the context manager locks the state
-    assert result.result == 1
+    assert result.result.result == 1

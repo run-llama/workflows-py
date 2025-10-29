@@ -58,7 +58,7 @@ async def test_collect_events() -> None:
             return StopEvent(result=events)
 
     r = await WorkflowTestRunner(TestWorkflow()).run()
-    assert r.result == [ev1, ev2]
+    assert r.result.result == [ev1, ev2]
 
 
 @pytest.mark.asyncio
@@ -110,7 +110,7 @@ async def test_collect_events_with_extra_event_type() -> None:
             return StopEvent(result="collected")
 
     r = await WorkflowTestRunner(TestWorkflow()).run()
-    assert r.result == "collected"
+    assert r.result.result == "collected"
 
     # Verify the collector was called multiple times (once for each event)
     ctx = r.ctx
@@ -204,7 +204,7 @@ async def test_wait_for_event_in_workflow() -> None:
             break
 
     result = await handler
-    assert result == "bar"
+    assert result.result == "bar"
 
 
 class CustomState(BaseModel):
@@ -260,7 +260,7 @@ async def test_wait_for_event_in_workflow_serialization() -> None:
     assert new_handler.ctx
     new_handler.ctx.send_event(Event(msg="bar"))
     result = await new_handler
-    assert result == "bar"
+    assert result.result == "bar"
     assert new_handler.ctx._broker_run
     # After workflow completion, there should be no more waiters
     state = new_handler.ctx._broker_run._state
@@ -339,7 +339,7 @@ async def test_wait_for_multiple_events_in_workflow() -> None:
             )
 
     result = await handler
-    assert result == ["foo", "bar"]
+    assert result.result == ["foo", "bar"]
     assert not handler.ctx.is_running
 
     # serialize and resume
@@ -359,7 +359,7 @@ async def test_wait_for_multiple_events_in_workflow() -> None:
             )
 
     result = await handler
-    assert result == ["fizz", "buzz"]
+    assert result.result == ["fizz", "buzz"]
 
 
 @pytest.mark.asyncio

@@ -71,8 +71,26 @@ async def test_get_result_for_handler(client: WorkflowClient) -> None:
 
     # Result should be retrievable again and reference the same handler
     result_again = await client.get_result(handler_id)
-    assert result_again.handler_id == handler_id
+    assert result_again == result
 
+
+
+@pytest.mark.asyncio
+async def test_get_handler(client: WorkflowClient) -> None:
+    handler = await client.run_workflow(
+        "greeting", start_event=InputEvent(greeting="hello", name="John")
+    )
+    assert handler.status == "completed"
+    handler_id = handler.handler_id
+
+    handler_data = await client.get_handler(handler_id)
+    assert handler_data.handler_id == handler_id
+    assert handler_data.workflow_name == "greeting"
+    assert handler_data.run_id == handler.run_id
+    assert handler_data.status == "completed"
+    assert handler_data.started_at is not None
+    assert handler_data.updated_at is not None
+    assert handler_data.completed_at is not None
 
 @pytest.mark.asyncio
 async def test_get_handlers(client: WorkflowClient) -> None:
