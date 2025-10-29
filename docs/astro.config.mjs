@@ -90,8 +90,16 @@ export default defineConfig({
 			},
 			sidebar: [
 				{
-					label: 'Workflows',
-					autogenerate: { directory: 'workflows', collapsed: true },
+					label: 'Agent Workflows',
+					autogenerate: { directory: 'llamaagents/workflows', collapsed: false },
+				},
+				{
+					label: 'llamactl',
+					autogenerate: { directory: 'llamaagents/llamactl', collapsed: false },
+				},
+				{
+					label: 'llamactl-reference',
+					autogenerate: { directory: 'llamaagents/llamactl-reference', collapsed: true },
 				},
 				{
 					label: 'Workflows API Reference 🔗',
