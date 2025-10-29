@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import Any, AsyncGenerator
 from datetime import datetime, timezone
 
-from pydantic import BaseModel
 import uvicorn
 from starlette.applications import Starlette
 from starlette.exceptions import HTTPException
@@ -31,6 +30,7 @@ from workflows.events import (
     StartEvent,
     StepState,
     StepStateChanged,
+    StopEvent,
 )
 from workflows.handler import WorkflowHandler
 
@@ -877,7 +877,9 @@ class WorkflowServer:
                 updated_at=h.updated_at.isoformat() if h.updated_at else None,
                 completed_at=h.completed_at.isoformat() if h.completed_at else None,
                 error=h.error,
-                result=h.result,
+                result=EventEnvelopeWithMetadata.from_event(h.result)
+                if h.result
+                else None,
             )
             for h in persistent_handlers
         ]
@@ -1227,9 +1229,7 @@ class _WorkflowHandler:
             status=self.status,
             run_id=self.run_handler.run_id,
             error=self.error,
-            result=self.result.model_dump()
-            if self.result is not None and isinstance(self.result, BaseModel)
-            else self.result,
+            result=self.result,
             started_at=self.started_at,
             updated_at=self.updated_at,
             completed_at=self.completed_at,
@@ -1276,9 +1276,9 @@ class _WorkflowHandler:
             if self.completed_at is not None
             else None,
             error=self.error,
-            result=self.result.model_dump()
-            if self.result is not None and isinstance(self.result, BaseModel)
-            else self.result,
+            result=EventEnvelopeWithMetadata.from_event(self.result)
+            if self.result is not None
+            else None,
         )
 
     @property
@@ -1306,11 +1306,11 @@ class _WorkflowHandler:
         return str(exc) if exc is not None else None
 
     @property
-    def result(self) -> RunResultT | None:
+    def result(self) -> StopEvent | None:
         if not self.run_handler.done():
             return None
         try:
-            return self.run_handler.result()
+            return self.run_handler.get_stop_event()
         except asyncio.CancelledError:
             return None
         except Exception:

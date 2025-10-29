@@ -1,6 +1,7 @@
 import pytest
 from datetime import datetime, timezone
 
+from workflows.events import StopEvent
 from workflows.server.abstract_workflow_store import HandlerQuery, PersistentHandler
 from workflows.server.memory_workflow_store import MemoryWorkflowStore
 
@@ -335,7 +336,7 @@ async def test_store_handles_all_datetime_fields() -> None:
         status="completed",
         run_id="run123",
         error=None,
-        result={"output": "success"},
+        result=StopEvent(result={"output": "success"}),
         started_at=now,
         updated_at=now,
         completed_at=now,
@@ -348,7 +349,7 @@ async def test_store_handles_all_datetime_fields() -> None:
     assert len(result) == 1
     found = result[0]
     assert found.run_id == "run123"
-    assert found.result == {"output": "success"}
+    assert found.result == StopEvent(result={"output": "success"})
     assert found.started_at == now
     assert found.updated_at == now
     assert found.completed_at == now

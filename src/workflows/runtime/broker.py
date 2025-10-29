@@ -25,7 +25,6 @@ from workflows.errors import WorkflowRuntimeError
 from workflows.events import (
     Event,
     StartEvent,
-    StopEvent,
 )
 from workflows.runtime.control_loop import control_loop, rebuild_state_from_ticks
 from workflows.runtime.types.internal_state import BrokerState
@@ -162,11 +161,7 @@ class WorkflowBroker(Generic[MODEL_T]):
                     finally:
                         # ensure run context is cleaned up even on failure
                         workflow_registry.delete_run(run_id)
-                    result.set_result(
-                        workflow_result.result
-                        if type(workflow_result) is StopEvent
-                        else workflow_result
-                    )
+                    result._set_stop_event(workflow_result)
                 except Exception as e:
                     exception_raised = e
 

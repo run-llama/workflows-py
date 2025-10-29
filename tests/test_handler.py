@@ -12,17 +12,10 @@ from workflows.handler import WorkflowHandler
 
 @pytest.mark.asyncio
 async def test_str() -> None:
-    h = WorkflowHandler()
+    ctx = mock.MagicMock(spec=Context)
+    h = WorkflowHandler(ctx=ctx)
     h.set_result([])
     assert str(h) == "[]"
-
-
-@pytest.mark.asyncio
-async def test_stream_no_context() -> None:
-    h = WorkflowHandler()
-    with pytest.raises(ValueError, match="Context is not set!"):
-        async for ev in h.stream_events():
-            pass
 
 
 @pytest.mark.asyncio

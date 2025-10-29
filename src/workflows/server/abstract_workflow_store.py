@@ -3,7 +3,14 @@ from abc import abstractmethod, ABC
 from datetime import datetime
 from typing import Literal, Optional, List, Any
 from dataclasses import dataclass
-from pydantic import BaseModel
+from pydantic import (
+    BaseModel,
+    field_serializer,
+    field_validator,
+)
+
+from workflows.context import JsonSerializer
+from workflows.events import StopEvent
 
 
 Status = Literal["running", "completed", "failed", "cancelled"]
@@ -25,11 +32,34 @@ class PersistentHandler(BaseModel):
     status: Status
     run_id: str | None = None
     error: str | None = None
-    result: Any | None = None
+    result: StopEvent | None = None
     started_at: datetime | None = None
     updated_at: datetime | None = None
     completed_at: datetime | None = None
     ctx: dict[str, Any] = {}
+
+    @field_validator("result", mode="before")
+    @classmethod
+    def _parse_stop_event(cls, data: Any) -> StopEvent | None:
+        if isinstance(data, StopEvent):
+            return data
+        elif isinstance(data, dict):
+            deserialized = JsonSerializer().deserialize_value(data)
+            if isinstance(deserialized, StopEvent):
+                return deserialized
+            else:
+                return StopEvent(result=data)
+        elif data is None:
+            return None
+        else:
+            return StopEvent(result=data)
+
+    @field_serializer("result", mode="plain")
+    def _serialize_stop_event(self, data: StopEvent | None) -> Any:
+        if data is None:
+            return None
+        result = JsonSerializer().serialize_value(data)
+        return result
 
 
 class AbstractWorkflowStore(ABC):

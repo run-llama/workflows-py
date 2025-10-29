@@ -66,7 +66,7 @@ async def test_get_result_for_handler(client: WorkflowClient) -> None:
 
     result = await client.get_result(handler_id)
     assert result.result is not None
-    res = OutputEvent.model_validate(result.result)
+    res = OutputEvent.model_validate(result.result.value)
     assert "John" in res.greeting and "!" in res.greeting and "hello" in res.greeting
 
     # Result should be retrievable again and reference the same handler
@@ -119,8 +119,8 @@ async def test_run_workflow_sync_result(client: WorkflowClient) -> None:
     result = await client.run_workflow(
         "greeting", start_event=InputEvent(greeting="hello", name="John")
     )
-    assert result is not None
-    res = OutputEvent.model_validate(result.result)
+    assert result.result is not None
+    res = OutputEvent.model_validate(result.result.value)
     assert "John" in res.greeting and "!" in res.greeting and "hello" in res.greeting
 
 

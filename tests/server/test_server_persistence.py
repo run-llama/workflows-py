@@ -340,7 +340,7 @@ async def test_resume_across_runs(
             )
             assert response.status_code == 200
             resp_data = response.json()
-            assert resp_data["result"] == "count: 5, runs: 1"
+            assert resp_data["result"]["value"]["result"] == "count: 5, runs: 1"
 
             # Get the handler id for that run
             handler_id = resp_data["handler_id"]
@@ -363,7 +363,7 @@ async def test_resume_across_runs(
             )
             assert response2.status_code == 200
             resp_data2 = response2.json()
-            assert resp_data2["result"] == "count: 8, runs: 2"
+            assert resp_data2["result"]["value"]["result"] == "count: 8, runs: 2"
 
             # Verify the handler id is the same
             assert resp_data2["handler_id"] == handler_id
