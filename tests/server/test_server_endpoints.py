@@ -812,7 +812,6 @@ async def test_get_handlers_filters_multiple_status_params(
         assert ids == {"ha", "hb"}
 
 
-
 @pytest.mark.asyncio
 async def test_post_event_to_running_workflow(client: AsyncClient) -> None:
     # Start an interactive workflow

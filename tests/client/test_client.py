@@ -5,8 +5,13 @@ from httpx import ASGITransport, AsyncClient
 from workflows.protocol.serializable_events import EventEnvelopeWithMetadata
 from workflows.server.server import WorkflowServer
 from workflows.client import WorkflowClient
-from .greeting_workflow import greeting_wf, crashing_wf, InputEvent, OutputEvent
-from .greeting_workflow import GreetEvent
+from .client_workflows import (
+    greeting_wf,
+    crashing_wf,
+    InputEvent,
+    OutputEvent,
+    GreetEvent,
+)
 from workflows.server.memory_workflow_store import MemoryWorkflowStore
 
 
@@ -111,9 +116,7 @@ async def test_get_handlers_filter_by_workflow_name(client: WorkflowClient) -> N
     await client.run_workflow_nowait(
         "greeting", start_event=InputEvent(greeting="hello", name="John")
     )
-    await client.run_workflow_nowait(
-        "crashing", start_event=InputEvent(greeting="test", name="test")
-    )
+    await client.run_workflow_nowait("crashing", start_event={})
 
     handlers = await client.get_handlers(workflow_name=["greeting"])
     assert len(handlers.handlers) >= 1

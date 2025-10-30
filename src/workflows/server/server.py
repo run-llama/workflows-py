@@ -514,12 +514,15 @@ class WorkflowServer:
             )
             try:
                 await handler
-                if wrapper.task is not None:
-                    await wrapper.task
                 status = 200
             except Exception as e:
                 status = 500
                 logger.error(f"Error running workflow: {e}", exc_info=True)
+            if wrapper.task is not None:
+                try:
+                    await wrapper.task
+                except Exception:
+                    pass
 
             return JSONResponse(
                 wrapper.to_response_model().model_dump(), status_code=status
@@ -1016,7 +1019,7 @@ class WorkflowServer:
             if not values:
                 single = request.query_params.get(param_name) or ""
                 values = [single]
-            values = [value.strip() for value in values]
+            values = [value.strip() for value in values if value.strip()]
             if not values:
                 return None
             return values
