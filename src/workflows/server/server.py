@@ -9,7 +9,7 @@ import json
 import logging
 from importlib.metadata import version
 from pathlib import Path
-from typing import Any, AsyncGenerator
+from typing import Any, AsyncGenerator, Callable, Awaitable
 from datetime import datetime, timezone
 
 import uvicorn
@@ -514,6 +514,8 @@ class WorkflowServer:
             )
             try:
                 await handler
+                if wrapper.task is not None:
+                    await wrapper.task
                 status = 200
             except Exception as e:
                 status = 500
@@ -927,6 +929,13 @@ class WorkflowServer:
 
         handler = self._handlers.get(handler_id)
         if handler is None:
+            persisted = await self._workflow_store.query(
+                HandlerQuery(handler_id_in=[handler_id])
+            )
+            if persisted:
+                status = persisted[0].status
+                if status in {"completed", "failed", "cancelled"}:
+                    raise HTTPException(detail="Handler is completed", status_code=204)
             raise HTTPException(detail="Handler not found", status_code=404)
         if handler.queue.empty() and handler.task is not None and handler.task.done():
             # https://html.spec.whatwg.org/multipage/server-sent-events.html
@@ -1058,13 +1067,18 @@ class WorkflowServer:
         # Check if handler exists
         wrapper = self._handlers.get(handler_id)
         if wrapper is None:
-            raise HTTPException(detail="Handler not found", status_code=404)
+            handler_data = await self._load_handler(handler_id)
+            if handler_data.status in {"completed", "failed", "cancelled"}:
+                raise HTTPException(
+                    detail="Workflow already completed", status_code=409
+                )
+            else:
+                # this branch is for cases where handler status is running but somehow not in memory
+                # Ideally, this should never happen. We probably need to revisit when we add pause/expire functionality.
+                logger.warning(f"Handler {handler_id} is running but not in memory.")
+                raise HTTPException(detail="Handler expired", status_code=409)
 
         handler = wrapper.run_handler
-
-        # Check if workflow is still running
-        if handler.done():
-            raise HTTPException(detail="Workflow already completed", status_code=409)
 
         # Get the context
         ctx = handler.ctx
@@ -1275,7 +1289,12 @@ class WorkflowServer:
         await wrapper.checkpoint()
         # Now register and start streaming
         self._handlers[handler_id] = wrapper
-        wrapper.start_streaming()
+
+        async def on_finish() -> None:
+            self._handlers.pop(handler_id, None)
+            self._results.pop(handler_id, None)
+
+        wrapper.start_streaming(on_finish=on_finish)
 
         return wrapper
 
@@ -1451,11 +1470,11 @@ class _WorkflowHandler:
         except Exception:
             return None
 
-    def start_streaming(self) -> None:
+    def start_streaming(self, on_finish: Callable[[], Awaitable[None]]) -> None:
         """Start streaming events from the handler and managing state."""
-        self.task = asyncio.create_task(self._stream_events())
+        self.task = asyncio.create_task(self._stream_events(on_finish=on_finish))
 
-    async def _stream_events(self) -> None:
+    async def _stream_events(self, on_finish: Callable[[], Awaitable[None]]) -> None:
         """Internal method that streams events, updates status, and persists state."""
         await self.checkpoint()
         async for event in self.run_handler.stream_events(expose_internal=True):
@@ -1483,6 +1502,7 @@ class _WorkflowHandler:
             logger.error(f"Workflow run {self.handler_id} failed! {e}", exc_info=True)
 
         await self.checkpoint()
+        await on_finish()
 
     async def acquire_events_stream(
         self, timeout: float = 1

@@ -33,7 +33,7 @@ async def main() -> None:
             )
             msg = "Event has been sent" if sent_event else "Event failed to send"
             print(msg)
-    result = await client.get_result(handler_id)
+    result = await client.get_handler(handler_id)
     print(f"Workflow complete with status: {result.status})")
     res = OutEvent.model_validate(result.result)
     print("Received final message:", res.output)

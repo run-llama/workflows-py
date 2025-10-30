@@ -65,6 +65,8 @@ class InteractiveWorkflow(Workflow):
 
     @step
     async def end(self, ctx: Context, ev: ExternalEvent) -> StopEvent:
+        if ev.response == "error":
+            raise RuntimeError("Error response received")
         return StopEvent(result=f"received: {ev.response}")
 
 

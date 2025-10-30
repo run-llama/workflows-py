@@ -4,6 +4,7 @@
 import secrets
 import string
 
+
 alphabet = string.ascii_letters + string.digits  # A-Z, a-z, 0-9
 
 

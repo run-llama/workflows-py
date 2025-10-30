@@ -32,7 +32,7 @@ async def main() -> None:
 
     async for event in client.get_workflow_events(handler_id=handler_id):
         print(f"Received event type={event.type} data={event.value}")
-    result = await client.get_result(handler_id)
+    result = await client.get_handler(handler_id)
 
     print(f"Final result: {result.result} (status: {result.status})")
 
