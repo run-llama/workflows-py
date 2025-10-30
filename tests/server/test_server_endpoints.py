@@ -361,7 +361,7 @@ async def test_get_workflow_result(client: AsyncClient, server: WorkflowServer) 
     await asyncio.sleep(0.1)
 
     # get result
-    response = await client.get(f"/results/{handler_id}")
+    response = await client.get(f"/handlers/{handler_id}")
     assert response.status_code == 200
 
     # Verify the result content
@@ -384,7 +384,7 @@ async def test_get_workflow_result_error(
     await asyncio.sleep(0.1)
 
     # get result
-    response = await client.get(f"/results/{handler_id}")
+    response = await client.get(f"/handlers/{handler_id}")
     assert response.status_code == 500
     data = response.json()
     assert "error" in data
@@ -394,7 +394,7 @@ async def test_get_workflow_result_error(
 
 @pytest.mark.asyncio
 async def test_get_workflow_result_not_found(client: AsyncClient) -> None:
-    response = await client.get("/results/nonexistent")
+    response = await client.get("/handlers/nonexistent")
     assert response.status_code == 404
 
 
@@ -640,16 +640,16 @@ async def test_get_handlers_with_running_workflows(client: AsyncClient) -> None:
 
     # Wait for workflows to complete to avoid warnings
     for handler_id in [handler_id1, handler_id2]:
-        response = await client.get(f"/results/{handler_id}")
+        response = await client.get(f"/handlers/{handler_id}")
         while response.status_code == 202:
             await asyncio.sleep(0.01)
-            response = await client.get(f"/results/{handler_id}")
+            response = await client.get(f"/handlers/{handler_id}")
 
 
 async def validate_result_response(
     handler_id: str, client: AsyncClient, expected_status: int = 200
 ) -> Any:
-    response = await client.get(f"/results/{handler_id}")
+    response = await client.get(f"/handlers/{handler_id}")
     assert response.status_code == expected_status
     return response.json() if expected_status == 200 else response.text
 
@@ -702,7 +702,7 @@ async def test_custom_stop_event_serialization_in_run_and_handlers(
 
     # Wait for completion via results endpoint
     async def _wait_done() -> dict[str, Any]:
-        r = await client.get(f"/results/{handler_id}")
+        r = await client.get(f"/handlers/{handler_id}")
         if r.status_code == 200:
             return r.json()
         raise AssertionError("not done")
@@ -838,7 +838,7 @@ async def test_get_workflow_result_returns_202_when_pending(
     assert response.status_code == 200
     handler_id = response.json()["handler_id"]
 
-    response = await client.get(f"/results/{handler_id}")
+    response = await client.get(f"/handlers/{handler_id}")
     assert response.status_code == 202
 
 
@@ -875,10 +875,10 @@ async def test_post_event_to_completed_workflow(client: AsyncClient) -> None:
     handler_id = response.json()["handler_id"]
 
     # Wait for workflow to complete
-    response = await client.get(f"/results/{handler_id}")
+    response = await client.get(f"/handlers/{handler_id}")
     while response.status_code == 202:
         await asyncio.sleep(0.01)
-        response = await client.get(f"/results/{handler_id}")
+        response = await client.get(f"/handlers/{handler_id}")
 
     # Try to send event to completed workflow
     response = await client.post(f"/events/{handler_id}", json={"event": "{}"})
@@ -983,7 +983,7 @@ async def test_handler_datetime_fields_progress(client: AsyncClient) -> None:
 
     # Wait for completion and check completed_at
     async def _wait_done() -> Response:
-        r = await client.get(f"/results/{handler_id}")
+        r = await client.get(f"/handlers/{handler_id}")
         if r.status_code == 200:
             return r
         raise AssertionError("not done")
@@ -1076,3 +1076,25 @@ async def test_stop_only_persisted_handler_without_removal_returns_not_found(
 
         persisted = await store.query(HandlerQuery(handler_id_in=["store-only"]))
         assert persisted and persisted[0].status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_legacy_results_endpoint_still_works(client: AsyncClient) -> None:
+    # Start a workflow without waiting
+    response = await client.post("/workflows/test/run-nowait", json={})
+    assert response.status_code == 200
+    handler_id = response.json()["handler_id"]
+
+    # Poll the deprecated endpoint until completion
+    async def _wait_done() -> Response:
+        r = await client.get(f"/results/{handler_id}")
+        if r.status_code == 200:
+            return r
+        raise AssertionError("not done")
+
+    r = await wait_for_passing(_wait_done)
+    data = r.json()
+    # Ensure it returns an object and includes an untyped result field
+    assert isinstance(data, dict)
+    assert data.get("handler_id") == handler_id
+    assert data.get("result") is not None

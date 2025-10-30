@@ -405,7 +405,7 @@ async def test_result_for_completed_persisted_handler_without_runtime_registrati
         # But the API should still return the persisted result
         transport = ASGITransport(app=server.app)
         async with AsyncClient(transport=transport, base_url="http://test") as client:
-            response = await client.get(f"/results/{handler_id}")
+            response = await client.get(f"/handlers/{handler_id}")
             assert response.status_code == 200
             data = response.json()
             assert data["status"] == "completed"

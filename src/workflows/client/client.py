@@ -296,7 +296,7 @@ class WorkflowClient:
             HandlerData: Complete handler data for the workflow
         """
         async with self._get_client() as client:
-            response = await client.get(f"/results/{handler_id}")
+            response = await client.get(f"/handlers/{handler_id}")
             _raise_for_status_with_body(response)
 
             return HandlerData.model_validate(response.json())

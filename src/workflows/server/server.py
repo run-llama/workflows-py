@@ -144,6 +144,11 @@ class WorkflowServer:
                 methods=["GET"],
             ),
             Route(
+                "/handlers/{handler_id}",
+                self._get_workflow_handler,
+                methods=["GET"],
+            ),
+            Route(
                 "/handlers/{handler_id}/cancel",
                 self._cancel_handler,
                 methods=["POST"],
@@ -693,10 +698,92 @@ class WorkflowServer:
             )
         return JSONResponse(wrapper.to_response_model().model_dump())
 
+    async def _load_handler(self, handler_id: str) -> HandlerData:
+        wrapper = self._handlers.get(handler_id)
+        if wrapper is None:
+            found = await self._workflow_store.query(
+                HandlerQuery(handler_id_in=[handler_id])
+            )
+            if not found:
+                raise HTTPException(detail="Handler not found", status_code=404)
+            existing = found[0]
+            return _WorkflowHandler.handler_data_from_persistent(existing)
+        else:
+            if wrapper.run_handler.done():
+                try:
+                    await wrapper.run_handler  # make sure its fully done
+                except Exception:
+                    # failed workflows raise their exception here
+                    pass  # failed workflows raise their exception here
+
+            return wrapper.to_response_model()
+
     async def _get_workflow_result(self, request: Request) -> JSONResponse:
         """
         ---
-        summary: Get workflow result
+        summary: Get workflow result (deprecated)
+        description: |
+          Deprecated. Use GET /handlers/{handler_id} instead. Returns the final result of an asynchronously started workflow, if available.
+        parameters:
+          - in: path
+            name: handler_id
+            required: true
+            schema:
+              type: string
+            description: Workflow run identifier returned from the no-wait run endpoint.
+        deprecated: true
+        responses:
+          200:
+            description: Result is available
+            content:
+              application/json:
+                schema:
+                  type: object
+          202:
+            description: Result not ready yet
+            content:
+              application/json:
+                schema:
+                  type: object
+          404:
+            description: Handler not found
+          500:
+            description: Error computing result
+            content:
+              text/plain:
+                schema:
+                  type: string
+        """
+        handler_id = request.path_params["handler_id"]
+        if not handler_id:
+            raise HTTPException(detail="Handler ID is required", status_code=400)
+
+        handler_data = await self._load_handler(handler_id)
+        status = (
+            202
+            if handler_data.status in "running"
+            else 200
+            if handler_data.status == "completed"
+            else 500
+        )
+        response_model = handler_data.model_dump()
+
+        # compatibility. Use handler api instead
+        if not handler_data.result:
+            response_model["result"] = None
+        else:
+            type = handler_data.result.qualified_name
+            response_model["result"] = (
+                handler_data.result.value.get("result")
+                if type == "workflows.events.StopEvent"
+                else handler_data.result.value
+            )
+        return JSONResponse(response_model, status_code=status)
+
+    async def _get_workflow_handler(self, request: Request) -> JSONResponse:
+        """
+        ---
+        summary: Get workflow handler
         description: Returns the final result of an asynchronously started workflow, if available
         parameters:
           - in: path
@@ -731,28 +818,15 @@ class WorkflowServer:
         if not handler_id:
             raise HTTPException(detail="Handler ID is required", status_code=400)
 
-        wrapper = self._handlers.get(handler_id)
-        if wrapper is None:
-            found = await self._workflow_store.query(
-                HandlerQuery(handler_id_in=[handler_id])
-            )
-            if not found:
-                raise HTTPException(detail="Handler not found", status_code=404)
-            existing = found[0]
-            status = 200
-            response_model = _WorkflowHandler.handler_data_from_persistent(existing)
-        else:
-            status = 202 if not wrapper.run_handler.done() else 200
-            if wrapper.run_handler.done():
-                try:
-                    await wrapper.run_handler  # make sure its fully done
-                except Exception:
-                    # failed workflows raise their exception here
-                    status = 500
-
-            response_model = wrapper.to_response_model()
-
-        return JSONResponse(response_model.model_dump(), status_code=status)
+        handler_data = await self._load_handler(handler_id)
+        status = (
+            202
+            if handler_data.status in "running"
+            else 200
+            if handler_data.status == "completed"
+            else 500
+        )
+        return JSONResponse(handler_data.model_dump(), status_code=status)
 
     async def _stream_events(self, request: Request) -> StreamingResponse:
         """
