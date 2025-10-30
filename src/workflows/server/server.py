@@ -709,9 +709,9 @@ class WorkflowServer:
             existing = found[0]
             return _WorkflowHandler.handler_data_from_persistent(existing)
         else:
-            if wrapper.run_handler.done():
+            if wrapper.run_handler.done() and wrapper.task is not None:
                 try:
-                    await wrapper.run_handler  # make sure its fully done
+                    await wrapper.task  # make sure its fully done
                 except Exception:
                     # failed workflows raise their exception here
                     pass  # failed workflows raise their exception here
