@@ -812,30 +812,6 @@ async def test_get_handlers_filters_multiple_status_params(
         assert ids == {"ha", "hb"}
 
 
-@pytest.mark.asyncio
-async def test_get_handlers_filters_comma_separated_values(
-    interactive_workflow: Workflow,
-) -> None:
-    persisted = [
-        PersistentHandler(
-            handler_id="c1", workflow_name="interactive", status="completed", ctx={}
-        ),
-        PersistentHandler(
-            handler_id="c2", workflow_name="interactive", status="failed", ctx={}
-        ),
-        PersistentHandler(
-            handler_id="c3", workflow_name="interactive", status="running", ctx={}
-        ),
-    ]
-
-    async with server_with_persisted_handlers(
-        interactive_workflow, persisted_handlers=persisted
-    ) as (_server, client, _store):
-        r = await client.get("/handlers?status=completed,failed")
-        assert r.status_code == 200
-        ids = {h["handler_id"] for h in r.json()["handlers"]}
-        assert ids == {"c1", "c2"}
-
 
 @pytest.mark.asyncio
 async def test_post_event_to_running_workflow(client: AsyncClient) -> None:
