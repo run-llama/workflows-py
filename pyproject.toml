@@ -47,7 +47,7 @@ pythonVersion = "3.9"
 
 [[tool.basedpyright.executionEnvironments]]
 root = "examples"
-pythonVersion = "3.13"
+pythonVersion = "3.14"
 
 [tool.coverage.run]
 omit = ["tests/*"]
