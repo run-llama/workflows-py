@@ -287,19 +287,9 @@ class WorkflowClient:
 
     async def get_result(self, handler_id: str) -> HandlerData:
         """
-        Get the result of the workflow associated with the specified handler ID.
-
-        Args:
-            handler_id (str): ID of the handler running the workflow
-
-        Returns:
-            HandlerData: Complete handler data for the workflow
+        Deprecated. Use get_handler instead.
         """
-        async with self._get_client() as client:
-            response = await client.get(f"/handlers/{handler_id}")
-            _raise_for_status_with_body(response)
-
-            return HandlerData.model_validate(response.json())
+        return await self.get_handler(handler_id)
 
     async def get_handlers(self) -> HandlersListResponse:
         """

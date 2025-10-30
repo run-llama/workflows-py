@@ -95,7 +95,7 @@ The `WorkflowServer` exposes the following RESTful endpoints:
 | `GET`  | `/workflows`                   | Lists the names of all registered workflows.                                                            |
 | `POST` | `/workflows/{name}/run`        | Runs the specified workflow synchronously and returns the final result.                                 |
 | `POST` | `/workflows/{name}/run-nowait` | Starts the specified workflow asynchronously and returns a `handler_id`.                                |
-| `GET`  | `/results/{handler_id}`        | Retrieves the result of an asynchronously run workflow. Returns `202 Accepted` if still running.       |
+| `GET`  | `/handlers/{handler_id}`        | Retrieves the result of an asynchronously run workflow. Returns `202 Accepted` if still running, `500` if the workflow failed, `200` if the workflow completed.       |
 | `GET`  | `/events/{handler_id}`         | Streams all events from a running workflow as newline-delimited JSON (`application/x-ndjson` and `text/event-stream` if SSE are enabled).          |
 | `POST`  | `/events/{handler_id}`         | Sends an event to a workflow during its execution (useful for human-in-the-loop)         |
 | `GET`  | `/handlers`         |  Get all the workflow handlers (running and completed)        |
@@ -306,7 +306,7 @@ async def main()
 
     async for event in client.get_workflow_events(handler_id=handler_id):
         print("Received data:", event)
-    result = await client.get_result(handler_id)
+    result = await client.get_handler(handler_id)
 
     print(f"Final result: {result.result} (status: {result.status})")
 
@@ -373,7 +373,7 @@ async for event in client.get_workflow_events(handler_id=handler_id):
         )
         msg = "Event has been sent" if sent_event else "Event failed to send"
         print(msg)
-result = await client.get_result(handler_id)
+result = await client.get_handler(handler_id)
 print(f"Workflow complete with status: {result.status})")
 res = OutEvent.model_validate(result.result)
 print("Received final message:", res.output)
