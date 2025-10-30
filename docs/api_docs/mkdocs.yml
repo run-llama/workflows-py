@@ -42,7 +42,7 @@ plugins:
             extensions:
               - griffe_fieldz
           paths:
-            - ../workflows
+            - ../../workflows
 site_name: LlamaIndex Workflows
 theme:
   custom_dir: overrides
