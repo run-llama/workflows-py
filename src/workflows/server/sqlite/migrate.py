@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from importlib.abc import Traversable
+try:
+    from importlib.resources.abc import Traversable  # type: ignore
+except ImportError:  # pre 3.11
+    from importlib.abc import Traversable  # type: ignore
 import logging
 import re
 import sqlite3
@@ -19,7 +22,7 @@ def _iter_migration_files() -> list[Traversable]:
     pkg = import_module(_MIGRATIONS_PKG)
     root = resources.files(pkg)
     files = (p for p in root.iterdir() if p.name.endswith(".sql"))
-    return sorted(files, key=lambda p: p.name)
+    return sorted(files, key=lambda p: p.name)  # type: ignore
 
 
 def _parse_target_version(sql_text: str) -> int | None:
