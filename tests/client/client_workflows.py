@@ -33,3 +33,12 @@ class GreetingWorkflow(Workflow):
 
 
 greeting_wf = GreetingWorkflow()
+
+
+class CrashingWorkflow(Workflow):
+    @step
+    async def crashing_step(self, ev: StartEvent) -> StopEvent:
+        raise ValueError("Workflow crashed intentionally")
+
+
+crashing_wf = CrashingWorkflow()

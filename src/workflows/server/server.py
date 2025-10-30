@@ -514,12 +514,15 @@ class WorkflowServer:
             )
             try:
                 await handler
-                if wrapper.task is not None:
-                    await wrapper.task
                 status = 200
             except Exception as e:
                 status = 500
                 logger.error(f"Error running workflow: {e}", exc_info=True)
+            if wrapper.task is not None:
+                try:
+                    await wrapper.task
+                except Exception:
+                    pass
 
             return JSONResponse(
                 wrapper.to_response_model().model_dump(), status_code=status
@@ -976,7 +979,31 @@ class WorkflowServer:
         """
         ---
         summary: Get handlers
-        description: Returns all workflow handlers.
+        description: Returns workflow handlers, optionally filtered by query parameters.
+        parameters:
+          - in: query
+            name: status
+            required: false
+            schema:
+              type: array
+              items:
+                type: string
+                enum: [running, completed, failed, cancelled]
+            style: form
+            explode: true
+            description: |
+              Filter by handler status. Can be provided multiple times (e.g., status=running&status=failed)
+          - in: query
+            name: workflow_name
+            required: false
+            schema:
+              type: array
+              items:
+                type: string
+            style: form
+            explode: true
+            description: |
+              Filter by workflow name. Can be provided multiple times (e.g., workflow_name=test&workflow_name=other)
         responses:
           200:
             description: List of handlers
@@ -985,7 +1012,39 @@ class WorkflowServer:
                 schema:
                   $ref: '#/components/schemas/HandlersList'
         """
-        persistent_handlers = await self._workflow_store.query(HandlerQuery())
+
+        def _parse_list_param(param_name: str) -> list[str] | None:
+            # parse repeated params
+            values = list(request.query_params.getlist(param_name))
+            if not values:
+                single = request.query_params.get(param_name) or ""
+                values = [single]
+            values = [value.strip() for value in values if value.strip()]
+            if not values:
+                return None
+            return values
+
+        # Parse filters
+        status_values = _parse_list_param("status")
+        workflow_name_in = _parse_list_param("workflow_name")
+
+        # Narrow types for status to match HandlerQuery expectations
+        allowed_status_values: set[Status] = {
+            "running",
+            "completed",
+            "failed",
+            "cancelled",
+        }
+
+        status_in = (
+            list(set(allowed_status_values).intersection(status_values))
+            if status_values is not None
+            else None
+        )
+
+        persistent_handlers = await self._workflow_store.query(
+            HandlerQuery(status_in=status_in, workflow_name_in=workflow_name_in)
+        )
         items = [
             HandlerData(
                 handler_id=h.handler_id,

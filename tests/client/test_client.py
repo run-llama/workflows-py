@@ -5,8 +5,13 @@ from httpx import ASGITransport, AsyncClient
 from workflows.protocol.serializable_events import EventEnvelopeWithMetadata
 from workflows.server.server import WorkflowServer
 from workflows.client import WorkflowClient
-from .greeting_workflow import greeting_wf, InputEvent, OutputEvent
-from .greeting_workflow import GreetEvent
+from .client_workflows import (
+    greeting_wf,
+    crashing_wf,
+    InputEvent,
+    OutputEvent,
+    GreetEvent,
+)
 from workflows.server.memory_workflow_store import MemoryWorkflowStore
 
 
@@ -15,6 +20,7 @@ def server() -> WorkflowServer:
     # Use MemoryWorkflowStore so get_handlers() can retrieve from persistence
     ws = WorkflowServer(workflow_store=MemoryWorkflowStore())
     ws.add_workflow(name="greeting", workflow=greeting_wf)
+    ws.add_workflow(name="crashing", workflow=crashing_wf)
     return ws
 
 
@@ -34,8 +40,9 @@ async def test_is_healthy(client: WorkflowClient) -> None:
 @pytest.mark.asyncio
 async def test_list_workflows(client: WorkflowClient) -> None:
     wfs = await client.list_workflows()
-    assert len(wfs.workflows) == 1
-    assert wfs.workflows[0] == "greeting"
+    assert len(wfs.workflows) == 2
+    assert "greeting" in wfs.workflows
+    assert "crashing" in wfs.workflows
 
 
 @pytest.mark.asyncio
@@ -102,6 +109,43 @@ async def test_get_handlers(client: WorkflowClient) -> None:
     handlers = await client.get_handlers()
     assert len(handlers.handlers) == 1
     assert handlers.handlers[0].handler_id == handler_id
+
+
+@pytest.mark.asyncio
+async def test_get_handlers_filter_by_workflow_name(client: WorkflowClient) -> None:
+    await client.run_workflow_nowait(
+        "greeting", start_event=InputEvent(greeting="hello", name="John")
+    )
+    await client.run_workflow_nowait("crashing", start_event={})
+
+    handlers = await client.get_handlers(workflow_name=["greeting"])
+    assert len(handlers.handlers) >= 1
+    assert all(h.workflow_name == "greeting" for h in handlers.handlers)
+
+
+@pytest.mark.asyncio
+async def test_get_handlers_filter_by_status(client: WorkflowClient) -> None:
+    await client.run_workflow_nowait(
+        "greeting", start_event=InputEvent(greeting="hello", name="John")
+    )
+    completed_handler = await client.run_workflow(
+        "greeting", start_event=InputEvent(greeting="hi", name="Jane")
+    )
+    # Wait for the crashing workflow to fail
+    try:
+        await client.run_workflow(
+            "crashing", start_event=InputEvent(greeting="test", name="test")
+        )
+    except Exception:
+        pass
+
+    handlers = await client.get_handlers(status=["completed"])
+    handler_ids = {h.handler_id for h in handlers.handlers}
+    assert completed_handler.handler_id in handler_ids
+
+    failed_handlers = await client.get_handlers(status=["failed"])
+    failed_ids = {h.handler_id for h in failed_handlers.handlers}
+    assert len(failed_ids) == 1
 
 
 @pytest.mark.asyncio
