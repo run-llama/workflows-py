@@ -293,20 +293,25 @@ class WorkflowClient:
         return await self.get_handler(handler_id)
 
     async def get_handlers(
-        self, handler_id: list[str] | None = None, status: list[Status] | None = None
+        self,
+        status: list[Status] | None = None,
+        workflow_name: list[str] | None = None,
     ) -> HandlersListResponse:
         """
         Get all the workflow handlers.
         Args:
-            handler_id (list[str] | None): List of handler IDs to filter by. Defaults to None.
             status (list[Status] | None): List of statuses (e.g. "running", "completed", etc. ) to filter by. Defaults to None.
-
+            workflow_name (list[str] | None): List of workflow names to filter by. Defaults to None.
         Returns:
             HandlersListResponse: List of workflow handlers.
         """
         async with self._get_client() as client:
             response = await client.get(
-                "/handlers", params={"handler_id": handler_id, "status": status}
+                "/handlers",
+                params={
+                    "status": status,
+                    "workflow_name": workflow_name,
+                },
             )
             _raise_for_status_with_body(response)
 
