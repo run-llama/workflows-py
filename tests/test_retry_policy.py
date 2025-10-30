@@ -32,7 +32,7 @@ async def test_retry_e2e() -> None:
             await ctx.store.set("counter", count + 1)
 
     res = await WorkflowTestRunner(DummyWorkflow(disable_validation=True)).run()
-    assert res.result.result == "All good!"
+    assert res.result == "All good!"
 
 
 def test_ConstantDelayRetryPolicy_init() -> None:

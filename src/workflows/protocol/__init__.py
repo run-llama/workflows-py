@@ -35,12 +35,6 @@ class WorkflowsListResponse(BaseModel):
     workflows: list[str]
 
 
-class WorkflowResultResponse(BaseModel):
-    status: Literal["running", "completed", "failed", "cancelled"]
-    result: Any | None = None
-    error: str | None = None
-
-
 class SendEventResponse(BaseModel):
     status: Literal["sent"]
 
@@ -83,7 +77,6 @@ class WorkflowGraphNodeEdges(BaseModel):
 __all__ = [
     "Status",
     "HandlerData",
-    "WorkflowResultResponse",
     "HandlersListResponse",
     "HealthResponse",
     "WorkflowsListResponse",

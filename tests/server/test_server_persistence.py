@@ -83,7 +83,7 @@ async def test_store_is_updated_on_step_completion(
     assert task is not None
     await task
     await asyncio.sleep(0)  # let even loop resolve other waiters on the internal
-    assert result.result == "received: pong"
+    assert result == "received: pong"
     updated = memory_store.handlers[handler_id]
     assert updated.status == "completed"
 
@@ -114,7 +114,7 @@ async def test_resume_active_handlers_across_server_restart(
 
         # Await its completion through internal result future
         result = await server2._handlers[handler_id].run_handler
-        assert result.result == "processed: default"
+        assert result == "processed: default"
 
 
 @pytest.mark.asyncio
@@ -220,7 +220,7 @@ async def test_startup_ignores_unregistered_workflows(
 
         # Await completion of the resumed known handler
         result = await server._handlers["known-1"].run_handler
-        assert result.result == "processed: default"
+        assert result == "processed: default"
 
 
 def patch_store_update_to_fail(
@@ -269,7 +269,7 @@ async def test_persistence_retries_on_failure(
 
         # Wait for workflow completion
         result = await server._handlers[handler_id].run_handler
-        assert result.result == "processed: default"
+        assert result == "processed: default"
 
         # Wait for background streaming task to complete, ignoring its expected exception
         task = server._handlers[handler_id].task

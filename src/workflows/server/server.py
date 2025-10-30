@@ -9,7 +9,7 @@ import json
 import logging
 from importlib.metadata import version
 from pathlib import Path
-from typing import Any, AsyncGenerator, Callable, Awaitable, TypedDict, Literal
+from typing import Any, AsyncGenerator, Callable, Awaitable
 from datetime import datetime, timezone
 
 import uvicorn
@@ -55,7 +55,7 @@ from workflows.server.memory_workflow_store import MemoryWorkflowStore
 from workflows.types import RunResultT
 
 # Protocol models are used on the client side; server responds with plain dicts
-from .utils import nanoid, handler_data_from_persistent
+from .utils import nanoid
 from .representation_utils import _extract_workflow_structure
 from workflows.protocol.serializable_events import (
     EventValidationError,
@@ -64,12 +64,6 @@ from workflows.protocol.serializable_events import (
 )
 
 logger = logging.getLogger()
-
-
-class WorkflowResultPayload(TypedDict):
-    status: Literal["completed", "failed", "cancelled", "running"]
-    result: RunResultT | None
-    error: str | None
 
 
 class WorkflowServer:
@@ -802,34 +796,25 @@ class WorkflowServer:
             description: Workflow run identifier returned from the no-wait run endpoint.
         responses:
           200:
-            description: Result is available or workflow failed
+            description: Result is available
             content:
               application/json:
                 schema:
-                  type: object
-                  properties:
-                    status:
-                      type: string
-                      enum: [completed, failed, cancelled]
-                    result:
-                      description: Workflow-defined result payload
-                    error:
-                      type: string
-                      description: Error details when status is failed
-                  required: [status]
+                  $ref: '#/components/schemas/Handler'
           202:
-            description: Workflow still running
+            description: Result not ready yet
             content:
               application/json:
                 schema:
-                  type: object
-                  properties:
-                    status:
-                      type: string
-                      enum: [running]
-                  required: [status]
+                  $ref: '#/components/schemas/Handler'
           404:
             description: Handler not found
+          500:
+            description: Error computing result
+            content:
+              text/plain:
+                schema:
+                  type: string
         """
         handler_id = request.path_params["handler_id"]
         if not handler_id:
@@ -985,9 +970,6 @@ class WorkflowServer:
 
                 await asyncio.sleep(0)
 
-        logging.info(
-            f"Returning StreamingResponse for handler ID: {handler.handler_id}"
-        )
         return StreamingResponse(event_stream(handler), media_type=media_type)
 
     async def _get_handlers(self, request: Request) -> JSONResponse:
@@ -1021,40 +1003,6 @@ class WorkflowServer:
             for h in persistent_handlers
         ]
         return JSONResponse(HandlersListResponse(handlers=items).model_dump())
-
-    async def _get_handler(self, request: Request) -> JSONResponse:
-        """
-        ---
-        summary: Get handler
-        description: Returns the persisted handler metadata.
-        parameters:
-          - in: path
-            name: handler_id
-            required: true
-            schema:
-              type: string
-            description: Workflow handler identifier.
-        responses:
-          200:
-            description: Handler found
-            content:
-              application/json:
-                schema:
-                  $ref: '#/components/schemas/Handler'
-          404:
-            description: Handler not found
-        """
-        handler_id = request.path_params["handler_id"]
-        results = await self._workflow_store.query(
-            HandlerQuery(handler_id_in=[handler_id])
-        )
-
-        if len(results) == 0:
-            raise HTTPException(detail="Handler not found", status_code=404)
-
-        handler = results[0]
-        item = handler_data_from_persistent(handler)
-        return JSONResponse(item.model_dump())
 
     async def _post_event(self, request: Request) -> JSONResponse:
         """
@@ -1119,13 +1067,18 @@ class WorkflowServer:
         # Check if handler exists
         wrapper = self._handlers.get(handler_id)
         if wrapper is None:
-            raise HTTPException(detail="Handler not found", status_code=404)
+            handler_data = await self._load_handler(handler_id)
+            if handler_data.status in {"completed", "failed", "cancelled"}:
+                raise HTTPException(
+                    detail="Workflow already completed", status_code=409
+                )
+            else:
+                # this branch is for cases where handler status is running but somehow not in memory
+                # Ideally, this should never happen. We probably need to revisit when we add pause/expire functionality.
+                logger.warning(f"Handler {handler_id} is running but not in memory.")
+                raise HTTPException(detail="Handler expired", status_code=409)
 
         handler = wrapper.run_handler
-
-        # Check if workflow is still running
-        if handler.done():
-            raise HTTPException(detail="Workflow already completed", status_code=409)
 
         # Get the context
         ctx = handler.ctx

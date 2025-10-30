@@ -66,7 +66,7 @@ async def test_workflow_initialization(workflow: Workflow) -> None:
 @pytest.mark.asyncio
 async def test_workflow_run(workflow: Workflow) -> None:
     r = await WorkflowTestRunner(workflow).run()
-    assert r.result.result == "Workflow completed"
+    assert r.result == "Workflow completed"
 
 
 @pytest.mark.asyncio
@@ -229,8 +229,8 @@ async def test_workflow_num_workers() -> None:
     workflow = NumWorkersWorkflow(timeout=1)
     r = await WorkflowTestRunner(workflow).run()
 
-    assert "test4" in set(r.result.result)
-    assert len({"test1", "test2", "test3"} - set(r.result.result)) == 1
+    assert "test4" in set(r.result)
+    assert len({"test1", "test2", "test3"} - set(r.result)) == 1
 
     # Ensure ctx is serializable
     ctx = r.ctx
@@ -257,7 +257,7 @@ async def test_workflow_step_send_event() -> None:
 
     workflow = StepSendEventWorkflow()
     r = await WorkflowTestRunner(workflow).run()
-    assert r.result.result == "step2"
+    assert r.result == "step2"
     ctx = r.ctx
     replay = ctx._broker_run._runtime.replay()  # type:ignore
     assert TickAddEvent(OneTestEvent(), step_name="step2") in replay
@@ -317,7 +317,7 @@ async def test_workflow_multiple_runs() -> None:
         runner.run(StartEvent(number=42)),  # type: ignore
         runner.run(StartEvent(number=-99)),  # type: ignore
     )
-    assert set([r.result.result for r in results]) == {6, 84, -198}
+    assert set([r.result for r in results]) == {6, 84, -198}
 
 
 def test_add_step() -> None:
@@ -388,14 +388,14 @@ async def test_workflow_continue_context() -> None:
 
     # first run
     r = await WorkflowTestRunner(wf).run()
-    assert r.result.result == "Done"
+    assert r.result == "Done"
     ctx = r.ctx
     assert ctx
     assert await ctx.store.get("number") == 1
 
     # second run -- independent from the first
     r = await WorkflowTestRunner(wf).run()
-    assert r.result.result == "Done"
+    assert r.result == "Done"
     ctx = r.ctx
     assert ctx
     assert await ctx.store.get("number") == 1
@@ -404,7 +404,7 @@ async def test_workflow_continue_context() -> None:
     handler = wf.run(ctx=ctx)
     result = await handler
     assert handler.ctx
-    assert result.result == "Done"
+    assert result == "Done"
     assert await handler.ctx.store.get("number") == 2
 
 
@@ -520,7 +520,7 @@ async def test_human_in_the_loop() -> None:
             handler.ctx.send_event(HumanResponseEvent(response="42"))  # type:ignore
 
     final_result = await handler
-    assert final_result.result == "42"
+    assert final_result == "42"
 
 
 @pytest.mark.asyncio
@@ -544,7 +544,7 @@ async def test_human_in_the_loop_with_resume() -> None:
     new_handler.ctx.send_event(HumanResponseEvent(response="42"))  # type:ignore
 
     final_result = await new_handler
-    assert final_result.result == "42"
+    assert final_result == "42"
 
     # ensure the workflow ran each step once
     step1_runs = await new_handler.ctx.store.get("step1_runs")  # type:ignore
@@ -601,7 +601,7 @@ async def test_workflow_run_num_concurrent(
     results = await asyncio.gather(*[workflow.run(run_num=ix) for ix in range(1, 5)])
     max_concurrent_runs = max(workflow.num_active_runs_history)
     assert validate_max_concurrent_runs(max_concurrent_runs)
-    assert [r.result for r in results] == [f"Run {ix}: Done" for ix in range(1, 5)]
+    assert results == [f"Run {ix}: Done" for ix in range(1, 5)]
 
 
 @pytest.mark.asyncio
