@@ -1014,10 +1014,11 @@ class WorkflowServer:
             # parse repeated params
             values = list(request.query_params.getlist(param_name))
             if not values:
-                single = request.query_params.get(param_name)
-                if single is None:
-                    return None
+                single = request.query_params.get(param_name) or ""
                 values = [single]
+            values = [value.strip() for value in values]
+            if not values:
+                return None
             return values
 
         # Parse filters
