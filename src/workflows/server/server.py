@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import Any, AsyncGenerator
 from datetime import datetime, timezone
 
-from pydantic import BaseModel
 import uvicorn
 from starlette.applications import Starlette
 from starlette.exceptions import HTTPException
@@ -31,6 +30,7 @@ from workflows.events import (
     StartEvent,
     StepState,
     StepStateChanged,
+    StopEvent,
 )
 from workflows.handler import WorkflowHandler
 
@@ -141,6 +141,11 @@ class WorkflowServer:
             Route(
                 "/handlers",
                 self._get_handlers,
+                methods=["GET"],
+            ),
+            Route(
+                "/handlers/{handler_id}",
+                self._get_workflow_handler,
                 methods=["GET"],
             ),
             Route(
@@ -279,6 +284,16 @@ class WorkflowServer:
                 },
                 "components": {
                     "schemas": {
+                        "EventEnvelopeWithMetadata": {
+                            "type": "object",
+                            "properties": {
+                                "value": {"type": "object"},
+                                "types": {"type": "array", "items": {"type": "string"}},
+                                "type": {"type": "string"},
+                                "qualified_name": {"type": "string"},
+                            },
+                            "required": ["value", "type"],
+                        },
                         "Handler": {
                             "type": "object",
                             "properties": {
@@ -306,7 +321,15 @@ class WorkflowServer:
                                     "nullable": True,
                                 },
                                 "error": {"type": "string", "nullable": True},
-                                "result": {"description": "Workflow result value"},
+                                "result": {
+                                    "description": "Workflow result value",
+                                    "oneOf": [
+                                        {
+                                            "$ref": "#/components/schemas/EventEnvelopeWithMetadata"
+                                        },
+                                        {"type": "null"},
+                                    ],
+                                },
                             },
                             "required": [
                                 "handler_id",
@@ -489,10 +512,22 @@ class WorkflowServer:
             wrapper = await self._run_workflow_handler(
                 handler_id, workflow.name, handler
             )
-            await handler
-            return JSONResponse(wrapper.to_response_model().model_dump())
+            try:
+                await handler
+                status = 200
+            except Exception as e:
+                status = 500
+                logger.error(f"Error running workflow: {e}", exc_info=True)
+
+            return JSONResponse(
+                wrapper.to_response_model().model_dump(), status_code=status
+            )
         except Exception as e:
-            raise HTTPException(detail=f"Error running workflow: {e}", status_code=500)
+            status = 500
+            logger.error(f"Error running workflow: {e}", exc_info=True)
+            raise HTTPException(
+                detail=f"Error running workflow: {e}", status_code=status
+            )
 
     async def _get_events_schema(self, request: Request) -> JSONResponse:
         """
@@ -663,10 +698,92 @@ class WorkflowServer:
             )
         return JSONResponse(wrapper.to_response_model().model_dump())
 
+    async def _load_handler(self, handler_id: str) -> HandlerData:
+        wrapper = self._handlers.get(handler_id)
+        if wrapper is None:
+            found = await self._workflow_store.query(
+                HandlerQuery(handler_id_in=[handler_id])
+            )
+            if not found:
+                raise HTTPException(detail="Handler not found", status_code=404)
+            existing = found[0]
+            return _WorkflowHandler.handler_data_from_persistent(existing)
+        else:
+            if wrapper.run_handler.done() and wrapper.task is not None:
+                try:
+                    await wrapper.task  # make sure its fully done
+                except Exception:
+                    # failed workflows raise their exception here
+                    pass  # failed workflows raise their exception here
+
+            return wrapper.to_response_model()
+
     async def _get_workflow_result(self, request: Request) -> JSONResponse:
         """
         ---
-        summary: Get workflow result
+        summary: Get workflow result (deprecated)
+        description: |
+          Deprecated. Use GET /handlers/{handler_id} instead. Returns the final result of an asynchronously started workflow, if available.
+        parameters:
+          - in: path
+            name: handler_id
+            required: true
+            schema:
+              type: string
+            description: Workflow run identifier returned from the no-wait run endpoint.
+        deprecated: true
+        responses:
+          200:
+            description: Result is available
+            content:
+              application/json:
+                schema:
+                  type: object
+          202:
+            description: Result not ready yet
+            content:
+              application/json:
+                schema:
+                  type: object
+          404:
+            description: Handler not found
+          500:
+            description: Error computing result
+            content:
+              text/plain:
+                schema:
+                  type: string
+        """
+        handler_id = request.path_params["handler_id"]
+        if not handler_id:
+            raise HTTPException(detail="Handler ID is required", status_code=400)
+
+        handler_data = await self._load_handler(handler_id)
+        status = (
+            202
+            if handler_data.status in "running"
+            else 200
+            if handler_data.status == "completed"
+            else 500
+        )
+        response_model = handler_data.model_dump()
+
+        # compatibility. Use handler api instead
+        if not handler_data.result:
+            response_model["result"] = None
+        else:
+            type = handler_data.result.qualified_name
+            response_model["result"] = (
+                handler_data.result.value.get("result")
+                if type == "workflows.events.StopEvent"
+                else handler_data.result.value
+            )
+        return JSONResponse(response_model, status_code=status)
+
+    async def _get_workflow_handler(self, request: Request) -> JSONResponse:
+        """
+        ---
+        summary: Get workflow handler
         description: Returns the final result of an asynchronously started workflow, if available
         parameters:
           - in: path
@@ -698,25 +815,18 @@ class WorkflowServer:
                   type: string
         """
         handler_id = request.path_params["handler_id"]
+        if not handler_id:
+            raise HTTPException(detail="Handler ID is required", status_code=400)
 
-        wrapper = self._handlers.get(handler_id)
-        if wrapper is None:
-            raise HTTPException(detail="Handler not found", status_code=404)
-
-        handler = wrapper.run_handler
-        if not handler.done():
-            return JSONResponse(
-                wrapper.to_response_model().model_dump(), status_code=202
-            )
-
-        try:
-            result = await handler
-            self._results[handler_id] = result
-            return JSONResponse(wrapper.to_response_model().model_dump())
-        except Exception as e:
-            raise HTTPException(
-                detail=f"Error getting workflow result: {e}", status_code=500
-            )
+        handler_data = await self._load_handler(handler_id)
+        status = (
+            202
+            if handler_data.status in "running"
+            else 200
+            if handler_data.status == "completed"
+            else 500
+        )
+        return JSONResponse(handler_data.model_dump(), status_code=status)
 
     async def _stream_events(self, request: Request) -> StreamingResponse:
         """
@@ -877,7 +987,9 @@ class WorkflowServer:
                 updated_at=h.updated_at.isoformat() if h.updated_at else None,
                 completed_at=h.completed_at.isoformat() if h.completed_at else None,
                 error=h.error,
-                result=h.result,
+                result=EventEnvelopeWithMetadata.from_event(h.result)
+                if h.result
+                else None,
             )
             for h in persistent_handlers
         ]
@@ -1077,7 +1189,10 @@ class WorkflowServer:
         self, request: Request, workflow: Workflow, workflow_name: str
     ) -> tuple[Context | None, StartEvent | None, str]:
         try:
-            body = await request.json()
+            try:
+                body = await request.json()
+            except Exception as e:
+                raise HTTPException(detail=f"Invalid JSON body: {e}", status_code=400)
             context_data = body.get("context")
             run_kwargs = body.get("kwargs", {})
             start_event_data = body.get("start_event", run_kwargs)
@@ -1227,9 +1342,7 @@ class _WorkflowHandler:
             status=self.status,
             run_id=self.run_handler.run_id,
             error=self.error,
-            result=self.result.model_dump()
-            if self.result is not None and isinstance(self.result, BaseModel)
-            else self.result,
+            result=self.result,
             started_at=self.started_at,
             updated_at=self.updated_at,
             completed_at=self.completed_at,
@@ -1276,9 +1389,31 @@ class _WorkflowHandler:
             if self.completed_at is not None
             else None,
             error=self.error,
-            result=self.result.model_dump()
-            if self.result is not None and isinstance(self.result, BaseModel)
-            else self.result,
+            result=EventEnvelopeWithMetadata.from_event(self.result)
+            if self.result is not None
+            else None,
+        )
+
+    @staticmethod
+    def handler_data_from_persistent(persistent: PersistentHandler) -> HandlerData:
+        return HandlerData(
+            handler_id=persistent.handler_id,
+            workflow_name=persistent.workflow_name,
+            run_id=persistent.run_id,
+            status=persistent.status,
+            started_at=persistent.started_at.isoformat()
+            if persistent.started_at is not None
+            else datetime.now(timezone.utc).isoformat(),
+            updated_at=persistent.updated_at.isoformat()
+            if persistent.updated_at is not None
+            else None,
+            completed_at=persistent.completed_at.isoformat()
+            if persistent.completed_at is not None
+            else None,
+            error=persistent.error,
+            result=EventEnvelopeWithMetadata.from_event(persistent.result)
+            if persistent.result is not None
+            else None,
         )
 
     @property
@@ -1306,11 +1441,11 @@ class _WorkflowHandler:
         return str(exc) if exc is not None else None
 
     @property
-    def result(self) -> RunResultT | None:
+    def result(self) -> StopEvent | None:
         if not self.run_handler.done():
             return None
         try:
-            return self.run_handler.result()
+            return self.run_handler.get_stop_event()
         except asyncio.CancelledError:
             return None
         except Exception:

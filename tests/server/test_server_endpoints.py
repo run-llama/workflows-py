@@ -12,8 +12,10 @@ import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient, Response
 
+from workflows.events import StopEvent, StartEvent
+
 from .util import wait_for_passing
-from workflows import Context
+from workflows import Context, step
 from workflows.server import WorkflowServer
 from workflows.server.abstract_workflow_store import HandlerQuery, PersistentHandler
 from workflows.workflow import Workflow
@@ -23,6 +25,16 @@ from datetime import datetime
 from workflows.context.serializers import JsonSerializer
 from .conftest import ExternalEvent
 from workflows.server.memory_workflow_store import MemoryWorkflowStore
+
+
+class CustomStopEvent(StopEvent):
+    message: str
+
+
+class CustomStopWorkflow(Workflow):
+    @step
+    async def finish(self, ev: StartEvent) -> CustomStopEvent:
+        return CustomStopEvent(message="custom-completed")
 
 
 @pytest.fixture
@@ -83,7 +95,7 @@ async def test_run_workflow_with_start_event_str_plain(
     )
     assert response.status_code == 200
     data = response.json()
-    assert data["result"] == "processed: plain string start"
+    assert data["result"]["value"]["result"] == "processed: plain string start"
 
 
 @pytest.mark.asyncio
@@ -101,7 +113,7 @@ async def test_run_workflow_with_start_event_dict_with_discriminators(
     )
     assert response.status_code == 200
     data = response.json()
-    assert data["result"] == "processed: dict with discriminators"
+    assert data["result"]["value"]["result"] == "processed: dict with discriminators"
 
 
 @pytest.mark.asyncio
@@ -115,7 +127,7 @@ async def test_run_workflow_with_start_event_dict_plain(
     )
     assert response.status_code == 200
     data = response.json()
-    assert data["result"] == "processed: plain dict start"
+    assert data["result"]["value"]["result"] == "processed: plain dict start"
 
 
 @pytest.mark.asyncio
@@ -159,7 +171,7 @@ async def test_run_workflow_success(client: AsyncClient) -> None:
     assert response.status_code == 200
     data = response.json()
     assert "result" in data
-    assert data["result"] == "processed: hello"
+    assert data["result"]["value"]["result"] == "processed: hello"
 
 
 @pytest.mark.asyncio
@@ -167,7 +179,7 @@ async def test_run_workflow_no_kwargs(client: AsyncClient) -> None:
     response = await client.post("/workflows/test/run", json={})
     assert response.status_code == 200
     data = response.json()
-    assert data["result"] == "processed: default"
+    assert data["result"]["value"]["result"] == "processed: default"
 
 
 @pytest.mark.asyncio
@@ -180,7 +192,7 @@ async def test_run_workflow_with_context(
     response = await client.post("/workflows/test/run", json={"context": ctx_dict})
     assert response.status_code == 200
     data = response.json()
-    assert data["result"] == "processed: message from context"
+    assert data["result"]["value"]["result"] == "processed: message from context"
 
 
 @pytest.mark.asyncio
@@ -192,7 +204,7 @@ async def test_run_workflow_with_start_event(client: AsyncClient) -> None:
     )
     assert response.status_code == 200
     data = response.json()
-    assert data["result"] == "processed: start event message"
+    assert data["result"]["value"]["result"] == "processed: start event message"
 
 
 @pytest.mark.asyncio
@@ -205,7 +217,10 @@ async def test_run_workflow_not_found(client: AsyncClient) -> None:
 async def test_run_workflow_error(client: AsyncClient) -> None:
     response = await client.post("/workflows/error/run", json={})
     assert response.status_code == 500
-    assert "Test error" in response.text
+    data = response.json()
+    assert data["error"] is not None
+    assert "Test error" in data["error"]
+    assert data["status"] == "failed"
 
 
 @pytest.mark.asyncio
@@ -215,7 +230,7 @@ async def test_run_workflow_invalid_json(client: AsyncClient) -> None:
         content="invalid json",
         headers={"Content-Type": "application/json"},
     )
-    assert response.status_code == 500
+    assert response.status_code == 400
 
 
 @pytest.mark.asyncio
@@ -291,7 +306,7 @@ async def test_run_workflow_with_start_event_and_kwargs(
     assert response.status_code == 200
     data = response.json()
     # start_event should take precedence
-    assert data["result"] == "processed: start event priority"
+    assert data["result"]["value"]["result"] == "processed: start event priority"
 
 
 @pytest.mark.asyncio
@@ -346,13 +361,13 @@ async def test_get_workflow_result(client: AsyncClient, server: WorkflowServer) 
     await asyncio.sleep(0.1)
 
     # get result
-    response = await client.get(f"/results/{handler_id}")
+    response = await client.get(f"/handlers/{handler_id}")
     assert response.status_code == 200
 
     # Verify the result content
     result_data = response.json()
     assert "result" in result_data
-    assert result_data["result"] == "processed: message from context"
+    assert result_data["result"]["value"]["result"] == "processed: message from context"
 
 
 @pytest.mark.asyncio
@@ -369,17 +384,17 @@ async def test_get_workflow_result_error(
     await asyncio.sleep(0.1)
 
     # get result
-    response = await client.get(f"/results/{handler_id}")
+    response = await client.get(f"/handlers/{handler_id}")
     assert response.status_code == 500
-
-    # Verify the result content
-    # Now returns detailed error string body
-    assert "Test error" in response.text
+    data = response.json()
+    assert "error" in data
+    assert "Test error" in data["error"]
+    assert data["status"] == "failed"
 
 
 @pytest.mark.asyncio
 async def test_get_workflow_result_not_found(client: AsyncClient) -> None:
-    response = await client.get("/results/nonexistent")
+    response = await client.get("/handlers/nonexistent")
     assert response.status_code == 404
 
 
@@ -625,16 +640,16 @@ async def test_get_handlers_with_running_workflows(client: AsyncClient) -> None:
 
     # Wait for workflows to complete to avoid warnings
     for handler_id in [handler_id1, handler_id2]:
-        response = await client.get(f"/results/{handler_id}")
+        response = await client.get(f"/handlers/{handler_id}")
         while response.status_code == 202:
             await asyncio.sleep(0.01)
-            response = await client.get(f"/results/{handler_id}")
+            response = await client.get(f"/handlers/{handler_id}")
 
 
 async def validate_result_response(
     handler_id: str, client: AsyncClient, expected_status: int = 200
 ) -> Any:
-    response = await client.get(f"/results/{handler_id}")
+    response = await client.get(f"/handlers/{handler_id}")
     assert response.status_code == expected_status
     return response.json() if expected_status == 200 else response.text
 
@@ -654,8 +669,56 @@ async def test_get_handlers_with_completed_workflow(client: AsyncClient) -> None
     # Find our handler
     handler = next(h for h in handlers if h["handler_id"] == handler_id)
     assert handler["status"] == "completed"
-    assert handler["result"] == "processed: default"
+    assert handler["result"] == {
+        "type": "StopEvent",
+        "value": {"result": "processed: default"},
+        "qualified_name": "workflows.events.StopEvent",
+        "types": None,
+    }
     assert handler["error"] is None
+
+
+@pytest.mark.asyncio
+async def test_custom_stop_event_serialization_in_run_and_handlers(
+    client: AsyncClient, server: WorkflowServer
+) -> None:
+    # Register custom workflow that returns a CustomStopEvent
+    server.add_workflow("custom", CustomStopWorkflow())
+
+    # Synchronous run returns a handler with result immediately
+    resp_run = await client.post("/workflows/custom/run", json={})
+    assert resp_run.status_code == 200
+    run_data = resp_run.json()
+    assert run_data["status"] == "completed"
+    assert isinstance(run_data.get("result"), dict)
+    assert run_data["result"]["type"] == "CustomStopEvent"
+    # Minimal value check
+    assert run_data["result"]["value"]["message"] == "custom-completed"
+
+    # No-wait run then observe via handlers
+    resp_nowait = await client.post("/workflows/custom/run-nowait", json={})
+    assert resp_nowait.status_code == 200
+    handler_id = resp_nowait.json()["handler_id"]
+
+    # Wait for completion via results endpoint
+    async def _wait_done() -> dict[str, Any]:
+        r = await client.get(f"/handlers/{handler_id}")
+        if r.status_code == 200:
+            return r.json()
+        raise AssertionError("not done")
+
+    result_data = await wait_for_passing(_wait_done)
+    assert result_data["result"]["type"] == "CustomStopEvent"
+    assert result_data["result"]["value"]["message"] == "custom-completed"
+
+    # Handlers list should reflect the same serialized result
+    resp_handlers = await client.get("/handlers")
+    assert resp_handlers.status_code == 200
+    handlers = resp_handlers.json()["handlers"]
+    custom = next(h for h in handlers if h["handler_id"] == handler_id)
+    assert custom["status"] == "completed"
+    assert custom["result"]["type"] == "CustomStopEvent"
+    assert custom["result"]["value"]["message"] == "custom-completed"
 
 
 @pytest.mark.asyncio
@@ -708,7 +771,7 @@ async def test_post_event_to_running_workflow(client: AsyncClient) -> None:
         lambda: validate_result_response(handler_id, client)
     )
 
-    assert result["result"] == "received: Hello from test"
+    assert result["result"]["value"]["result"] == "received: Hello from test"
 
 
 @pytest.mark.asyncio
@@ -733,7 +796,7 @@ async def test_post_event_simple_schema_to_running_workflow(
         lambda: validate_result_response(handler_id, client)
     )
 
-    assert result["result"] == "received: Hello from test"
+    assert result["result"]["value"]["result"] == "received: Hello from test"
 
 
 @pytest.mark.asyncio
@@ -763,7 +826,7 @@ async def test_post_event_with_discriminators_to_running_workflow(
         lambda: validate_result_response(handler_id, client)
     )
 
-    assert result["result"] == "received: Hello with discriminators"
+    assert result["result"]["value"]["result"] == "received: Hello with discriminators"
 
 
 @pytest.mark.asyncio
@@ -775,7 +838,7 @@ async def test_get_workflow_result_returns_202_when_pending(
     assert response.status_code == 200
     handler_id = response.json()["handler_id"]
 
-    response = await client.get(f"/results/{handler_id}")
+    response = await client.get(f"/handlers/{handler_id}")
     assert response.status_code == 202
 
 
@@ -792,7 +855,7 @@ async def test_get_workflow_result_multiple_times(
 
     # First fetch populates cache
     first = await wait_for_passing(lambda: validate_result_response(handler_id, client))
-    assert first["result"] == "processed: cache-me"
+    assert first["result"]["value"]["result"] == "processed: cache-me"
 
     second = await validate_result_response(handler_id, client)
     assert second == first
@@ -812,10 +875,10 @@ async def test_post_event_to_completed_workflow(client: AsyncClient) -> None:
     handler_id = response.json()["handler_id"]
 
     # Wait for workflow to complete
-    response = await client.get(f"/results/{handler_id}")
+    response = await client.get(f"/handlers/{handler_id}")
     while response.status_code == 202:
         await asyncio.sleep(0.01)
-        response = await client.get(f"/results/{handler_id}")
+        response = await client.get(f"/handlers/{handler_id}")
 
     # Try to send event to completed workflow
     response = await client.post(f"/events/{handler_id}", json={"event": "{}"})
@@ -920,7 +983,7 @@ async def test_handler_datetime_fields_progress(client: AsyncClient) -> None:
 
     # Wait for completion and check completed_at
     async def _wait_done() -> Response:
-        r = await client.get(f"/results/{handler_id}")
+        r = await client.get(f"/handlers/{handler_id}")
         if r.status_code == 200:
             return r
         raise AssertionError("not done")
@@ -1013,3 +1076,25 @@ async def test_stop_only_persisted_handler_without_removal_returns_not_found(
 
         persisted = await store.query(HandlerQuery(handler_id_in=["store-only"]))
         assert persisted and persisted[0].status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_legacy_results_endpoint_still_works(client: AsyncClient) -> None:
+    # Start a workflow without waiting
+    response = await client.post("/workflows/test/run-nowait", json={})
+    assert response.status_code == 200
+    handler_id = response.json()["handler_id"]
+
+    # Poll the deprecated endpoint until completion
+    async def _wait_done() -> Response:
+        r = await client.get(f"/results/{handler_id}")
+        if r.status_code == 200:
+            return r
+        raise AssertionError("not done")
+
+    r = await wait_for_passing(_wait_done)
+    data = r.json()
+    # Ensure it returns an object and includes an untyped result field
+    assert isinstance(data, dict)
+    assert data.get("handler_id") == handler_id
+    assert data.get("result") is not None

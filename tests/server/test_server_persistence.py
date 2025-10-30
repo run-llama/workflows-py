@@ -7,7 +7,7 @@ from httpx import AsyncClient, ASGITransport
 
 
 from .conftest import ExternalEvent, RequestedExternalEvent
-from workflows.events import Event, InternalDispatchEvent
+from workflows.events import Event, InternalDispatchEvent, StopEvent
 from workflows.server import WorkflowServer
 from workflows import Context
 from workflows.workflow import Workflow
@@ -340,7 +340,7 @@ async def test_resume_across_runs(
             )
             assert response.status_code == 200
             resp_data = response.json()
-            assert resp_data["result"] == "count: 5, runs: 1"
+            assert resp_data["result"]["value"]["result"] == "count: 5, runs: 1"
 
             # Get the handler id for that run
             handler_id = resp_data["handler_id"]
@@ -363,7 +363,7 @@ async def test_resume_across_runs(
             )
             assert response2.status_code == 200
             resp_data2 = response2.json()
-            assert resp_data2["result"] == "count: 8, runs: 2"
+            assert resp_data2["result"]["value"]["result"] == "count: 8, runs: 2"
 
             # Verify the handler id is the same
             assert resp_data2["handler_id"] == handler_id
@@ -374,3 +374,39 @@ async def test_resume_across_runs(
             # Verify memory store has only one handler
             assert len(memory_store.handlers) == 1
             assert memory_store.handlers[handler_id].status == "completed"
+
+
+@pytest.mark.asyncio
+async def test_result_for_completed_persisted_handler_without_runtime_registration(
+    memory_store: MemoryWorkflowStore, simple_test_workflow: Workflow
+) -> None:
+    """A completed handler persisted in the store but not registered in memory should still return its result."""
+    handler_id = "store-completed-1"
+
+    # Seed a completed handler directly in the store (server won't load completed handlers at startup)
+    await memory_store.update(
+        PersistentHandler(
+            handler_id=handler_id,
+            workflow_name="test",
+            status="completed",
+            result=StopEvent(result="processed: default"),
+            ctx=Context(simple_test_workflow).to_dict(),
+        )
+    )
+
+    # Start a server with the same store and workflow registered
+    server = WorkflowServer(workflow_store=memory_store)
+    server.add_workflow("test", simple_test_workflow)
+
+    async with server.contextmanager():
+        # Ensure the handler is not registered in runtime memory
+        assert handler_id not in server._handlers
+
+        # But the API should still return the persisted result
+        transport = ASGITransport(app=server.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.get(f"/handlers/{handler_id}")
+            assert response.status_code == 200
+            data = response.json()
+            assert data["status"] == "completed"
+            assert data["result"]["value"]["result"] == "processed: default"

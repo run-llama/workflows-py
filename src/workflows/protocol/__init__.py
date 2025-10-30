@@ -3,6 +3,8 @@ from __future__ import annotations
 from typing import Any, Literal
 from pydantic import BaseModel
 
+from workflows.protocol.serializable_events import EventEnvelopeWithMetadata
+
 # Shared protocol types between client and server
 
 # Mirrors server.store Status
@@ -14,8 +16,7 @@ class HandlerData(BaseModel):
     workflow_name: str
     run_id: str | None
     error: str | None
-    # result is workflow-defined; None if not completed
-    result: Any | None
+    result: EventEnvelopeWithMetadata | None
     status: Status
     started_at: str
     updated_at: str | None
