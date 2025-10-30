@@ -990,7 +990,6 @@ class WorkflowServer:
             explode: true
             description: |
               Filter by handler status. Can be provided multiple times (e.g., status=running&status=failed)
-              or as a comma-separated list (e.g., status=running,failed).
           - in: query
             name: workflow_name
             required: false
@@ -1002,7 +1001,6 @@ class WorkflowServer:
             explode: true
             description: |
               Filter by workflow name. Can be provided multiple times (e.g., workflow_name=test&workflow_name=other)
-              or as a comma-separated list (e.g., workflow_name=test,other).
         responses:
           200:
             description: List of handlers
@@ -1013,33 +1011,31 @@ class WorkflowServer:
         """
 
         def _parse_list_param(param_name: str) -> list[str] | None:
-            # Prefer repeated params first, also support comma-separated values
+            # parse repeated params
             values = list(request.query_params.getlist(param_name))
             if not values:
                 single = request.query_params.get(param_name)
                 if single is None:
                     return None
                 values = [single]
-
-            parsed: list[str] = []
-            for raw in values:
-                parts = [p.strip() for p in raw.split(",")]
-                parsed.extend([p for p in parts if p])
-            return parsed or None
+            return values
 
         # Parse filters
         status_values = _parse_list_param("status")
         workflow_name_in = _parse_list_param("workflow_name")
 
         # Narrow types for status to match HandlerQuery expectations
-        allowed_status_values = {"running", "completed", "failed", "cancelled"}
-        from typing import cast, Optional, List
+        allowed_status_values: set[Status] = {
+            "running",
+            "completed",
+            "failed",
+            "cancelled",
+        }
 
-        status_in = cast(
-            Optional[List[Status]],
-            [s for s in status_values if s in allowed_status_values]
+        status_in = (
+            list(set(allowed_status_values).intersection(status_values))
             if status_values is not None
-            else None,
+            else None
         )
 
         persistent_handlers = await self._workflow_store.query(
