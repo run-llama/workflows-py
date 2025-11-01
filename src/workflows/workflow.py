@@ -119,16 +119,6 @@ class Workflow(metaclass=WorkflowMeta):
         self._verbose = verbose
         self._disable_validation = disable_validation
         self._num_concurrent_runs = num_concurrent_runs
-        # Ensure at least one step is configured before inspecting events
-        if not self._get_steps():
-            cls_name = self.__class__.__name__
-            msg = (
-                f"Workflow '{cls_name}' has no configured steps. "
-                "Did you forget to annotate methods with @step or to register "
-                "free-function steps via @step(workflow=...)?"
-            )
-            raise WorkflowConfigurationError(msg)
-
         # Detect StartEvent issues before StopEvent for clearer guidance
         self._start_event_class = self._ensure_start_event_class()
         self._stop_event_class = self._ensure_stop_event_class()
@@ -375,6 +365,21 @@ class Workflow(metaclass=WorkflowMeta):
         """
         if self._disable_validation:
             return False
+
+        # Ensure at least one step is configured before inspecting events
+        if not self._get_steps():
+            cls_name = self.__class__.__name__
+            msg = (
+                f"Workflow '{cls_name}' has no configured steps. "
+                "Did you forget to annotate methods with @step or to register "
+                "free-function steps via @step(workflow=...)?"
+            )
+            raise WorkflowConfigurationError(msg)
+
+        # Recompute StartEvent and StopEvent classes here to support dynamic changes
+        # and to surface StartEvent errors before StopEvent during validation.
+        self._start_event_class = self._ensure_start_event_class()
+        self._stop_event_class = self._ensure_stop_event_class()
 
         produced_events: set[type] = {self._start_event_class}
         consumed_events: set[type] = set()
