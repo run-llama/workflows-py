@@ -817,3 +817,40 @@ async def test_workflow_instances_garbage_collected_after_completion() -> None:
 
     # All weakrefs should be cleared
     assert all([r() is None for r in refs])
+
+
+def test_workflow_error_no_steps_configured_message() -> None:
+    class EmptyWorkflow(Workflow):
+        pass
+
+    with pytest.raises(
+        WorkflowConfigurationError,
+        match=r"Workflow 'EmptyWorkflow' has no configured steps",
+    ):
+        EmptyWorkflow()
+
+
+def test_missing_start_event_error_includes_class_name() -> None:
+    class MissingStartWorkflow(Workflow):
+        @step
+        def a_step(self, ev: Event) -> StopEvent:
+            return StopEvent()
+
+    with pytest.raises(
+        WorkflowConfigurationError,
+        match=r"Workflow 'MissingStartWorkflow' has no @step that accepts StartEvent",
+    ):
+        MissingStartWorkflow()
+
+
+def test_missing_stop_event_error_includes_class_name() -> None:
+    class MissingStopWorkflow(Workflow):
+        @step
+        def a_step(self, ev: StartEvent) -> None:
+            return None  # type: ignore[return-value]
+
+    with pytest.raises(
+        WorkflowConfigurationError,
+        match=r"Workflow 'MissingStopWorkflow' has no @step that returns StopEvent",
+    ):
+        MissingStopWorkflow()
