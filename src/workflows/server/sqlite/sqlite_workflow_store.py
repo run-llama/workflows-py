@@ -1,3 +1,4 @@
+from workflows.context import JsonSerializer
 from workflows.server.abstract_workflow_store import (
     AbstractWorkflowStore,
     HandlerQuery,
@@ -69,7 +70,9 @@ class SqliteWorkflowStore(AbstractWorkflowStore):
                 handler.status,
                 handler.run_id,
                 handler.error,
-                json.dumps(handler.result) if handler.result is not None else None,
+                JsonSerializer().serialize(handler.result)
+                if handler.result is not None
+                else None,
                 handler.started_at.isoformat() if handler.started_at else None,
                 handler.updated_at.isoformat() if handler.updated_at else None,
                 handler.completed_at.isoformat() if handler.completed_at else None,
