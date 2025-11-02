@@ -18,7 +18,7 @@ dev = [
 
 [project]
 name = "llama-index-workflows"
-version = "2.10.0"
+version = "2.10.1"
 description = "An event-driven, async-first, step-based way to control the execution flow of AI applications like Agents."
 readme = "README.md"
 license = "MIT"
