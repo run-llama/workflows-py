@@ -143,12 +143,23 @@ def test_custom_stop_event_serialization() -> None:
 
     serializer = JsonSerializer()
     serialized_ev = serializer.serialize(ev)
-    deseriazlied_ev = serializer.deserialize(serialized_ev)
+    deserialized_ev = serializer.deserialize(serialized_ev)
 
-    assert type(deseriazlied_ev).__name__ == type(ev).__name__
-    deseriazlied_ev = cast(
+    assert type(deserialized_ev).__name__ == type(ev).__name__
+    deserialized_ev = cast(
         CustomStopEvent,
-        deseriazlied_ev,
+        deserialized_ev,
     )
-    assert ev.foo == deseriazlied_ev.foo
-    assert ev.bar == deseriazlied_ev.bar
+    assert ev.foo == deserialized_ev.foo
+    assert ev.bar == deserialized_ev.bar
+
+
+def test_stop_event_repr() -> None:
+    ev = StopEvent(foo="foo", result=42)
+    assert repr(ev) == "StopEvent(foo='foo', result=42)"
+
+
+def test_custom_stop_event_repr_no_result() -> None:
+    ev = CustomStopEvent(foo="foo", bar=42)
+    rep = repr(ev)
+    assert rep == "CustomStopEvent(foo='foo', bar=42)"
