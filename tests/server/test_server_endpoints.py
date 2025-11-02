@@ -970,7 +970,9 @@ async def test_post_event_context_not_available(
 ) -> None:
     # Dumb test for code coverage. Inject a dummy handler with no context to trigger 500 path
     wrapper = SimpleNamespace(
-        run_handler=SimpleNamespace(done=lambda: False, ctx=None), workflow_name="test"
+        run_handler=SimpleNamespace(done=lambda: False, ctx=None),
+        workflow_name="test",
+        status="running",
     )
 
     handler_id = "noctx-1"
@@ -1162,3 +1164,39 @@ async def test_legacy_results_endpoint_still_works(client: AsyncClient) -> None:
     assert isinstance(data, dict)
     assert data.get("handler_id") == handler_id
     assert data.get("result") is not None
+
+
+@pytest.mark.asyncio
+async def test_stream_events_after_completion_should_return_unconsumed_events(
+    client: AsyncClient,
+) -> None:
+    # Start streaming workflow that emits 3 events and completes
+    start_resp = await client.post(
+        "/workflows/streaming/run-nowait", json={"kwargs": {"count": 3}}
+    )
+    assert start_resp.status_code == 200
+    handler_id = start_resp.json()["handler_id"]
+
+    # Wait for completion via results endpoint
+    async def _wait_done() -> Response:
+        r = await client.get(f"/handlers/{handler_id}")
+        if r.status_code == 200:
+            return r
+        raise AssertionError("not done")
+
+    await wait_for_passing(_wait_done)
+
+    # Now fetch events AFTER completion. Expect the unconsumed events to still be retrievable.
+    # Use NDJSON for easier parsing.
+    resp = await client.get(f"/events/{handler_id}?sse=false")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("application/x-ndjson")
+
+    # Collect NDJSON lines
+    lines: list[str] = []
+    async for line in resp.aiter_lines():
+        data = line.strip()
+        if data:
+            lines.append(data)
+
+    assert len(lines) == 4
