@@ -198,6 +198,13 @@ class StopEvent(Event):
             data["result"] = self._result
         return data
 
+    def __repr__(self) -> str:
+        dict_items = {**self._data, **self.model_dump()}
+        # Format as key=value pairs
+        parts = [f"{k}={v!r}" for k, v in dict_items.items()]
+        dict_str = ", ".join(parts)
+        return f"{self.__class__.__name__}({dict_str})"
+
     def __str__(self) -> str:
         return str(self._result)
 
