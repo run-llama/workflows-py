@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from contextvars import ContextVar
 from dataclasses import dataclass
+import dataclasses
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -48,6 +49,13 @@ class StepWorkerState:
     step_name: str
     collected_events: dict[str, list[Event]]
     collected_waiters: list[StepWorkerWaiter]
+
+    def _deepcopy(self) -> StepWorkerState:
+        return StepWorkerState(
+            step_name=self.step_name,
+            collected_events={k: list(v) for k, v in self.collected_events.items()},
+            collected_waiters=[dataclasses.replace(x) for x in self.collected_waiters],
+        )
 
 
 @dataclass()

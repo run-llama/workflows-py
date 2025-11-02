@@ -4,12 +4,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import dataclasses
 from typing import Any, TYPE_CHECKING
 
 from workflows.events import Event
 from workflows.retry_policy import RetryPolicy
 from workflows.decorators import StepConfig
-from workflows.runtime.types.commands import CommandQueueEvent, WorkflowCommand
 from workflows.runtime.types.results import StepWorkerState, StepWorkerWaiter
 from workflows.runtime.types.ticks import TickAddEvent, WorkflowTick
 from workflows.workflow import Workflow
@@ -44,6 +44,19 @@ class BrokerState:
     is_running: bool
     config: BrokerConfig
     workers: dict[str, InternalStepWorkerState]
+
+    def deepcopy(self) -> BrokerState:
+        """
+        Deep-ish copy. Copies fields that are considered mutable during updates.
+        """
+        return BrokerState(
+            is_running=self.is_running,
+            config=self.config,  # immutable
+            workers={
+                name: worker_state._deepcopy()
+                for name, worker_state in self.workers.items()
+            },
+        )
 
     @staticmethod
     def from_workflow(workflow: Workflow) -> BrokerState:
@@ -228,10 +241,10 @@ def _import_event_type(qualified_name: str) -> type[Event]:
     return getattr(module, class_name)
 
 
-@dataclass()
+@dataclass(frozen=True)
 class BrokerConfig:
     """
-    Immutable configuration for a workflow run.
+    configuration for a workflow run.
 
     This contains all the static configuration that doesn't change during workflow execution.
 
@@ -300,6 +313,15 @@ class InternalStepWorkerState:
     collected_events: dict[str, list[Event]]
     collected_waiters: list[StepWorkerWaiter]
 
+    def _deepcopy(self) -> InternalStepWorkerState:
+        return InternalStepWorkerState(
+            queue=[dataclasses.replace(x) for x in self.queue],
+            config=self.config,
+            in_progress=[x._deepcopy() for x in self.in_progress],
+            collected_events={k: list(v) for k, v in self.collected_events.items()},
+            collected_waiters=[dataclasses.replace(x) for x in self.collected_waiters],
+        )
+
 
 @dataclass()
 class InProgressState:
@@ -324,3 +346,12 @@ class InProgressState:
     shared_state: StepWorkerState
     attempts: int
     first_attempt_at: float
+
+    def _deepcopy(self) -> InProgressState:
+        return InProgressState(
+            event=self.event,
+            worker_id=self.worker_id,
+            shared_state=self.shared_state._deepcopy(),
+            attempts=self.attempts,
+            first_attempt_at=self.first_attempt_at,
+        )
