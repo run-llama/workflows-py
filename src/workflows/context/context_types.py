@@ -74,7 +74,7 @@ class SerializedWaiter(BaseModel):
     # Fully qualified name of the event type being waited for (e.g. "mymodule.MyEvent")
     waiting_for_event: str
     # Requirements dict for matching the waited-for event
-    requirements: dict[str, Any] = Field(default_factory=dict)
+    has_requirements: bool = Field(default=False)
     # Resolved event if available (serialized), None otherwise
     resolved_event: Optional[str] = None
 

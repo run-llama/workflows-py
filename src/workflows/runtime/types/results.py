@@ -64,6 +64,8 @@ class StepWorkerWaiter(Generic[EventType]):
     waiting_for_event: type[EventType]
     # the requirements for the waiting event to consider it met
     requirements: dict[str, Any]
+    # requirements are not required to be serializable. Flag used during deserialization to re-ping the step function for the requirements
+    has_requirements: bool
     # set to true when the waiting event has been resolved, such that the step can retrieve it
     resolved_event: EventType | None
 

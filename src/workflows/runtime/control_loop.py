@@ -98,6 +98,8 @@ class _ControlLoopRunner:
         self.state = init_state
         self.workers: list[asyncio.Task] = []
         self.queue: asyncio.Queue[WorkflowTick] = asyncio.Queue()
+        for tick in self.state.rehydrate_with_ticks():
+            self.queue.put_nowait(tick)
         self.snapshot_plugin = as_snapshottable(plugin)
 
     async def wait_for_tick(self) -> WorkflowTick:
@@ -471,22 +473,26 @@ def _process_step_result_tick(
                 )
         elif isinstance(result, AddWaiter):
             # indicates that a run has added a waiter to the collected waiters state
-            existing = [
-                x
-                for x in worker_state.collected_waiters
-                if x.waiter_id == result.waiter_id
-            ]
-            if not existing:
-                # somewhat arbitrary, just retain the first one
-                worker_state.collected_waiters.append(
-                    StepWorkerWaiter(
-                        waiter_id=result.waiter_id,
-                        event=this_execution.event,
-                        waiting_for_event=result.event_type,
-                        requirements=result.requirements,
-                        resolved_event=None,
-                    )
-                )
+            existing = next(
+                (
+                    (i)
+                    for i, x in enumerate(worker_state.collected_waiters)
+                    if x.waiter_id == result.waiter_id
+                ),
+                None,
+            )
+            new_waiter = StepWorkerWaiter(
+                waiter_id=result.waiter_id,
+                event=this_execution.event,
+                waiting_for_event=result.event_type,
+                requirements=result.requirements,
+                has_requirements=bool(len(result.requirements)),
+                resolved_event=None,
+            )
+            if existing is not None:
+                worker_state.collected_waiters[existing] = new_waiter
+            else:
+                worker_state.collected_waiters.append(new_waiter)
                 if result.waiter_event:
                     commands.append(CommandPublishEvent(event=result.waiter_event))
 

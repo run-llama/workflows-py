@@ -9,7 +9,9 @@ from typing import Any, TYPE_CHECKING
 from workflows.events import Event
 from workflows.retry_policy import RetryPolicy
 from workflows.decorators import StepConfig
+from workflows.runtime.types.commands import CommandQueueEvent, WorkflowCommand
 from workflows.runtime.types.results import StepWorkerState, StepWorkerWaiter
+from workflows.runtime.types.ticks import TickAddEvent, WorkflowTick
 from workflows.workflow import Workflow
 from workflows.context.context_types import (
     SerializedContext,
@@ -70,6 +72,21 @@ class BrokerState:
             },
         )
 
+    def rehydrate_with_ticks(self) -> list[WorkflowTick]:
+        """
+        Rehydrates non-serializable state by re-running commands
+        """
+        commands: list[WorkflowTick] = []
+        for step_name, worker_state in sorted(self.workers.items(), key=lambda x: x[0]):
+            for waiter in sorted(
+                worker_state.collected_waiters, key=lambda x: x.waiter_id
+            ):
+                if waiter.has_requirements and not waiter.requirements:
+                    commands.append(
+                        TickAddEvent(event=waiter.event, step_name=step_name)
+                    )
+        return commands
+
     def to_serialized(self, serializer: BaseSerializer) -> SerializedContext:
         """Serialize the broker state to a SerializedContext."""
 
@@ -102,7 +119,8 @@ class BrokerState:
                     waiter_id=waiter.waiter_id,
                     event=serializer.serialize(waiter.event),
                     waiting_for_event=f"{waiter.waiting_for_event.__module__}.{waiter.waiting_for_event.__name__}",
-                    requirements=waiter.requirements,
+                    has_requirements=bool(len(waiter.requirements))
+                    or waiter.has_requirements,
                     resolved_event=serializer.serialize(waiter.resolved_event)
                     if waiter.resolved_event
                     else None,
@@ -185,7 +203,8 @@ class BrokerState:
                         waiter_id=waiter_data.waiter_id,
                         event=serializer.deserialize(waiter_data.event),
                         waiting_for_event=waiting_for_event,
-                        requirements=waiter_data.requirements,
+                        requirements={},
+                        has_requirements=waiter_data.has_requirements,
                         resolved_event=serializer.deserialize(
                             waiter_data.resolved_event
                         )
