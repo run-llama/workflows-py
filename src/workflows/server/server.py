@@ -44,6 +44,7 @@ from workflows.protocol import (
     WorkflowEventsListResponse,
     WorkflowGraphResponse,
     WorkflowSchemaResponse,
+    is_status_completed,
 )
 from workflows.server.abstract_workflow_store import (
     AbstractWorkflowStore,
@@ -1125,12 +1126,11 @@ class WorkflowServer:
 
         # Check if handler exists
         wrapper = self._handlers.get(handler_id)
-        completed_statuses = {"completed", "failed", "cancelled"}
-        if wrapper is not None and wrapper.status in completed_statuses:
+        if wrapper is not None and is_status_completed(wrapper.status):
             raise HTTPException(detail="Workflow already completed", status_code=409)
         if wrapper is None:
             handler_data = await self._load_handler(handler_id)
-            if handler_data.status in completed_statuses:
+            if is_status_completed(handler_data.status):
                 raise HTTPException(
                     detail="Workflow already completed", status_code=409
                 )
