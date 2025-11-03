@@ -6,10 +6,13 @@ from __future__ import annotations
 import asyncio
 import gc
 import logging
+import pickle
+import threading
 import weakref
 from typing import Any, Callable, Union
 from unittest import mock
 
+from pydantic import PrivateAttr
 import pytest
 
 from workflows.context import Context, PickleSerializer
@@ -702,6 +705,69 @@ def test_wrong_event_types() -> None:
         InvalidStartWorkflow()
 
 
+class LockEvent(Event):
+    key: Any
+
+
+class LockResponseEvent(Event):
+    key: Any
+
+
+class NonSerializableRequirement:
+    def __init__(self, be_serializable: bool = False) -> None:
+        if be_serializable:
+            self.lock = None
+        else:
+            self.lock = threading.Lock()
+
+    def __eq__(self, other: Any) -> bool:
+        return isinstance(other, NonSerializableRequirement)
+
+
+class NonSerializableRequirementsWorkflow(Workflow):
+    @step
+    async def wait_step(self, ctx: Context, ev: StartEvent) -> StopEvent:
+        # Create a waiter with a non-picklable requirement value
+        await ctx.wait_for_event(
+            LockResponseEvent,
+            waiter_event=InputRequiredEvent(),
+            waiter_id="lock_wait",
+            requirements={"key": NonSerializableRequirement()},
+            timeout=5,
+        )
+        return StopEvent(result="Done")
+
+
+@pytest.mark.asyncio
+async def test_human_in_the_loop_waiter_with_nonserializable_requirements_pickle_resume() -> (
+    None
+):
+    with pytest.raises(TypeError, match="cannot pickle '_thread.lock'"):
+        pickle.dumps(NonSerializableRequirement())
+
+    workflow = NonSerializableRequirementsWorkflow()
+
+    handler: WorkflowHandler = workflow.run()
+    assert handler.ctx
+
+    ctx_dict: dict[str, Any] | None = None
+
+    async for event in handler.stream_events():
+        if isinstance(event, InputRequiredEvent):
+            ctx_dict = handler.ctx.to_dict(serializer=PickleSerializer())
+            await handler.cancel_run()
+            break
+
+    # Restore and resume
+    new_ctx = Context.from_dict(workflow, ctx_dict or {}, serializer=PickleSerializer())
+    new_handler = workflow.run(ctx=new_ctx)
+    new_handler.ctx.send_event(
+        LockResponseEvent(key=NonSerializableRequirement(be_serializable=True))
+    )
+    final_result = await new_handler
+    assert final_result == "Done"
+
+
 def test__get_start_event_instance(caplog: Any) -> None:
     class CustomEvent(StartEvent):
         field: str
@@ -817,3 +883,29 @@ async def test_workflow_instances_garbage_collected_after_completion() -> None:
 
     # All weakrefs should be cleared
     assert all([r() is None for r in refs])
+
+
+class SomeEvent(StartEvent):
+    _not_serializable: threading.Lock | None = PrivateAttr(default=None)
+
+
+@pytest.mark.asyncio
+async def test_workflow_non_picklable_event() -> None:
+    step_started = asyncio.Event()
+    step_continued = asyncio.Event()
+
+    class DummyWorkflow(Workflow):
+        @step
+        async def step(self, ev: SomeEvent) -> StopEvent:
+            step_started.set()
+            await step_continued.wait()
+            return StopEvent()
+
+    start_event = SomeEvent()
+    start_event._not_serializable = threading.Lock()
+    wf = DummyWorkflow()
+    handler = wf.run(start_event=start_event)
+    await step_started.wait()
+    handler.ctx.to_dict()
+    step_continued.set()
+    await handler

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from contextvars import ContextVar
 from dataclasses import dataclass
+import dataclasses
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -49,6 +50,13 @@ class StepWorkerState:
     collected_events: dict[str, list[Event]]
     collected_waiters: list[StepWorkerWaiter]
 
+    def _deepcopy(self) -> StepWorkerState:
+        return StepWorkerState(
+            step_name=self.step_name,
+            collected_events={k: list(v) for k, v in self.collected_events.items()},
+            collected_waiters=[dataclasses.replace(x) for x in self.collected_waiters],
+        )
+
 
 @dataclass()
 class StepWorkerWaiter(Generic[EventType]):
@@ -64,6 +72,8 @@ class StepWorkerWaiter(Generic[EventType]):
     waiting_for_event: type[EventType]
     # the requirements for the waiting event to consider it met
     requirements: dict[str, Any]
+    # requirements are not required to be serializable. Flag used during deserialization to re-ping the step function for the requirements
+    has_requirements: bool
     # set to true when the waiting event has been resolved, such that the step can retrieve it
     resolved_event: EventType | None
 

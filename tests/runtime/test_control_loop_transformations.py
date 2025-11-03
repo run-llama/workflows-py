@@ -366,6 +366,7 @@ def test_waiter_resolution(base_state: BrokerState) -> None:
         event=original_event,
         waiting_for_event=OtherEvent,
         requirements={"data": "expected"},
+        has_requirements=True,
         resolved_event=None,
     )
     base_state.workers["test_step"].collected_waiters.append(waiter)

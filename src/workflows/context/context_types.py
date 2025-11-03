@@ -1,6 +1,7 @@
 from typing import Any, Optional
 import json
 from pydantic import BaseModel, Field
+from pydantic.functional_validators import model_validator
 
 
 class SerializedContextV0(BaseModel):
@@ -74,9 +75,21 @@ class SerializedWaiter(BaseModel):
     # Fully qualified name of the event type being waited for (e.g. "mymodule.MyEvent")
     waiting_for_event: str
     # Requirements dict for matching the waited-for event
-    requirements: dict[str, Any] = Field(default_factory=dict)
+    has_requirements: bool = Field(default=False)
     # Resolved event if available (serialized), None otherwise
     resolved_event: Optional[str] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def deserialize_requirements(cls, v: dict[str, Any]) -> dict[str, Any]:
+        # handle old requirements object
+        if (
+            "requirements" in v
+            and isinstance(v["requirements"], dict)
+            and len(v["requirements"]) > 0
+        ):
+            v["has_requirements"] = True
+        return v
 
 
 class SerializedStepWorkerState(BaseModel):

@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import replace
-from copy import deepcopy
 import time
 from typing import TYPE_CHECKING
 
@@ -98,6 +97,8 @@ class _ControlLoopRunner:
         self.state = init_state
         self.workers: list[asyncio.Task] = []
         self.queue: asyncio.Queue[WorkflowTick] = asyncio.Queue()
+        for tick in self.state.rehydrate_with_ticks():
+            self.queue.put_nowait(tick)
         self.snapshot_plugin = as_snapshottable(plugin)
 
     async def wait_for_tick(self) -> WorkflowTick:
@@ -335,7 +336,7 @@ def rewind_in_progress(
     now_seconds: float,
 ) -> tuple[BrokerState, list[WorkflowCommand]]:
     """Rewind the in_progress state, extracting commands to re-initiate the workers"""
-    state = deepcopy(state)
+    state = state.deepcopy()
     commands: list[WorkflowCommand] = []
     for step_name, step_state in sorted(state.workers.items(), key=lambda x: x[0]):
         for in_progress in step_state.in_progress:
@@ -365,7 +366,7 @@ def _process_step_result_tick(
     """
     processes the results from a step function execution
     """
-    state = deepcopy(init)
+    state = init.deepcopy()
     commands: list[WorkflowCommand] = []
     worker_state = state.workers[tick.step_name]
     # get the current execution details and mark it as no longer in progress
@@ -449,9 +450,12 @@ def _process_step_result_tick(
                 step_no_longer_in_progress = False
                 updated_state = replace(
                     this_execution.shared_state,
-                    collected_events=deepcopy(
-                        state.workers[tick.step_name].collected_events
-                    ),
+                    collected_events={
+                        x: list(y)
+                        for x, y in state.workers[
+                            tick.step_name
+                        ].collected_events.items()
+                    },
                 )
                 this_execution.shared_state = updated_state
                 commands.append(
@@ -471,22 +475,26 @@ def _process_step_result_tick(
                 )
         elif isinstance(result, AddWaiter):
             # indicates that a run has added a waiter to the collected waiters state
-            existing = [
-                x
-                for x in worker_state.collected_waiters
-                if x.waiter_id == result.waiter_id
-            ]
-            if not existing:
-                # somewhat arbitrary, just retain the first one
-                worker_state.collected_waiters.append(
-                    StepWorkerWaiter(
-                        waiter_id=result.waiter_id,
-                        event=this_execution.event,
-                        waiting_for_event=result.event_type,
-                        requirements=result.requirements,
-                        resolved_event=None,
-                    )
-                )
+            existing = next(
+                (
+                    (i)
+                    for i, x in enumerate(worker_state.collected_waiters)
+                    if x.waiter_id == result.waiter_id
+                ),
+                None,
+            )
+            new_waiter = StepWorkerWaiter(
+                waiter_id=result.waiter_id,
+                event=this_execution.event,
+                waiting_for_event=result.event_type,
+                requirements=result.requirements,
+                has_requirements=bool(len(result.requirements)),
+                resolved_event=None,
+            )
+            if existing is not None:
+                worker_state.collected_waiters[existing] = new_waiter
+            else:
+                worker_state.collected_waiters.append(new_waiter)
                 if result.waiter_event:
                     commands.append(CommandPublishEvent(event=result.waiter_event))
 
@@ -548,10 +556,11 @@ def _add_or_enqueue_event(
         used = set(x.worker_id for x in state.in_progress)
         id_candidates = [i for i in range(state.config.num_workers) if i not in used]
         id = id_candidates[0]
+        state_copy = state._deepcopy()
         shared_state: StepWorkerState = StepWorkerState(
             step_name=step_name,
-            collected_events=deepcopy(state.collected_events),
-            collected_waiters=deepcopy(state.collected_waiters),
+            collected_events=state_copy.collected_events,
+            collected_waiters=state_copy.collected_waiters,
         )
         state.in_progress.append(
             InProgressState(
@@ -591,7 +600,7 @@ def _add_or_enqueue_event(
 def _process_add_event_tick(
     tick: TickAddEvent, init: BrokerState, now_seconds: float
 ) -> tuple[BrokerState, list[WorkflowCommand]]:
-    state = deepcopy(init)
+    state = init.deepcopy()
     # iterate through the steps, and add to steps work queue if it's accepted.
     commands: list[WorkflowCommand] = []
     if isinstance(tick.event, StartEvent):
@@ -632,7 +641,7 @@ def _process_add_event_tick(
 def _process_cancel_run_tick(
     tick: TickCancelRun, init: BrokerState
 ) -> tuple[BrokerState, list[WorkflowCommand]]:
-    state = deepcopy(init)
+    state = init.deepcopy()
     state.is_running = False
     return state, [
         CommandPublishEvent(event=StopEvent()),
@@ -650,7 +659,7 @@ def _process_publish_event_tick(
 def _process_timeout_tick(
     tick: TickTimeout, init: BrokerState
 ) -> tuple[BrokerState, list[WorkflowCommand]]:
-    state = deepcopy(init)
+    state = init.deepcopy()
     state.is_running = False
     active_steps = [
         step_name
