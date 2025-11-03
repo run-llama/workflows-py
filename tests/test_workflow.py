@@ -12,6 +12,7 @@ import weakref
 from typing import Any, Callable, Union
 from unittest import mock
 
+from pydantic import PrivateAttr
 import pytest
 
 from workflows.context import Context, PickleSerializer
@@ -882,3 +883,29 @@ async def test_workflow_instances_garbage_collected_after_completion() -> None:
 
     # All weakrefs should be cleared
     assert all([r() is None for r in refs])
+
+
+class SomeEvent(StartEvent):
+    _not_serializable: threading.Lock | None = PrivateAttr(default=None)
+
+
+@pytest.mark.asyncio
+async def test_workflow_non_picklable_event() -> None:
+    step_started = asyncio.Event()
+    step_continued = asyncio.Event()
+
+    class DummyWorkflow(Workflow):
+        @step
+        async def step(self, ev: SomeEvent) -> StopEvent:
+            step_started.set()
+            await step_continued.wait()
+            return StopEvent()
+
+    start_event = SomeEvent()
+    start_event._not_serializable = threading.Lock()
+    wf = DummyWorkflow()
+    handler = wf.run(start_event=start_event)
+    await step_started.wait()
+    handler.ctx.to_dict()
+    step_continued.set()
+    await handler
