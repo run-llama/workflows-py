@@ -75,6 +75,7 @@ def _to_jsonable(value: object) -> Json:
 
 
 def render_schema(schema: object) -> str:
+    """Legacy JSON renderer (kept as fallback)."""
     try:
         jsonable = _to_jsonable(schema)
         return "```json\n" + json.dumps(jsonable, indent=2, ensure_ascii=False) + "\n```\n"
@@ -95,6 +96,180 @@ def resolve_ref(ref: str, components: Mapping[str, Any]) -> Tuple[str, Optional[
     group_map = components.get(group, {}) if isinstance(components, Mapping) else {}
     node = group_map.get(name)
     return name, node
+
+
+def _linkify_anchor(text: str) -> str:
+    """Create a local markdown link anchor for a header name.
+
+    Note: Many doc systems generate lowercase-hyphenated anchors from headers.
+    We follow that convention for intra-page links.
+    """
+    anchor = text.strip().lower().replace(" ", "-")
+    return f"[`{text}`](#{anchor})"
+
+
+def _schema_type_repr(schema: Mapping[str, Any], components: Mapping[str, Any]) -> str:
+    """Return a concise, human-friendly type representation for a schema."""
+    # $ref
+    if "$ref" in schema:
+        ref_name, _ = resolve_ref(str(schema["$ref"]), components)
+        return ref_name
+
+    # oneOf/anyOf/allOf
+    for key in ("oneOf", "anyOf", "allOf"):
+        if key in schema and isinstance(schema[key], list):
+            variants = [v for v in schema[key] if isinstance(v, Mapping)]
+            inner = ", ".join(_schema_type_repr(v, components) for v in variants)
+            label = {
+                "oneOf": "one of",
+                "anyOf": "any of",
+                "allOf": "all of",
+            }[key]
+            return f"{label} ({inner})"
+
+    t = str(schema.get("type", "")).strip()
+    fmt = str(schema.get("format", "")).strip()
+
+    if t == "array":
+        items = schema.get("items")
+        if isinstance(items, Mapping):
+            return f"array of {_schema_type_repr(items, components)}"
+        return "array"
+
+    if t == "object" or (not t and ("properties" in schema or "additionalProperties" in schema)):
+        # Map/dictionary form
+        if "additionalProperties" in schema and not schema.get("properties"):
+            ap = schema.get("additionalProperties")
+            if isinstance(ap, Mapping):
+                return f"map[string -> {_schema_type_repr(ap, components)}]"
+            return "map[string -> any]"
+        return "object"
+
+    if t:
+        return f"{t}{f' ({fmt})' if fmt else ''}"
+
+    # Enum-only schema without explicit type
+    if "enum" in schema:
+        try:
+            enum_vals = ", ".join(map(str, schema.get("enum", [])))
+            return f"enum ({enum_vals})"
+        except Exception:
+            return "enum"
+
+    return "unknown"
+
+
+def _render_enum(schema: Mapping[str, Any]) -> str:
+    if not isinstance(schema.get("enum"), list):
+        return ""
+    try:
+        values = ", ".join(md_escape(str(v)) for v in schema["enum"])
+    except Exception:
+        values = ""
+    return f"- **Allowed values**: {values}\n"
+
+
+def _render_examples(schema: Mapping[str, Any]) -> str:
+    example = schema.get("example")
+    if example is None:
+        return ""
+    try:
+        return "**Example**\n\n" + render_schema(example)
+    except Exception:
+        return ""
+
+
+def _render_object_properties_table(schema: Mapping[str, Any], components: Mapping[str, Any]) -> str:
+    properties = schema.get("properties", {})
+    if not isinstance(properties, Mapping) or not properties:
+        return ""
+    required_set = set(schema.get("required", []) if isinstance(schema.get("required"), list) else [])
+    rows: List[str] = [
+        "| Field | Type | Required | Description | Default |",
+        "| --- | --- | :---: | --- | --- |",
+    ]
+    for prop_name, prop_schema in properties.items():
+        if not isinstance(prop_schema, Mapping):
+            continue
+        typ = _schema_type_repr(prop_schema, components)
+        desc = str(prop_schema.get("description", "")).strip()
+        default = prop_schema.get("default")
+        default_str = md_escape(json.dumps(default)) if default is not None else ""
+        rows.append(
+            f"| `{md_escape(str(prop_name))}` | {md_escape(typ)} | {'yes' if prop_name in required_set else 'no'} | {md_escape(desc)} | {default_str} |"
+        )
+    return "\n".join(rows) + "\n\n"
+
+
+def render_schema_readable(schema: object, components: Mapping[str, Any]) -> str:
+    """Render a schema in a human-friendly format.
+
+    - Objects: table of properties
+    - Arrays/Primitives: bullet list of key details
+    - oneOf/anyOf/allOf: enumerated summary
+    Falls back to JSON if structure is unknown.
+    """
+    if not isinstance(schema, Mapping):
+        return render_schema(schema)
+
+    # Follow $ref once for readability
+    if "$ref" in schema:
+        ref_name, ref_schema = resolve_ref(str(schema["$ref"]), components)
+        heading = f"- Schema: {_linkify_anchor(ref_name)}\n\n"
+        if isinstance(ref_schema, Mapping):
+            return heading + render_schema_readable(ref_schema, components)
+        return heading
+
+    # oneOf/anyOf/allOf
+    for key in ("oneOf", "anyOf", "allOf"):
+        if key in schema and isinstance(schema[key], list) and schema[key]:
+            label = {"oneOf": "One of", "anyOf": "Any of", "allOf": "All of"}[key]
+            lines: List[str] = [f"**{label}**\n"]
+            for variant in schema[key]:
+                if not isinstance(variant, Mapping):
+                    continue
+                lines.append(f"- {_schema_type_repr(variant, components)}\n")
+            # If this union also describes properties, show them
+            props_tbl = _render_object_properties_table(schema, components)
+            if props_tbl:
+                lines.append("\n" + props_tbl)
+            lines.append(_render_enum(schema))
+            lines.append(_render_examples(schema))
+            return "".join(lines)
+
+    # Objects
+    is_object = schema.get("type") == "object" or "properties" in schema or "additionalProperties" in schema
+    if is_object:
+        lines: List[str] = []
+        # If map-like
+        if "additionalProperties" in schema and not schema.get("properties"):
+            ap = schema.get("additionalProperties")
+            if isinstance(ap, Mapping):
+                lines.append(f"- Type: map[string -> {_schema_type_repr(ap, components)}]\n")
+            else:
+                lines.append("- Type: map[string -> any]\n")
+        table = _render_object_properties_table(schema, components)
+        if table:
+            lines.append(table)
+        lines.append(_render_enum(schema))
+        lines.append(_render_examples(schema))
+        return "".join(lines) if any(lines) else render_schema(schema)
+
+    # Arrays / primitives
+    lines = [f"- **Type**: {_schema_type_repr(schema, components)}\n"]
+    desc = str(schema.get("description", "")).strip()
+    if desc:
+        lines.append(f"- **Description**: {md_escape(desc)}\n")
+    default = schema.get("default")
+    if default is not None:
+        try:
+            default_str = json.dumps(default)
+        except Exception:
+            default_str = str(default)
+        lines.append(f"- **Default**: {md_escape(default_str)}\n")
+    lines.append(_render_enum(schema))
+    lines.append(_render_examples(schema))
+    return "".join(lines)
 
 
 def schema_title(schema: Mapping[str, Any]) -> Optional[str]:
@@ -148,11 +323,11 @@ def render_request_body(rb: Mapping[str, Any], components: Mapping[str, Any]) ->
         # Resolve top-level $ref for readability
         if isinstance(schema, Mapping) and "$ref" in schema:
             ref_name, ref_schema = resolve_ref(str(schema["$ref"]), components)
-            lines.append(f"  - Schema: `{ref_name}`\n\n")
-            if ref_schema is not None:
-                lines.append(render_schema(ref_schema))
+            lines.append(f"  - Schema: {_linkify_anchor(ref_name)}\n\n")
+            if isinstance(ref_schema, Mapping):
+                lines.append(render_schema_readable(ref_schema, components))
         else:
-            lines.append(render_schema(schema))
+            lines.append(render_schema_readable(schema, components))
     return "\n".join(lines) + "\n"
 
 
@@ -177,11 +352,11 @@ def render_responses(responses: Mapping[str, Any], components: Mapping[str, Any]
                     continue
                 if isinstance(schema, Mapping) and "$ref" in schema:
                     ref_name, ref_schema = resolve_ref(str(schema["$ref"]), components)
-                    out.append(f"  - Schema: `{ref_name}`\n\n")
-                    if ref_schema is not None:
-                        out.append(render_schema(ref_schema))
+                    out.append(f"  - Schema: {_linkify_anchor(ref_name)}\n\n")
+                    if isinstance(ref_schema, Mapping):
+                        out.append(render_schema_readable(ref_schema, components))
                 else:
-                    out.append(render_schema(schema))
+                    out.append(render_schema_readable(schema, components))
         out.append("\n")
     return "".join(out)
 
@@ -252,7 +427,11 @@ def build_index_md(openapi: Mapping[str, Any]) -> str:
         header.append("These are the component schemas referenced above.\n\n")
         for name in sorted(schemas.keys()):
             header.append(f"#### {name}\n\n")
-            header.append(render_schema(schemas[name]))
+            schema_obj = schemas[name]
+            if isinstance(schema_obj, Mapping):
+                header.append(render_schema_readable(schema_obj, components))
+            else:
+                header.append(render_schema(schema_obj))
             header.append("\n")
 
     return "\n".join([line for line in header if line is not None])
