@@ -59,6 +59,6 @@ Deletes an environment and all associated profiles. If the deleted environment w
 
 ## See also
 
-- Profiles and tokens: [`llamactl auth`](/python/cloud/llamaagents/llamactl-reference/commands-auth)
-- Getting started: [Introduction](/python/cloud/llamaagents/getting-started)
-- Deployments: [`llamactl deployments`](/python/cloud/llamaagents/llamactl-reference/commands-deployments)
+- Profiles and tokens: [`llamactl auth`](/python/llamaagents/llamactl-reference/commands-auth/)
+- Getting started: [Introduction](/python/llamaagents/llamactl/getting-started/)
+- Deployments: [`llamactl deployments`](/python/llamaagents/llamactl-reference/commands-deployments/)

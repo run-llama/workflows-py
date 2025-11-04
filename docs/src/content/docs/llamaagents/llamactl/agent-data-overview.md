@@ -27,7 +27,7 @@ Important behavior and constraints:
 - **Aggregation**: Group by one or more data fields and optionally return per‑group counts and/or the first item.
 
 Project scoping:
-- You can scope requests to a specific project by providing the `Project-Id` header (UUID). This is especially important if your API key has access to multiple projects. Read more in the [Configuration Reference](/python/cloud/llamaagents/configuration-reference#authorization).
+- You can scope requests to a specific project by providing the `Project-Id` header (UUID). This is especially important if your API key has access to multiple projects. Read more in the [Configuration Reference](/python/llamaagents/llamactl/configuration-reference#authorization).
 
 ### Filter DSL
 

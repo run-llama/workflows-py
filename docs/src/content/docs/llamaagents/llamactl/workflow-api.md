@@ -44,11 +44,11 @@ answer-question = "app.workflows:qa_workflow"
 
 ## How serving works (local and cloud)
 
-- `llamactl serve` discovers your config. See [`llamactl serve`](/python/cloud/llamaagents/llamactl-reference/commands-serve).
+- `llamactl serve` discovers your config. See [`llamactl serve`](/python/llamaagents/llamactl-reference/commands-serve/).
 - The app server loads your workflows.
 - HTTP routes are exposed under `/deployments/{name}`. In development, `{name}` defaults to your Python project name and is configurable. On deploy, you can set a new name; a short random suffix may be appended to ensure uniqueness.
 - Workflow instances are registered under the specified name. For example, `POST /deployments/app/workflows/answer-question/run` runs the workflow above.
-- If you configure a UI, it runs alongside your API (proxied in dev, static in preview). For details, see [UI build and dev integration](/python/cloud/llamaagents/ui-build).
+- If you configure a UI, it runs alongside your API (proxied in dev, static in preview). For details, see [UI build and dev integration](/python/llamaagents/llamactl/ui-build).
 
 During development, the API is available at `http://localhost:4501`. After you deploy to LlamaCloud, it is available at `https://api.cloud.llamaindex.ai`.
 

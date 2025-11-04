@@ -7,7 +7,7 @@ sidebar:
 LlamaAgents is currently in alpha. You can try it out locally or [request access by contacting us](https://landing.llamaindex.ai/llamaagents?utm_source=docs).
 :::
 
-As described in the [Getting Started](/python/cloud/llamaagents/getting-started) guide, deploying a LlamaAgent to LlamaCloud requires connecting it to a `git` source (specifically, GitHub).
+As described in the [Getting Started](/python/llamaagents/llamactl/getting-started) guide, deploying a LlamaAgent to LlamaCloud requires connecting it to a `git` source (specifically, GitHub).
 
 However, when you push changes to GitHub, they are not automatically applied to your LlamaAgent. To keep your deployment in sync with your `git` reference, you must manually run `llamactl deployments update`.
 
