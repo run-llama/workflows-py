@@ -131,13 +131,13 @@ When you save, LlamaAgents will verify that it has access to your repository (an
 After creation, the TUI will show deployment status and logs.
 - You can later use `llamactl deployments get` to view again.
 - You can add secrets or change branches with `llamactl deployments edit`.
-- If you update your source repo, run `llamactl deployments update` to roll a new version. If you are interested in automating the deployment updates with GitHub Actions, you can read the [Continuous Deployment guide](/python/cloud/llamaagents/cd-with-github-actions)
+- If you update your source repo, run `llamactl deployments update` to roll a new version. If you are interested in automating the deployment updates with GitHub Actions, you can read the [Continuous Deployment guide](/python/llamaagents/llamactl/cd-with-github-actions/)
 
 ## Alternative Ways to Deploy
 
 If you prefer a self-hosted deployments, `llamactl` has utilities to export your workflows to container files, so that you can easily build images and deploy your agent workflow anywhere.
 
-Read more about this in the [`pkg` command reference](/python/cloud/llamaagents/llamactl-reference/commands-pkg).
+Read more about this in the [`pkg` command reference](/python/llamaagents/llamactl-reference/commands-pkg/).
 
 ---
 
