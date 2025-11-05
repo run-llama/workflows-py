@@ -81,6 +81,20 @@ await client.deleteItem(updated.id);
 SDK responses are strongly typed and camel‑cased.
 - `TypedAgentData<T>` fields: `id`, `deploymentName`, `collection?`, `data`, `createdAt`, `updatedAt`.
 
+### Delete by query
+
+Delete multiple items that match a filter. Returns the number of deleted items.
+
+```ts
+const deletedCount = await client.delete({
+  filter: {
+    status: { eq: "inactive" },
+    age: { gte: 65 },
+  },
+});
+console.log(deletedCount);
+```
+
 ### Search
 
 ```ts
