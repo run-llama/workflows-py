@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2025 LlamaIndex Inc.
 
+from __future__ import annotations
 import asyncio
 from collections import Counter
 import json
@@ -25,6 +26,7 @@ from datetime import datetime
 from workflows.context.serializers import JsonSerializer
 from .conftest import ExternalEvent
 from workflows.server.memory_workflow_store import MemoryWorkflowStore
+from llama_index_instrumentation.dispatcher import active_instrument_tags
 
 
 class CustomStopEvent(StopEvent):
@@ -1200,3 +1202,39 @@ async def test_stream_events_after_completion_should_return_unconsumed_events(
             lines.append(data)
 
     assert len(lines) == 4
+
+
+@pytest.mark.asyncio
+async def test_instrument_tags_contains_handler_id_in_server_context() -> None:
+    seen_handler_id: dict[str, str | None] = {"handler_id": None}
+
+    class TagReadingWorkflow(Workflow):
+        @step
+        async def read_tags(self, ctx: Context, ev: StartEvent) -> StopEvent:
+            # Read handler_id set by the server while streaming events
+            hid = active_instrument_tags.get().get("handler_id")
+            seen_handler_id["handler_id"] = hid
+            return StopEvent()
+
+    server = WorkflowServer(workflow_store=MemoryWorkflowStore())
+    server.add_workflow("tags", TagReadingWorkflow())
+
+    async with server.contextmanager():
+        transport = ASGITransport(app=server.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            # Start without waiting
+            start = await client.post("/workflows/tags/run-nowait", json={})
+            assert start.status_code == 200
+            handler_id = start.json()["handler_id"]
+
+            # Wait for completion and fetch result
+            async def _wait_done() -> dict[str, Any]:
+                r = await client.get(f"/handlers/{handler_id}")
+                if r.status_code == 200:
+                    return r.json()
+                raise AssertionError("not done")
+
+            data = await wait_for_passing(_wait_done)
+            assert data["status"] == "completed"
+            assert seen_handler_id["handler_id"] is not None
+            assert seen_handler_id["handler_id"] == handler_id

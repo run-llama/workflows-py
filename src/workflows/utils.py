@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import secrets
+import string
 import inspect
 from typing import (
     TYPE_CHECKING,
@@ -270,3 +272,11 @@ def is_free_function(qualname: str) -> bool:
         return False
     else:
         return toks[-2] == "<locals>"
+
+
+_alphabet = string.ascii_letters + string.digits  # A-Z, a-z, 0-9
+
+
+def _nanoid(size: int = 10) -> str:
+    """Returns a unique identifier with the format 'kY2xP9hTnQ'."""
+    return "".join(secrets.choice(_alphabet) for _ in range(size))

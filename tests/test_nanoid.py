@@ -1,7 +1,4 @@
-# SPDX-License-Identifier: MIT
-# Copyright (c) 2025 LlamaIndex Inc.
-
-from workflows.server.utils import nanoid
+from workflows.utils import _nanoid as nanoid
 
 
 def test_nanoid_default_length() -> None:

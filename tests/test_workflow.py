@@ -12,6 +12,7 @@ import weakref
 from typing import Any, Callable, Union
 from unittest import mock
 
+from llama_index_instrumentation.dispatcher import active_instrument_tags
 from pydantic import PrivateAttr
 import pytest
 
@@ -909,3 +910,24 @@ async def test_workflow_non_picklable_event() -> None:
     handler.ctx.to_dict()
     step_continued.set()
     await handler
+
+
+@pytest.mark.asyncio
+async def test_inner_step_can_access_run_id_from_instrument_tags() -> None:
+    # container to mutate rather than deal with nonlocal
+    run_id: dict[str, str | None] = {"run_id": None}
+
+    class TagReadingWorkflow(Workflow):
+        @step
+        async def read_tags(self, ctx: Context, ev: StartEvent) -> StopEvent:
+            tags = active_instrument_tags.get()
+            run_id["run_id"] = tags.get("run_id")
+            return StopEvent()
+
+    wf = TagReadingWorkflow()
+    handler = wf.run()
+    await handler
+
+    assert handler.run_id is not None
+    assert run_id["run_id"] is not None
+    assert run_id["run_id"] == handler.run_id
