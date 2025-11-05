@@ -265,9 +265,17 @@ class _ControlLoopRunner:
         try:
             while True:
                 tick = await self.wait_for_tick()
-                self.state, commands = _reduce_tick(
-                    tick, self.state, await self.plugin.get_now()
-                )
+                try:
+                    self.state, commands = _reduce_tick(
+                        tick, self.state, await self.plugin.get_now()
+                    )
+                except Exception:
+                    await self.cleanup_tasks()
+                    logger.error(
+                        "Unexpected error in internal control loop of workflow. This shouldn't happen. ",
+                        exc_info=True,
+                    )
+                    raise
                 if self.snapshot_plugin is not None:
                     self.snapshot_plugin.on_tick(tick)
                 for command in commands:

@@ -85,7 +85,7 @@ class WorkflowServer:
             workflow_store if workflow_store is not None else MemoryWorkflowStore()
         )
         self._assets_path = Path(__file__).parent / "static"
-        self._persistence_backoff = persistence_backoff
+        self._persistence_backoff = list(persistence_backoff)
 
         self._middleware = middleware or [
             Middleware(
@@ -1412,7 +1412,7 @@ class _WorkflowHandler:
     _persistence_backoff: list[float]
     _on_finsh: Callable[[], Awaitable[None]] | None = None
 
-    async def persist(self) -> None:
+    def _as_persistent(self) -> PersistentHandler:
         """Persist the current handler state immediately to the workflow store."""
         self.updated_at = datetime.now(timezone.utc)
         if self.status in ("completed", "failed", "cancelled"):
@@ -1430,15 +1430,25 @@ class _WorkflowHandler:
             completed_at=self.completed_at,
             ctx=self.run_handler.ctx.to_dict() if self.run_handler.ctx else {},
         )
+        return persistent
 
+    async def persist(self, persistent: PersistentHandler) -> None:
         await self._workflow_store.update(persistent)
 
     async def checkpoint(self) -> None:
         """Persist with retry/backoff; cancel handler when retries exhausted."""
         backoffs = list(self._persistence_backoff)
+        try:
+            persistent = self._as_persistent()
+        except Exception as e:
+            logger.error(
+                f"Failed to checkpoint handler {self.handler_id} to persistent state. Is there non-serializable state in an event or the state store? {e}",
+                exc_info=True,
+            )
+            raise
         while True:
             try:
-                await self.persist()
+                await self.persist(persistent)
                 return
             except Exception as e:
                 backoff = backoffs.pop(0) if backoffs else None
