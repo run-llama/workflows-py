@@ -75,6 +75,20 @@ Notes:
 - Updates overwrite the entire `data` object.
 - `get_item` raises an `httpx.HTTPStatusError` with status code 404 if not found.
 
+### Delete by query
+
+Delete multiple items that match a filter. Returns the number of deleted items.
+
+```python
+deleted_count = await client.delete(
+    filter={
+        "status": {"eq": "inactive"},
+        "age": {"gte": 65},
+    }
+)
+print(deleted_count)
+```
+
 ### Search
 
 You can filter by `data` fields and by `created_at`/`updated_at` (top-level fields). Sort using a comma-delimited list of fields; the `data.` prefix is required when sorting by data fields. The default page size is 50 (max 1000).
@@ -134,3 +148,37 @@ Details:
 - `first`: returns the first `data` item per group (earliest `created_at`).
 - `order_by`: uses the same semantics as search (applies to group key expressions).
 - Pagination uses `offset` and `page_size` similarly to search.
+
+### Untyped APIs
+
+Use the untyped methods when you want to skip Pydantic validation of your model. These methods response objects where the `.data` payload is a plain `dict` rather than a Pydantic model.
+
+```python
+# Get raw item (AgentData object; .data is a dict)
+raw_item = await client.untyped_get_item(created.id)
+print(raw_item.id, raw_item.deployment_name, raw_item.collection)
+print(raw_item.data["name"])  # dict access
+
+# Search (raw paginated response)
+raw_page = await client.untyped_search(
+    filter={"status": {"eq": "active"}},
+    order_by="data.name desc, created_at",
+    page_size=50,
+)
+for item in raw_page.items:  # each item is an AgentData object
+    print(item.data)  # dict
+
+# Pagination fields match the API
+print(raw_page.next_page_token, raw_page.total_size)
+
+# Aggregate (raw paginated response)
+raw_groups = await client.untyped_aggregate(
+    filter={"status": {"eq": "active"}},
+    group_by=["department", "role"],
+    count=True,
+    first=True,
+)
+for grp in raw_groups.items:  # each item is an AggregateGroup object
+    print(grp.group_key, grp.count, grp.first_item)  # first_item is a dict
+print(raw_groups.next_page_token, raw_groups.total_size)
+```
