@@ -119,8 +119,9 @@ class Workflow(metaclass=WorkflowMeta):
         self._verbose = verbose
         self._disable_validation = disable_validation
         self._num_concurrent_runs = num_concurrent_runs
-        self._stop_event_class = self._ensure_stop_event_class()
+        # Detect StartEvent issues before StopEvent for clearer guidance
         self._start_event_class = self._ensure_start_event_class()
+        self._stop_event_class = self._ensure_stop_event_class()
         self._events = self._ensure_events_collected()
         self._sem = (
             asyncio.Semaphore(num_concurrent_runs) if num_concurrent_runs else None
@@ -145,10 +146,18 @@ class Workflow(metaclass=WorkflowMeta):
 
         num_found = len(start_events_found)
         if num_found == 0:
-            msg = "At least one Event of type StartEvent must be received by any step."
+            cls_name = self.__class__.__name__
+            msg = (
+                "At least one Event of type StartEvent must be received by any step. "
+                f"(Workflow '{cls_name}' has no @step that accepts StartEvent.)"
+            )
             raise WorkflowConfigurationError(msg)
         elif num_found > 1:
-            msg = f"Only one type of StartEvent is allowed per workflow, found {num_found}: {start_events_found}."
+            cls_name = self.__class__.__name__
+            msg = (
+                f"Only one type of StartEvent is allowed per workflow, found {num_found}: {start_events_found} "
+                f"in workflow '{cls_name}'."
+            )
             raise WorkflowConfigurationError(msg)
         else:
             return start_events_found.pop()
@@ -206,10 +215,18 @@ class Workflow(metaclass=WorkflowMeta):
 
         num_found = len(stop_events_found)
         if num_found == 0:
-            msg = "At least one Event of type StopEvent must be returned by any step."
+            cls_name = self.__class__.__name__
+            msg = (
+                "At least one Event of type StopEvent must be returned by any step. "
+                f"(Workflow '{cls_name}' has no @step that returns StopEvent.)"
+            )
             raise WorkflowConfigurationError(msg)
         elif num_found > 1:
-            msg = f"Only one type of StopEvent is allowed per workflow, found {num_found}: {stop_events_found}."
+            cls_name = self.__class__.__name__
+            msg = (
+                f"Only one type of StopEvent is allowed per workflow, found {num_found}: {stop_events_found} "
+                f"in workflow '{cls_name}'."
+            )
             raise WorkflowConfigurationError(msg)
         else:
             return stop_events_found.pop()
@@ -340,14 +357,32 @@ class Workflow(metaclass=WorkflowMeta):
             workflow=self, start_event=start_event_instance, semaphore=self._sem
         )
 
-    def _validate(self) -> bool:
+    def validate(self) -> bool:
         """
         Validate the workflow to ensure it's well-formed.
 
         Returns True if the workflow uses human-in-the-loop, False otherwise.
         """
+        return self._validate()
+
+    def _validate(self) -> bool:
         if self._disable_validation:
             return False
+
+        # Ensure at least one step is configured before inspecting events
+        if not self._get_steps():
+            cls_name = self.__class__.__name__
+            msg = (
+                f"Workflow '{cls_name}' has no configured steps. "
+                "Did you forget to annotate methods with @step or to register "
+                "free-function steps via @step(workflow=...)?"
+            )
+            raise WorkflowConfigurationError(msg)
+
+        # Recompute StartEvent and StopEvent classes here to support dynamic changes
+        # and to surface StartEvent errors before StopEvent during validation.
+        self._start_event_class = self._ensure_start_event_class()
+        self._stop_event_class = self._ensure_stop_event_class()
 
         produced_events: set[type] = {self._start_event_class}
         consumed_events: set[type] = set()

@@ -885,6 +885,68 @@ async def test_workflow_instances_garbage_collected_after_completion() -> None:
     assert all([r() is None for r in refs])
 
 
+def test_workflow_error_no_steps_configured_message() -> None:
+    class Dummy(Workflow):
+        @step
+        def ok(self, ev: StartEvent) -> StopEvent:
+            return StopEvent()
+
+    wf = Dummy()
+
+    # simulate a workflow with no steps at validation time
+    wf._get_steps = lambda: {}  # type: ignore[method-assign]
+
+    with pytest.raises(
+        WorkflowConfigurationError,
+        match=r"Workflow 'Dummy' has no configured steps",
+    ):
+        wf._validate()
+
+
+def test_missing_start_event_error_includes_class_name() -> None:
+    class Dummy(Workflow):
+        @step
+        def ok(self, ev: StartEvent) -> StopEvent:
+            return StopEvent()
+
+        @step
+        def bad(self, ev: Event) -> StopEvent:
+            return StopEvent()
+
+    wf = Dummy()
+    # validate only the 'bad' step to simulate missing StartEvent config
+    only_bad = {"bad": wf._get_steps()["bad"]}
+    wf._get_steps = lambda: only_bad  # type: ignore[method-assign]
+
+    with pytest.raises(
+        WorkflowConfigurationError,
+        match=r"Workflow 'Dummy' has no @step that accepts StartEvent",
+    ):
+        wf._validate()
+
+
+def test_missing_stop_event_error_includes_class_name() -> None:
+    class Dummy(Workflow):
+        @step
+        def ok(self, ev: StartEvent) -> StopEvent:
+            return StopEvent()
+
+        @step
+        def bad(self, ev: StartEvent) -> None:
+            return None  # type: ignore[return-value]
+
+    wf = Dummy()
+    # validate only the 'bad' step to simulate missing StopEvent config
+    only_bad = {"bad": wf._get_steps()["bad"]}
+    wf._get_steps = lambda: only_bad  # type: ignore[method-assign]
+
+    with pytest.raises(
+        WorkflowConfigurationError,
+        match=r"Workflow 'Dummy' has no @step that returns StopEvent",
+    ):
+        wf._validate()
+
+
 class SomeEvent(StartEvent):
     _not_serializable: threading.Lock | None = PrivateAttr(default=None)
 
