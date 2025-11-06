@@ -125,7 +125,7 @@ class WorkflowBroker(Generic[MODEL_T]):
         self._init_state = previous
 
         async def _run_workflow(run_id: str, tags: dict[str, Any]) -> None:
-            with instrument_tags({**tags, "run_id": run_id}):
+            with instrument_tags({"run_id": run_id, **tags}):
                 # defer execution to make sure the task can be captured and passed
                 # to the handler as async exception, protecting against exceptions from before_start
                 self._is_running = True
