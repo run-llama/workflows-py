@@ -44,6 +44,7 @@ from workflows.protocol import (
     WorkflowEventsListResponse,
     WorkflowGraphResponse,
     WorkflowSchemaResponse,
+    is_status_completed,
 )
 from workflows.server.abstract_workflow_store import (
     AbstractWorkflowStore,
@@ -1125,9 +1126,11 @@ class WorkflowServer:
 
         # Check if handler exists
         wrapper = self._handlers.get(handler_id)
+        if wrapper is not None and is_status_completed(wrapper.status):
+            raise HTTPException(detail="Workflow already completed", status_code=409)
         if wrapper is None:
             handler_data = await self._load_handler(handler_id)
-            if handler_data.status in {"completed", "failed", "cancelled"}:
+            if is_status_completed(handler_data.status):
                 raise HTTPException(
                     detail="Workflow already completed", status_code=409
                 )
@@ -1407,6 +1410,7 @@ class _WorkflowHandler:
     # Dependencies for persistence
     _workflow_store: AbstractWorkflowStore
     _persistence_backoff: list[float]
+    _on_finsh: Callable[[], Awaitable[None]] | None = None
 
     async def persist(self) -> None:
         """Persist the current handler state immediately to the workflow store."""
@@ -1536,6 +1540,7 @@ class _WorkflowHandler:
     async def _stream_events(self, on_finish: Callable[[], Awaitable[None]]) -> None:
         """Internal method that streams events, updates status, and persists state."""
         await self.checkpoint()
+        self._on_finish = on_finish
         async for event in self.run_handler.stream_events(expose_internal=True):
             if (  # Watch for a specific internal event that signals the step is complete
                 isinstance(event, StepStateChanged)
@@ -1561,7 +1566,6 @@ class _WorkflowHandler:
             logger.error(f"Workflow run {self.handler_id} failed! {e}", exc_info=True)
 
         await self.checkpoint()
-        await on_finish()
 
     async def acquire_events_stream(
         self, timeout: float = 1
@@ -1608,6 +1612,8 @@ class _WorkflowHandler:
                     queue_get_task.cancel()
                     break
         finally:
+            if self._on_finish is not None:
+                await self._on_finish()
             self.consumer_mutex.release()
 
 

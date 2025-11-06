@@ -25,9 +25,10 @@ Important behavior and constraints:
 - **Access control**: You can only read/write data for agents in projects you can access. `_public` data is visible across agents within the same project.
 - **Filtering/Sorting**: You can filter on any `data` fields and on the top‑level `created_at` and `updated_at`. Sorting accepts a comma‑separated list; prefix fields inside `data` with `data.` (for example, `data.name desc, created_at`).
 - **Aggregation**: Group by one or more data fields and optionally return per‑group counts and/or the first item.
+- **Deletion**: Delete by ID or delete in bulk by query. Bulk delete accepts the same filter DSL as search.
 
 Project scoping:
-- You can scope requests to a specific project by providing the `Project-Id` header (UUID). This is especially important if your API key has access to multiple projects. Read more in the [Configuration Reference](/python/cloud/llamaagents/configuration-reference#authorization).
+- You can scope requests to a specific project by providing the `Project-Id` header (UUID). This is especially important if your API key has access to multiple projects. Read more in the [Configuration Reference](/python/llamaagents/llamactl/configuration-reference#authorization).
 
 ### Filter DSL
 

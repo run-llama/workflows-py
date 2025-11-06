@@ -4,6 +4,7 @@ import pytest
 
 from workflows.server.abstract_workflow_store import HandlerQuery, PersistentHandler
 from workflows.server.sqlite.sqlite_workflow_store import SqliteWorkflowStore
+from workflows.events import StopEvent
 
 
 @pytest.mark.asyncio
@@ -160,3 +161,44 @@ async def test_query_filters_by_handler_id_and_empty_lists(tmp_path: Path) -> No
     # No filters returns all
     all_rows = await store.query(HandlerQuery())
     assert {h.handler_id for h in all_rows} == {"h1", "h2", "h3"}
+
+
+class CustomStopEvent(StopEvent):
+    x: int
+    y: list[int]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "event",
+    [StopEvent(result={"meta": {"x": 1, "y": [2, 3]}}), CustomStopEvent(x=1, y=[2, 3])],
+)
+async def test_update_pydantic_result_serialization(
+    tmp_path: Path, event: StopEvent
+) -> None:
+    """
+    Ensures that a Pydantic BaseModel (StopEvent) stored in `result` is properly
+    serialized using model_dump_json() and does not raise TypeError as with json.dumps.
+    Also validates round-trip deserialization shape.
+    """
+    db_path: str = str(tmp_path / "handlers.db")
+    store = SqliteWorkflowStore(db_path)
+
+    handler = PersistentHandler(
+        handler_id="pydantic-result",
+        workflow_name="wf_pyd",
+        status="completed",
+        result=event,
+        ctx={"state": {"ok": True}},
+    )
+
+    # This would raise TypeError if the store used json.dumps(handler.result)
+    await store.update(handler)
+
+    rows = await store.query(HandlerQuery(handler_id_in=["pydantic-result"]))
+    assert len(rows) == 1
+    found = rows[0]
+    assert found.handler_id == "pydantic-result"
+
+    # The row's result should deserialize to a StopEvent
+    assert found.result == event

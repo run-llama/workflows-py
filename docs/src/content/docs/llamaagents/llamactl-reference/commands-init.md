@@ -55,4 +55,4 @@ llamactl init --template basic-ui --dir ./basic-ui --force
 llamactl init --update
 ```
 
-See also: [Getting Started guide](/python/cloud/llamaagents/getting-started).
+See also: [Getting Started guide](/python/llamaagents/llamactl/getting-started/).

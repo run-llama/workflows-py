@@ -357,12 +357,15 @@ class Workflow(metaclass=WorkflowMeta):
             workflow=self, start_event=start_event_instance, semaphore=self._sem
         )
 
-    def _validate(self) -> bool:
+    def validate(self) -> bool:
         """
         Validate the workflow to ensure it's well-formed.
 
         Returns True if the workflow uses human-in-the-loop, False otherwise.
         """
+        return self._validate()
+
+    def _validate(self) -> bool:
         if self._disable_validation:
             return False
 

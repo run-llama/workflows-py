@@ -78,6 +78,6 @@ Refreshes the deployment to the latest commit on the configured branch and shows
 
 ## See also
 
-- Getting started: [Introduction](/python/cloud/llamaagents/getting-started)
-- Configure names, env, and UI: [Deployment Config Reference](/python/cloud/llamaagents/configuration-reference)
-- Local dev server: [`llamactl serve`](/python/cloud/llamaagents/llamactl-reference/commands-serve)
+- Getting started: [Introduction](/python/llamaagents/llamactl/getting-started/)
+- Configure names, env, and UI: [Deployment Config Reference](/python/llamaagents/llamactl/configuration-reference/)
+- Local dev server: [`llamactl serve`](/python/llamaagents/llamactl-reference/commands-serve/)

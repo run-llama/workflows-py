@@ -11,6 +11,10 @@ from workflows.protocol.serializable_events import EventEnvelopeWithMetadata
 Status = Literal["running", "completed", "failed", "cancelled"]
 
 
+def is_status_completed(status: Status) -> bool:
+    return status in {"completed", "failed", "cancelled"}
+
+
 class HandlerData(BaseModel):
     handler_id: str
     workflow_name: str
