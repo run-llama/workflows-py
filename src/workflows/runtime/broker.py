@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import uuid
 from collections import Counter, defaultdict
 from typing import (
     TYPE_CHECKING,
@@ -20,7 +19,13 @@ from typing import (
     cast,
 )
 
+from llama_index_instrumentation.dispatcher import (
+    active_instrument_tags,
+    instrument_tags,
+)
 
+
+from workflows.utils import _nanoid as nanoid
 from workflows.errors import WorkflowRuntimeError
 from workflows.events import (
     Event,
@@ -119,67 +124,70 @@ class WorkflowBroker(Generic[MODEL_T]):
             )
         self._init_state = previous
 
-        async def _run_workflow() -> None:
-            # defer execution to make sure the task can be captured and passed
-            # to the handler as async exception, protecting against exceptions from before_start
-            self._is_running = True
-            await asyncio.sleep(0)
-            if before_start is not None:
-                await before_start()
-            try:
-                init_state = previous or BrokerState.from_workflow(workflow)
-
+        async def _run_workflow(run_id: str, tags: dict[str, Any]) -> None:
+            with instrument_tags({"run_id": run_id, **tags}):
+                # defer execution to make sure the task can be captured and passed
+                # to the handler as async exception, protecting against exceptions from before_start
+                self._is_running = True
+                await asyncio.sleep(0)
+                if before_start is not None:
+                    await before_start()
                 try:
-                    exception_raised = None
-
-                    step_workers: dict[str, StepWorkerFunction] = {}
-                    for name, step_func in workflow._get_steps().items():
-                        # Avoid capturing a bound method (which retains the instance).
-                        # If it's a bound method, extract the unbound function from the class.
-                        unbound = getattr(step_func, "__func__", step_func)
-                        step_workers[name] = as_step_worker_function(unbound)
-
-                    registered = workflow_registry.get_registered_workflow(
-                        workflow, self._plugin, control_loop, step_workers
-                    )
-
-                    # Register run context prior to invoking control loop
-                    workflow_registry.register_run(
-                        run_id=run_id,
-                        workflow=workflow,
-                        plugin=self._runtime,
-                        context=self._context,  # type: ignore
-                        steps=registered.steps,
-                    )
+                    init_state = previous or BrokerState.from_workflow(workflow)
 
                     try:
-                        workflow_result = await registered.workflow_function(
-                            start_event,
-                            init_state,
-                            run_id,
-                        )
-                    finally:
-                        # ensure run context is cleaned up even on failure
-                        workflow_registry.delete_run(run_id)
-                    result._set_stop_event(workflow_result)
-                except Exception as e:
-                    exception_raised = e
+                        exception_raised = None
 
-                if exception_raised:
-                    # cancel the stream
-                    if not result.done():
-                        result.set_exception(exception_raised)
-            finally:
-                if after_complete is not None:
-                    await after_complete()
-                self._is_running = False
+                        step_workers: dict[str, StepWorkerFunction] = {}
+                        for name, step_func in workflow._get_steps().items():
+                            # Avoid capturing a bound method (which retains the instance).
+                            # If it's a bound method, extract the unbound function from the class.
+                            unbound = getattr(step_func, "__func__", step_func)
+                            step_workers[name] = as_step_worker_function(unbound)
+
+                        registered = workflow_registry.get_registered_workflow(
+                            workflow, self._plugin, control_loop, step_workers
+                        )
+
+                        # Register run context prior to invoking control loop
+                        workflow_registry.register_run(
+                            run_id=run_id,
+                            workflow=workflow,
+                            plugin=self._runtime,
+                            context=self._context,  # type: ignore
+                            steps=registered.steps,
+                        )
+
+                        try:
+                            workflow_result = await registered.workflow_function(
+                                start_event,
+                                init_state,
+                                run_id,
+                            )
+                        finally:
+                            # ensure run context is cleaned up even on failure
+                            workflow_registry.delete_run(run_id)
+                        result._set_stop_event(workflow_result)
+                    except Exception as e:
+                        exception_raised = e
+
+                    if exception_raised:
+                        # cancel the stream
+                        if not result.done():
+                            result.set_exception(exception_raised)
+                finally:
+                    if after_complete is not None:
+                        await after_complete()
+                    self._is_running = False
 
         # Start the machinery in a new Context or use the provided one
-        run_id = str(uuid.uuid4())
+        run_id = nanoid()
 
         # If a previous context is provided, pass its serialized form
 
-        run_task = self._execute_task(_run_workflow())
+        run_task = self._execute_task(
+            _run_workflow(run_id, tags=active_instrument_tags.get())
+        )
         result = WorkflowHandler(
             ctx=self._context,  # type: ignore
             run_id=run_id,

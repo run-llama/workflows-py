@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, AsyncGenerator, Callable, Awaitable
 from datetime import datetime, timezone
 
+from llama_index_instrumentation.dispatcher import instrument_tags
 import uvicorn
 from starlette.applications import Starlette
 from starlette.exceptions import HTTPException
@@ -56,7 +57,7 @@ from workflows.server.memory_workflow_store import MemoryWorkflowStore
 from workflows.types import RunResultT
 
 # Protocol models are used on the client side; server responds with plain dicts
-from .utils import nanoid
+from workflows.utils import _nanoid as nanoid
 from .representation_utils import _extract_workflow_structure
 from workflows.protocol.serializable_events import (
     EventValidationError,
@@ -85,7 +86,7 @@ class WorkflowServer:
             workflow_store if workflow_store is not None else MemoryWorkflowStore()
         )
         self._assets_path = Path(__file__).parent / "static"
-        self._persistence_backoff = persistence_backoff
+        self._persistence_backoff = list(persistence_backoff)
 
         self._middleware = middleware or [
             Middleware(
@@ -198,20 +199,21 @@ class WorkflowServer:
                 status_in=["running"], workflow_name_in=list(self._workflows.keys())
             )
         )
-        handler: WorkflowHandler | None = None
         for persistent in handlers:
             workflow = self._workflows[persistent.workflow_name]
             try:
-                ctx = Context.from_dict(workflow=workflow, data=persistent.ctx)
-                handler = workflow.run(ctx=ctx)
+                await self._start_workflow(
+                    workflow=_NamedWorkflow(
+                        name=persistent.workflow_name, workflow=workflow
+                    ),
+                    handler_id=persistent.handler_id,
+                    context=Context.from_dict(workflow=workflow, data=persistent.ctx),
+                )
             except Exception as e:
                 logger.error(
                     f"Failed to resume handler {persistent.handler_id} for workflow {persistent.workflow_name}: {e}"
                 )
-                if handler is not None:
-                    run_id = handler.run_id
-                else:
-                    run_id = None
+
                 try:
                     now = datetime.now(timezone.utc)
                     await self._workflow_store.update(
@@ -219,7 +221,7 @@ class WorkflowServer:
                             handler_id=persistent.handler_id,
                             workflow_name=persistent.workflow_name,
                             status="failed",
-                            run_id=run_id,
+                            run_id=persistent.run_id,
                             error=str(e),
                             result=None,
                             started_at=persistent.started_at,
@@ -232,10 +234,6 @@ class WorkflowServer:
                     pass
                 continue
 
-            if handler is not None:
-                await self._run_workflow_handler(
-                    persistent.handler_id, persistent.workflow_name, handler
-                )
         return self
 
     @asynccontextmanager
@@ -506,13 +504,13 @@ class WorkflowServer:
             input_ev = None
 
         try:
-            handler = workflow.workflow.run(
-                ctx=context,
+            wrapper = await self._start_workflow(
+                workflow=_NamedWorkflow(name=workflow.name, workflow=workflow.workflow),
+                handler_id=handler_id,
+                context=context,
                 start_event=input_ev,
             )
-            wrapper = await self._run_workflow_handler(
-                handler_id, workflow.name, handler
-            )
+            handler = wrapper.run_handler
             try:
                 await handler
                 status = 200
@@ -688,16 +686,14 @@ class WorkflowServer:
         else:
             input_ev = None
 
-        handler = workflow.workflow.run(
-            ctx=context,
-            start_event=input_ev,
-        )
         try:
-            wrapper = await self._run_workflow_handler(
-                handler_id,
-                workflow.name,
-                handler,
+            wrapper = await self._start_workflow(
+                workflow=_NamedWorkflow(name=workflow.name, workflow=workflow.workflow),
+                handler_id=handler_id,
+                context=context,
+                start_event=input_ev,
             )
+
         except Exception as e:
             raise HTTPException(
                 detail=f"Initial persistence failed: {e}", status_code=500
@@ -1325,6 +1321,24 @@ class WorkflowServer:
                 detail=f"Error processing request body: {e}", status_code=500
             )
 
+    async def _start_workflow(
+        self,
+        workflow: _NamedWorkflow,
+        handler_id: str,
+        start_event: StartEvent | None = None,
+        context: Context | None = None,
+    ) -> _WorkflowHandler:
+        """Start a workflow and return a wrapper for the handler."""
+        with instrument_tags({"handler_id": handler_id}):
+            handler = workflow.workflow.run(
+                ctx=context,
+                start_event=start_event,
+            )
+            wrapper = await self._run_workflow_handler(
+                handler_id, workflow.name, handler
+            )
+            return wrapper
+
     async def _run_workflow_handler(
         self, handler_id: str, workflow_name: str, handler: WorkflowHandler
     ) -> _WorkflowHandler:
@@ -1412,7 +1426,7 @@ class _WorkflowHandler:
     _persistence_backoff: list[float]
     _on_finsh: Callable[[], Awaitable[None]] | None = None
 
-    async def persist(self) -> None:
+    def _as_persistent(self) -> PersistentHandler:
         """Persist the current handler state immediately to the workflow store."""
         self.updated_at = datetime.now(timezone.utc)
         if self.status in ("completed", "failed", "cancelled"):
@@ -1430,15 +1444,25 @@ class _WorkflowHandler:
             completed_at=self.completed_at,
             ctx=self.run_handler.ctx.to_dict() if self.run_handler.ctx else {},
         )
+        return persistent
 
+    async def persist(self, persistent: PersistentHandler) -> None:
         await self._workflow_store.update(persistent)
 
     async def checkpoint(self) -> None:
         """Persist with retry/backoff; cancel handler when retries exhausted."""
         backoffs = list(self._persistence_backoff)
+        try:
+            persistent = self._as_persistent()
+        except Exception as e:
+            logger.error(
+                f"Failed to checkpoint handler {self.handler_id} to persistent state. Is there non-serializable state in an event or the state store? {e}",
+                exc_info=True,
+            )
+            raise
         while True:
             try:
-                await self.persist()
+                await self.persist(persistent)
                 return
             except Exception as e:
                 backoff = backoffs.pop(0) if backoffs else None
@@ -1539,33 +1563,38 @@ class _WorkflowHandler:
 
     async def _stream_events(self, on_finish: Callable[[], Awaitable[None]]) -> None:
         """Internal method that streams events, updates status, and persists state."""
-        await self.checkpoint()
-        self._on_finish = on_finish
-        async for event in self.run_handler.stream_events(expose_internal=True):
-            if (  # Watch for a specific internal event that signals the step is complete
-                isinstance(event, StepStateChanged)
-                and event.step_state == StepState.NOT_RUNNING
-            ):
-                state = self.run_handler.ctx.to_dict() if self.run_handler.ctx else None
-                if state is None:
-                    logger.warning(
-                        f"Context state is None for handler {self.handler_id}. This is not expected."
+        with instrument_tags({"handler_id": self.handler_id}):
+            await self.checkpoint()
+            self._on_finish = on_finish
+            async for event in self.run_handler.stream_events(expose_internal=True):
+                if (  # Watch for a specific internal event that signals the step is complete
+                    isinstance(event, StepStateChanged)
+                    and event.step_state == StepState.NOT_RUNNING
+                ):
+                    state = (
+                        self.run_handler.ctx.to_dict() if self.run_handler.ctx else None
                     )
-                    continue
-                await self.checkpoint()
+                    if state is None:
+                        logger.warning(
+                            f"Context state is None for handler {self.handler_id}. This is not expected."
+                        )
+                        continue
+                    await self.checkpoint()
 
-            self.queue.put_nowait(event)
-        # done when stream events are complete
-        try:
-            await self.run_handler
-        except asyncio.CancelledError:
-            # Handler was cancelled - status will be automatically detected via handler.cancelled()
-            logger.info(f"Workflow run {self.handler_id} was cancelled")
-            # Don't re-raise, just let the task complete
-        except Exception as e:
-            logger.error(f"Workflow run {self.handler_id} failed! {e}", exc_info=True)
+                self.queue.put_nowait(event)
+            # done when stream events are complete
+            try:
+                await self.run_handler
+            except asyncio.CancelledError:
+                # Handler was cancelled - status will be automatically detected via handler.cancelled()
+                logger.info(f"Workflow run {self.handler_id} was cancelled")
+                # Don't re-raise, just let the task complete
+            except Exception as e:
+                logger.error(
+                    f"Workflow run {self.handler_id} failed! {e}", exc_info=True
+                )
 
-        await self.checkpoint()
+            await self.checkpoint()
 
     async def acquire_events_stream(
         self, timeout: float = 1

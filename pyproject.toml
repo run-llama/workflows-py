@@ -13,7 +13,8 @@ dev = [
   "pyyaml>=6.0.2",
   "packaging>=21.0",
   "pytest-xdist>=3.8.0",
-  "pytest-timeout>=2.4.0"
+  "pytest-timeout>=2.4.0",
+  "structlog>=25.5.0"
 ]
 
 [project]
