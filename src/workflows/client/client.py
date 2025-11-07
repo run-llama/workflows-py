@@ -228,6 +228,8 @@ class WorkflowClient:
                         "include_internal": incl_inter,
                         "acquire_timeout": lock_timeout,
                     },
+                    headers={"Connection": "keep-alive"},
+                    timeout=None,
                 ) as response:
                     # Handle different response codes
                     if response.status_code == 404:

@@ -1238,3 +1238,17 @@ async def test_instrument_tags_contains_handler_id_in_server_context() -> None:
             assert data["status"] == "completed"
             assert seen_handler_id["handler_id"] is not None
             assert seen_handler_id["handler_id"] == handler_id
+
+
+@pytest.mark.asyncio
+async def test_run_sync_removes_handler_even_with_unconsumed_events(
+    client: AsyncClient, server: WorkflowServer
+) -> None:
+    # Run a streaming workflow synchronously; it emits user events but we don't consume them here.
+    resp = await client.post("/workflows/streaming/run", json={"kwargs": {"count": 2}})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["status"] == "completed"
+
+    # The synchronous run path should clean up the handler from memory even if events remain
+    assert len(server._handlers) == 0
