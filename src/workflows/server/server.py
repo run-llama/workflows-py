@@ -522,6 +522,9 @@ class WorkflowServer:
                     await wrapper.task
                 except Exception:
                     pass
+            # explicitly close handlers from this synchronous api so they don't linger with events
+            # that no-one is listening for
+            await self._close_handler(wrapper)
 
             return JSONResponse(
                 wrapper.to_response_model().model_dump(), status_code=status
@@ -1424,7 +1427,7 @@ class _WorkflowHandler:
     # Dependencies for persistence
     _workflow_store: AbstractWorkflowStore
     _persistence_backoff: list[float]
-    _on_finsh: Callable[[], Awaitable[None]] | None = None
+    _on_finish: Callable[[], Awaitable[None]] | None = None
 
     def _as_persistent(self) -> PersistentHandler:
         """Persist the current handler state immediately to the workflow store."""
@@ -1641,7 +1644,8 @@ class _WorkflowHandler:
                     queue_get_task.cancel()
                     break
         finally:
-            if self._on_finish is not None:
+            if self._on_finish is not None and self.run_handler.done():
+                # clean up the resources if the stream has been consumed
                 await self._on_finish()
             self.consumer_mutex.release()
 
