@@ -32,7 +32,7 @@ jobs:
             tag_prefix: "llama-index-utils-workflow@"
             package_label: "pkg:llama-index-utils-workflow"
             pyproject_path: "packages/llama-index-utils-workflow/pyproject.toml"
-            artifact_glob: "packages/llama-index-utils-workflow/dist/*"
+            artifact_glob: "dist/*"
 
     steps:
       - uses: actions/checkout@v4
@@ -44,142 +44,41 @@ jobs:
 
       - name: Validate version tag
         run: >
-          uv run python scripts/validate_version.py
+          uv run --package workflows-dev workflows-dev validate-version
           --pyproject ${{ matrix.pyproject_path }}
           --tag-prefix ${{ matrix.tag_prefix }}
+          --tag ${{ github.ref_name }}
 
       - name: Extract tag version
         id: version
-        env:
-          TAG_PREFIX: ${{ matrix.tag_prefix }}
-        run: |
-          python - <<'PY'
-import os
-import sys
-
-tag = os.environ["GITHUB_REF_NAME"]
-prefix = os.environ["TAG_PREFIX"]
-if not tag.startswith(prefix):
-    print(f"Tag {tag} does not match prefix {prefix}")
-    sys.exit(1)
-
-suffix = tag[len(prefix):]
-semver = suffix[1:] if suffix.startswith("v") else suffix
-
-with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
-    fh.write(f"tag_suffix={suffix}\n")
-    fh.write(f"semver={semver}\n")
-PY
+        run: >
+          uv run --package workflows-dev workflows-dev extract-tag-info
+          --tag ${{ github.ref_name }}
+          --tag-prefix ${{ matrix.tag_prefix }}
+          --output "$GITHUB_OUTPUT"
 
       - name: Determine previous tag
         id: previous_tag
-        env:
-          TAG_PREFIX: ${{ matrix.tag_prefix }}
-        run: |
-          python - <<'PY'
-import os
-import subprocess
-
-prefix = os.environ["TAG_PREFIX"]
-current = os.environ["GITHUB_REF_NAME"]
-
-result = subprocess.run(
-    ["git", "tag", "-l", f"{prefix}*", "--sort=-version:refname"],
-    capture_output=True,
-    text=True,
-    check=True,
-)
-
-previous = ""
-for candidate in result.stdout.splitlines():
-    candidate = candidate.strip()
-    if candidate and candidate != current:
-        previous = candidate
-        break
-
-with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
-    fh.write(f"previous={previous}\n")
-PY
+        run: >
+          uv run --package workflows-dev workflows-dev find-previous-tag
+          --repo .
+          --tag-prefix ${{ matrix.tag_prefix }}
+          --current-tag ${{ github.ref_name }}
+          --output "$GITHUB_OUTPUT"
 
       - name: Generate release notes
         id: notes
-        uses: actions/github-script@v7
         env:
-          PACKAGE_LABEL: ${{ matrix.package_label }}
-          PACKAGE_NAME: ${{ matrix.display_name }}
-          CURRENT_TAG: ${{ github.ref_name }}
-          PREVIOUS_TAG: ${{ steps.previous_tag.outputs.previous }}
-          SEMVER: ${{ steps.version.outputs.semver }}
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const owner = context.repo.owner;
-            const repo = context.repo.repo;
-            const tag = process.env.CURRENT_TAG;
-            const previousTag = process.env.PREVIOUS_TAG;
-            const packageLabel = process.env.PACKAGE_LABEL;
-            const packageName = process.env.PACKAGE_NAME;
-            const semver = process.env.SEMVER;
-
-            const commitShas = new Set();
-            let hasComparison = false;
-
-            if (previousTag) {
-              try {
-                const compare = await github.rest.repos.compareCommitsWithBasehead({
-                  owner,
-                  repo,
-                  basehead: `${previousTag}...${tag}`,
-                });
-                for (const commit of compare.data.commits) {
-                  commitShas.add(commit.sha);
-                }
-                hasComparison = true;
-              } catch (error) {
-                core.warning(`Unable to compare ${previousTag}...${tag}: ${error.message}`);
-              }
-            }
-
-            const prs = await github.paginate(
-              github.rest.pulls.list,
-              {
-                owner,
-                repo,
-                state: "closed",
-                per_page: 100,
-                sort: "updated",
-                direction: "desc",
-              },
-            );
-
-            const relevant = prs.filter((pr) => {
-              if (!pr.merged_at || !pr.merge_commit_sha) {
-                return false;
-              }
-              const hasLabel = pr.labels.some((label) => label.name === packageLabel);
-              if (!hasLabel) {
-                return false;
-              }
-              if (!hasComparison) {
-                return true;
-              }
-              return commitShas.has(pr.merge_commit_sha);
-            });
-
-            let body = `## ${packageName} ${semver}\n\n`;
-            if (relevant.length === 0) {
-              body += "_No labeled pull requests for this package in this release._\n";
-            } else {
-              for (const pr of relevant) {
-                body += `- ${pr.title} (#${pr.number}) by @${pr.user.login}\n`;
-              }
-            }
-
-            if (previousTag) {
-              body += `\n[View changes between ${previousTag} and ${tag}](https://github.com/${owner}/${repo}/compare/${previousTag}...${tag}).\n`;
-            }
-
-            core.setOutput("body", body.trim());
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >
+          uv run --package workflows-dev workflows-dev generate-release-notes
+          --repository ${{ github.repository }}
+          --package-label ${{ matrix.package_label }}
+          --package-name "${{ matrix.display_name }}"
+          --current-tag ${{ github.ref_name }}
+          --previous-tag "${{ steps.previous_tag.outputs.previous }}"
+          --semver ${{ steps.version.outputs.semver }}
+          --output "$GITHUB_OUTPUT"
 
       - name: Build package
         working-directory: ${{ matrix.package_dir }}

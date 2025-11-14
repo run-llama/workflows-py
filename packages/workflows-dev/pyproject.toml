@@ -1,0 +1,22 @@
+[project]
+name = "workflows-dev"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Adrian Lyjak", email = "adrianlyjak@gmail.com" }
+]
+requires-python = ">=3.9"
+dependencies = [
+    "click>=8.1.7",
+    "httpx>=0.28.1",
+    "packaging>=24.1",
+    "tomli>=2.0.1; python_version < '3.11'",
+]
+
+[project.scripts]
+workflows-dev = "workflows_dev:main"
+
+[build-system]
+requires = ["uv_build>=0.9.7,<0.10.0"]
+build-backend = "uv_build"

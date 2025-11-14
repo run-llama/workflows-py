@@ -55,24 +55,11 @@ jobs:
 
       - name: Extract version information
         id: version
-        run: |
-          python - <<'PY'
-import os
-import sys
-
-tag = os.environ.get("TARGET_TAG", "")
-prefix = "llama-index-workflows@"
-if not tag.startswith(prefix):
-    print(f"Tag {tag} does not match expected prefix {prefix}")
-    sys.exit(1)
-
-suffix = tag[len(prefix):]
-semver = suffix[1:] if suffix.startswith("v") else suffix
-
-with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
-    fh.write(f"tag_suffix={suffix}\n")
-    fh.write(f"semver={semver}\n")
-PY
+        run: >
+          uv run --package workflows-dev workflows-dev extract-tag-info
+          --tag "${{ env.TARGET_TAG }}"
+          --tag-prefix "llama-index-workflows@"
+          --output "$GITHUB_OUTPUT"
 
       - name: Sync dependencies and build OpenAPI spec
         run: |
@@ -93,7 +80,8 @@ PY
         env:
           GITHUB_REF: refs/tags/${{ env.TARGET_TAG }}
         run: >
-          uv run python scripts/detect_change_type.py
+          uv run --package workflows-dev workflows-dev detect-change-type
+          --repo .
           --tag-glob "llama-index-workflows@v*"
           --tag-prefix "llama-index-workflows@"
 

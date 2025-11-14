@@ -14,7 +14,9 @@ dev = [
   "packaging>=21.0",
   "pytest-xdist>=3.8.0",
   "pytest-timeout>=2.4.0",
-  "structlog>=25.5.0"
+  "structlog>=25.5.0",
+  "starlette>=0.39.0",
+  "uvicorn>=0.32.0"
 ]
 
 [project]
@@ -71,4 +73,7 @@ testpaths = ["tests"]
 llama-index-workflows = {workspace = true}
 
 [tool.uv.workspace]
-members = ["packages/llama-index-utils-workflow"]
+members = [
+    "packages/llama-index-utils-workflow",
+    "packages/workflows-dev",
+]
