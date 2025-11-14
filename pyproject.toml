@@ -2,78 +2,22 @@
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
-[dependency-groups]
-dev = [
-  "pre-commit>=4.2.0",
-  "pytest>=8.4.0",
-  "pytest-asyncio>=1.0.0",
-  "pytest-cov>=6.1.1",
-  "httpx>=0.25.0",
-  "hatch>=1.14.1",
-  "pyyaml>=6.0.2",
-  "packaging>=21.0",
-  "pytest-xdist>=3.8.0",
-  "pytest-timeout>=2.4.0",
-  "structlog>=25.5.0",
-  "starlette>=0.39.0",
-  "uvicorn>=0.32.0"
-]
-
 [project]
-name = "llama-index-workflows"
-version = "2.11.1"
-description = "An event-driven, async-first, step-based way to control the execution flow of AI applications like Agents."
+name = "llama-index-workflows-workspace"
+version = "0.1.0"
+description = "Monorepo workspace for the LlamaIndex Workflows packages."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.9"
-dependencies = [
-  "eval-type-backport>=0.2.2 ; python_full_version < '3.10'",
-  "llama-index-instrumentation>=0.1.0",
-  "pydantic>=2.11.5",
-  "typing-extensions>=4.6.0"
-]
-
-[project.optional-dependencies]
-server = ["starlette>=0.39.0", "uvicorn>=0.32.0"]
-client = ["httpx>=0.28.1,<1"]
-
-[tool.basedpyright]
-typeCheckingMode = "standard"
-
-[[tool.basedpyright.executionEnvironments]]
-root = "src"
-pythonVersion = "3.9"
-
-[[tool.basedpyright.executionEnvironments]]
-root = "tests"
-pythonVersion = "3.9"
-
-[[tool.basedpyright.executionEnvironments]]
-root = "examples"
-pythonVersion = "3.14"
-
-[tool.coverage.run]
-omit = ["tests/*"]
-
-[tool.hatch.build.targets.wheel]
-packages = ["src/workflows"]
-
-[tool.hatch.envs.server]
-features = ["server"]
-dependencies = ["pyyaml>=6.0.2"]
-
-[tool.hatch.envs.server.scripts]
-openapi = "python -m workflows.server.server --output openapi.json"
-
-[tool.pytest.ini_options]
-asyncio_mode = "auto"
-testpaths = ["tests"]
 
 [tool.uv.sources]
 llama-index-workflows = {workspace = true}
+llama-index-utils-workflow = {workspace = true}
+workflows-dev = {workspace = true}
 
 [tool.uv.workspace]
 members = [
-    "packages/llama-index-utils-workflow",
-    "packages/workflows-dev",
+  "packages/llama-index-workflows",
+  "packages/llama-index-utils-workflow",
+  "packages/workflows-dev"
 ]

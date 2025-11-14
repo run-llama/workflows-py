@@ -21,18 +21,18 @@ Ideas beyond the above are welcome! This list is not exhaustive.
 
 Generally, the code organization is relatively flat. Here's a quick overview of the code structure:
 
-- **[src/workflows/workflow.py](src/workflows/workflow.py)**: The main `Workflow` class that orchestrates step execution and event handling
-- **[src/workflows/decorators.py](src/workflows/decorators.py)**: The `@step` decorator used to mark functions as workflow steps, along with step configuration
-- **[src/workflows/events.py](src/workflows/events.py)**: Core event types (`StartEvent`, `StopEvent`, `Event`) that drive workflow execution
-- **[src/workflows/handler.py](src/workflows/handler.py)**: The `WorkflowHandler` that manages workflow execution and provides the interface for running workflows
-- **[src/workflows/context/](src/workflows/context/)**: Context management for workflow state and data passing between steps
-  - **[src/workflows/context/context.py](src/workflows/context/context.py)**: Main `Context` class that holds workflow state and handles event routing
-  - **[src/workflows/context/serializers.py](src/workflows/context/serializers.py)**: Serialization utilities for persisting workflow state
-- **[src/workflows/resource.py](src/workflows/resource.py)**: Management of external resources that workflows can depend on
-- **[src/workflows/retry_policy.py](src/workflows/retry_policy.py)**: Configurable retry logic for failed steps
-- **[src/workflows/errors.py](src/workflows/errors.py)**: Custom exception types for workflow-specific errors
-- **[src/workflows/types.py](src/workflows/types.py)**: Type definitions and type variables used throughout the library
-- **[src/workflows/utils.py](src/workflows/utils.py)**: Utility functions for step introspection, signature validation, and other helpers
+- **[packages/llama-index-workflows/src/workflows/workflow.py](packages/llama-index-workflows/src/workflows/workflow.py)**: The main `Workflow` class that orchestrates step execution and event handling
+- **[packages/llama-index-workflows/src/workflows/decorators.py](packages/llama-index-workflows/src/workflows/decorators.py)**: The `@step` decorator used to mark functions as workflow steps, along with step configuration
+- **[packages/llama-index-workflows/src/workflows/events.py](packages/llama-index-workflows/src/workflows/events.py)**: Core event types (`StartEvent`, `StopEvent`, `Event`) that drive workflow execution
+- **[packages/llama-index-workflows/src/workflows/handler.py](packages/llama-index-workflows/src/workflows/handler.py)**: The `WorkflowHandler` that manages workflow execution and provides the interface for running workflows
+- **[packages/llama-index-workflows/src/workflows/context/](packages/llama-index-workflows/src/workflows/context/)**: Context management for workflow state and data passing between steps
+  - **[packages/llama-index-workflows/src/workflows/context/context.py](packages/llama-index-workflows/src/workflows/context/context.py)**: Main `Context` class that holds workflow state and handles event routing
+  - **[packages/llama-index-workflows/src/workflows/context/serializers.py](packages/llama-index-workflows/src/workflows/context/serializers.py)**: Serialization utilities for persisting workflow state
+- **[packages/llama-index-workflows/src/workflows/resource.py](packages/llama-index-workflows/src/workflows/resource.py)**: Management of external resources that workflows can depend on
+- **[packages/llama-index-workflows/src/workflows/retry_policy.py](packages/llama-index-workflows/src/workflows/retry_policy.py)**: Configurable retry logic for failed steps
+- **[packages/llama-index-workflows/src/workflows/errors.py](packages/llama-index-workflows/src/workflows/errors.py)**: Custom exception types for workflow-specific errors
+- **[packages/llama-index-workflows/src/workflows/types.py](packages/llama-index-workflows/src/workflows/types.py)**: Type definitions and type variables used throughout the library
+- **[packages/llama-index-workflows/src/workflows/utils.py](packages/llama-index-workflows/src/workflows/utils.py)**: Utility functions for step introspection, signature validation, and other helpers
 
 ## Setup
 
@@ -51,15 +51,15 @@ source .venv/bin/activate
 Then, install the dependencies with:
 
 ```bash
-uv sync
+uv sync --directory packages/llama-index-workflows
 ```
 
-The `pyproject.toml` file contains the dependencies for the project along with other details like the package name, version, etc. Generally you won't have to edit this file.
+The `packages/llama-index-workflows/pyproject.toml` file contains the dependencies for the main package along with other details like the package name, version, etc. Generally you won't have to edit this file.
 
 Linting is done automatically with `pre-commit`. Initialize it with:
 
 ```bash
-uv run pre-commit install
+uv run --directory packages/llama-index-workflows pre-commit install
 ```
 
 ## Run tests
@@ -67,7 +67,7 @@ uv run pre-commit install
 Tests are run with `pytest`. You can run them with:
 
 ```bash
-uv run pytest
+uv run --directory packages/llama-index-workflows pytest
 ```
 
 Generally, all features should be covered by robust tests. If you are adding a new feature or fixing a bug, please add tests for it.
@@ -77,14 +77,14 @@ Generally, all features should be covered by robust tests. If you are adding a n
 We use `pre-commit` to run linting and formatting on the codebase. You can run it manually with:
 
 ```bash
-uv run -- pre-commit run -a
+uv run --directory packages/llama-index-workflows pre-commit run -a
 ```
 
 The `pre-commit` config is located in the `.pre-commit-config.yaml` file.
 
 ## Release (requires repo push access)
 
-- Update the `version` key in the `project` table of the `pyproject.toml` file.
+- Update the `version` key in the `project` table of `packages/llama-index-workflows/pyproject.toml`.
   - Change the version numbers following the [SemVer](https://semver.org/) specification.
 - Commit directly to `main`
 - Tag the commit on `main` you just created using an annotated tag: `git tag -m"v0.0.0" v0.0.0`

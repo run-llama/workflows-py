@@ -62,6 +62,7 @@ jobs:
           --output "$GITHUB_OUTPUT"
 
       - name: Sync dependencies and build OpenAPI spec
+        working-directory: packages/llama-index-workflows
         run: |
           uv sync --all-extras
           uv run hatch run server:openapi
@@ -70,7 +71,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.TARGET_TAG }}
-          files: openapi.json
+          files: packages/llama-index-workflows/openapi.json
           fail_on_unmatched_files: true
           append_body: false
 
@@ -118,4 +119,3 @@ jobs:
              "openapi_url": "https://github.com/run-llama/workflows-py/releases/download/${{ env.TARGET_TAG }}/openapi.json",
              "change_type": "${{ steps.metadata.outputs.change_type }}",
              "change_description": "${{ steps.metadata.outputs.change_description }}"}
-

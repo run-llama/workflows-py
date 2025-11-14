@@ -15,28 +15,28 @@ This is the LlamaIndex Workflows library - an event-driven, async-first framewor
 ### Testing
 ```bash
 # Run all tests
-uv run pytest
+uv run --directory packages/llama-index-workflows pytest
 
 # Run tests with coverage
-uv run pytest --cov=src/workflows --cov-report=html
+uv run --directory packages/llama-index-workflows pytest --cov=src/workflows --cov-report=html
 
 # Run specific test files
-uv run pytest tests/test_server.py tests/test_server_utils.py
+uv run --directory packages/llama-index-workflows pytest tests/test_server.py tests/test_server_utils.py
 
 # Run tests in verbose mode
-uv run pytest -v
+uv run --directory packages/llama-index-workflows pytest -v
 ```
 
 ### Linting & Formatting
 ```bash
 # Run pre-commit hooks
-uv run pre-commit run -a
+uv run --directory packages/llama-index-workflows pre-commit run -a
 ```
 
 ## Project Structure
-- `src/workflows/` - Main library code
-- `src/workflows/server/` - Web server implementation
-- `tests/` - Test suite
+- `packages/llama-index-workflows/src/workflows/` - Main library code
+- `packages/llama-index-workflows/src/workflows/server/` - Web server implementation
+- `packages/llama-index-workflows/tests/` - Test suite
 - `examples/` - Usage examples
 
 ## Key Components
@@ -46,7 +46,7 @@ uv run pre-commit run -a
 - **WorkflowServer** - HTTP server for serving workflows as web services
 
 ## Notes for Claude
-- Always run tests after making changes: `uv run pytest`
+- Always run tests after making changes: `uv run --directory packages/llama-index-workflows pytest`
 - Never use classes for tests, only use pytest functions
 - Always annotate with types function arguments and return values
 - The project uses async/await extensively
@@ -67,10 +67,10 @@ Always run test tests and pre-commit commands before committing. They run very f
 Tests:
 
 ```bash
-uv run pytest -nauto --timeout=1
+uv run --directory packages/llama-index-workflows pytest -nauto --timeout=1
 ```
 
 Linting, typechecking, and formatting:
 ```bash
-uv run pre-commit run -a
+uv run --directory packages/llama-index-workflows pre-commit run -a
 ```

@@ -21,10 +21,10 @@ jobs:
         include:
           - package: llama-index-workflows
             display_name: LlamaIndex Workflows
-            package_dir: .
+            package_dir: "packages/llama-index-workflows"
             tag_prefix: "llama-index-workflows@"
             package_label: "pkg:llama-index-workflows"
-            pyproject_path: "pyproject.toml"
+            pyproject_path: "packages/llama-index-workflows/pyproject.toml"
             artifact_glob: "dist/*"
           - package: llama-index-utils-workflow
             display_name: LlamaIndex Utils Workflow

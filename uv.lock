@@ -11,6 +11,7 @@ resolution-markers = [
 members = [
     "llama-index-utils-workflow",
     "llama-index-workflows",
+    "llama-index-workflows-workspace",
     "workflows-dev",
 ]
 
@@ -1548,7 +1549,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "llama-index-core", specifier = ">=0.14,<0.15.0" },
-    { name = "llama-index-workflows", editable = "." },
+    { name = "llama-index-workflows", editable = "packages/llama-index-workflows" },
     { name = "pyvis", specifier = ">=0.3.2" },
 ]
 
@@ -1562,7 +1563,7 @@ dev = [
 [[package]]
 name = "llama-index-workflows"
 version = "2.11.1"
-source = { editable = "." }
+source = { editable = "packages/llama-index-workflows" }
 dependencies = [
     { name = "eval-type-backport", marker = "python_full_version < '3.10'" },
     { name = "llama-index-instrumentation" },
@@ -1624,6 +1625,11 @@ dev = [
     { name = "structlog", specifier = ">=25.5.0" },
     { name = "uvicorn", specifier = ">=0.32.0" },
 ]
+
+[[package]]
+name = "llama-index-workflows-workspace"
+version = "0.1.0"
+source = { editable = "." }
 
 [[package]]
 name = "markdown-it-py"

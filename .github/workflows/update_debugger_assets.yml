@@ -60,7 +60,7 @@ jobs:
             This PR updates the workflow debugger assets.
 
             ### Changes
-            - Updated `src/workflows/server/static/index.html`
+            - Updated `packages/llama-index-workflows/src/workflows/server/static/index.html`
               - JavaScript: ${{ steps.payload.outputs.js_url }}
               - CSS: ${{ steps.payload.outputs.css_url }}
 
