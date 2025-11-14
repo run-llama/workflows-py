@@ -1,0 +1,7 @@
+pkg:llama-index-workflows:
+  - "src/**"
+  - "tests/**"
+  - "pyproject.toml"
+
+pkg:llama-index-utils-workflow:
+  - "packages/llama-index-utils-workflow/**"

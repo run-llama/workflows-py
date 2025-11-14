@@ -9,8 +9,10 @@ resolution-markers = [
 
 [manifest]
 members = [
+    "llama-agents-workspace",
     "llama-index-utils-workflow",
     "llama-index-workflows",
+    "workflows-dev",
 ]
 
 [[package]]
@@ -1470,6 +1472,11 @@ wheels = [
 ]
 
 [[package]]
+name = "llama-agents-workspace"
+version = "0.1.0"
+source = { editable = "." }
+
+[[package]]
 name = "llama-index-core"
 version = "0.14.6"
 source = { registry = "https://pypi.org/simple" }
@@ -1547,7 +1554,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "llama-index-core", specifier = ">=0.14,<0.15.0" },
-    { name = "llama-index-workflows", editable = "." },
+    { name = "llama-index-workflows", editable = "packages/llama-index-workflows" },
     { name = "pyvis", specifier = ">=0.3.2" },
 ]
 
@@ -1561,7 +1568,7 @@ dev = [
 [[package]]
 name = "llama-index-workflows"
 version = "2.11.1"
-source = { editable = "." }
+source = { editable = "packages/llama-index-workflows" }
 dependencies = [
     { name = "eval-type-backport", marker = "python_full_version < '3.10'" },
     { name = "llama-index-instrumentation" },
@@ -1590,7 +1597,9 @@ dev = [
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
     { name = "pyyaml" },
+    { name = "starlette" },
     { name = "structlog" },
+    { name = "uvicorn" },
 ]
 
 [package.metadata]
@@ -1617,7 +1626,9 @@ dev = [
     { name = "pytest-timeout", specifier = ">=2.4.0" },
     { name = "pytest-xdist", specifier = ">=3.8.0" },
     { name = "pyyaml", specifier = ">=6.0.2" },
+    { name = "starlette", specifier = ">=0.39.0" },
     { name = "structlog", specifier = ">=25.5.0" },
+    { name = "uvicorn", specifier = ">=0.32.0" },
 ]
 
 [[package]]
@@ -3630,6 +3641,26 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/24/30/6b0809f4510673dc723187aeaf24c7f5459922d01e2f794277a3dfb90345/wcwidth-0.2.14.tar.gz", hash = "sha256:4d478375d31bc5395a3c55c40ccdf3354688364cd61c4f6adacaa9215d0b3605", size = 102293, upload-time = "2025-09-22T16:29:53.023Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/af/b5/123f13c975e9f27ab9c0770f514345bd406d0e8d3b7a0723af9d43f710af/wcwidth-0.2.14-py2.py3-none-any.whl", hash = "sha256:a7bb560c8aee30f9957e5f9895805edd20602f2d7f720186dfd906e82b4982e1", size = 37286, upload-time = "2025-09-22T16:29:51.641Z" },
+]
+
+[[package]]
+name = "workflows-dev"
+version = "0.1.0"
+source = { editable = "packages/workflows-dev" }
+dependencies = [
+    { name = "click", version = "8.1.8", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "click", version = "8.3.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+    { name = "httpx" },
+    { name = "packaging" },
+    { name = "tomli", marker = "python_full_version < '3.11'" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "click", specifier = ">=8.1.7" },
+    { name = "httpx", specifier = ">=0.28.1" },
+    { name = "packaging", specifier = ">=24.1" },
+    { name = "tomli", marker = "python_full_version < '3.11'", specifier = ">=2.0.1" },
 ]
 
 [[package]]
