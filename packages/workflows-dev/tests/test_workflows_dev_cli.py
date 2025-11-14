@@ -260,6 +260,97 @@ def test_find_previous_tag_returns_match() -> None:
         assert out_file.read_text().strip() == "previous=pkg@v1.0.0"
 
 
+def test_needs_release_first_release() -> None:
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        repo = Path.cwd()
+        (repo / "pyproject.toml").write_text(
+            """
+[project]
+name = "example"
+version = "1.0.0"
+""".strip()
+        )
+
+        output_file = Path("out.txt")
+        result = runner.invoke(
+            cli,
+            [
+                "needs-release",
+                "--repo",
+                ".",
+                "--pyproject",
+                "pyproject.toml",
+                "--tag-prefix",
+                "pkg@",
+                "--output",
+                str(output_file),
+            ],
+        )
+        assert result.exit_code == 0
+        contents = output_file.read_text()
+        assert "version=1.0.0" in contents
+        assert "previous_tag=" in contents
+        assert "change_type=major" in contents
+        assert "release=true" in contents
+
+
+def test_needs_release_when_version_has_not_advanced() -> None:
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        repo = Path.cwd()
+        (repo / "pyproject.toml").write_text(
+            """
+[project]
+name = "example"
+version = "1.0.0"
+""".strip()
+        )
+        # initialise git and create matching tag
+        subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "config", "user.email", "dev@example.com"],
+            cwd=repo,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Dev User"],
+            cwd=repo,
+            check=True,
+        )
+        (repo / "file.txt").write_text("content")
+        subprocess.run(["git", "add", "."], cwd=repo, check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "init"],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(["git", "tag", "pkg@v1.0.0"], cwd=repo, check=True)
+
+        output_file = Path("out.txt")
+        result = runner.invoke(
+            cli,
+            [
+                "needs-release",
+                "--repo",
+                ".",
+                "--pyproject",
+                "pyproject.toml",
+                "--tag-prefix",
+                "pkg@",
+                "--output",
+                str(output_file),
+            ],
+        )
+        assert result.exit_code == 0
+        contents = output_file.read_text()
+        assert "version=1.0.0" in contents
+        assert "previous_tag=pkg@v1.0.0" in contents
+        assert "change_type=none" in contents
+        assert "release=false" in contents
+
+
 def test_update_index_html_success(tmp_path: Path) -> None:
     runner = CliRunner()
     index_path = tmp_path / "index.html"

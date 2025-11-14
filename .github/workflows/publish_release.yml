@@ -1,17 +1,13 @@
 name: Publish packages to PyPI and GitHub
 
 on:
+  workflow_dispatch:
   push:
-    tags:
-      - "llama-index-workflows@v*"
-      - "llama-index-utils-workflow@v*"
+    branches: [main]
 
 jobs:
   publish:
-    if: >
-      github.repository == 'run-llama/workflows-py' &&
-      startsWith(github.ref, 'refs/tags/') &&
-      startsWith(github.ref_name, matrix.tag_prefix)
+    if: github.repository == 'run-llama/workflows-py'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -21,18 +17,20 @@ jobs:
         include:
           - package: llama-index-workflows
             display_name: LlamaIndex Workflows
-            package_dir: "packages/llama-index-workflows"
-            tag_prefix: "llama-index-workflows@"
-            package_label: "pkg:llama-index-workflows"
-            pyproject_path: "packages/llama-index-workflows/pyproject.toml"
-            artifact_glob: "dist/*"
+            package_dir: packages/llama-index-workflows
+            tag_prefix: llama-index-workflows@
+            package_label: pkg:llama-index-workflows
+            pyproject_path: packages/llama-index-workflows/pyproject.toml
+            artifact_glob: dist/llama_index_workflows-*
+            trigger_openapi: true
           - package: llama-index-utils-workflow
             display_name: LlamaIndex Utils Workflow
-            package_dir: "packages/llama-index-utils-workflow"
-            tag_prefix: "llama-index-utils-workflow@"
-            package_label: "pkg:llama-index-utils-workflow"
-            pyproject_path: "packages/llama-index-utils-workflow/pyproject.toml"
-            artifact_glob: "dist/*"
+            package_dir: packages/llama-index-utils-workflow
+            tag_prefix: llama-index-utils-workflow@
+            package_label: pkg:llama-index-utils-workflow
+            pyproject_path: packages/llama-index-utils-workflow/pyproject.toml
+            artifact_glob: dist/llama_index_utils_workflow-*
+            trigger_openapi: false
 
     steps:
       - uses: actions/checkout@v4
@@ -42,32 +40,39 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v6
 
-      - name: Validate version tag
+      - name: Determine if package needs a release
+        id: decision
         run: >
-          uv run --package workflows-dev workflows-dev validate-version
+          uv run --package workflows-dev workflows-dev needs-release
+          --repo .
           --pyproject ${{ matrix.pyproject_path }}
           --tag-prefix ${{ matrix.tag_prefix }}
-          --tag ${{ github.ref_name }}
-
-      - name: Extract tag version
-        id: version
-        run: >
-          uv run --package workflows-dev workflows-dev extract-tag-info
-          --tag ${{ github.ref_name }}
-          --tag-prefix ${{ matrix.tag_prefix }}
           --output "$GITHUB_OUTPUT"
 
-      - name: Determine previous tag
-        id: previous_tag
-        run: >
-          uv run --package workflows-dev workflows-dev find-previous-tag
-          --repo .
-          --tag-prefix ${{ matrix.tag_prefix }}
-          --current-tag ${{ github.ref_name }}
-          --output "$GITHUB_OUTPUT"
+      - name: Configure git identity
+        if: steps.decision.outputs.release == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Create and push tag
+        id: tag
+        if: steps.decision.outputs.release == 'true'
+        env:
+          VERSION: ${{ steps.decision.outputs.version }}
+        run: |
+          TAG_NAME="${{ matrix.tag_prefix }}v${VERSION}"
+          echo "tag=${TAG_NAME}" >> "$GITHUB_OUTPUT"
+          if git rev-parse "${TAG_NAME}" >/dev/null 2>&1; then
+            echo "Tag ${TAG_NAME} already exists"
+            exit 1
+          fi
+          git tag "${TAG_NAME}"
+          git push origin "${TAG_NAME}"
 
       - name: Generate release notes
         id: notes
+        if: steps.decision.outputs.release == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: >
@@ -75,25 +80,42 @@ jobs:
           --repository ${{ github.repository }}
           --package-label ${{ matrix.package_label }}
           --package-name "${{ matrix.display_name }}"
-          --current-tag ${{ github.ref_name }}
-          --previous-tag "${{ steps.previous_tag.outputs.previous }}"
-          --semver ${{ steps.version.outputs.semver }}
+          --current-tag ${{ steps.tag.outputs.tag }}
+          --previous-tag "${{ steps.decision.outputs.previous_tag }}"
+          --semver ${{ steps.decision.outputs.version }}
           --output "$GITHUB_OUTPUT"
 
       - name: Build package
+        if: steps.decision.outputs.release == 'true'
         working-directory: ${{ matrix.package_dir }}
         run: uv build
 
-      - name: Publish to PyPI
+      - name: Publish package to PyPI
+        if: steps.decision.outputs.release == 'true'
         working-directory: ${{ matrix.package_dir }}
         env:
           UV_PUBLISH_TOKEN: ${{ secrets.PYPI_TOKEN }}
         run: uv publish
 
       - name: Create GitHub Release
+        if: steps.decision.outputs.release == 'true'
         uses: ncipollo/release-action@v1
         with:
-          tag: ${{ github.ref_name }}
-          name: "${{ matrix.display_name }} ${{ steps.version.outputs.tag_suffix }}"
+          tag: ${{ steps.tag.outputs.tag }}
+          name: "${{ matrix.display_name }} v${{ steps.decision.outputs.version }}"
           body: ${{ steps.notes.outputs.body }}
           artifacts: ${{ matrix.artifact_glob }}
+
+      - name: No release needed for package
+        if: steps.decision.outputs.release != 'true'
+        run: echo "No new release required for ${{ matrix.package }}."
+
+      - name: Trigger OpenAPI publish workflow
+        if: steps.decision.outputs.release == 'true' && matrix.trigger_openapi == true
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          event-type: publish-openapi
+          client-payload: >-
+            {"tag": "${{ steps.tag.outputs.tag }}"}

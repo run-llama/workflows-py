@@ -9,11 +9,20 @@ def list_tags(repo: str | Path, tag_glob: str) -> list[str]:
     """Return tags that match the provided glob sorted newest first."""
     repo_path = Path(repo)
     result = subprocess.run(
-        ["git", "-C", str(repo_path), "tag", "-l", tag_glob, "--sort=-version:refname"],
+        [
+            "git",
+            "-C",
+            str(repo_path),
+            "tag",
+            "-l",
+            tag_glob,
+            "--sort=-version:refname",
+        ],
         capture_output=True,
         text=True,
         check=True,
     )
+
     return [line.strip() for line in result.stdout.splitlines() if line.strip()]
 
 

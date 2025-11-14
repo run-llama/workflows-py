@@ -1,35 +1,18 @@
 name: Publish OpenAPI specification
 
 on:
-  release:
-    types: [published]
   workflow_dispatch:
     inputs:
       tag:
         description: "Release tag to update (e.g. llama-index-workflows@v2.12.0)"
         required: true
-      change_type:
-        description: "SDK change type"
-        required: true
-        default: "none"
-        type: choice
-        options:
-          - none
-          - patch
-          - minor
-          - major
-      change_description:
-        description: "Optional notes for the SDK update"
-        required: false
+        type: string
+  repository_dispatch:
+    types: [publish-openapi]
 
 jobs:
   publish-openapi:
-    if: >
-      github.repository == 'run-llama/workflows-py' &&
-      (
-        (github.event_name == 'release' && startsWith(github.event.release.tag_name, 'llama-index-workflows@')) ||
-        (github.event_name == 'workflow_dispatch' && startsWith(github.event.inputs.tag, 'llama-index-workflows@'))
-      )
+    if: github.repository == 'run-llama/workflows-py'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -45,13 +28,13 @@ jobs:
       - name: Resolve target tag
         id: target
         run: |
-          if [ "${{ github.event_name }}" = "release" ]; then
-            TAG="${{ github.event.release.tag_name }}"
-          else
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             TAG="${{ github.event.inputs.tag }}"
+          else
+            TAG="${{ github.event.client_payload.tag }}"
           fi
-          echo "tag=$TAG" >> $GITHUB_OUTPUT
-          echo "TARGET_TAG=$TAG" >> $GITHUB_ENV
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "TARGET_TAG=${TAG}" >> "$GITHUB_ENV"
 
       - name: Extract version information
         id: version
@@ -77,7 +60,6 @@ jobs:
 
       - name: Detect change type automatically
         id: detect_change
-        if: github.event_name == 'release'
         env:
           GITHUB_REF: refs/tags/${{ env.TARGET_TAG }}
         run: >
@@ -89,13 +71,8 @@ jobs:
       - name: Resolve change metadata
         id: metadata
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "change_type=${{ github.event.inputs.change_type }}" >> $GITHUB_OUTPUT
-            echo "change_description=${{ github.event.inputs.change_description }}" >> $GITHUB_OUTPUT
-          else
-            echo "change_type=${{ steps.detect_change.outputs.change_type }}" >> $GITHUB_OUTPUT
-            echo "change_description=" >> $GITHUB_OUTPUT
-          fi
+          echo "change_type=${{ steps.detect_change.outputs.change_type }}" >> "$GITHUB_OUTPUT"
+          echo "change_description=" >> "$GITHUB_OUTPUT"
 
       - name: Generate GitHub App token
         id: app-token
