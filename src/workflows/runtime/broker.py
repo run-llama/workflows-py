@@ -24,13 +24,12 @@ from llama_index_instrumentation.dispatcher import (
     instrument_tags,
 )
 
-
-from workflows.utils import _nanoid as nanoid
 from workflows.errors import WorkflowRuntimeError
 from workflows.events import (
     Event,
     StartEvent,
 )
+from workflows.handler import WorkflowHandler
 from workflows.runtime.control_loop import control_loop, rebuild_state_from_ticks
 from workflows.runtime.types.internal_state import BrokerState
 from workflows.runtime.types.plugin import Plugin, WorkflowRuntime, as_snapshottable
@@ -49,10 +48,9 @@ from workflows.runtime.types.step_function import (
 )
 from workflows.runtime.types.ticks import TickAddEvent, TickCancelRun, WorkflowTick
 from workflows.runtime.workflow_registry import workflow_registry
+from workflows.utils import _nanoid as nanoid
 
 from ..context.state_store import MODEL_T
-
-from workflows.handler import WorkflowHandler
 
 if TYPE_CHECKING:
     from workflows import Workflow
@@ -105,7 +103,15 @@ class WorkflowBroker(Generic[MODEL_T]):
     def _execute_task(self, coro: Coroutine[Any, Any, Any]) -> asyncio.Task[Any]:
         task = asyncio.create_task(coro)
         self._workers.append(task)
-        task.add_done_callback(lambda _: self._workers.remove(task))
+
+        def _remove_task(_: asyncio.Task[Any]) -> None:
+            try:
+                self._workers.remove(task)
+            except ValueError:
+                # Handle Task was already cleared during shutdown or cleanup.
+                pass
+
+        task.add_done_callback(_remove_task)
         return task
 
     # context API only
