@@ -73,6 +73,44 @@ description = "Test package"
         assert "doesn't match pyproject.toml version" in result.stdout
 
 
+def test_validate_version_with_prefix() -> None:
+    """Test the script succeeds with custom tag prefixes."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        pyproject_path = Path(tmpdir) / "pyproject.toml"
+        pyproject_path.write_text("""
+[project]
+name = "llama-index-utils-workflow"
+version = "0.5.0"
+description = "Utils package"
+""")
+
+        scripts_dir = Path(tmpdir) / "scripts"
+        scripts_dir.mkdir()
+        script_path = scripts_dir / "validate_version.py"
+        original_script = Path("scripts/validate_version.py")
+        script_path.write_text(original_script.read_text())
+
+        env = os.environ.copy()
+        env["GITHUB_REF"] = "refs/tags/llama-index-utils-workflow@v0.5.0"
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(script_path),
+                "--pyproject",
+                str(pyproject_path),
+                "--tag-prefix",
+                "llama-index-utils-workflow@",
+            ],
+            capture_output=True,
+            text=True,
+            env=env,
+            cwd=tmpdir,
+        )
+        assert result.returncode == 0
+        assert "Version validated: 0.5.0" in result.stdout
+
+
 def test_validate_version_not_a_tag() -> None:
     """Test the script exits gracefully when not a tag push."""
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -237,6 +275,72 @@ def test_detect_change_type_minor() -> None:
 
         result = subprocess.run(
             [sys.executable, str(script_path)],
+            capture_output=True,
+            text=True,
+            env=env,
+            cwd=tmpdir,
+        )
+
+        assert result.returncode == 0
+        assert "Change type: minor" in result.stdout
+
+
+def test_detect_change_type_with_prefix() -> None:
+    """Test detecting changes for tags with package prefixes."""
+    with tempfile.TemporaryDirectory() as tmpdir:
+        subprocess.run(["git", "init"], cwd=tmpdir, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.com"], cwd=tmpdir, check=True
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Test User"], cwd=tmpdir, check=True
+        )
+
+        dummy_file = Path(tmpdir) / "dummy.txt"
+        dummy_file.write_text("v1.0.0")
+        subprocess.run(["git", "add", "."], cwd=tmpdir, check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "v1.0.0"],
+            cwd=tmpdir,
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "tag", "llama-index-workflows@v1.0.0"],
+            cwd=tmpdir,
+            check=True,
+        )
+
+        dummy_file.write_text("v1.1.0")
+        subprocess.run(["git", "add", "."], cwd=tmpdir, check=True)
+        subprocess.run(
+            ["git", "commit", "-m", "v1.1.0"],
+            cwd=tmpdir,
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "tag", "llama-index-workflows@v1.1.0"],
+            cwd=tmpdir,
+            check=True,
+        )
+
+        script_path = Path(tmpdir) / "detect_change_type.py"
+        original_script = Path("scripts/detect_change_type.py")
+        script_path.write_text(original_script.read_text())
+
+        env = os.environ.copy()
+        env["GITHUB_REF"] = "refs/tags/llama-index-workflows@v1.1.0"
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(script_path),
+                "--tag-glob",
+                "llama-index-workflows@v*",
+                "--tag-prefix",
+                "llama-index-workflows@",
+            ],
             capture_output=True,
             text=True,
             env=env,

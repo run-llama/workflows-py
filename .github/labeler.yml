@@ -1,0 +1,15 @@
+pkg:llama-index-workflows:
+  - "src/**"
+  - "tests/**"
+  - "examples/**"
+  - "scripts/**"
+  - "docs/**"
+  - ".github/**"
+  - "pyproject.toml"
+  - "uv.lock"
+  - "README.md"
+  - "LICENSE"
+
+pkg:llama-index-utils-workflow:
+  - "packages/llama-index-utils-workflow/**"
+
