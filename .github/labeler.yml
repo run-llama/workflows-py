@@ -1,0 +1,7 @@
+"pkg:llama-index-workflows":
+  - changed-files:
+    - any-glob-to-any-file: 'packages/llama-index-workflows/**'
+
+"pkg:llama-index-utils-workflow":
+  - changed-files:
+    - any-glob-to-any-file: 'packages/llama-index-utils-workflow/**'
