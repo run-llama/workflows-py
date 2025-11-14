@@ -25,10 +25,8 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
 
       - name: Extract payload data
         id: payload
@@ -43,10 +41,10 @@ jobs:
           fi
 
       - name: Update index.html
-        run: |
-          python scripts/update_index_html.py \
-            --js-url "${{ steps.payload.outputs.js_url }}" \
-            --css-url "${{ steps.payload.outputs.css_url }}"
+        run: >
+          uv run --package workflows-dev workflows-dev update-index-html
+          --js-url "${{ steps.payload.outputs.js_url }}"
+          --css-url "${{ steps.payload.outputs.css_url }}"
 
       - name: Create Pull Request
         uses: peter-evans/create-pull-request@v6
@@ -62,7 +60,7 @@ jobs:
             This PR updates the workflow debugger assets.
 
             ### Changes
-            - Updated `src/workflows/server/static/index.html`
+            - Updated `packages/llama-index-workflows/src/workflows/server/static/index.html`
               - JavaScript: ${{ steps.payload.outputs.js_url }}
               - CSS: ${{ steps.payload.outputs.css_url }}
 

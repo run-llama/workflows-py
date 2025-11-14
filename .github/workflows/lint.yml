@@ -15,8 +15,8 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v6
 
-      - name: Run linter
-        shell: bash
-        run: |
-          uv sync --all-extras --all-packages
-          uv run -- pre-commit run -a
+      - name: Install dev dependencies
+        run: uv sync --all-extras --all-packages
+
+      - name: Run pre-commit
+        run: uv run pre-commit run -a

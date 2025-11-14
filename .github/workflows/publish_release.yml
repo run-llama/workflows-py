@@ -1,100 +1,115 @@
-name: Publish to PyPI and GitHub
+name: Publish packages to PyPI and GitHub
 
 on:
   workflow_dispatch:
-    inputs:
-      server_change_type:
-        description: 'Server/API change type, this will be used to generate the client SDK'
-        required: false
-        default: 'none'
-        type: choice
-        options:
-          - none
-          - patch
-          - minor
-          - major
-      change_description:
-        description: 'Description of server/API changes (optional), this will be used to generate the client SDK'
-        required: false
-        type: string
   push:
-    tags:
-      - "v*"
+    branches:
+      - main
 
 jobs:
-  build-n-publish:
-    name: Build and publish to PyPI
+  publish:
     if: github.repository == 'run-llama/workflows-py'
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - package: llama-index-workflows
+            display_name: LlamaIndex Workflows
+            artifact_glob: dist/llama_index_workflows-*
+            trigger_openapi: true
+          - package: llama-index-utils-workflow
+            display_name: LlamaIndex Utils Workflow
+            artifact_glob: dist/llama_index_utils_workflow-*
+            trigger_openapi: false
 
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Need full history for tag comparison
+          fetch-depth: 0
 
       - name: Install uv
         uses: astral-sh/setup-uv@v6
 
-      - name: Validate version
-        if: startsWith(github.ref, 'refs/tags/')
-        run: uv run python scripts/validate_version.py
+      - name: Determine if package needs a release
+        id: decision
+        run: >
+          uv run --package workflows-dev workflows-dev needs-release
+          --pyproject packages/${{ matrix.package }}/pyproject.toml
+          --tag-prefix ${{ matrix.package }}@
+          --output "$GITHUB_OUTPUT"
 
-      - name: Set version output
-        id: version
+      - name: Configure git identity
+        if: steps.decision.outputs.release == 'true'
         run: |
-          VERSION=$(uv run python -c "from importlib.metadata import version; print(version('llama-index-workflows'))")
-          echo "Version: $VERSION"
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Build and publish
+      - name: Generate release notes
+        id: notes
+        if: steps.decision.outputs.release == 'true'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >
+          uv run --package workflows-dev workflows-dev generate-release-notes
+          --repository ${{ github.repository }}
+          --package-label pkg:${{ matrix.package }}
+          --package-name "${{ matrix.display_name }}"
+          --current-tag ${{ matrix.package }}@v${{ steps.decision.outputs.version }}
+          --previous-tag "${{ steps.decision.outputs.previous_tag }}"
+          --semver ${{ steps.decision.outputs.version }}
+          --output "$GITHUB_OUTPUT"
+
+      - name: Build package
+        if: steps.decision.outputs.release == 'true'
+        working-directory: packages/${{ matrix.package }}
+        run: uv build
+
+      - name: Publish package to PyPI
+        if: steps.decision.outputs.release == 'true'
+        working-directory: packages/${{ matrix.package }}
         env:
           UV_PUBLISH_TOKEN: ${{ secrets.PYPI_TOKEN }}
-        run: |
-          uv build
-          uv publish
+        run: uv publish
 
-      - name: Generate OpenAPI spec
+      # push tag after publishing, in case build fails, can retry
+      - name: Create and push tag
+        id: tag
+        if: steps.decision.outputs.release == 'true'
+        env:
+          VERSION: ${{ steps.decision.outputs.version }}
         run: |
-          uv sync --all-extras
-          uv run hatch run server:openapi
+          TAG_NAME="${{ matrix.package }}@v${VERSION}"
+          echo "tag=${TAG_NAME}" >> "$GITHUB_OUTPUT"
+          if [ -n "$(git tag -l "${TAG_NAME}")" ]; then
+            echo "Deleting existing tag ${TAG_NAME}"
+            git tag -d "${TAG_NAME}"
+            git push origin :"${TAG_NAME}"
+          fi
+          git tag "${TAG_NAME}"
+          git push origin "${TAG_NAME}"
 
       - name: Create GitHub Release
+        if: steps.decision.outputs.release == 'true'
         uses: ncipollo/release-action@v1
         with:
-          artifacts: "dist/*,openapi.json"
-          generateReleaseNotes: true
+          tag: ${{ steps.tag.outputs.tag }}
+          name: "${{ matrix.display_name }} v${{ steps.decision.outputs.version }}"
+          body: ${{ steps.notes.outputs.body }}
+          artifacts: ${{ matrix.artifact_glob }}
 
-      - name: Detect change type for tags
-        id: detect_change
-        if: startsWith(github.ref, 'refs/tags/')
-        run: uv run python scripts/detect_change_type.py
+      - name: No release needed for package
+        if: steps.decision.outputs.release != 'true'
+        run: echo "No new release required for ${{ matrix.package }}."
 
-      - name: Set SDK trigger parameters
-        id: sdk_params
-        run: |
-          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-            echo "change_type=${{ github.event.inputs.server_change_type }}" >> $GITHUB_OUTPUT
-            echo "change_description=${{ github.event.inputs.change_description }}" >> $GITHUB_OUTPUT
-          else
-            echo "change_type=${{ steps.detect_change.outputs.change_type }}" >> $GITHUB_OUTPUT
-            echo "change_description=" >> $GITHUB_OUTPUT
-          fi
-
-      - name: Generate GitHub App Token
-        id: app-token
-        uses: actions/create-github-app-token@v1
-        with:
-          app-id: ${{ secrets.CI_BOT_APP_ID }}
-          private-key: ${{ secrets.CI_BOT_PRIVATE_KEY }}
-          owner: run-llama
-
-      - name: Trigger SDK Update
-        if: steps.sdk_params.outputs.change_type != 'none' && steps.sdk_params.outputs.change_type != ''
+      - name: Trigger OpenAPI publish workflow
+        if: steps.decision.outputs.release == 'true' && matrix.trigger_openapi == true
         uses: peter-evans/repository-dispatch@v3
         with:
-          token: ${{ steps.app-token.outputs.token }}
-          repository: run-llama/llama-ui
-          event-type: workflows-sdk-update
-          client-payload: '{"version": "${{ steps.version.outputs.version }}", "openapi_url": "https://github.com/run-llama/workflows-py/releases/download/v${{ steps.version.outputs.version }}/openapi.json", "change_type": "${{ steps.sdk_params.outputs.change_type }}", "change_description": "${{ steps.sdk_params.outputs.change_description }}"}'
+          token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          event-type: publish-openapi
+          client-payload: >-
+            {"tag": "${{ steps.tag.outputs.tag }}"}
