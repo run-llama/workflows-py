@@ -23,7 +23,7 @@ jobs:
             coverage_report: true
           - package: llama-index-utils-workflow
             package_dir: packages/llama-index-utils-workflow
-            coverage_report: false
+            coverage_report: true
     steps:
       - uses: actions/checkout@v4
         with:
@@ -45,6 +45,20 @@ jobs:
         if: matrix.coverage_report == true && matrix.python-version == env.COV_PYTHON_VERSION
         uses: coverallsapp/github-action@v2
         with:
-          file: packages/llama-index-workflows/coverage.xml
+          file: ${{ matrix.package_dir }}/coverage.xml
+          flag-name: ${{ matrix.package }}
+          parallel: true
+        env:
+          COVERALLS_REPO_TOKEN: ${{ secrets.COVERALLS_REPO_TOKEN }}
+
+  coveralls-finish:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.repository == 'run-llama/workflows-py'
+    steps:
+      - name: Finalize Coveralls parallel jobs
+        uses: coverallsapp/github-action@v2
+        with:
+          parallel-finished: true
         env:
           COVERALLS_REPO_TOKEN: ${{ secrets.COVERALLS_REPO_TOKEN }}
