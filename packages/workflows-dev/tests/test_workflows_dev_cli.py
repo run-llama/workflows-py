@@ -399,7 +399,7 @@ def test_release_notes_formatting() -> None:
             author="alice",
             merge_commit_sha="abc",
             merged=True,
-            labels=("pkg:llama-index-workflows",),
+            labels=("pkg:llama-index-workflows", "enhancement"),
         )
     ]
     body = release_notes.format_release_notes(
@@ -411,4 +411,5 @@ def test_release_notes_formatting() -> None:
         pull_requests=prs,
     )
     assert "Add feature (#1) by @alice" in body
+    assert "### Enhancements" in body
     assert "View changes between v1.2.2 and v1.2.3" in body

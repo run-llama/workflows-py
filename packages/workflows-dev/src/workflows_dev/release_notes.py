@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable, Mapping, Optional
+from typing import Iterable, Literal, Mapping, Optional
 
 import httpx
 
@@ -23,6 +23,9 @@ class PullRequest:
     merge_commit_sha: Optional[str]
     merged: bool
     labels: tuple[str, ...]
+
+
+CategoryName = Literal["breaking-change", "enhancement", "bug", "other"]
 
 
 class GitHubClient:
@@ -184,6 +187,16 @@ def filter_pull_requests(
     return relevant
 
 
+def _categorize_pull_request(pr: PullRequest) -> CategoryName:
+    if "breaking-change" in pr.labels:
+        return "breaking-change"
+    if "enhancement" in pr.labels:
+        return "enhancement"
+    if "bug" in pr.labels:
+        return "bug"
+    return "other"
+
+
 def format_release_notes(
     repo: Repository,
     package_name: str,
@@ -193,12 +206,44 @@ def format_release_notes(
     pull_requests: Iterable[PullRequest],
 ) -> str:
     lines: list[str] = [f"## {package_name} {semver}", ""]
-    added = False
+
+    sections: dict[CategoryName, list[PullRequest]] = {
+        "breaking-change": [],
+        "enhancement": [],
+        "bug": [],
+        "other": [],
+    }
     for pr in pull_requests:
-        lines.append(f"- {pr.title} (#{pr.number}) by @{pr.author}")
+        category = _categorize_pull_request(pr)
+        sections[category].append(pr)
+
+    added = False
+    headings: dict[CategoryName, str] = {
+        "breaking-change": "Breaking changes",
+        "enhancement": "Enhancements",
+        "bug": "Bug fixes",
+        "other": "Other changes",
+    }
+    order: tuple[CategoryName, ...] = (
+        "breaking-change",
+        "enhancement",
+        "bug",
+        "other",
+    )
+    for category in order:
+        prs = sections[category]
+        if not prs:
+            continue
+        if added:
+            lines.append("")
+        lines.append(f"### {headings[category]}")
+        for pr in prs:
+            lines.append(f"- {pr.title} (#{pr.number}) by @{pr.author}")
         added = True
+
     if not added:
         lines.append("_No labeled pull requests for this package in this release._")
+
     if previous_tag:
         lines.append("")
         lines.append(
