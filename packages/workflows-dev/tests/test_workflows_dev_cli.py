@@ -113,8 +113,6 @@ def test_detect_change_type_patch() -> None:
             cli,
             [
                 "detect-change-type",
-                "--repo",
-                ".",
                 "--tag-glob",
                 "v*",
                 "--current-tag",
@@ -141,8 +139,6 @@ def test_detect_change_type_minor() -> None:
             cli,
             [
                 "detect-change-type",
-                "--repo",
-                ".",
                 "--tag-glob",
                 "v*",
                 "--current-tag",
@@ -166,8 +162,6 @@ def test_detect_change_type_major() -> None:
             cli,
             [
                 "detect-change-type",
-                "--repo",
-                ".",
                 "--tag-glob",
                 "v*",
                 "--current-tag",
@@ -191,8 +185,6 @@ def test_detect_change_type_with_prefix() -> None:
             cli,
             [
                 "detect-change-type",
-                "--repo",
-                ".",
                 "--tag-glob",
                 "pkg@v*",
                 "--tag-prefix",
@@ -249,8 +241,6 @@ def test_find_previous_tag_returns_match() -> None:
             cli,
             [
                 "find-previous-tag",
-                "--repo",
-                ".",
                 "--tag-prefix",
                 "pkg@",
                 "--current-tag",
@@ -281,8 +271,6 @@ version = "1.0.0"
             cli,
             [
                 "needs-release",
-                "--repo",
-                ".",
                 "--pyproject",
                 "pyproject.toml",
                 "--tag-prefix",
@@ -337,8 +325,6 @@ version = "1.0.0"
             cli,
             [
                 "needs-release",
-                "--repo",
-                ".",
                 "--pyproject",
                 "pyproject.toml",
                 "--tag-prefix",

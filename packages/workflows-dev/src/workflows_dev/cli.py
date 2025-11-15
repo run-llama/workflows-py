@@ -48,14 +48,12 @@ def validate_version(
 
 
 @cli.command("detect-change-type")
-@click.option("--repo", type=click.Path(exists=True, file_okay=False), default=".")
 @click.option("--tag-glob", default="v*", show_default=True)
 @click.option("--tag-prefix", default="", show_default=True)
 @click.option("--current-tag", envvar="GITHUB_REF_NAME")
 @click.option("--github-ref", envvar="GITHUB_REF")
 @click.option("--output", type=click.Path(), default=None)
 def detect_change_type(
-    repo: str,
     tag_glob: str,
     tag_prefix: str,
     current_tag: Optional[str],
@@ -64,7 +62,7 @@ def detect_change_type(
 ) -> None:
     """Compute the semantic change between the current tag and the previous release."""
     target_tag = _resolve_tag(current_tag, github_ref)
-    tags = git_utils.list_tags(repo, tag_glob)
+    tags = git_utils.list_tags(Path.cwd(), tag_glob)
     previous = git_utils.previous_tag(target_tag, tags)
 
     current_version = versioning.extract_semver(target_tag, tag_prefix)
@@ -96,15 +94,12 @@ def extract_tag_info(tag: str, tag_prefix: str, output: Optional[str]) -> None:
 
 
 @cli.command("find-previous-tag")
-@click.option("--repo", type=click.Path(exists=True, file_okay=False), default=".")
 @click.option("--tag-prefix", required=True)
 @click.option("--current-tag", required=True)
 @click.option("--output", type=click.Path(), default=None)
-def find_previous_tag(
-    repo: str, tag_prefix: str, current_tag: str, output: Optional[str]
-) -> None:
+def find_previous_tag(tag_prefix: str, current_tag: str, output: Optional[str]) -> None:
     """Find the most recent tag for a package other than the current tag."""
-    previous = git_utils.find_previous_tag(repo, tag_prefix, current_tag)
+    previous = git_utils.find_previous_tag(Path.cwd(), tag_prefix, current_tag)
     gha.write_outputs({"previous": previous}, output_path=output)
 
 
@@ -141,7 +136,6 @@ def generate_release_notes(
 
 
 @cli.command("needs-release")
-@click.option("--repo", type=click.Path(exists=True, file_okay=False), default=".")
 @click.option(
     "--pyproject",
     type=click.Path(exists=True, dir_okay=False),
@@ -154,12 +148,10 @@ def generate_release_notes(
     help="Git tag prefix for this package (e.g. llama-index-workflows@).",
 )
 @click.option("--output", type=click.Path(), default=None)
-def needs_release(
-    repo: str, pyproject: str, tag_prefix: str, output: Optional[Path]
-) -> None:
+def needs_release(pyproject: str, tag_prefix: str, output: Optional[Path]) -> None:
     """Determine whether a package needs a new release tag."""
     current_version = versioning.read_pyproject_version(pyproject)
-    tags = git_utils.list_tags(repo, f"{tag_prefix}v*")
+    tags = git_utils.list_tags(Path.cwd(), f"{tag_prefix}v*")
     previous_tag = tags[0] if tags else ""
     previous_version = (
         versioning.extract_semver(previous_tag, tag_prefix) if previous_tag else None

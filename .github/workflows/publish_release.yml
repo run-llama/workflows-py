@@ -34,7 +34,6 @@ jobs:
         id: decision
         run: >
           uv run --package workflows-dev workflows-dev needs-release
-          --repo .
           --pyproject packages/${{ matrix.package }}/pyproject.toml
           --tag-prefix ${{ matrix.package }}@
           --output "$GITHUB_OUTPUT"
@@ -81,6 +80,11 @@ jobs:
         run: |
           TAG_NAME="${{ matrix.package }}@v${VERSION}"
           echo "tag=${TAG_NAME}" >> "$GITHUB_OUTPUT"
+          if [ -n "$(git tag -l "${TAG_NAME}")" ]; then
+            echo "Deleting existing tag ${TAG_NAME}"
+            git tag -d "${TAG_NAME}"
+            git push origin :"${TAG_NAME}"
+          fi
           git tag "${TAG_NAME}"
           git push origin "${TAG_NAME}"
 
