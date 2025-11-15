@@ -1036,15 +1036,14 @@ class WorkflowServer:
             "cancelled",
         }
 
-        status_in: list[Status] | None = None
-        if status_values is not None:
-            # Only keep values that are valid Status literals and cast them accordingly
-            status_in = [
-                cast(Status, value)
-                for value in status_values
-                if value in allowed_status_values
-            ] or None
-
+        status_in: list[Status] | None = (
+            cast(
+                list[Status],
+                list(set(allowed_status_values).intersection(status_values)),
+            )
+            if status_values is not None
+            else None
+        )
         persistent_handlers = await self._workflow_store.query(
             HandlerQuery(status_in=status_in, workflow_name_in=workflow_name_in)
         )
