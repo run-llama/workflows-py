@@ -1,0 +1,5 @@
+pkg:llama-index-workflows:
+  - "packages/llama-index-workflows/**"
+
+pkg:llama-index-utils-workflow:
+  - "packages/llama-index-utils-workflow/**"

@@ -17,14 +17,25 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ["3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
-        package: [llama-index-workflows, llama-index-utils-workflow]
+        package: [llama-index-workflows, llama-index-utils-workflow, workflows-dev]
+        exclude:
+          - package: workflows-dev
+            python-version: "3.9"
+          - package: workflows-dev
+            python-version: "3.10"
+          - package: workflows-dev
+            python-version: "3.11"
+          - package: workflows-dev
+            python-version: "3.12"
+          - package: workflows-dev
+            python-version: "3.13"
         include:
           - package: llama-index-workflows
-            is_root: true
-            coverage_report: true
+            package_dir: packages/llama-index-workflows
           - package: llama-index-utils-workflow
-            is_root: false
-            coverage_report: false
+            package_dir: packages/llama-index-utils-workflow
+          - package: workflows-dev
+            package_dir: packages/workflows-dev
     steps:
       - uses: actions/checkout@v4
         with:
@@ -36,22 +47,32 @@ jobs:
           python-version: ${{ matrix.python-version }}
           enable-cache: true
 
-      - name: Compute directory flag
-        run: |
-          if [ "${{ matrix.is_root }}" = "true" ]; then
-            echo "DIR_FLAG=" >> $GITHUB_ENV
-          else
-            echo "DIR_FLAG=--directory packages/${{ matrix.package }}" >> $GITHUB_ENV
-          fi
-
-      - name: Sync dev dependencies for selected package
-        run: uv sync --all-extras $DIR_FLAG --group dev
+      - name: Run tests
+        if: matrix.python-version != env.COV_PYTHON_VERSION
+        run: uv run --all-extras --directory ${{ matrix.package_dir }} -- pytest
 
       - name: Run tests with coverage
-        run: uv run --all-extras $DIR_FLAG -- pytest --cov --cov-report=xml
+        if: matrix.python-version == env.COV_PYTHON_VERSION
+        run: uv run --all-extras --directory ${{ matrix.package_dir }} -- pytest --cov --cov-report=xml
 
       - name: Report Coveralls
-        if: matrix.coverage_report == true && matrix.python-version == env.COV_PYTHON_VERSION
+        if: matrix.python-version == env.COV_PYTHON_VERSION
         uses: coverallsapp/github-action@v2
+        with:
+          file: ${{ matrix.package_dir }}/coverage.xml
+          flag-name: ${{ matrix.package }}
+          parallel: true
+        env:
+          COVERALLS_REPO_TOKEN: ${{ secrets.COVERALLS_REPO_TOKEN }}
+
+  coveralls-finish:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.repository == 'run-llama/workflows-py'
+    steps:
+      - name: Finalize Coveralls parallel jobs
+        uses: coverallsapp/github-action@v2
+        with:
+          parallel-finished: true
         env:
           COVERALLS_REPO_TOKEN: ${{ secrets.COVERALLS_REPO_TOKEN }}
