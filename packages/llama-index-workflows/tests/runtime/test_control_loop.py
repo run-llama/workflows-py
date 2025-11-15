@@ -36,7 +36,7 @@ from workflows.runtime.workflow_registry import workflow_registry
 from workflows.runtime.types.ticks import TickAddEvent, TickCancelRun
 from workflows.retry_policy import ConstantDelayRetryPolicy
 
-from .conftest import MockRuntimePlugin
+from .conftest import MockRuntimePlugin  # type: ignore[import]
 
 
 class IntermediateEvent(Event):

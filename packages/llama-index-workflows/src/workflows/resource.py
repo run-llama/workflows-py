@@ -31,7 +31,7 @@ class _Resource(Generic[T]):
     def __init__(self, factory: Callable[..., T | Awaitable[T]], cache: bool) -> None:
         self._factory = factory
         self._is_async = inspect.iscoroutinefunction(factory)
-        self.name = factory.__qualname__
+        self.name = getattr(factory, "__qualname__", type(factory).__name__)
         self.cache = cache
 
     async def call(self) -> T:

@@ -13,7 +13,7 @@ from workflows.errors import WorkflowRuntimeError, WorkflowTimeoutError
 from workflows.events import Event, StartEvent, StopEvent
 from workflows.workflow import Workflow
 
-from .conftest import OneTestEvent
+from .conftest import OneTestEvent  # type: ignore[import]
 
 
 class StreamingWorkflow(Workflow):

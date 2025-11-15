@@ -215,13 +215,14 @@ class Context(Generic[MODEL_T]):
         # Initialize a runtime plugin (asyncio-based by default)
         runtime: WorkflowRuntime = plugin or self._plugin.new_runtime(str(uuid.uuid4()))
         # Initialize the new broker implementation (broker2)
-        self._broker_run = WorkflowBroker(
+        broker: WorkflowBroker[MODEL_T] = WorkflowBroker(
             workflow=workflow,
-            context=self,
+            context=cast("Context[MODEL_T]", self),
             runtime=runtime,
             plugin=self._plugin,
         )
-        return self._broker_run
+        self._broker_run = broker
+        return broker
 
     def _workflow_run(
         self,
