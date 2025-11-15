@@ -49,3 +49,18 @@ members = [
   "packages/llama-index-utils-workflow",
   "packages/workflows-dev"
 ]
+
+[tool.ruff.lint]
+select = [
+  "E4",
+  "E7",
+  "E9",
+  "F",
+  "I",
+  "UP007",
+  "UP045",
+  "ANN001",
+  "ANN002",
+  "ANN003",
+  "T201"
+]

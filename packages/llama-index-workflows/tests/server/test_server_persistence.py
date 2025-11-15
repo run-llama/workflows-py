@@ -6,7 +6,10 @@ from typing import AsyncGenerator
 from httpx import AsyncClient, ASGITransport
 
 
-from .conftest import ExternalEvent, RequestedExternalEvent
+from .conftest import (  # type: ignore[import]
+    ExternalEvent,
+    RequestedExternalEvent,
+)
 from workflows.events import Event, InternalDispatchEvent, StopEvent
 from workflows.server import WorkflowServer
 from workflows import Context
@@ -14,7 +17,7 @@ from workflows.workflow import Workflow
 from workflows.server.abstract_workflow_store import HandlerQuery, PersistentHandler
 
 from workflows.server.memory_workflow_store import MemoryWorkflowStore
-from .util import wait_for_passing
+from .util import wait_for_passing  # type: ignore[import]
 
 
 @pytest.fixture

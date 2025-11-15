@@ -55,6 +55,9 @@ def run_server() -> None:
             )
             sys.exit(1)
 
+        # At this point, a WorkflowServer instance is guaranteed to exist
+        assert server is not None
+
         host = os.environ.get("WORKFLOWS_PY_SERVER_HOST", "0.0.0.0")
         port = int(os.environ.get("WORKFLOWS_PY_SERVER_PORT", 8080))
         uvicorn.run(server.app, host=host, port=port)

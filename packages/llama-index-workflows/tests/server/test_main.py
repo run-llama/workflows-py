@@ -17,6 +17,7 @@ def test_no_file_path_argument(capsys: Any) -> None:
         with pytest.raises(SystemExit) as exc_info:
             run_server()
 
+        assert isinstance(exc_info.value, SystemExit)
         assert exc_info.value.code == 1
         captured = capsys.readouterr()
         assert (
@@ -30,6 +31,7 @@ def test_nonexistent_file(capsys: Any) -> None:
         with pytest.raises(SystemExit) as exc_info:
             run_server()
 
+        assert isinstance(exc_info.value, SystemExit)
         assert exc_info.value.code == 1
         captured = capsys.readouterr()
         assert "Error: File '/nonexistent/file.py' not found" in captured.err
@@ -44,6 +46,7 @@ def test_directory_instead_of_file(capsys: Any, tmp_path: Path) -> None:
         with pytest.raises(SystemExit) as exc_info:
             run_server()
 
+        assert isinstance(exc_info.value, SystemExit)
         assert exc_info.value.code == 1
         captured = capsys.readouterr()
         assert f"Error: '{test_dir}' is not a file" in captured.err
@@ -63,6 +66,7 @@ another_variable = 42
         with pytest.raises(SystemExit) as exc_info:
             run_server()
 
+        assert isinstance(exc_info.value, SystemExit)
         assert exc_info.value.code == 1
         captured = capsys.readouterr()
         assert (
@@ -157,6 +161,7 @@ def invalid_syntax(
         with pytest.raises(SystemExit) as exc_info:
             run_server()
 
+        assert isinstance(exc_info.value, SystemExit)
         assert exc_info.value.code == 1
         captured = capsys.readouterr()
         assert "Error loading or running server:" in captured.err
@@ -172,6 +177,7 @@ def test_spec_creation_failure(capsys: Any, tmp_path: Path) -> None:
             with pytest.raises(SystemExit) as exc_info:
                 run_server()
 
+            assert isinstance(exc_info.value, SystemExit)
             assert exc_info.value.code == 1
             captured = capsys.readouterr()
             assert "Unable to get spec from module" in captured.err

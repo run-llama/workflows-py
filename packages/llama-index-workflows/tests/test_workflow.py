@@ -9,7 +9,7 @@ import logging
 import pickle
 import threading
 import weakref
-from typing import Any, Callable, Union
+from typing import Any, Callable, Union, cast
 from unittest import mock
 
 from llama_index_instrumentation.dispatcher import active_instrument_tags
@@ -36,7 +36,7 @@ from workflows.runtime.types.ticks import TickAddEvent
 from workflows.testing import WorkflowTestRunner
 from workflows.workflow import Workflow
 
-from .conftest import (
+from .conftest import (  # type: ignore[import]
     AnotherTestEvent,
     DummyWorkflow,
     LastEvent,
@@ -374,9 +374,10 @@ def test_workflow_disable_validation() -> None:
             raise ValueError("The step raised an error!")
 
     w = DummyWorkflow(disable_validation=True)
-    w._get_steps = mock.MagicMock()  # type:ignore
+    w._get_steps = mock.MagicMock()  # type: ignore[assignment]
+    mock_get_steps = cast(mock.MagicMock, w._get_steps)
     w._validate()
-    w._get_steps.assert_not_called()
+    mock_get_steps.assert_not_called()
 
 
 @pytest.mark.asyncio
@@ -872,7 +873,10 @@ async def test_workflow_instances_garbage_collected_after_completion() -> None:
 
     for _ in range(10):
         wf = TinyWorkflow()
-        refs.append(weakref.ref(wf))
+        wf_ref: weakref.ReferenceType[Workflow] = cast(
+            weakref.ReferenceType[Workflow], weakref.ref(wf)
+        )
+        refs.append(wf_ref)
         await WorkflowTestRunner(wf).run()
         # Drop strong reference before next iteration
         del wf

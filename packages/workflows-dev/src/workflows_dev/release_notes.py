@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable, Literal, Mapping, Optional
+from typing import Iterable, Literal, Mapping, Optional, cast
 
 import httpx
 
@@ -64,7 +64,8 @@ def parse_pull_request(raw: Mapping[str, object]) -> PullRequest:
     user = raw.get("user")
     author = ""
     if isinstance(user, Mapping):
-        login = user.get("login")
+        user_mapping = cast(Mapping[str, object], user)
+        login = user_mapping.get("login")
         author = str(login) if isinstance(login, str) else ""
 
     labels: list[str] = []
@@ -72,7 +73,8 @@ def parse_pull_request(raw: Mapping[str, object]) -> PullRequest:
     if isinstance(raw_labels, Iterable):
         for label in raw_labels:
             if isinstance(label, Mapping):
-                name = label.get("name")
+                label_mapping = cast(Mapping[str, object], label)
+                name = label_mapping.get("name")
                 if isinstance(name, str):
                     labels.append(name)
 

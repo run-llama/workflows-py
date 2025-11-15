@@ -31,7 +31,11 @@ from workflows.events import (
 from workflows.testing import WorkflowTestRunner
 from workflows.workflow import Workflow
 
-from ..conftest import AnotherTestEvent, LastEvent, OneTestEvent
+from ..conftest import (  # type: ignore[import]
+    AnotherTestEvent,
+    LastEvent,
+    OneTestEvent,
+)
 
 
 @pytest.mark.asyncio

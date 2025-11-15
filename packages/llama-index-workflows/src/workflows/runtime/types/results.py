@@ -177,6 +177,6 @@ StepFunctionResult = Union[
     StepWorkerFailed[R],
     AddCollectedEvent,
     DeleteCollectedEvent,
-    AddWaiter[EventType],
+    AddWaiter[Event],
     DeleteWaiter,
 ]
