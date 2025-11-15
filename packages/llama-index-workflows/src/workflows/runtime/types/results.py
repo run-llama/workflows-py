@@ -85,7 +85,7 @@ class Returns(Generic[R]):
     step function has completed (including errors!)
     """
 
-    return_values: list[StepFunctionResult[R, Any]]
+    return_values: list[StepFunctionResult[R]]
 
 
 class WaitingForEvent(Exception, Generic[EventType]):
@@ -177,6 +177,6 @@ StepFunctionResult = Union[
     StepWorkerFailed[R],
     AddCollectedEvent,
     DeleteCollectedEvent,
-    AddWaiter[EventType],
+    AddWaiter[Event],
     DeleteWaiter,
 ]

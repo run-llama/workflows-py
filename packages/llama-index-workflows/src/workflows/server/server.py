@@ -9,7 +9,7 @@ import json
 import logging
 from importlib.metadata import version
 from pathlib import Path
-from typing import Any, AsyncGenerator, Callable, Awaitable
+from typing import Any, AsyncGenerator, Callable, Awaitable, cast
 from datetime import datetime, timezone
 
 from llama_index_instrumentation.dispatcher import instrument_tags
@@ -90,7 +90,7 @@ class WorkflowServer:
 
         self._middleware = middleware or [
             Middleware(
-                CORSMiddleware,
+                CORSMiddleware,  # type: ignore[arg-type]
                 # regex echoes the origin header back, which some browsers require (rather than "*") when credentials are required
                 allow_origin_regex=".*",
                 allow_methods=["*"],
@@ -1036,12 +1036,14 @@ class WorkflowServer:
             "cancelled",
         }
 
-        status_in = (
-            list(set(allowed_status_values).intersection(status_values))
+        status_in: list[Status] | None = (
+            cast(
+                list[Status],
+                list(set(allowed_status_values).intersection(status_values)),
+            )
             if status_values is not None
             else None
         )
-
         persistent_handlers = await self._workflow_store.query(
             HandlerQuery(status_in=status_in, workflow_name_in=workflow_name_in)
         )

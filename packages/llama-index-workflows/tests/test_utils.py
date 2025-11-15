@@ -20,7 +20,10 @@ from workflows.utils import (
     validate_step_signature,
 )
 
-from .conftest import AnotherTestEvent, OneTestEvent
+from .conftest import (  # type: ignore[import]
+    AnotherTestEvent,
+    OneTestEvent,
+)
 
 
 def test_validate_step_signature_of_method() -> None:

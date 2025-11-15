@@ -23,6 +23,13 @@ repos:
       - id: ruff-check
         args: [--fix, --exit-non-zero-on-fix]
 
+  - repo: local
+    hooks:
+      - id: ty
+        name: ty
+        language: system
+        entry: uv run ty check packages
+        exclude: ^examples/|^docs/
   - repo: https://github.com/pre-commit/mirrors-mypy
     rev: v1.15.0
     hooks:

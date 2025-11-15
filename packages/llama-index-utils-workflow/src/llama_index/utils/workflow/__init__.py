@@ -501,7 +501,11 @@ def _process_tools_and_handoffs(
         if agent.name == root_agent:
             edges.append(DrawWorkflowEdge("user", root_agent))
         for t in agent.tools or []:
-            fn_name = t.metadata.get_name() if isinstance(t, BaseTool) else t.__name__
+            if isinstance(t, BaseTool):
+                fn_name = t.metadata.get_name()
+            else:
+                # Fallback for non-BaseTool callables or objects without __name__
+                fn_name = getattr(t, "__name__", type(t).__name__)
             node_id = f"{agent.name}_{fn_name}"
             nodes.append(
                 DrawWorkflowNode(

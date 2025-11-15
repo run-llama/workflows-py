@@ -15,7 +15,7 @@ from httpx import ASGITransport, AsyncClient, Response
 
 from workflows.events import StopEvent, StartEvent
 
-from .util import wait_for_passing
+from .util import wait_for_passing  # type: ignore[import]
 from workflows import Context, step
 from workflows.server import WorkflowServer
 from workflows.server.abstract_workflow_store import HandlerQuery, PersistentHandler
@@ -24,7 +24,7 @@ from datetime import datetime
 
 # Prepare the event to send
 from workflows.context.serializers import JsonSerializer
-from .conftest import ExternalEvent
+from .conftest import ExternalEvent  # type: ignore[import]
 from workflows.server.memory_workflow_store import MemoryWorkflowStore
 from llama_index_instrumentation.dispatcher import active_instrument_tags
 

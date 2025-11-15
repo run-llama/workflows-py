@@ -5,7 +5,7 @@ from httpx import ASGITransport, AsyncClient
 from workflows.protocol.serializable_events import EventEnvelopeWithMetadata
 from workflows.server.server import WorkflowServer
 from workflows.client import WorkflowClient
-from .client_workflows import (
+from .client_workflows import (  # type: ignore[import]
     greeting_wf,
     crashing_wf,
     InputEvent,

@@ -93,6 +93,9 @@ class Workflow(metaclass=WorkflowMeta):
         - [RetryPolicy][workflows.retry_policy.RetryPolicy]
     """
 
+    # Populated by the metaclass; declared here for type checkers.
+    _step_functions: dict[str, StepFunction]
+
     def __init__(
         self,
         timeout: float | None = 45.0,

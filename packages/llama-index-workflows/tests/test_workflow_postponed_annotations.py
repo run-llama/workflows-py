@@ -13,7 +13,7 @@ from workflows.events import (
 from workflows.workflow import Workflow
 from workflows.testing import WorkflowTestRunner
 
-from .conftest import OneTestEvent
+from .conftest import OneTestEvent  # type: ignore[import]
 
 
 class PostponedAnnotationsWorkflow(Workflow):
