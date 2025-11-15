@@ -2,6 +2,9 @@ name: Publish packages to PyPI and GitHub
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
 
 jobs:
   publish:
@@ -87,7 +90,6 @@ jobs:
           fi
           git tag "${TAG_NAME}"
           git push origin "${TAG_NAME}"
-
 
       - name: Create GitHub Release
         if: steps.decision.outputs.release == 'true'
