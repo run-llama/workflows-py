@@ -5,8 +5,7 @@ from typing import Optional
 
 from packaging.version import Version
 
-# only Python 3.11+ includes tomllib
-import tomli as tomllib
+import tomllib
 
 
 class VersionMismatchError(ValueError):
@@ -63,7 +62,6 @@ def detect_change_type(current_version: str, previous_version: Optional[str]) ->
     """Return the semantic change classification between two versions."""
     if not previous_version:
         return "major"
-
 
     current = Version(current_version)
     previous = Version(previous_version)

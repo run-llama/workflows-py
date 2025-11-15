@@ -2,8 +2,6 @@ name: Publish packages to PyPI and GitHub
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
 
 jobs:
   publish:
@@ -17,18 +15,10 @@ jobs:
         include:
           - package: llama-index-workflows
             display_name: LlamaIndex Workflows
-            package_dir: packages/llama-index-workflows
-            tag_prefix: llama-index-workflows@
-            package_label: pkg:llama-index-workflows
-            pyproject_path: packages/llama-index-workflows/pyproject.toml
             artifact_glob: dist/llama_index_workflows-*
             trigger_openapi: true
           - package: llama-index-utils-workflow
             display_name: LlamaIndex Utils Workflow
-            package_dir: packages/llama-index-utils-workflow
-            tag_prefix: llama-index-utils-workflow@
-            package_label: pkg:llama-index-utils-workflow
-            pyproject_path: packages/llama-index-utils-workflow/pyproject.toml
             artifact_glob: dist/llama_index_utils_workflow-*
             trigger_openapi: false
 
@@ -45,8 +35,8 @@ jobs:
         run: >
           uv run --package workflows-dev workflows-dev needs-release
           --repo .
-          --pyproject ${{ matrix.pyproject_path }}
-          --tag-prefix ${{ matrix.tag_prefix }}
+          --pyproject packages/${{ matrix.package }}/pyproject.toml
+          --tag-prefix ${{ matrix.package }}@
           --output "$GITHUB_OUTPUT"
 
       - name: Configure git identity
@@ -54,21 +44,6 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-
-      - name: Create and push tag
-        id: tag
-        if: steps.decision.outputs.release == 'true'
-        env:
-          VERSION: ${{ steps.decision.outputs.version }}
-        run: |
-          TAG_NAME="${{ matrix.tag_prefix }}v${VERSION}"
-          echo "tag=${TAG_NAME}" >> "$GITHUB_OUTPUT"
-          if git rev-parse "${TAG_NAME}" >/dev/null 2>&1; then
-            echo "Tag ${TAG_NAME} already exists"
-            exit 1
-          fi
-          git tag "${TAG_NAME}"
-          git push origin "${TAG_NAME}"
 
       - name: Generate release notes
         id: notes
@@ -78,7 +53,7 @@ jobs:
         run: >
           uv run --package workflows-dev workflows-dev generate-release-notes
           --repository ${{ github.repository }}
-          --package-label ${{ matrix.package_label }}
+          --package-label pkg:${{ matrix.package }}
           --package-name "${{ matrix.display_name }}"
           --current-tag ${{ steps.tag.outputs.tag }}
           --previous-tag "${{ steps.decision.outputs.previous_tag }}"
@@ -87,15 +62,28 @@ jobs:
 
       - name: Build package
         if: steps.decision.outputs.release == 'true'
-        working-directory: ${{ matrix.package_dir }}
+        working-directory: packages/${{ matrix.package }}
         run: uv build
 
       - name: Publish package to PyPI
         if: steps.decision.outputs.release == 'true'
-        working-directory: ${{ matrix.package_dir }}
+        working-directory: packages/${{ matrix.package }}
         env:
           UV_PUBLISH_TOKEN: ${{ secrets.PYPI_TOKEN }}
         run: uv publish
+
+      # push tag after publishing, in case build fails, can retry
+      - name: Create and push tag
+        id: tag
+        if: steps.decision.outputs.release == 'true'
+        env:
+          VERSION: ${{ steps.decision.outputs.version }}
+        run: |
+          TAG_NAME="${{ matrix.package }}@v${VERSION}"
+          echo "tag=${TAG_NAME}" >> "$GITHUB_OUTPUT"
+          git tag "${TAG_NAME}"
+          git push origin "${TAG_NAME}"
+
 
       - name: Create GitHub Release
         if: steps.decision.outputs.release == 'true'

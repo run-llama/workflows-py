@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import subprocess
 from pathlib import Path
 
@@ -93,8 +92,7 @@ def test_validate_version_not_a_tag() -> None:
     with runner.isolated_filesystem():
         pyproject = Path("pyproject.toml")
         _write_pyproject(pyproject, "1.0.0")
-        env = os.environ.copy()
-        env["GITHUB_REF"] = "refs/heads/main"
+        env = {"GITHUB_REF": "refs/heads/main", "GITHUB_REF_NAME": ""}
         result = runner.invoke(
             cli, ["validate-version", "--pyproject", str(pyproject)], env=env
         )
@@ -124,6 +122,7 @@ def test_detect_change_type_patch() -> None:
                 "--output",
                 str(output_file),
             ],
+            env={},
         )
         assert result.exit_code == 0
         assert "Change type: patch" in result.output
@@ -149,6 +148,7 @@ def test_detect_change_type_minor() -> None:
                 "--current-tag",
                 "v1.1.0",
             ],
+            env={},
         )
         assert result.exit_code == 0
         assert "Change type: minor" in result.output
@@ -173,6 +173,7 @@ def test_detect_change_type_major() -> None:
                 "--current-tag",
                 "v2.0.0",
             ],
+            env={},
         )
         assert result.exit_code == 0
         assert "Change type: major" in result.output
@@ -199,6 +200,7 @@ def test_detect_change_type_with_prefix() -> None:
                 "--current-tag",
                 "pkg@v1.0.1",
             ],
+            env={},
         )
         assert result.exit_code == 0
         assert "Change type: patch" in result.output
@@ -206,7 +208,8 @@ def test_detect_change_type_with_prefix() -> None:
 
 def test_detect_change_type_requires_tag() -> None:
     runner = CliRunner()
-    result = runner.invoke(cli, ["detect-change-type"])
+    env = {"GITHUB_REF": "", "GITHUB_REF_NAME": ""}
+    result = runner.invoke(cli, ["detect-change-type"], env=env)
     assert result.exit_code != 0
     assert "Unable to determine tag" in result.output
 
@@ -264,6 +267,7 @@ def test_needs_release_first_release() -> None:
     runner = CliRunner()
     with runner.isolated_filesystem():
         repo = Path.cwd()
+        _init_git_repo(repo)
         (repo / "pyproject.toml").write_text(
             """
 [project]

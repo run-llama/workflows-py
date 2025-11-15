@@ -2,6 +2,12 @@
 requires = ["uv_build>=0.9.7,<0.10.0"]
 build-backend = "uv_build"
 
+[dependency-groups]
+dev = [
+  "pytest>=8.4.2",
+  "pytest-coverage>=0.0"
+]
+
 [project]
 name = "workflows-dev"
 version = "0.1.0"
@@ -15,7 +21,7 @@ dependencies = [
   "click>=8.1.7",
   "httpx>=0.28.1",
   "packaging>=24.1",
-  "tomli>=2.0.1; python_version < '3.11'"
+  "pytest-coverage>=0.0"
 ]
 
 [project.scripts]
