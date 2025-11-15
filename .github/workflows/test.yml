@@ -17,7 +17,7 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ["3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
-        package: [llama-index-workflows, llama-index-utils-workflow]
+        package: [llama-index-workflows, llama-index-utils-workflow, workflows-dev]
         include:
           - package: llama-index-workflows
             package_dir: packages/llama-index-workflows
@@ -35,9 +35,6 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           enable-cache: true
-
-      - name: Sync dev dependencies for selected package
-        run: uv sync --all-extras --directory ${{ matrix.package_dir }} --group dev
 
       - name: Run tests with coverage
         run: uv run --all-extras --directory ${{ matrix.package_dir }} -- pytest --cov --cov-report=xml

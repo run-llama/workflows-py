@@ -9,33 +9,24 @@ description = "Monorepo workspace for the LlamaIndex Workflows packages."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.9"
+dependencies = [
+    "tomli>=2.3.0",
+]
 
 [tool.basedpyright]
 typeCheckingMode = "standard"
 
 [[tool.basedpyright.executionEnvironments]]
-root = "src"
+root = "packages/llama-index-workflows"
 pythonVersion = "3.9"
 
 [[tool.basedpyright.executionEnvironments]]
-root = "packages/llama-index-workflows/src"
+root = "packages/llama-index-utils-workflow"
 pythonVersion = "3.9"
 
 [[tool.basedpyright.executionEnvironments]]
-root = "packages/llama-index-utils-workflow/src"
-pythonVersion = "3.9"
-
-[[tool.basedpyright.executionEnvironments]]
-root = "tests"
-pythonVersion = "3.9"
-
-[[tool.basedpyright.executionEnvironments]]
-root = "packages/llama-index-workflows/tests"
-pythonVersion = "3.9"
-
-[[tool.basedpyright.executionEnvironments]]
-root = "packages/llama-index-utils-workflow/tests"
-pythonVersion = "3.9"
+root = "packages/workflows-dev"
+pythonVersion = "3.14"
 
 [[tool.basedpyright.executionEnvironments]]
 root = "examples"

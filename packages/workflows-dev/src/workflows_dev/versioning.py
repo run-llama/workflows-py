@@ -5,10 +5,8 @@ from typing import Optional
 
 from packaging.version import Version
 
-try:  # pragma: no cover - Python 3.11+ includes tomllib
-    import tomllib  # type: ignore[attr-defined]
-except ModuleNotFoundError:  # pragma: no cover - fallback for Python < 3.11
-    import tomli as tomllib  # type: ignore[no-redef]
+# only Python 3.11+ includes tomllib
+import tomli as tomllib
 
 
 class VersionMismatchError(ValueError):
@@ -66,11 +64,9 @@ def detect_change_type(current_version: str, previous_version: Optional[str]) ->
     if not previous_version:
         return "major"
 
-    try:
-        current = Version(current_version)
-        previous = Version(previous_version)
-    except Exception:  # pragma: no cover - defensive guard
-        return "minor"
+
+    current = Version(current_version)
+    previous = Version(previous_version)
 
     if current <= previous:
         return "none"

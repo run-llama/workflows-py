@@ -1475,6 +1475,12 @@ wheels = [
 name = "llama-agents-workspace"
 version = "0.1.0"
 source = { editable = "." }
+dependencies = [
+    { name = "tomli" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "tomli", specifier = ">=2.3.0" }]
 
 [[package]]
 name = "llama-index-core"
