@@ -95,14 +95,14 @@ Visit the [complete documentation](https://docs.llamaindex.ai/en/stable/understa
 
 ## More examples
 
-- [Basic Feature Run-Through](../../examples/feature_walkthrough.ipynb)
-- [Building a Function Calling Agent with `llama-index`](../../examples/agent.ipynb)
-- [Human-in-the-loop Iterative Document Extraction](../../examples/document_processing.ipynb)
+- [Basic Feature Run-Through](./examples/feature_walkthrough.ipynb)
+- [Building a Function Calling Agent with `llama-index`](./examples/agent.ipynb)
+- [Human-in-the-loop Iterative Document Extraction](./examples/document_processing.ipynb)
 - Observability
-  - [OpenTelemetry + Instrumentation Primer](../../examples/observability/workflows_observability_pt1.ipynb)
-  - [OpenTelemetry + LlamaIndex](../../examples/observability/workflows_observability_pt2.ipynb)
-  - [Arize Phoenix + LlamaIndex](../../examples/observability/workflows_observablitiy_arize_phoenix.ipynb)
-  - [Langfuse + LlamaIndex](../../examples/observability/workflows_observablitiy_langfuse.ipynb)
+  - [OpenTelemetry + Instrumentation Primer](./examples/observability/workflows_observability_pt1.ipynb)
+  - [OpenTelemetry + LlamaIndex](./examples/observability/workflows_observability_pt2.ipynb)
+  - [Arize Phoenix + LlamaIndex](./examples/observability/workflows_observablitiy_arize_phoenix.ipynb)
+  - [Langfuse + LlamaIndex](./examples/observability/workflows_observablitiy_langfuse.ipynb)
 
 ## Related Packages
 
