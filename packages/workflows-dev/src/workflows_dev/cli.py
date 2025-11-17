@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Optional
 
 import click
 
 from . import git_utils, gha, index_html, release_notes, versioning
+from . import changesets
 
 
 def _resolve_tag(explicit_tag: Optional[str], github_ref: Optional[str]) -> str:
@@ -195,3 +197,47 @@ def update_index_html_cmd(js_url: str, css_url: str, index_path: Optional[str]) 
     click.echo("✅ Updated index.html")
     click.echo(f"   JavaScript: {js_url}")
     click.echo(f"   CSS: {css_url}")
+
+
+@cli.command("changeset-version")
+def changeset_version() -> None:
+    """Apply changeset versions, then sync versions for co-located Python packages.
+
+    - Runs changesets to bump package.json versions.
+    - Discovers all workspace packages via pnpm.
+    - For any directory containing both package.json and pyproject.toml, and with
+      package.json private: false, set pyproject [project].version to match the JS version.
+    - If a pyproject is updated, run `uv sync` in that directory to update its lock file.
+    """
+    # Ensure we're at the repo root
+    os.chdir(Path(__file__).parents[4])
+
+    # First, run changeset version to update all package.json files
+    changesets._run_command(["npx", "@changesets/cli", "version"])
+
+    # Enumerate workspace packages and perform syncs
+    packages = changesets._get_pnpm_workspace_packages()
+    version_map = {pkg.name: pkg for pkg in packages}
+    for pkg in packages:
+        changesets._sync_package_version_with_pyproject(pkg.path, version_map, pkg.name)
+
+
+@cli.command("changeset-publish")
+@click.option("--tag", is_flag=True, help="Tag the packages after publishing")
+@click.option("--dry-run", is_flag=True, help="Dry run the publish")
+def publish(tag: bool, dry_run: bool) -> None:
+    """Publish all packages."""
+    # move to the root
+    os.chdir(Path(__file__).parents[4])
+
+    changesets._maybe_publish_pypi(dry_run)
+
+    if tag:
+        if dry_run:
+            click.echo("Dry run, skipping tag. Would run:")
+            click.echo("  npx @changesets/cli tag")
+            click.echo("  git push --tags")
+        else:
+            # Let changesets create JS-related tags as usual
+            changesets._run_command(["npx", "@changesets/cli", "tag"])
+            changesets._run_command(["git", "push", "--tags"])

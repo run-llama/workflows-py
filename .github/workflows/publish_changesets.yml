@@ -40,4 +40,6 @@ jobs:
         run: |
           pnpm run release
         env:
-          PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
+          UV_PUBLISH_TOKEN: ${{ secrets.UV_PUBLISH_TOKEN }}
+
+

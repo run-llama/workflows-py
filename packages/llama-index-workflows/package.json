@@ -1,14 +1,8 @@
 {
-  "name": "@llama-agents-workspace/llama-index-workflows",
+  "name": "llama-index-workflows",
   "version": "2.11.1",
-  "private": "true",
+  "private": "false",
   "license": "MIT",
   "scripts": {
-    "version": "cd ../../ && pnpm changeset version && bash scripts/new_version.sh --package llama-index-workflows",
-    "release": "bash ../../scripts/release.sh --package llama-index-workflows"
-  },
-  "devDependencies": {
-    "@changesets/cli": "^2.29.5",
-    "changesets": "^1.0.2"
   }
 }
