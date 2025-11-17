@@ -1,0 +1,82 @@
+name: Version Bump and Release
+
+on:
+  push:
+    branches:
+      - main
+
+concurrency: ${{ github.workflow }}-${{ github.ref }}
+
+jobs:
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    # Only run on main branch pushes
+    if: github.ref == 'refs/heads/main'
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: "pnpm"
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Create Release Pull Request or Publish packages
+        id: changesets
+        uses: changesets/action@v1
+        with:
+          commit: "chore: version packages"
+          title: "chore: version packages"
+          # Custom version script
+          version: pnpm -w run version
+          # Custom publish script
+          publish: pnpm -w run publish
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          UV_PUBLISH_TOKEN: ${{ secrets.UV_PUBLISH_TOKEN }}
+
+      - name: Generate GitHub App token
+        if: steps.changesets.outputs.published == 'true'
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.CI_BOT_APP_ID }}
+          private-key: ${{ secrets.CI_BOT_PRIVATE_KEY }}
+
+      - name: Extract published llama-index-workflows version
+        if: steps.changesets.outputs.published == 'true'
+        id: workflows-version
+        run: |
+          PACKAGES='${{ steps.changesets.outputs.publishedPackages }}'
+          VERSION=$(echo "$PACKAGES" | jq -r '.[] | select(.name == "llama-index-workflows") | .version')
+
+          if [ -n "$VERSION" ]; then
+            echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+            echo "tag=llama-index-workflows@v${VERSION}" >> "$GITHUB_OUTPUT"
+            echo "Found llama-index-workflows version: $VERSION"
+          else
+            echo "llama-index-workflows was not published in this release"
+          fi
+
+      - name: Trigger OpenAPI publish for llama-index-workflows
+        if: steps.changesets.outputs.published == 'true' && steps.workflows-version.outputs.version != ''
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          event-type: publish-openapi
+          client-payload: '{"tag": "${{ steps.workflows-version.outputs.tag }}"}'

@@ -20,7 +20,9 @@ requires-python = ">=3.9"
 dependencies = [
   "click>=8.1.7",
   "httpx>=0.28.1",
-  "packaging>=24.1"
+  "packaging>=24.1",
+  "pydantic>=2.12.3",
+  "tomlkit>=0.13.3"
 ]
 
 [project.scripts]

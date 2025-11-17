@@ -148,3 +148,4 @@ cython_debug/
 # Generated files
 openapi.json
 workflow_all_flows.mermaid
+node_modules/
