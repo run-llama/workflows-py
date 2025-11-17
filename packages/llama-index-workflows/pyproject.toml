@@ -1,6 +1,6 @@
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = ["uv_build>=0.9.10,<0.10.0"]
+build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
@@ -37,9 +37,6 @@ dependencies = [
 server = ["starlette>=0.39.0", "uvicorn>=0.32.0"]
 client = ["httpx>=0.28.1,<1"]
 
-[tool.hatch.build.targets.wheel]
-packages = ["src/workflows"]
-
 [tool.hatch.envs.server]
 features = ["server"]
 dependencies = ["pyyaml>=6.0.2"]
@@ -50,3 +47,6 @@ openapi = "python -m workflows.server.server --output openapi.json"
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+
+[tool.uv.build-backend]
+module-name = "workflows"
