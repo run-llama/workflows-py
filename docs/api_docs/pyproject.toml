@@ -7,7 +7,7 @@ name = "docs"
 version = "0.1.0"
 description = ""
 authors = [{name = "Your Name", email = "you@example.com"}]
-requires-python = ">=3.10"
+requires-python = ">=3.9"
 readme = "README.md"
 dependencies = [
   "llama-index-workflows[server]",
