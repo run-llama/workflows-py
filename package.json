@@ -1,12 +1,12 @@
 {
   "name": "llama-agents-workspace",
   "version": "0.1.0",
-  "private": "true",
+  "private": true,
   "license": "MIT",
   "scripts": {
     "pre-commit-version": "pnpm changeset",
     "version": "uv run --package workflows-dev workflows-dev changeset-version",
-    "release": "uv run --package workflows-dev workflows-dev changeset-publish --tag"
+    "publish": "uv run --package workflows-dev workflows-dev changeset-publish --tag"
   },
   "devDependencies": {
     "@changesets/cli": "^2.29.7"
