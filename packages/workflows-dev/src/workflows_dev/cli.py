@@ -137,48 +137,6 @@ def generate_release_notes(
     gha.write_outputs({"body": body}, output_path=output)
 
 
-@cli.command("needs-release")
-@click.option(
-    "--pyproject",
-    type=click.Path(exists=True, dir_okay=False),
-    required=True,
-    help="Path to the package's pyproject.toml file.",
-)
-@click.option(
-    "--tag-prefix",
-    required=True,
-    help="Git tag prefix for this package (e.g. llama-index-workflows@).",
-)
-@click.option("--output", type=click.Path(), default=None)
-def needs_release(pyproject: str, tag_prefix: str, output: Optional[Path]) -> None:
-    """Determine whether a package needs a new release tag."""
-    current_version = versioning.read_pyproject_version(pyproject)
-    tags = git_utils.list_tags(Path.cwd(), f"{tag_prefix}v*")
-    previous_tag = tags[0] if tags else ""
-    previous_version = (
-        versioning.extract_semver(previous_tag, tag_prefix) if previous_tag else None
-    )
-    change_type = versioning.detect_change_type(current_version, previous_version)
-    release_needed = "true" if change_type != "none" else "false"
-
-    click.echo(f"Detected version: {current_version}")
-    if previous_tag:
-        click.echo(f"Previous tag: {previous_tag} (version {previous_version})")
-    else:
-        click.echo("No previous tag found; treating as first release.")
-    click.echo(f"Release needed: {release_needed}")
-
-    gha.write_outputs(
-        {
-            "version": current_version,
-            "previous_tag": previous_tag,
-            "change_type": change_type,
-            "release": release_needed,
-        },
-        output_path=output,
-    )
-
-
 @cli.command("update-index-html")
 @click.option("--js-url", required=True, help="URL for the JavaScript bundle.")
 @click.option("--css-url", required=True, help="URL for the CSS bundle.")
@@ -213,13 +171,13 @@ def changeset_version() -> None:
     os.chdir(Path(__file__).parents[4])
 
     # First, run changeset version to update all package.json files
-    changesets._run_command(["npx", "@changesets/cli", "version"])
+    changesets.run_command(["npx", "@changesets/cli", "version"])
 
     # Enumerate workspace packages and perform syncs
-    packages = changesets._get_pnpm_workspace_packages()
+    packages = changesets.get_pnpm_workspace_packages()
     version_map = {pkg.name: pkg for pkg in packages}
     for pkg in packages:
-        changesets._sync_package_version_with_pyproject(pkg.path, version_map, pkg.name)
+        changesets.sync_package_version_with_pyproject(pkg.path, version_map, pkg.name)
 
 
 @cli.command("changeset-publish")
@@ -230,7 +188,7 @@ def publish(tag: bool, dry_run: bool) -> None:
     # move to the root
     os.chdir(Path(__file__).parents[4])
 
-    changesets._maybe_publish_pypi(dry_run)
+    changesets.maybe_publish_pypi(dry_run)
 
     if tag:
         if dry_run:
@@ -239,5 +197,5 @@ def publish(tag: bool, dry_run: bool) -> None:
             click.echo("  git push --tags")
         else:
             # Let changesets create JS-related tags as usual
-            changesets._run_command(["npx", "@changesets/cli", "tag"])
-            changesets._run_command(["git", "push", "--tags"])
+            changesets.run_command(["npx", "@changesets/cli", "tag"])
+            changesets.run_command(["git", "push", "--tags"])

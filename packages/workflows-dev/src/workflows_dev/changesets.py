@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """
 This is a script called by the changeset bot. Normally changeset can do the following things, but this is a mixed ts and python repo, so we need to do some extra things.
 
@@ -8,6 +6,8 @@ There's 2 things this does:
 - Releasing/Tagging: After versions are changed, we check each package to see if its released, and if not, we release it and tag it.
 
 """
+
+from __future__ import annotations
 
 from dataclasses import dataclass
 import json
@@ -24,14 +24,14 @@ import tomlkit
 from packaging.version import Version
 
 
-def _run_command(
+def run_command(
     cmd: List[str], cwd: Path | None = None, env: dict[str, str] | None = None
 ) -> None:
     """Run a command, streaming output to the console, and raise on failure."""
     subprocess.run(cmd, check=True, text=True, cwd=cwd or Path.cwd(), env=env)
 
 
-def _run_and_capture(
+def run_and_capture(
     cmd: List[str], cwd: Path | None = None, env: dict[str, str] | None = None
 ) -> str:
     """Run a command and return stdout as text, raising on failure."""
@@ -54,19 +54,24 @@ class PackageJson:
     private: bool
 
 
-def _get_pnpm_workspace_packages() -> list[PackageJson]:
+def get_pnpm_workspace_packages() -> list[PackageJson]:
     """Return directories for all workspace packages from pnpm list JSON output."""
-    output = _run_and_capture(["pnpm", "list", "-r", "--depth=-1", "--json"])
+    output = run_and_capture(["pnpm", "list", "-r", "--depth=-1", "--json"])
 
     data = cast(list[dict[str, Any]], json.loads(output))
     packages: list[PackageJson] = [
-        PackageJson(name=data["name"], version=data["version"], path=Path(data["path"]), private=data["private"])
+        PackageJson(
+            name=data["name"],
+            version=data["version"],
+            path=Path(data["path"]),
+            private=data["private"],
+        )
         for data in data
     ]
     return packages
 
 
-def _sync_package_version_with_pyproject(
+def sync_package_version_with_pyproject(
     package_dir: Path, packages: dict[str, PackageJson], js_package_name: str
 ) -> None:
     """Sync version from package.json to pyproject.toml.
@@ -97,18 +102,18 @@ def _sync_package_version_with_pyproject(
 
 def _publishable_packages() -> Generator[Path, None, None]:
     """Finds all paths to pyproject.toml that also have a package.json with private: false."""
-    packages = _get_pnpm_workspace_packages()
+    packages = get_pnpm_workspace_packages()
     for package in packages:
         if not package.private:
-
             pyproject = package.path.parent / "pyproject.toml"
             if pyproject.exists():
                 yield pyproject
 
+
 def lock_python_dependencies() -> None:
     """Lock Python dependencies."""
     try:
-        _run_command(["uv", "lock"])
+        run_command(["uv", "lock"])
         click.echo("Locked Python dependencies")
     except subprocess.CalledProcessError as e:
         click.echo(f"Warning: Failed to lock Python dependencies: {e}", err=True)
@@ -120,52 +125,7 @@ def cli() -> None:
     pass
 
 
-@cli.command()
-def version() -> None:
-    """Apply changeset versions, then sync versions for co-located Python packages.
-
-    - Runs changesets to bump package.json versions.
-    - Discovers all workspace packages via pnpm.
-    - For any directory containing both package.json and pyproject.toml, and with
-      package.json private: false, set pyproject [project].version to match the JS version.
-    - If a pyproject is updated, run `uv sync` in that directory to update its lock file.
-    """
-    # Ensure we're at the repo root
-    os.chdir(Path(__file__).parents[4])
-
-    # First, run changeset version to update all package.json files
-    _run_command(["npx", "@changesets/cli", "version"])
-
-    # Enumerate workspace packages and perform syncs
-    packages = _get_pnpm_workspace_packages()
-    version_map = {pkg.name: pkg for pkg in packages}
-    for pkg in packages:
-        _sync_package_version_with_pyproject(pkg.path, version_map, pkg.name)
-
-
-@cli.command()
-@click.option("--tag", is_flag=True, help="Tag the packages after publishing")
-@click.option("--dry-run", is_flag=True, help="Dry run the publish")
-def publish(tag: bool, dry_run: bool) -> None:
-    """Publish all packages."""
-    # move to the root
-    os.chdir(Path(__file__).parents[4])
-
-    _maybe_publish_pypi(dry_run)
-
-    if tag:
-        if dry_run:
-            click.echo("Dry run, skipping tag. Would run:")
-            click.echo("  npx @changesets/cli tag")
-            click.echo("  git push --tags")
-        else:
-            # Let changesets create JS-related tags as usual
-            _run_command(["npx", "@changesets/cli", "tag"])
-            _run_command(["git", "push", "--tags"])
-
-
-
-def _maybe_publish_pypi(dry_run: bool) -> None:
+def maybe_publish_pypi(dry_run: bool) -> None:
     """Publish the py packages if they need to be published."""
     any = False
     for package in _publishable_packages():
@@ -185,13 +145,13 @@ def _maybe_publish_pypi(dry_run: bool) -> None:
             click.echo("  uv build")
             click.echo("  uv publish")
         else:
-            _run_command(["uv", "build"], cwd=package.parent)
+            run_command(["uv", "build"], cwd=package.parent)
     if any:
         if dry_run:
             click.echo("Dry run, skipping publish. Would run:")
             click.echo("  uv publish")
         else:
-            _run_command(["uv", "publish"])
+            run_command(["uv", "publish"])
 
 
 def current_version(pyproject: Path) -> tuple[str, str]:
@@ -223,7 +183,6 @@ if __name__ == "__main__":
     cli()
 
 
-
 class PyProjectContainer(BaseModel):
     project: PyProject
 
@@ -231,6 +190,7 @@ class PyProjectContainer(BaseModel):
     def parse(cls, text: str) -> tuple[Any, PyProjectContainer]:
         doc = tomlkit.parse(text)
         return doc, PyProjectContainer.model_validate(doc)
+
 
 class PyProject(BaseModel):
     name: str
