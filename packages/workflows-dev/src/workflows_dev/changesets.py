@@ -58,15 +58,15 @@ def get_pnpm_workspace_packages() -> list[PackageJson]:
     """Return directories for all workspace packages from pnpm list JSON output."""
     output = run_and_capture(["pnpm", "list", "-r", "--depth=-1", "--json"])
 
-    data = cast(list[dict[str, Any]], json.loads(output))
+    package_json = cast(list[dict[str, Any]], json.loads(output))
     packages: list[PackageJson] = [
         PackageJson(
             name=data["name"],
             version=data["version"],
             path=Path(data["path"]),
-            private=data["private"],
+            private=data.get("private", True),
         )
-        for data in data
+        for data in package_json
     ]
     return packages
 
@@ -105,7 +105,7 @@ def _publishable_packages() -> Generator[Path, None, None]:
     packages = get_pnpm_workspace_packages()
     for package in packages:
         if not package.private:
-            pyproject = package.path.parent / "pyproject.toml"
+            pyproject = package.path / "pyproject.toml"
             if pyproject.exists():
                 yield pyproject
 
@@ -142,7 +142,6 @@ def maybe_publish_pypi(dry_run: bool) -> None:
             click.echo(
                 f"Dry run, skipping publish. Would run with publish token {summary}:"
             )
-            click.echo("  uv build")
             click.echo("  uv publish")
         else:
             run_command(["uv", "build"], cwd=package.parent)
