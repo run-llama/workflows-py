@@ -17,23 +17,6 @@ Generally, we're looking for:
 
 Ideas beyond the above are welcome! This list is not exhaustive.
 
-## Code Structure
-
-Generally, the code organization is relatively flat. Here's a quick overview of the code structure:
-
-- **[src/workflows/workflow.py](src/workflows/workflow.py)**: The main `Workflow` class that orchestrates step execution and event handling
-- **[src/workflows/decorators.py](src/workflows/decorators.py)**: The `@step` decorator used to mark functions as workflow steps, along with step configuration
-- **[src/workflows/events.py](src/workflows/events.py)**: Core event types (`StartEvent`, `StopEvent`, `Event`) that drive workflow execution
-- **[src/workflows/handler.py](src/workflows/handler.py)**: The `WorkflowHandler` that manages workflow execution and provides the interface for running workflows
-- **[src/workflows/context/](src/workflows/context/)**: Context management for workflow state and data passing between steps
-  - **[src/workflows/context/context.py](src/workflows/context/context.py)**: Main `Context` class that holds workflow state and handles event routing
-  - **[src/workflows/context/serializers.py](src/workflows/context/serializers.py)**: Serialization utilities for persisting workflow state
-- **[src/workflows/resource.py](src/workflows/resource.py)**: Management of external resources that workflows can depend on
-- **[src/workflows/retry_policy.py](src/workflows/retry_policy.py)**: Configurable retry logic for failed steps
-- **[src/workflows/errors.py](src/workflows/errors.py)**: Custom exception types for workflow-specific errors
-- **[src/workflows/types.py](src/workflows/types.py)**: Type definitions and type variables used throughout the library
-- **[src/workflows/utils.py](src/workflows/utils.py)**: Utility functions for step introspection, signature validation, and other helpers
-
 ## Setup
 
 This section assumes you have `uv` installed.
@@ -48,13 +31,13 @@ source .venv/bin/activate
 .venv\Scripts\activate
 ```
 
-Then, install the dependencies with:
+The project is a monorepo with multiple closely related packages. You can install all dependencies with:
 
 ```bash
-uv sync
+uv sync --all-extras --all-packages
 ```
 
-The `pyproject.toml` file contains the dependencies for the project along with other details like the package name, version, etc. Generally you won't have to edit this file.
+The `pyproject.toml` files contain the dependencies for each project along with other details like the package name, version, etc. Generally you won't have to edit this file.
 
 Linting is done automatically with `pre-commit`. Initialize it with:
 
@@ -77,18 +60,32 @@ Generally, all features should be covered by robust tests. If you are adding a n
 We use `pre-commit` to run linting and formatting on the codebase. You can run it manually with:
 
 ```bash
-uv run -- pre-commit run -a
+uv run pre-commit run -a
 ```
 
 The `pre-commit` config is located in the `.pre-commit-config.yaml` file.
 
-## Release (requires repo push access)
+## Changesets and Releases
 
-- Update the `version` key in the `project` table of the `pyproject.toml` file.
-  - Change the version numbers following the [SemVer](https://semver.org/) specification.
-- Commit directly to `main`
-- Tag the commit on `main` you just created using an annotated tag: `git tag -m"v0.0.0" v0.0.0`
-- Push the `main` branch along with tags: `git push origin main --tags`
-- Monitor the [release workflow](https://github.com/run-llama/workflows-py/actions/workflows/publish_release.yml)
-  - Check the [release page](https://github.com/run-llama/workflows-py/releases) contains the new changelog, manually amend it if necessary
-  - Check the package was published on [PyPI](https://pypi.org/project/llama-index-workflows/)
+Despite being a Python project, we use [Changesets](https://github.com/changesets/changesets) for version management because it provides an excellent workflow for managing releases in a monorepo. Changesets makes it easy to track which packages need version bumps and helps generate changelogs automatically.
+
+### Adding a Changeset
+
+When you make a change that should be included in the next release, you need to add a changeset by running the following command (requires Node.js):
+
+```bash
+npx @changesets/cli
+```
+
+This will prompt you to:
+1. Select which packages are affected by your changes
+2. Choose the version bump type (major, minor, or patch)
+3. Write a summary of your changes
+
+### How It Works
+
+When a PR with changesets is merged, the changeset bot will:
+1. Sync versions from `package.json` to `pyproject.toml` files
+2. Update package versions according to the changesets
+3. Generate/update CHANGELOG files
+4. Create a "Version Packages" PR that can be merged to trigger the release
