@@ -25,10 +25,8 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
 
       - name: Extract payload data
         id: payload
@@ -43,10 +41,26 @@ jobs:
           fi
 
       - name: Update index.html
+        run: >
+          uv run --package workflows-dev workflows-dev update-index-html
+          --js-url "${{ steps.payload.outputs.js_url }}"
+          --css-url "${{ steps.payload.outputs.css_url }}"
+
+      - name: Create changeset for patch version
         run: |
-          python scripts/update_index_html.py \
-            --js-url "${{ steps.payload.outputs.js_url }}" \
-            --css-url "${{ steps.payload.outputs.css_url }}"
+          # Create a changeset file with a unique name
+          CHANGESET_FILE=".changeset/update-debugger-assets-$(date +%s).md"
+          cat > "$CHANGESET_FILE" << 'EOF'
+          ---
+          "llama-index-workflows": patch
+          ---
+
+          Update debugger assets
+
+          - JavaScript: ${{ steps.payload.outputs.js_url }}
+          - CSS: ${{ steps.payload.outputs.css_url }}
+          EOF
+          echo "Created changeset: $CHANGESET_FILE"
 
       - name: Create Pull Request
         uses: peter-evans/create-pull-request@v6
@@ -59,10 +73,10 @@ jobs:
           body: |
             ## Update Debugger Assets
 
-            This PR updates the workflow debugger assets.
+            This PR updates the workflow debugger assets and creates a changeset for a patch version bump.
 
             ### Changes
-            - Updated `src/workflows/server/static/index.html`
+            - Updated `packages/llama-index-workflows/src/workflows/server/static/index.html`
               - JavaScript: ${{ steps.payload.outputs.js_url }}
               - CSS: ${{ steps.payload.outputs.css_url }}
 
