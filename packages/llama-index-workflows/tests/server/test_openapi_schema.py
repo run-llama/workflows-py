@@ -2,7 +2,6 @@
 # Copyright (c) 2025 LlamaIndex Inc.
 
 from workflows import Workflow
-
 from workflows.server import WorkflowServer
 
 

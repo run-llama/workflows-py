@@ -1,3 +1,5 @@
+from typing import Any, Type, Union, cast
+
 import pytest
 from pydantic import (
     BaseModel,
@@ -6,9 +8,7 @@ from pydantic import (
     field_serializer,
     field_validator,
 )
-from typing import Union, cast, Type, Any
-
-from workflows.context.serializers import JsonSerializer, BaseSerializer
+from workflows.context.serializers import BaseSerializer, JsonSerializer
 from workflows.context.state_store import DictState, InMemoryStateStore
 
 

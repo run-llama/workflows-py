@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import pytest
-
 from workflows.context import Context
 from workflows.errors import ContextSerdeError
 from workflows.workflow import Workflow

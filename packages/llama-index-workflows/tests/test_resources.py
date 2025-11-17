@@ -6,7 +6,6 @@ from unittest import mock
 
 import pytest
 from pydantic import BaseModel, Field
-
 from workflows.decorators import step
 from workflows.events import Event, StartEvent, StopEvent
 from workflows.resource import Resource, ResourceManager

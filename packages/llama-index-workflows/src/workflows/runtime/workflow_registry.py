@@ -1,6 +1,7 @@
-from threading import Lock
 from dataclasses import dataclass
-from typing import Optional
+from threading import Lock
+from typing import TYPE_CHECKING, Optional
+
 from workflows.runtime.types._identity_weak_ref import IdentityWeakKeyDict
 from workflows.runtime.types.plugin import (
     ControlLoopFunction,
@@ -8,9 +9,8 @@ from workflows.runtime.types.plugin import (
     RegisteredWorkflow,
     WorkflowRuntime,
 )
-from workflows.workflow import Workflow
 from workflows.runtime.types.step_function import StepWorkerFunction
-from typing import TYPE_CHECKING
+from workflows.workflow import Workflow
 
 if TYPE_CHECKING:
     from workflows.context.context import Context

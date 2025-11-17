@@ -12,11 +12,11 @@ from typing import AsyncGenerator
 import httpx
 import pytest
 import uvicorn
-
 from workflows import Workflow
+from workflows.client.client import WorkflowClient
 from workflows.events import StopEvent
 from workflows.server import WorkflowServer
-from workflows.client.client import WorkflowClient
+
 from .conftest import (  # type: ignore[import]
     ExternalEvent,
     RequestedExternalEvent,

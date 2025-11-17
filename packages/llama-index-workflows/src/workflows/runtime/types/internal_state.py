@@ -3,29 +3,28 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import dataclasses
-from typing import Any, TYPE_CHECKING
+import importlib
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
 
+from workflows.context.context_types import (
+    SerializedContext,
+    SerializedEventAttempt,
+    SerializedStepWorkerState,
+    SerializedWaiter,
+)
+from workflows.context.serializers import JsonSerializer
+from workflows.decorators import StepConfig
 from workflows.events import Event
 from workflows.retry_policy import RetryPolicy
-from workflows.decorators import StepConfig
 from workflows.runtime.types.results import StepWorkerState, StepWorkerWaiter
 from workflows.runtime.types.ticks import TickAddEvent, WorkflowTick
 from workflows.workflow import Workflow
-from workflows.context.context_types import (
-    SerializedContext,
-    SerializedStepWorkerState,
-    SerializedEventAttempt,
-    SerializedWaiter,
-)
-
-from workflows.context.serializers import JsonSerializer
-import importlib
 
 if TYPE_CHECKING:
-    from workflows.context.serializers import BaseSerializer
     from workflows.context.context_types import SerializedContext
+    from workflows.context.serializers import BaseSerializer
 
 
 @dataclass()

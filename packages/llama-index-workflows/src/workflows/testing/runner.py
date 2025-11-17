@@ -1,9 +1,9 @@
-from typing import Any, Optional
 from collections import Counter
 from dataclasses import dataclass
+from typing import Any, Optional
 
-from workflows import Workflow, Context
-from workflows.events import StartEvent, Event, EventType
+from workflows import Context, Workflow
+from workflows.events import Event, EventType, StartEvent
 
 
 @dataclass

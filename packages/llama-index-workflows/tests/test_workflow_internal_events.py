@@ -1,17 +1,17 @@
-import pytest
 import asyncio
-
-from workflows import Workflow, Context, step
-from workflows.testing import WorkflowTestRunner
 from typing import Union
+
+import pytest
+from pydantic import BaseModel
+from workflows import Context, Workflow, step
 from workflows.events import (
-    StepStateChanged,
-    StepState,
     Event,
     StartEvent,
+    StepState,
+    StepStateChanged,
     StopEvent,
 )
-from pydantic import BaseModel
+from workflows.testing import WorkflowTestRunner
 
 
 class SomeEvent(Event):

@@ -6,14 +6,13 @@ from __future__ import annotations
 import asyncio
 import logging
 from typing import (
+    TYPE_CHECKING,
     Any,
     Tuple,
 )
 
 from llama_index_instrumentation import get_dispatcher
 from pydantic import ValidationError
-
-from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:  # pragma: no cover
     from .context import Context

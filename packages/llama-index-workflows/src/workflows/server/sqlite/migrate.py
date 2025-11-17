@@ -9,7 +9,6 @@ import re
 import sqlite3
 from importlib import import_module, resources
 
-
 logger = logging.getLogger(__name__)
 
 

@@ -4,7 +4,6 @@ import gc
 import weakref
 
 import pytest
-
 from workflows.runtime.types._identity_weak_ref import IdentityWeakKeyDict
 
 

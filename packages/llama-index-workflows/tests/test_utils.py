@@ -5,7 +5,6 @@ import inspect
 from typing import Any, List, Optional, Union, get_type_hints
 
 import pytest
-
 from workflows.context import Context
 from workflows.decorators import step
 from workflows.errors import WorkflowValidationError

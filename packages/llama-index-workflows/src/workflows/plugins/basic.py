@@ -7,11 +7,11 @@ import asyncio
 import time
 from typing import AsyncGenerator, Callable
 
+from workflows.decorators import P, R
 from workflows.events import Event, StopEvent
 from workflows.runtime.types.plugin import Plugin, SnapshottableRuntime, WorkflowRuntime
 from workflows.runtime.types.step_function import StepWorkerFunction
 from workflows.runtime.types.ticks import WorkflowTick
-from workflows.decorators import P, R
 from workflows.workflow import Workflow
 
 

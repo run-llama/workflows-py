@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from pathlib import Path
 import sqlite3
+from pathlib import Path
 from typing import List
 
 from workflows.server.sqlite.migrate import run_migrations

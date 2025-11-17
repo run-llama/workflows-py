@@ -8,16 +8,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import (
+    TYPE_CHECKING,
     AsyncGenerator,
     Coroutine,
     Protocol,
-    TYPE_CHECKING,
     cast,
 )
 
-
 from workflows.events import Event, StopEvent
-
 from workflows.runtime.types.internal_state import BrokerState
 from workflows.runtime.types.step_function import StepWorkerFunction
 from workflows.runtime.types.ticks import WorkflowTick

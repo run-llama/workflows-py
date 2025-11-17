@@ -3,9 +3,9 @@
 
 from __future__ import annotations
 
+import inspect
 import secrets
 import string
-import inspect
 from typing import (
     TYPE_CHECKING,
     Annotated,

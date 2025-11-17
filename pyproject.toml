@@ -4,7 +4,9 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
-  "pytest-xdist>=3.8.0"
+  "pytest-xdist>=3.8.0",
+  "ruff>=0.14.5",
+  "ty>=0.0.1a26"
 ]
 
 [project]
@@ -14,9 +16,6 @@ description = "Monorepo workspace for the LlamaIndex Workflows packages."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.9"
-dependencies = [
-  "tomli>=2.3.0"
-]
 
 [tool.basedpyright]
 typeCheckingMode = "standard"
@@ -42,6 +41,37 @@ omit = ["**/tests/*"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+
+[tool.ruff.lint]
+select = [
+  # default flake8 rules
+  "E4",
+  "E7",
+  "E9",
+  "F", # Pyflakes rules https://docs.astral.sh/ruff/rules/#pyflakes-f
+  "I", # sort imports https://docs.astral.sh/ruff/rules/#isort-i
+  "UP007", # Use X | Y for type annotations
+  "UP045", # Use X | None for type annotations
+  "ANN001", # Missing type annotation for function argument {name}
+  "ANN002", # Missing type annotation for *{name}
+  "ANN003", # Missing type annotation for **{name}
+  "T201" # no print statements
+]
+
+[tool.ruff.lint.per-file-ignores]
+# "tests/*" = ["D", "D100", "D101"]
+"examples/**/*" = ["T201"]
+"packages/*/tests/**/*" = [
+  "T201",
+  "ANN001",
+  "ANN002",
+  "ANN003",
+  # remove UP007 and UP045 after removing 3.9 support
+  "UP007",
+  "UP045"
+]
+"*.ipynb" = ["T201", "ANN001", "ANN002", "ANN003"]
+"__main__.py" = ["T201"]
 
 [tool.uv.sources]
 llama-index-workflows = {workspace = true}

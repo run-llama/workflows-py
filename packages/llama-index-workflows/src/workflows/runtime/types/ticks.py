@@ -19,8 +19,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Generic, Union
 
-from workflows.events import Event
 from workflows.decorators import R
+from workflows.events import Event
 from workflows.runtime.types.results import StepFunctionResult
 
 

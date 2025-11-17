@@ -2,31 +2,30 @@
 # Copyright (c) 2025 LlamaIndex Inc.
 
 from __future__ import annotations
-from dataclasses import dataclass
-from typing import List, Optional, Dict, Tuple, Union, cast, Any
 
-from workflows.events import (
-    StartEvent,
-    StopEvent,
-    InputRequiredEvent,
-    HumanResponseEvent,
-    Event,
-)
-from workflows.decorators import StepConfig
-from workflows.handler import WorkflowHandler
-from workflows import Workflow
+from dataclasses import dataclass
+from typing import Any, Dict, List, Tuple, Union, cast
 
 from llama_index.core.agent.workflow import (
     AgentWorkflow,
-    ReActAgent,
-    CodeActAgent,
     BaseWorkflowAgent,
+    CodeActAgent,
+    ReActAgent,
 )
-from llama_index.core.tools import BaseTool, AsyncBaseTool
+from llama_index.core.tools import AsyncBaseTool, BaseTool
 from pyvis.network import Network
-
-from workflows.runtime.types.ticks import TickStepResult, TickAddEvent, WorkflowTick
-from workflows.runtime.types.results import StepWorkerResult, AddCollectedEvent
+from workflows import Workflow
+from workflows.decorators import StepConfig
+from workflows.events import (
+    Event,
+    HumanResponseEvent,
+    InputRequiredEvent,
+    StartEvent,
+    StopEvent,
+)
+from workflows.handler import WorkflowHandler
+from workflows.runtime.types.results import AddCollectedEvent, StepWorkerResult
+from workflows.runtime.types.ticks import TickAddEvent, TickStepResult, WorkflowTick
 
 
 @dataclass
@@ -36,10 +35,8 @@ class DrawWorkflowNode:
     id: str
     label: str
     node_type: str  # 'step', 'event', 'external'
-    title: Optional[str] = None
-    event_type: Optional[type] = (
-        None  # Store the actual event type for styling decisions
-    )
+    title: str | None = None
+    event_type: type | None = None  # Store the actual event type for styling decisions
 
 
 @dataclass
@@ -64,7 +61,7 @@ def _truncate_label(label: str, max_length: int) -> str:
 
 
 def _extract_workflow_structure(
-    workflow: Workflow, max_label_length: Optional[int] = None
+    workflow: Workflow, max_label_length: int | None = None
 ) -> DrawWorkflowGraph:
     """Extract workflow structure into an intermediate representation."""
     # Get workflow steps
@@ -73,7 +70,7 @@ def _extract_workflow_structure(
     edges = []
     added_nodes = set()  # Track added node IDs to avoid duplicates
 
-    step_config: Optional[StepConfig] = None
+    step_config: StepConfig | None = None
 
     # Only one kind of `StopEvent` is allowed in a `Workflow`.
     # Assuming that `Workflow` is validated before drawing, it's enough to find the first one.
@@ -587,7 +584,7 @@ def draw_all_possible_flows(
     workflow: Workflow,
     filename: str = "workflow_all_flows.html",
     notebook: bool = False,
-    max_label_length: Optional[int] = None,
+    max_label_length: int | None = None,
 ) -> None:
     """
     Draws all possible flows of the workflow using Pyvis.
@@ -607,7 +604,7 @@ def draw_most_recent_execution(
     handler: WorkflowHandler,
     filename: str = "workflow_recent_execution.html",
     notebook: bool = False,
-    max_label_length: Optional[int] = None,
+    max_label_length: int | None = None,
 ) -> None:
     """
     Draws the most recent execution of the workflow.
@@ -626,7 +623,7 @@ def draw_most_recent_execution(
     ticks: List[WorkflowTick] = handler.ctx._broker_run._tick_log
 
     # Build execution DAG from ticks
-    nodes: Dict[str, Tuple[str, str, Optional[type]]] = {}
+    nodes: Dict[str, Tuple[str, str, type | None]] = {}
     edges: List[Tuple[str, str]] = []
     event_node_by_identity: Dict[int, str] = {}
     step_seq: Dict[str, int] = {}
@@ -718,7 +715,7 @@ def draw_most_recent_execution(
 def draw_all_possible_flows_mermaid(
     workflow: Workflow,
     filename: str = "workflow_all_flows.mermaid",
-    max_label_length: Optional[int] = None,
+    max_label_length: int | None = None,
 ) -> str:
     """
     Draws all possible flows of the workflow as a Mermaid diagram.

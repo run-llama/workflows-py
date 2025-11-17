@@ -1,12 +1,12 @@
 import asyncio
+from typing import Optional, Union
+
 import pytest
 from pydantic import BaseModel, Field
-from typing import Union, Optional
-
 from workflows import Context, Workflow
-from workflows.testing import WorkflowTestRunner
 from workflows.decorators import step
-from workflows.events import StartEvent, StopEvent, Event
+from workflows.events import Event, StartEvent, StopEvent
+from workflows.testing import WorkflowTestRunner
 
 
 class MyState(BaseModel):

@@ -2,13 +2,12 @@
 # Copyright (c) 2025 LlamaIndex Inc.
 
 import pytest
-
 from workflows.context import Context
 from workflows.decorators import step
 from workflows.events import Event, StartEvent, StopEvent
 from workflows.retry_policy import ConstantDelayRetryPolicy
-from workflows.workflow import Workflow
 from workflows.testing import WorkflowTestRunner
+from workflows.workflow import Workflow
 
 
 @pytest.mark.asyncio

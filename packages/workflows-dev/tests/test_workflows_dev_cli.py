@@ -7,7 +7,6 @@ from unittest.mock import Mock, patch
 from urllib.error import HTTPError
 
 from click.testing import CliRunner
-
 from workflows_dev.changesets import (
     PackageJson,
     PyProjectContainer,

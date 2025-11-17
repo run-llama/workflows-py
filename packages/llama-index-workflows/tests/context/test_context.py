@@ -4,19 +4,10 @@
 from __future__ import annotations
 
 import asyncio
-
-from workflows.runtime.types.ticks import TickAddEvent
-
-try:
-    from typing import Union
-except ImportError:
-    from typing_extensions import Union
-
-from typing import Optional
+from typing import Optional, Union
 
 import pytest
 from pydantic import BaseModel
-
 from workflows.context import Context
 from workflows.context.state_store import DictState
 from workflows.decorators import step
@@ -28,6 +19,7 @@ from workflows.events import (
     StartEvent,
     StopEvent,
 )
+from workflows.runtime.types.ticks import TickAddEvent
 from workflows.testing import WorkflowTestRunner
 from workflows.workflow import Workflow
 

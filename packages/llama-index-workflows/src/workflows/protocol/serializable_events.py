@@ -7,6 +7,7 @@ import json
 from typing import Any, Type
 
 from pydantic import BaseModel, ValidationError, model_validator
+
 from workflows.context.utils import import_module_from_qualified_name
 from workflows.events import Event
 

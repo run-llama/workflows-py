@@ -1,5 +1,4 @@
 import pytest
-
 from workflows.context.utils import (
     get_qualified_name,
     import_module_from_qualified_name,

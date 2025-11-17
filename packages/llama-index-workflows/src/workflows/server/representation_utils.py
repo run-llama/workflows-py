@@ -1,12 +1,13 @@
 from dataclasses import dataclass
 from typing import List, Optional
 
-from workflows.events import (
-    StopEvent,
-    InputRequiredEvent,
-    HumanResponseEvent,
-)
+from workflows import Workflow
 from workflows.decorators import StepConfig, StepFunction
+from workflows.events import (
+    HumanResponseEvent,
+    InputRequiredEvent,
+    StopEvent,
+)
 from workflows.protocol import (
     WorkflowGraphEdge,
     WorkflowGraphNode,
@@ -16,7 +17,6 @@ from workflows.utils import (
     get_steps_from_class,
     get_steps_from_instance,
 )
-from workflows import Workflow
 
 
 @dataclass

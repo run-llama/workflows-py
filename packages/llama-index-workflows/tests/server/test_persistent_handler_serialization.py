@@ -2,9 +2,8 @@ from __future__ import annotations
 
 from typing import Any, cast
 
-
-from workflows.server.abstract_workflow_store import PersistentHandler
 from workflows.events import StopEvent
+from workflows.server.abstract_workflow_store import PersistentHandler
 
 
 def _base_handler_kwargs() -> dict[str, Any]:

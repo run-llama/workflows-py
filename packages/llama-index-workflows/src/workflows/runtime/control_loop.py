@@ -4,10 +4,10 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import replace
+import logging
 import time
+from dataclasses import replace
 from typing import TYPE_CHECKING
-
 
 from workflows.decorators import R
 from workflows.errors import (
@@ -34,9 +34,9 @@ from workflows.runtime.types.commands import (
     indicates_exit,
 )
 from workflows.runtime.types.internal_state import (
+    BrokerState,
     EventAttempt,
     InProgressState,
-    BrokerState,
     InternalStepWorkerState,
 )
 from workflows.runtime.types.plugin import (
@@ -64,10 +64,8 @@ from workflows.runtime.types.ticks import (
     TickTimeout,
     WorkflowTick,
 )
-import logging
-
-from workflows.workflow import Workflow
 from workflows.runtime.workflow_registry import workflow_registry
+from workflows.workflow import Workflow
 
 if TYPE_CHECKING:
     from workflows.context.context import Context

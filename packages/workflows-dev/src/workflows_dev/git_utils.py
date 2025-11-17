@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Iterable
 
 
 def list_tags(repo: str | Path, tag_glob: str) -> list[str]:
@@ -26,7 +26,7 @@ def list_tags(repo: str | Path, tag_glob: str) -> list[str]:
     return [line.strip() for line in result.stdout.splitlines() if line.strip()]
 
 
-def previous_tag(current_tag: str, tags: Iterable[str]) -> Optional[str]:
+def previous_tag(current_tag: str, tags: Iterable[str]) -> str | None:
     """Return the tag immediately after the current entry in the sorted list."""
     tags_list = list(tags)
     if current_tag in tags_list:

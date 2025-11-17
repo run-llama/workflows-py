@@ -23,7 +23,6 @@ from llama_index_instrumentation.dispatcher import (
     active_instrument_tags,
     instrument_tags,
 )
-
 from workflows.errors import WorkflowRuntimeError
 from workflows.events import (
     Event,

@@ -4,7 +4,6 @@
 from unittest import mock
 
 import pytest
-
 from workflows.context import Context
 from workflows.errors import WorkflowRuntimeError
 from workflows.handler import WorkflowHandler

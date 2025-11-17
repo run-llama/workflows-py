@@ -1,11 +1,10 @@
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
 
 from packaging.version import Version
-import sys
 
 if sys.version_info >= (3, 11):
     import tomllib
@@ -96,7 +95,7 @@ def compute_suffix_and_version(tag: str, tag_prefix: str) -> tuple[str, str]:
     return suffix, semver
 
 
-def detect_change_type(current_version: str, previous_version: Optional[str]) -> str:
+def detect_change_type(current_version: str, previous_version: str | None) -> str:
     """Return the semantic change classification between two versions."""
     if not previous_version:
         return "major"

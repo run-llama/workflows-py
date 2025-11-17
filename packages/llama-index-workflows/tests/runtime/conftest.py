@@ -8,7 +8,6 @@ import time
 from typing import Any, AsyncGenerator
 
 import pytest
-
 from workflows.events import Event, StopEvent
 from workflows.runtime.types.plugin import ControlLoopFunction, Plugin, WorkflowRuntime
 from workflows.runtime.types.step_function import StepWorkerFunction

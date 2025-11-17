@@ -4,11 +4,10 @@
 from __future__ import annotations
 
 import asyncio
-from contextvars import copy_context
 import functools
 import time
-from typing import Any, Awaitable, Callable, TYPE_CHECKING, Generic, Protocol
-
+from contextvars import copy_context
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Generic, Protocol
 
 from workflows.decorators import P, R, StepConfig
 from workflows.errors import WorkflowRuntimeError
@@ -25,7 +24,6 @@ from workflows.runtime.types.results import (
     StepWorkerStateContextVar,
     WaitingForEvent,
 )
-
 from workflows.workflow import Workflow
 
 if TYPE_CHECKING:

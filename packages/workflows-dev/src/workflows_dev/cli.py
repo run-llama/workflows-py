@@ -2,11 +2,10 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Optional
 
 import click
 
-from . import git_utils, gha, index_html, versioning, changesets
+from . import changesets, gha, git_utils, index_html, versioning
 
 
 @click.group()
@@ -21,7 +20,7 @@ def cli() -> None:
     help="Full git tag to inspect (e.g. llama-index-workflows@v1.2.3).",
 )
 @click.option("--output", type=click.Path(), default=None)
-def compute_tag_metadata(tag: str, output: Optional[Path]) -> None:
+def compute_tag_metadata(tag: str, output: Path | None) -> None:
     """Compute semantic metadata and change classification for a tag.
 
     Writes tag_suffix, semver, change_type, and change_description to outputs.
@@ -69,7 +68,7 @@ def compute_tag_metadata(tag: str, output: Optional[Path]) -> None:
     default=None,
     help="Optional custom index.html path.",
 )
-def update_index_html_cmd(js_url: str, css_url: str, index_path: Optional[str]) -> None:
+def update_index_html_cmd(js_url: str, css_url: str, index_path: str | None) -> None:
     """Update debugger asset URLs in the server index.html file."""
     try:
         index_html.update_index_html(js_url, css_url, index_path)
