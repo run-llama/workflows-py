@@ -47,5 +47,6 @@ workflows-dev = {workspace = true}
 members = [
   "packages/llama-index-workflows",
   "packages/llama-index-utils-workflow",
-  "packages/workflows-dev"
+  "packages/workflows-dev",
+  "docs/api_docs"
 ]
