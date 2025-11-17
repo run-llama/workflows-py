@@ -9,38 +9,12 @@ importers:
   .:
     devDependencies:
       '@changesets/cli':
-        specifier: ^2.29.5
+        specifier: ^2.29.7
         version: 2.29.7
-      changesets:
-        specifier: ^1.0.2
-        version: 1.0.2
 
-  packages/llama-index-utils-workflow:
-    devDependencies:
-      '@changesets/cli':
-        specifier: ^2.29.5
-        version: 2.29.7
-      changesets:
-        specifier: ^1.0.2
-        version: 1.0.2
+  packages/llama-index-utils-workflow: {}
 
-  packages/llama-index-workflows:
-    devDependencies:
-      '@changesets/cli':
-        specifier: ^2.29.5
-        version: 2.29.7
-      changesets:
-        specifier: ^1.0.2
-        version: 1.0.2
-
-  packages/workflows-dev:
-    devDependencies:
-      '@changesets/cli':
-        specifier: ^2.29.5
-        version: 2.29.7
-      changesets:
-        specifier: ^1.0.2
-        version: 1.0.2
+  packages/llama-index-workflows: {}
 
 packages:
 
@@ -155,9 +129,6 @@ packages:
   braces@3.0.3:
     resolution: {integrity: sha512-yQbXgO/OSZVD2IsiLlro+7Hf6Q18EJrKSEsdoMzKePKXct3gvD8oLcOQdIzGupr5Fj+EDe8gO/lxc1BzfMpxvA==}
     engines: {node: '>=8'}
-
-  changesets@1.0.2:
-    resolution: {integrity: sha512-lnXvvqJEcK0z/6RtwKNLbejazl+Hxd1bocMcNgfLHWb4rGxuqkO/LdeGNzwIx3jHj+fNWZ6AGgK5AqNBwva4Xg==}
 
   chardet@2.1.1:
     resolution: {integrity: sha512-PsezH1rqdV9VvyNhxxOW32/d75r01NY7TQCmOqomRo15ZSOKbpTFVsfjghxo6JloQUCGnH4k1LGu0R4yCLlWQQ==}
@@ -615,8 +586,6 @@ snapshots:
   braces@3.0.3:
     dependencies:
       fill-range: 7.1.1
-
-  changesets@1.0.2: {}
 
   chardet@2.1.1: {}
 
