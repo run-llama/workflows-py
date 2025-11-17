@@ -56,7 +56,7 @@ jobs:
         env:
           # Use the created app token, otherwise PRs won't run workflows
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
-          UV_PUBLISH_TOKEN: ${{ secrets.UV_PUBLISH_TOKEN }}
+          UV_PUBLISH_TOKEN: ${{ secrets.PYPI_TOKEN }}
 
       - name: Extract published llama-index-workflows version
         if: steps.changesets.outputs.published == 'true'
