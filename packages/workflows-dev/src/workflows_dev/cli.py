@@ -9,75 +9,55 @@ import click
 from . import git_utils, gha, index_html, versioning, changesets
 
 
-def _resolve_tag(explicit_tag: Optional[str], github_ref: Optional[str]) -> str:
-    if explicit_tag:
-        return versioning.strip_refs_prefix(explicit_tag)
-    if github_ref and github_ref.startswith("refs/tags/"):
-        return versioning.strip_refs_prefix(github_ref)
-    raise click.BadParameter(
-        "Unable to determine tag. Provide --tag or set GITHUB_REF/GITHUB_REF_NAME to a tag value."
-    )
-
-
 @click.group()
 def cli() -> None:
     """Developer tooling for the workflows repository."""
 
 
-@cli.command("detect-change-type")
-@click.option("--tag-glob", default="v*", show_default=True)
-@click.option("--tag-prefix", default="", show_default=True)
-@click.option("--current-tag", envvar="GITHUB_REF_NAME")
-@click.option("--github-ref", envvar="GITHUB_REF")
+@cli.command("compute-tag-metadata")
+@click.option(
+    "--tag",
+    required=True,
+    help="Full git tag to inspect (e.g. llama-index-workflows@v1.2.3).",
+)
 @click.option("--output", type=click.Path(), default=None)
-def detect_change_type(
-    tag_glob: str,
-    tag_prefix: str,
-    current_tag: Optional[str],
-    github_ref: Optional[str],
-    output: Optional[Path],
-) -> None:
-    """Compute the semantic change between the current tag and the previous release."""
-    target_tag = _resolve_tag(current_tag, github_ref)
-    tags = git_utils.list_tags(Path.cwd(), tag_glob)
-    previous = git_utils.previous_tag(target_tag, tags)
+def compute_tag_metadata(tag: str, output: Optional[Path]) -> None:
+    """Compute semantic metadata and change classification for a tag.
 
-    current_version = versioning.extract_semver(target_tag, tag_prefix)
+    Writes tag_suffix, semver, change_type, and change_description to outputs.
+    """
+    try:
+        metadata = versioning.infer_tag_metadata(tag)
+    except ValueError as exc:
+        raise click.BadParameter(str(exc)) from exc
+
+    suffix, semver = versioning.compute_suffix_and_version(tag, metadata.tag_prefix)
+
+    tags = git_utils.list_tags(Path.cwd(), metadata.tag_glob)
+    previous = git_utils.previous_tag(metadata.normalized, tags)
     previous_version = (
-        versioning.extract_semver(previous, tag_prefix) if previous else None
+        versioning.extract_semver(previous, metadata.tag_prefix) if previous else None
     )
-    change_type = versioning.detect_change_type(current_version, previous_version)
+    change_type = versioning.detect_change_type(semver, previous_version)
+    change_description = ""
 
-    click.echo(f"Current tag: {target_tag}")
+    click.echo(f"Current tag: {metadata.normalized}")
     if previous:
         click.echo(f"Previous tag: {previous}")
     else:
         click.echo("No previous tag found")
+    click.echo(f"Version: {semver}")
     click.echo(f"Change type: {change_type}")
 
-    gha.write_outputs({"change_type": change_type}, output_path=output)
-
-
-@cli.command("extract-tag-info")
-@click.option(
-    "--tag", required=True, help="Full git tag (e.g. llama-index-workflows@v1.2.3)."
-)
-@click.option("--tag-prefix", required=True, help="Expected prefix for the tag.")
-@click.option("--output", type=click.Path(), default=None)
-def extract_tag_info(tag: str, tag_prefix: str, output: Optional[str]) -> None:
-    """Extract suffix and semantic version metadata from a tag."""
-    suffix, semver = versioning.compute_suffix_and_version(tag, tag_prefix)
-    gha.write_outputs({"tag_suffix": suffix, "semver": semver}, output_path=output)
-
-
-@cli.command("find-previous-tag")
-@click.option("--tag-prefix", required=True)
-@click.option("--current-tag", required=True)
-@click.option("--output", type=click.Path(), default=None)
-def find_previous_tag(tag_prefix: str, current_tag: str, output: Optional[str]) -> None:
-    """Find the most recent tag for a package other than the current tag."""
-    previous = git_utils.find_previous_tag(Path.cwd(), tag_prefix, current_tag)
-    gha.write_outputs({"previous": previous}, output_path=output)
+    gha.write_outputs(
+        {
+            "tag_suffix": suffix,
+            "semver": semver,
+            "change_type": change_type,
+            "change_description": change_description,
+        },
+        output_path=output,
+    )
 
 
 @cli.command("update-index-html")
