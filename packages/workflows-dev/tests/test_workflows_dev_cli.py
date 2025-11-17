@@ -5,7 +5,6 @@ from pathlib import Path
 
 from click.testing import CliRunner
 
-from workflows_dev import release_notes
 from workflows_dev.cli import cli
 
 
@@ -40,64 +39,6 @@ def _commit_and_tag(repo_path: Path, filename: str, content: str, tag: str) -> N
         capture_output=True,
     )
     subprocess.run(["git", "tag", tag], cwd=repo_path, check=True)
-
-
-def test_validate_version_matching() -> None:
-    runner = CliRunner()
-    with runner.isolated_filesystem():
-        pyproject = Path("pyproject.toml")
-        _write_pyproject(pyproject, "1.2.3")
-        result = runner.invoke(
-            cli, ["validate-version", "--pyproject", str(pyproject), "--tag", "v1.2.3"]
-        )
-        assert result.exit_code == 0
-        assert "Version validated: 1.2.3" in result.output
-
-
-def test_validate_version_not_matching() -> None:
-    runner = CliRunner()
-    with runner.isolated_filesystem():
-        pyproject = Path("pyproject.toml")
-        _write_pyproject(pyproject, "1.2.3")
-        result = runner.invoke(
-            cli, ["validate-version", "--pyproject", str(pyproject), "--tag", "v9.9.9"]
-        )
-        assert result.exit_code != 0
-        assert "doesn't match pyproject.toml version" in result.output
-
-
-def test_validate_version_with_prefix() -> None:
-    runner = CliRunner()
-    with runner.isolated_filesystem():
-        pyproject = Path("pyproject.toml")
-        _write_pyproject(pyproject, "0.5.0")
-        result = runner.invoke(
-            cli,
-            [
-                "validate-version",
-                "--pyproject",
-                str(pyproject),
-                "--tag-prefix",
-                "pkg@",
-                "--tag",
-                "pkg@v0.5.0",
-            ],
-        )
-        assert result.exit_code == 0
-        assert "Version validated: 0.5.0" in result.output
-
-
-def test_validate_version_not_a_tag() -> None:
-    runner = CliRunner()
-    with runner.isolated_filesystem():
-        pyproject = Path("pyproject.toml")
-        _write_pyproject(pyproject, "1.0.0")
-        env = {"GITHUB_REF": "refs/heads/main", "GITHUB_REF_NAME": ""}
-        result = runner.invoke(
-            cli, ["validate-version", "--pyproject", str(pyproject)], env=env
-        )
-        assert result.exit_code != 0
-        assert "Unable to determine tag" in result.output
 
 
 def test_detect_change_type_patch() -> None:
@@ -388,28 +329,3 @@ def test_update_index_html_missing_file(tmp_path: Path) -> None:
     )
     assert result.exit_code != 0
     assert "not found" in result.output
-
-
-def test_release_notes_formatting() -> None:
-    repo = release_notes.Repository(owner="run-llama", name="workflows-py")
-    prs = [
-        release_notes.PullRequest(
-            number=1,
-            title="Add feature",
-            author="alice",
-            merge_commit_sha="abc",
-            merged=True,
-            labels=("pkg:llama-index-workflows", "enhancement"),
-        )
-    ]
-    body = release_notes.format_release_notes(
-        repo=repo,
-        package_name="LlamaIndex Workflows",
-        semver="1.2.3",
-        current_tag="v1.2.3",
-        previous_tag="v1.2.2",
-        pull_requests=prs,
-    )
-    assert "Add feature (#1) by @alice" in body
-    assert "### Enhancements" in body
-    assert "View changes between v1.2.2 and v1.2.3" in body

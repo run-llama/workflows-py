@@ -6,8 +6,7 @@ from typing import Optional
 
 import click
 
-from . import git_utils, gha, index_html, release_notes, versioning
-from . import changesets
+from . import git_utils, gha, index_html, versioning, changesets
 
 
 def _resolve_tag(explicit_tag: Optional[str], github_ref: Optional[str]) -> str:
@@ -23,30 +22,6 @@ def _resolve_tag(explicit_tag: Optional[str], github_ref: Optional[str]) -> str:
 @click.group()
 def cli() -> None:
     """Developer tooling for the workflows repository."""
-
-
-@cli.command("validate-version")
-@click.option(
-    "--pyproject",
-    type=click.Path(exists=True, dir_okay=False),
-    default="pyproject.toml",
-    show_default=True,
-)
-@click.option("--tag-prefix", default="", show_default=True)
-@click.option("--tag", envvar="GITHUB_REF_NAME")
-@click.option("--github-ref", envvar="GITHUB_REF")
-def validate_version(
-    pyproject: str, tag_prefix: str, tag: Optional[str], github_ref: Optional[str]
-) -> None:
-    """Ensure the git tag matches the pyproject version."""
-    target_tag = _resolve_tag(tag, github_ref)
-    pyproject_version = versioning.read_pyproject_version(pyproject)
-    tag_version = versioning.extract_semver(target_tag, tag_prefix)
-    try:
-        versioning.ensure_versions_match(pyproject_version, tag_version, target_tag)
-    except versioning.VersionMismatchError as exc:
-        raise click.ClickException(str(exc)) from exc
-    click.echo(f"✅ Version validated: {pyproject_version} (tag: {target_tag})")
 
 
 @cli.command("detect-change-type")
@@ -103,38 +78,6 @@ def find_previous_tag(tag_prefix: str, current_tag: str, output: Optional[str]) 
     """Find the most recent tag for a package other than the current tag."""
     previous = git_utils.find_previous_tag(Path.cwd(), tag_prefix, current_tag)
     gha.write_outputs({"previous": previous}, output_path=output)
-
-
-@cli.command("generate-release-notes")
-@click.option("--repository", envvar="GITHUB_REPOSITORY", required=True)
-@click.option("--github-token", envvar="GITHUB_TOKEN", required=True)
-@click.option("--package-label", required=True)
-@click.option("--package-name", required=True)
-@click.option("--current-tag", required=True)
-@click.option("--previous-tag", default="", show_default=True)
-@click.option("--semver", required=True)
-@click.option("--output", type=click.Path(), default=None)
-def generate_release_notes(
-    repository: str,
-    github_token: str,
-    package_label: str,
-    package_name: str,
-    current_tag: str,
-    previous_tag: str,
-    semver: str,
-    output: Optional[str],
-) -> None:
-    """Generate release notes by aggregating labeled pull requests."""
-    body = release_notes.generate_release_notes(
-        token=github_token,
-        repository=repository,
-        package_label=package_label,
-        package_name=package_name,
-        current_tag=current_tag,
-        previous_tag=previous_tag,
-        semver=semver,
-    )
-    gha.write_outputs({"body": body}, output_path=output)
 
 
 @cli.command("update-index-html")

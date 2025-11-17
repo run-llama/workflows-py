@@ -79,7 +79,6 @@ jobs:
             - Updated `packages/llama-index-workflows/src/workflows/server/static/index.html`
               - JavaScript: ${{ steps.payload.outputs.js_url }}
               - CSS: ${{ steps.payload.outputs.css_url }}
-            - Created changeset for `@llama-agents-workspace/llama-index-workflows` (patch)
 
             ---
             *This PR was automatically created by the [update-debugger-assets workflow](https://github.com/${{ github.repository }}/actions/workflows/update_debugger_assets.yml)*
