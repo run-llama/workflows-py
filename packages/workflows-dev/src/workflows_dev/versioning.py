@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -34,6 +35,39 @@ def read_pyproject_version(pyproject_path: str) -> str:
 def strip_refs_prefix(tag: str) -> str:
     """Remove the refs/tags/ prefix when present."""
     return tag.replace("refs/tags/", "") if tag.startswith("refs/tags/") else tag
+
+
+@dataclass
+class TagMetadata:
+    """Normalized tag metadata for a namespaced package release."""
+
+    normalized: str
+    tag_prefix: str
+    tag_glob: str
+
+
+def infer_tag_metadata(tag: str) -> TagMetadata:
+    """Return normalized tag, prefix, and glob for tags of the same package.
+
+    Supported format: "<namespace>@v<semver>" (e.g. "llama-index-workflows@v1.2.3").
+    """
+    normalized = strip_refs_prefix(tag)
+
+    if "@" not in normalized:
+        raise ValueError(
+            f"Invalid tag '{tag}'. Expected format '<namespace>@v<semver>'."
+        )
+
+    package, suffix = normalized.split("@", 1)
+    if not suffix.startswith("v"):
+        raise ValueError(
+            f"Invalid tag '{tag}'. Expected format '<namespace>@v<semver>'."
+        )
+
+    tag_prefix = f"{package}@"
+    tag_glob = f"{package}@v*"
+
+    return TagMetadata(normalized=normalized, tag_prefix=tag_prefix, tag_glob=tag_glob)
 
 
 def remove_tag_prefix(tag: str, tag_prefix: str) -> str:
@@ -79,11 +113,3 @@ def detect_change_type(current_version: str, previous_version: Optional[str]) ->
     if current_release[2] > previous_release[2]:
         return "patch"
     return "minor"
-
-
-def ensure_versions_match(expected: str, actual: str, tag_name: str) -> None:
-    """Raise when two version strings differ."""
-    if Version(expected) != Version(actual):
-        raise VersionMismatchError(
-            f"Tag {tag_name} (version {actual}) doesn't match pyproject.toml version {expected}"
-        )

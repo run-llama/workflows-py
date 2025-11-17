@@ -51,80 +51,7 @@ def _commit_and_tag(repo_path: Path, filename: str, content: str, tag: str) -> N
     subprocess.run(["git", "tag", tag], cwd=repo_path, check=True)
 
 
-def test_detect_change_type_patch() -> None:
-    runner = CliRunner()
-    with runner.isolated_filesystem():
-        repo = Path.cwd()
-        _init_git_repo(repo)
-        _commit_and_tag(repo, "file.txt", "v1.0.0", "v1.0.0")
-        _commit_and_tag(repo, "file.txt", "v1.0.1", "v1.0.1")
-
-        output_file = Path("out.txt")
-        result = runner.invoke(
-            cli,
-            [
-                "detect-change-type",
-                "--tag-glob",
-                "v*",
-                "--current-tag",
-                "v1.0.1",
-                "--output",
-                str(output_file),
-            ],
-            env={},
-        )
-        assert result.exit_code == 0
-        assert "Change type: patch" in result.output
-        assert "change_type=patch" in output_file.read_text()
-
-
-def test_detect_change_type_minor() -> None:
-    runner = CliRunner()
-    with runner.isolated_filesystem():
-        repo = Path.cwd()
-        _init_git_repo(repo)
-        _commit_and_tag(repo, "file.txt", "v1.0.0", "v1.0.0")
-        _commit_and_tag(repo, "file.txt", "v1.1.0", "v1.1.0")
-
-        result = runner.invoke(
-            cli,
-            [
-                "detect-change-type",
-                "--tag-glob",
-                "v*",
-                "--current-tag",
-                "v1.1.0",
-            ],
-            env={},
-        )
-        assert result.exit_code == 0
-        assert "Change type: minor" in result.output
-
-
-def test_detect_change_type_major() -> None:
-    runner = CliRunner()
-    with runner.isolated_filesystem():
-        repo = Path.cwd()
-        _init_git_repo(repo)
-        _commit_and_tag(repo, "file.txt", "v1.0.0", "v1.0.0")
-        _commit_and_tag(repo, "file.txt", "v2.0.0", "v2.0.0")
-
-        result = runner.invoke(
-            cli,
-            [
-                "detect-change-type",
-                "--tag-glob",
-                "v*",
-                "--current-tag",
-                "v2.0.0",
-            ],
-            env={},
-        )
-        assert result.exit_code == 0
-        assert "Change type: major" in result.output
-
-
-def test_detect_change_type_with_prefix() -> None:
+def test_compute_tag_metadata_patch() -> None:
     runner = CliRunner()
     with runner.isolated_filesystem():
         repo = Path.cwd()
@@ -132,54 +59,27 @@ def test_detect_change_type_with_prefix() -> None:
         _commit_and_tag(repo, "file.txt", "pkg@v1.0.0", "pkg@v1.0.0")
         _commit_and_tag(repo, "file.txt", "pkg@v1.0.1", "pkg@v1.0.1")
 
+        output_file = Path("out.txt")
         result = runner.invoke(
             cli,
             [
-                "detect-change-type",
-                "--tag-glob",
-                "pkg@v*",
-                "--tag-prefix",
-                "pkg@",
-                "--current-tag",
+                "compute-tag-metadata",
+                "--tag",
                 "pkg@v1.0.1",
+                "--output",
+                str(output_file),
             ],
             env={},
         )
         assert result.exit_code == 0
         assert "Change type: patch" in result.output
+        contents = output_file.read_text()
+        assert "tag_suffix=v1.0.1" in contents
+        assert "semver=1.0.1" in contents
+        assert "change_type=patch" in contents
 
 
-def test_detect_change_type_requires_tag() -> None:
-    runner = CliRunner()
-    env = {"GITHUB_REF": "", "GITHUB_REF_NAME": ""}
-    result = runner.invoke(cli, ["detect-change-type"], env=env)
-    assert result.exit_code != 0
-    assert "Unable to determine tag" in result.output
-
-
-def test_extract_tag_info_outputs_suffix() -> None:
-    runner = CliRunner()
-    with runner.isolated_filesystem():
-        out_file = Path("tag.txt")
-        result = runner.invoke(
-            cli,
-            [
-                "extract-tag-info",
-                "--tag",
-                "pkg@v1.2.3",
-                "--tag-prefix",
-                "pkg@",
-                "--output",
-                str(out_file),
-            ],
-        )
-        assert result.exit_code == 0
-        contents = out_file.read_text()
-        assert "tag_suffix=v1.2.3" in contents
-        assert "semver=1.2.3" in contents
-
-
-def test_find_previous_tag_returns_match() -> None:
+def test_compute_tag_metadata_minor() -> None:
     runner = CliRunner()
     with runner.isolated_filesystem():
         repo = Path.cwd()
@@ -187,21 +87,33 @@ def test_find_previous_tag_returns_match() -> None:
         _commit_and_tag(repo, "file.txt", "pkg@v1.0.0", "pkg@v1.0.0")
         _commit_and_tag(repo, "file.txt", "pkg@v1.1.0", "pkg@v1.1.0")
 
-        out_file = Path("prev.txt")
         result = runner.invoke(
-            cli,
-            [
-                "find-previous-tag",
-                "--tag-prefix",
-                "pkg@",
-                "--current-tag",
-                "pkg@v1.1.0",
-                "--output",
-                str(out_file),
-            ],
+            cli, ["compute-tag-metadata", "--tag", "pkg@v1.1.0"], env={}
         )
         assert result.exit_code == 0
-        assert out_file.read_text().strip() == "previous=pkg@v1.0.0"
+        assert "Change type: minor" in result.output
+
+
+def test_compute_tag_metadata_major() -> None:
+    runner = CliRunner()
+    with runner.isolated_filesystem():
+        repo = Path.cwd()
+        _init_git_repo(repo)
+        _commit_and_tag(repo, "file.txt", "pkg@v1.0.0", "pkg@v1.0.0")
+        _commit_and_tag(repo, "file.txt", "pkg@v2.0.0", "pkg@v2.0.0")
+
+        result = runner.invoke(
+            cli, ["compute-tag-metadata", "--tag", "pkg@v2.0.0"], env={}
+        )
+        assert result.exit_code == 0
+        assert "Change type: major" in result.output
+
+
+def test_compute_tag_metadata_requires_tag() -> None:
+    runner = CliRunner()
+    result = runner.invoke(cli, ["compute-tag-metadata"])
+    assert result.exit_code != 0
+    assert "Missing option '--tag'" in result.output
 
 
 def test_update_index_html_success(tmp_path: Path) -> None:

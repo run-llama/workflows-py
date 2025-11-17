@@ -1571,8 +1571,16 @@ dependencies = [
     { name = "tomli" },
 ]
 
+[package.dev-dependencies]
+dev = [
+    { name = "pytest-xdist" },
+]
+
 [package.metadata]
 requires-dist = [{ name = "tomli", specifier = ">=2.3.0" }]
+
+[package.metadata.requires-dev]
+dev = [{ name = "pytest-xdist", specifier = ">=3.8.0" }]
 
 [[package]]
 name = "llama-index-core"
