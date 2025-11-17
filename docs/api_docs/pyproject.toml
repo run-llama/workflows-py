@@ -26,4 +26,4 @@ dependencies = [
 package = false
 
 [tool.uv.sources]
-llama-index-workflows = {path = "../../", editable = true}
+llama-index-workflows = {workspace = true}
