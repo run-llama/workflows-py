@@ -1,0 +1,14 @@
+{
+  "name": "@llama-agents-workspace/llama-index-utils-workflow",
+  "version": "0.5.0",
+  "private": "true",
+  "license": "MIT",
+  "scripts": {
+    "version": "cd ../../ && pnpm changeset version && bash py/scripts/new_version.sh --package llama-index-utils-workflow",
+    "release": "bash ../../scripts/release.sh --package llama-index-utils-workflow"
+  },
+  "devDependencies": {
+    "@changesets/cli": "^2.29.5",
+    "changesets": "^1.0.2"
+  }
+}

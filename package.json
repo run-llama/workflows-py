@@ -1,0 +1,22 @@
+{
+  "name": "llama-agents-workspace",
+  "version": "1.0.0",
+  "private": "true",
+  "license": "MIT",
+  "scripts": {
+    "pre-commit-version": "pnpm changeset",
+    "version": "pnpm version-workflows-dev && pnpm version-llama-index-workflows && pnpm version-llama-index-utils-workflow",
+    "release": "pnpm release-workflows-dev && pnpm release-llama-index-workflows && pnpm release-llama-index-utils-workflow",
+    "release-workflows-dev": "pnpm run --filter @llama-agents-workspace@workflows-dev release",
+    "release-llama-index-workflows": "pnpm run --filter llama-agents-workspace@llama-index-workflows release",
+    "release-llama-index-utils-workflow": "pnpm run --filter @llama-agents-workspace@llama-index-utils-workflow release",
+    "version-workflows-dev": "pnpm run --filter @llama-agents-workspace@workflows-dev version",
+    "version-llama-index-workflows": "pnpm run --filter @llama-agents-workspace@llama-index-workflows version",
+    "version-llama-index-utils-workflow": "pnpm run --filter @llama-agents-workspace@llama-index-utils-workflow version"
+
+  },
+  "devDependencies": {
+    "@changesets/cli": "^2.29.5",
+    "changesets": "^1.0.2"
+  }
+}
