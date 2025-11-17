@@ -3658,6 +3658,8 @@ dependencies = [
     { name = "click", version = "8.3.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
     { name = "httpx" },
     { name = "packaging" },
+    { name = "pydantic" },
+    { name = "tomlkit" },
 ]
 
 [package.dev-dependencies]
@@ -3671,6 +3673,8 @@ requires-dist = [
     { name = "click", specifier = ">=8.1.7" },
     { name = "httpx", specifier = ">=0.28.1" },
     { name = "packaging", specifier = ">=24.1" },
+    { name = "pydantic", specifier = ">=2.12.3" },
+    { name = "tomlkit", specifier = ">=0.13.3" },
 ]
 
 [package.metadata.requires-dev]

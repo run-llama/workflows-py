@@ -1,11 +1,20 @@
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
+from unittest.mock import Mock, patch
+from urllib.error import HTTPError
 
 from click.testing import CliRunner
 
-from workflows_dev import release_notes
+from workflows_dev.changesets import (
+    PackageJson,
+    PyProjectContainer,
+    current_version,
+    is_published,
+    sync_package_version_with_pyproject,
+)
 from workflows_dev.cli import cli
 
 
@@ -40,64 +49,6 @@ def _commit_and_tag(repo_path: Path, filename: str, content: str, tag: str) -> N
         capture_output=True,
     )
     subprocess.run(["git", "tag", tag], cwd=repo_path, check=True)
-
-
-def test_validate_version_matching() -> None:
-    runner = CliRunner()
-    with runner.isolated_filesystem():
-        pyproject = Path("pyproject.toml")
-        _write_pyproject(pyproject, "1.2.3")
-        result = runner.invoke(
-            cli, ["validate-version", "--pyproject", str(pyproject), "--tag", "v1.2.3"]
-        )
-        assert result.exit_code == 0
-        assert "Version validated: 1.2.3" in result.output
-
-
-def test_validate_version_not_matching() -> None:
-    runner = CliRunner()
-    with runner.isolated_filesystem():
-        pyproject = Path("pyproject.toml")
-        _write_pyproject(pyproject, "1.2.3")
-        result = runner.invoke(
-            cli, ["validate-version", "--pyproject", str(pyproject), "--tag", "v9.9.9"]
-        )
-        assert result.exit_code != 0
-        assert "doesn't match pyproject.toml version" in result.output
-
-
-def test_validate_version_with_prefix() -> None:
-    runner = CliRunner()
-    with runner.isolated_filesystem():
-        pyproject = Path("pyproject.toml")
-        _write_pyproject(pyproject, "0.5.0")
-        result = runner.invoke(
-            cli,
-            [
-                "validate-version",
-                "--pyproject",
-                str(pyproject),
-                "--tag-prefix",
-                "pkg@",
-                "--tag",
-                "pkg@v0.5.0",
-            ],
-        )
-        assert result.exit_code == 0
-        assert "Version validated: 0.5.0" in result.output
-
-
-def test_validate_version_not_a_tag() -> None:
-    runner = CliRunner()
-    with runner.isolated_filesystem():
-        pyproject = Path("pyproject.toml")
-        _write_pyproject(pyproject, "1.0.0")
-        env = {"GITHUB_REF": "refs/heads/main", "GITHUB_REF_NAME": ""}
-        result = runner.invoke(
-            cli, ["validate-version", "--pyproject", str(pyproject)], env=env
-        )
-        assert result.exit_code != 0
-        assert "Unable to determine tag" in result.output
 
 
 def test_detect_change_type_patch() -> None:
@@ -253,94 +204,6 @@ def test_find_previous_tag_returns_match() -> None:
         assert out_file.read_text().strip() == "previous=pkg@v1.0.0"
 
 
-def test_needs_release_first_release() -> None:
-    runner = CliRunner()
-    with runner.isolated_filesystem():
-        repo = Path.cwd()
-        _init_git_repo(repo)
-        (repo / "pyproject.toml").write_text(
-            """
-[project]
-name = "example"
-version = "1.0.0"
-""".strip()
-        )
-
-        output_file = Path("out.txt")
-        result = runner.invoke(
-            cli,
-            [
-                "needs-release",
-                "--pyproject",
-                "pyproject.toml",
-                "--tag-prefix",
-                "pkg@",
-                "--output",
-                str(output_file),
-            ],
-        )
-        assert result.exit_code == 0
-        contents = output_file.read_text()
-        assert "version=1.0.0" in contents
-        assert "previous_tag=" in contents
-        assert "change_type=major" in contents
-        assert "release=true" in contents
-
-
-def test_needs_release_when_version_has_not_advanced() -> None:
-    runner = CliRunner()
-    with runner.isolated_filesystem():
-        repo = Path.cwd()
-        (repo / "pyproject.toml").write_text(
-            """
-[project]
-name = "example"
-version = "1.0.0"
-""".strip()
-        )
-        # initialise git and create matching tag
-        subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
-        subprocess.run(
-            ["git", "config", "user.email", "dev@example.com"],
-            cwd=repo,
-            check=True,
-        )
-        subprocess.run(
-            ["git", "config", "user.name", "Dev User"],
-            cwd=repo,
-            check=True,
-        )
-        (repo / "file.txt").write_text("content")
-        subprocess.run(["git", "add", "."], cwd=repo, check=True)
-        subprocess.run(
-            ["git", "commit", "-m", "init"],
-            cwd=repo,
-            check=True,
-            capture_output=True,
-        )
-        subprocess.run(["git", "tag", "pkg@v1.0.0"], cwd=repo, check=True)
-
-        output_file = Path("out.txt")
-        result = runner.invoke(
-            cli,
-            [
-                "needs-release",
-                "--pyproject",
-                "pyproject.toml",
-                "--tag-prefix",
-                "pkg@",
-                "--output",
-                str(output_file),
-            ],
-        )
-        assert result.exit_code == 0
-        contents = output_file.read_text()
-        assert "version=1.0.0" in contents
-        assert "previous_tag=pkg@v1.0.0" in contents
-        assert "change_type=none" in contents
-        assert "release=false" in contents
-
-
 def test_update_index_html_success(tmp_path: Path) -> None:
     runner = CliRunner()
     index_path = tmp_path / "index.html"
@@ -390,26 +253,162 @@ def test_update_index_html_missing_file(tmp_path: Path) -> None:
     assert "not found" in result.output
 
 
-def test_release_notes_formatting() -> None:
-    repo = release_notes.Repository(owner="run-llama", name="workflows-py")
-    prs = [
-        release_notes.PullRequest(
-            number=1,
-            title="Add feature",
-            author="alice",
-            merge_commit_sha="abc",
-            merged=True,
-            labels=("pkg:llama-index-workflows", "enhancement"),
-        )
-    ]
-    body = release_notes.format_release_notes(
-        repo=repo,
-        package_name="LlamaIndex Workflows",
-        semver="1.2.3",
-        current_tag="v1.2.3",
-        previous_tag="v1.2.2",
-        pull_requests=prs,
+# Tests for changesets.py functionality
+
+
+def test_current_version(tmp_path: Path) -> None:
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        """
+[project]
+name = "test-package"
+version = "1.2.3"
+dependencies = []
+""".strip()
     )
-    assert "Add feature (#1) by @alice" in body
-    assert "### Enhancements" in body
-    assert "View changes between v1.2.2 and v1.2.3" in body
+    name, version = current_version(pyproject)
+    assert name == "test-package"
+    assert version == "1.2.3"
+
+
+def test_current_version_normalizes_version(tmp_path: Path) -> None:
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        """
+[project]
+name = "test-package"
+version = "01.02.03"
+dependencies = []
+""".strip()
+    )
+    name, version = current_version(pyproject)
+    assert name == "test-package"
+    assert version == "1.2.3"
+
+
+def test_pyproject_container_parse() -> None:
+    toml_text = """
+[project]
+name = "my-package"
+version = "0.1.0"
+dependencies = ["requests>=2.0.0"]
+""".strip()
+    toml_doc, py_doc = PyProjectContainer.parse(toml_text)
+    assert py_doc.project.name == "my-package"
+    assert py_doc.project.version == "0.1.0"
+    assert py_doc.project.dependencies == ["requests>=2.0.0"]
+
+
+def test_is_published_returns_true_when_version_exists() -> None:
+    mock_response = Mock()
+    mock_response.read.return_value = json.dumps(
+        {"releases": {"1.0.0": [], "1.1.0": []}}
+    ).encode()
+
+    with patch("urllib.request.urlopen", return_value=mock_response):
+        result = is_published("test-package", "1.0.0")
+        assert result is True
+
+
+def test_is_published_returns_false_when_version_missing() -> None:
+    mock_response = Mock()
+    mock_response.read.return_value = json.dumps({"releases": {"1.0.0": []}}).encode()
+
+    with patch("urllib.request.urlopen", return_value=mock_response):
+        result = is_published("test-package", "1.1.0")
+        assert result is False
+
+
+def test_is_published_returns_false_when_package_not_found() -> None:
+    mock_error = HTTPError("url", 404, "Not Found", {}, None)  # type: ignore
+
+    with patch("urllib.request.urlopen", side_effect=mock_error):
+        result = is_published("nonexistent-package", "1.0.0")
+        assert result is False
+
+
+def test_is_published_raises_on_other_http_errors() -> None:
+    mock_error = HTTPError("url", 500, "Internal Server Error", {}, None)  # type: ignore
+
+    with patch("urllib.request.urlopen", side_effect=mock_error):
+        try:
+            is_published("test-package", "1.0.0")
+            assert False, "Expected HTTPError to be raised"
+        except HTTPError as e:
+            assert e.code == 500
+
+
+def test_sync_package_version_with_pyproject_updates_version(tmp_path: Path) -> None:
+    package_dir = tmp_path / "package"
+    package_dir.mkdir()
+    pyproject = package_dir / "pyproject.toml"
+    pyproject.write_text(
+        """
+[project]
+name = "test-package"
+version = "1.0.0"
+dependencies = []
+""".strip()
+    )
+
+    packages = {
+        "test-js-package": PackageJson(
+            name="test-js-package",
+            version="2.0.0",
+            path=package_dir,
+            private=False,
+        )
+    }
+
+    sync_package_version_with_pyproject(package_dir, packages, "test-js-package")
+
+    toml_doc, py_doc = PyProjectContainer.parse(pyproject.read_text())
+    assert py_doc.project.version == "2.0.0"
+
+
+def test_sync_package_version_with_pyproject_skips_when_no_pyproject(
+    tmp_path: Path,
+) -> None:
+    package_dir = tmp_path / "package"
+    package_dir.mkdir()
+
+    packages = {
+        "test-js-package": PackageJson(
+            name="test-js-package",
+            version="2.0.0",
+            path=package_dir,
+            private=False,
+        )
+    }
+
+    # Should not raise an error
+    sync_package_version_with_pyproject(package_dir, packages, "test-js-package")
+
+
+def test_sync_package_version_with_pyproject_skips_when_versions_match(
+    tmp_path: Path,
+) -> None:
+    package_dir = tmp_path / "package"
+    package_dir.mkdir()
+    pyproject = package_dir / "pyproject.toml"
+    original_content = """
+[project]
+name = "test-package"
+version = "2.0.0"
+dependencies = []
+""".strip()
+    pyproject.write_text(original_content)
+
+    packages = {
+        "test-js-package": PackageJson(
+            name="test-js-package",
+            version="2.0.0",
+            path=package_dir,
+            private=False,
+        )
+    }
+
+    sync_package_version_with_pyproject(package_dir, packages, "test-js-package")
+
+    # Content should be unchanged
+    assert pyproject.read_text() == original_content
