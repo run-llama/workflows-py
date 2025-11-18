@@ -5,7 +5,6 @@
 import asyncio
 
 import pytest
-
 from workflows import Context, Workflow, step
 from workflows.events import (
     Event,

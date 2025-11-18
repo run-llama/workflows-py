@@ -3,17 +3,17 @@
 from __future__ import annotations
 
 import asyncio
-from contextlib import asynccontextmanager
-from dataclasses import dataclass
 import json
 import logging
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from importlib.metadata import version
 from pathlib import Path
-from typing import Any, AsyncGenerator, Callable, Awaitable, cast
-from datetime import datetime, timezone
+from typing import Any, AsyncGenerator, Awaitable, Callable, cast
 
-from llama_index_instrumentation.dispatcher import instrument_tags
 import uvicorn
+from llama_index_instrumentation.dispatcher import instrument_tags
 from starlette.applications import Starlette
 from starlette.exceptions import HTTPException
 from starlette.middleware import Middleware
@@ -34,8 +34,6 @@ from workflows.events import (
     StopEvent,
 )
 from workflows.handler import WorkflowHandler
-
-
 from workflows.protocol import (
     CancelHandlerResponse,
     HandlerData,
@@ -46,6 +44,11 @@ from workflows.protocol import (
     WorkflowGraphResponse,
     WorkflowSchemaResponse,
     is_status_completed,
+)
+from workflows.protocol.serializable_events import (
+    EventEnvelope,
+    EventEnvelopeWithMetadata,
+    EventValidationError,
 )
 from workflows.server.abstract_workflow_store import (
     AbstractWorkflowStore,
@@ -58,12 +61,8 @@ from workflows.types import RunResultT
 
 # Protocol models are used on the client side; server responds with plain dicts
 from workflows.utils import _nanoid as nanoid
+
 from .representation_utils import _extract_workflow_structure
-from workflows.protocol.serializable_events import (
-    EventValidationError,
-    EventEnvelopeWithMetadata,
-    EventEnvelope,
-)
 
 logger = logging.getLogger()
 
@@ -1677,4 +1676,4 @@ if __name__ == "__main__":
     dict_schema = server.openapi_schema()
     with open(args.output, "w") as f:
         json.dump(dict_schema, indent=2, fp=f)
-    print(f"OpenAPI schema written to {args.output}")
+    print(f"OpenAPI schema written to {args.output}")  # noqa: T201

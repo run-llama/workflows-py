@@ -4,13 +4,11 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, AsyncGenerator, TYPE_CHECKING
-
+from typing import TYPE_CHECKING, Any, AsyncGenerator
 
 from .errors import WorkflowRuntimeError
-from .events import Event, StopEvent, InternalDispatchEvent
+from .events import Event, InternalDispatchEvent, StopEvent
 from .types import RunResultT
-
 
 if TYPE_CHECKING:
     from .context import Context

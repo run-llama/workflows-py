@@ -3,26 +3,26 @@
 
 from __future__ import annotations
 
-import httpx
-import json
-
+from contextlib import asynccontextmanager
 from typing import (
     Any,
     AsyncGenerator,
     AsyncIterator,
     overload,
 )
-from contextlib import asynccontextmanager
-from workflows.events import StartEvent, Event
+
+import httpx
+
 from workflows import Context
+from workflows.events import Event, StartEvent
 from workflows.protocol import (
+    CancelHandlerResponse,
     HandlerData,
     HandlersListResponse,
     HealthResponse,
     SendEventResponse,
     Status,
     WorkflowsListResponse,
-    CancelHandlerResponse,
 )
 from workflows.protocol.serializable_events import (
     EventEnvelope,
@@ -242,14 +242,8 @@ class WorkflowClient:
 
                     async for line in response.aiter_lines():
                         if line.strip():  # Skip empty lines
-                            try:
-                                event = EventEnvelopeWithMetadata.model_validate_json(
-                                    line
-                                )
-                                yield event
-                            except json.JSONDecodeError as e:
-                                print(f"Failed to parse JSON: {e}, data: {line}")
-                                continue
+                            event = EventEnvelopeWithMetadata.model_validate_json(line)
+                            yield event
 
             except httpx.TimeoutException:
                 raise TimeoutError(

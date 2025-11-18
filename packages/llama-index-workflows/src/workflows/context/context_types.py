@@ -1,5 +1,6 @@
-from typing import Any, Optional
 import json
+from typing import Any, Optional
+
 from pydantic import BaseModel, Field
 from pydantic.functional_validators import model_validator
 

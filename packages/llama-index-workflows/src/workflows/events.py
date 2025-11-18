@@ -4,7 +4,8 @@
 from __future__ import annotations
 
 from _collections_abc import dict_items, dict_keys, dict_values
-from typing import Any, Type, Optional
+from enum import Enum
+from typing import Any, Type
 
 from pydantic import (
     BaseModel,
@@ -13,7 +14,6 @@ from pydantic import (
     PrivateAttr,
     model_serializer,
 )
-from enum import Enum
 
 
 class DictLikeModel(BaseModel):
@@ -305,7 +305,7 @@ class StepStateChanged(InternalDispatchEvent):
     )
     worker_id: str = Field(description="ID of the worker that the step is running on")
     input_event_name: str = Field(description="Name of the input event")
-    output_event_name: Optional[str] = Field(
+    output_event_name: str | None = Field(
         description="Name of the output event", default=None
     )
 

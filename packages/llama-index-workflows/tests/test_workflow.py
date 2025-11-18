@@ -12,10 +12,9 @@ import weakref
 from typing import Any, Callable, Union, cast
 from unittest import mock
 
+import pytest
 from llama_index_instrumentation.dispatcher import active_instrument_tags
 from pydantic import PrivateAttr
-import pytest
-
 from workflows.context import Context, PickleSerializer
 from workflows.decorators import step
 from workflows.errors import (
@@ -452,8 +451,8 @@ async def test_workflow_pickle() -> None:
 
 @pytest.mark.asyncio
 async def test_workflow_context_to_dict() -> None:
-    ctx: Union[Context, None] = None
-    new_ctx: Union[Context, None] = None
+    ctx: Context | None = None
+    new_ctx: Context | None = None
     signal_continue = asyncio.Event()
     signal_ready = asyncio.Event()
     run_count = 0

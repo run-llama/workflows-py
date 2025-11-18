@@ -1,11 +1,9 @@
 import asyncio
-
-from workflows.client import WorkflowClient
-
-from workflows.events import StartEvent
-from pydantic import Field
-
 from typing import Literal
+
+from pydantic import Field
+from workflows.client import WorkflowClient
+from workflows.events import StartEvent
 
 
 class InputNumbers(StartEvent):

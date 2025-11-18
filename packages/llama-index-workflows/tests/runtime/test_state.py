@@ -1,4 +1,5 @@
 from json import JSONDecodeError
+
 import pytest
 from workflows.context.context_types import SerializedContext, SerializedContextV0
 from workflows.workflow import Workflow

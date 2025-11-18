@@ -1,12 +1,11 @@
 import pytest
-
-from workflows.events import (
-    StartEvent,
-    StopEvent,
-    Event,
-    StepStateChanged,
-)
 from workflows import Context, Workflow, step
+from workflows.events import (
+    Event,
+    StartEvent,
+    StepStateChanged,
+    StopEvent,
+)
 from workflows.testing import WorkflowTestRunner
 from workflows.testing.runner import WorkflowTestResult
 

@@ -9,10 +9,12 @@ testing them in isolation without running the full async control loop.
 """
 
 from __future__ import annotations
-from typing import Any, Union
+
+from typing import Any
 
 import pytest
-
+from workflows.decorators import StepConfig
+from workflows.errors import WorkflowTimeoutError
 from workflows.events import (
     Event,
     InputRequiredEvent,
@@ -21,7 +23,6 @@ from workflows.events import (
     StepStateChanged,
     StopEvent,
 )
-from workflows.errors import WorkflowTimeoutError
 from workflows.retry_policy import ConstantDelayRetryPolicy
 from workflows.runtime.control_loop import (
     _add_or_enqueue_event,
@@ -65,7 +66,6 @@ from workflows.runtime.types.ticks import (
     TickStepResult,
     TickTimeout,
 )
-from workflows.decorators import StepConfig
 
 
 class MyTestEvent(Event):
@@ -142,7 +142,7 @@ def add_worker(state: BrokerState, event: Event, worker_id: int = 0) -> None:
     ],
 )
 def test_step_worker_results(
-    base_state: BrokerState, result: Union[Event, None], expected_commands: list
+    base_state: BrokerState, result: Event | None, expected_commands: list
 ) -> None:
     """Test different step worker result types."""
     event = MyTestEvent(value=42)

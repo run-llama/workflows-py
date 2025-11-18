@@ -1,9 +1,9 @@
-from workflows import Workflow, step, Context
-from workflows.events import StartEvent, StopEvent, Event
-from pydantic import Field
-from workflows.server import WorkflowServer
-
 from typing import Literal
+
+from pydantic import Field
+from workflows import Context, Workflow, step
+from workflows.events import Event, StartEvent, StopEvent
+from workflows.server import WorkflowServer
 
 
 class InputNumbers(StartEvent):

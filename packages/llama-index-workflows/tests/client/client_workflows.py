@@ -1,7 +1,7 @@
 import random
 
-from workflows import Workflow, step, Context
-from workflows.events import StartEvent, Event, StopEvent
+from workflows import Context, Workflow, step
+from workflows.events import Event, StartEvent, StopEvent
 
 
 class InputEvent(StartEvent):

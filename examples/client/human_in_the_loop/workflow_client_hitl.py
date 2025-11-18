@@ -2,8 +2,8 @@ import asyncio
 
 from workflows.client import WorkflowClient
 from workflows.events import (
-    StopEvent,
     HumanResponseEvent,
+    StopEvent,
 )
 
 

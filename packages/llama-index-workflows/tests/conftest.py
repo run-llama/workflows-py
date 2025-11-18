@@ -2,9 +2,9 @@
 # Copyright (c) 2025 LlamaIndex Inc.
 
 from typing import AsyncGenerator
+
 import pytest
 from pydantic import Field
-
 from workflows.context import Context
 from workflows.decorators import step
 from workflows.events import Event, StartEvent, StopEvent

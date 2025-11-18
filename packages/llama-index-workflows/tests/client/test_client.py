@@ -1,18 +1,18 @@
-import pytest
 import httpx
-
+import pytest
 from httpx import ASGITransport, AsyncClient
-from workflows.protocol.serializable_events import EventEnvelopeWithMetadata
-from workflows.server.server import WorkflowServer
 from workflows.client import WorkflowClient
+from workflows.protocol.serializable_events import EventEnvelopeWithMetadata
+from workflows.server.memory_workflow_store import MemoryWorkflowStore
+from workflows.server.server import WorkflowServer
+
 from .client_workflows import (  # type: ignore[import]
-    greeting_wf,
-    crashing_wf,
+    GreetEvent,
     InputEvent,
     OutputEvent,
-    GreetEvent,
+    crashing_wf,
+    greeting_wf,
 )
-from workflows.server.memory_workflow_store import MemoryWorkflowStore
 
 
 @pytest.fixture()

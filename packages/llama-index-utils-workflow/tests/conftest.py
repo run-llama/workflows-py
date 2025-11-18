@@ -1,9 +1,8 @@
 import pytest
-
-from workflows.workflow import Workflow
-from workflows.decorators import step
-from workflows.events import StartEvent, StopEvent, Event
 from pydantic import Field
+from workflows.decorators import step
+from workflows.events import Event, StartEvent, StopEvent
+from workflows.workflow import Workflow
 
 
 class OneTestEvent(Event):

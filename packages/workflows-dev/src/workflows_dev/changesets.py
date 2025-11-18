@@ -9,19 +9,19 @@ There's 2 things this does:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import json
 import os
 import subprocess
+import urllib.error
+import urllib.request
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Generator, List, cast
-import urllib.request
-import urllib.error
-from pydantic import BaseModel
 
 import click
 import tomlkit
 from packaging.version import Version
+from pydantic import BaseModel
 
 
 def run_command(

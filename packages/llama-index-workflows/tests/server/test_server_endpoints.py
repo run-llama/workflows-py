@@ -2,31 +2,31 @@
 # Copyright (c) 2025 LlamaIndex Inc.
 
 from __future__ import annotations
+
 import asyncio
-from collections import Counter
 import json
+from collections import Counter
 from contextlib import asynccontextmanager
+from datetime import datetime
 from types import SimpleNamespace
-from typing import Any, AsyncGenerator, AsyncIterator, Optional
+from typing import Any, AsyncGenerator, AsyncIterator
 
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient, Response
-
-from workflows.events import StopEvent, StartEvent
-
-from .util import wait_for_passing  # type: ignore[import]
+from llama_index_instrumentation.dispatcher import active_instrument_tags
 from workflows import Context, step
-from workflows.server import WorkflowServer
-from workflows.server.abstract_workflow_store import HandlerQuery, PersistentHandler
-from workflows.workflow import Workflow
-from datetime import datetime
 
 # Prepare the event to send
 from workflows.context.serializers import JsonSerializer
-from .conftest import ExternalEvent  # type: ignore[import]
+from workflows.events import StartEvent, StopEvent
+from workflows.server import WorkflowServer
+from workflows.server.abstract_workflow_store import HandlerQuery, PersistentHandler
 from workflows.server.memory_workflow_store import MemoryWorkflowStore
-from llama_index_instrumentation.dispatcher import active_instrument_tags
+from workflows.workflow import Workflow
+
+from .conftest import ExternalEvent  # type: ignore[import]
+from .util import wait_for_passing  # type: ignore[import]
 
 
 class CustomStopEvent(StopEvent):
@@ -70,7 +70,7 @@ async def client(
 async def server_with_persisted_handlers(
     interactive_workflow: Workflow,
     *,
-    persisted_handlers: Optional[list[PersistentHandler]] = None,
+    persisted_handlers: list[PersistentHandler] | None = None,
 ) -> AsyncIterator[tuple[WorkflowServer, AsyncClient, MemoryWorkflowStore]]:
     store = MemoryWorkflowStore()
     if persisted_handlers is not None:

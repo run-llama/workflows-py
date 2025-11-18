@@ -5,15 +5,14 @@ from __future__ import annotations
 import asyncio
 import json
 from datetime import datetime, timezone
+from unittest.mock import MagicMock
 
 import pytest
-
-from unittest.mock import MagicMock
 from workflows.context import Context
-from workflows.server.memory_workflow_store import MemoryWorkflowStore
-from workflows.events import StopEvent, Event
+from workflows.events import Event, StopEvent
 from workflows.handler import WorkflowHandler
 from workflows.protocol import HandlerData
+from workflows.server.memory_workflow_store import MemoryWorkflowStore
 from workflows.server.server import _WorkflowHandler
 
 

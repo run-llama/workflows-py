@@ -4,14 +4,13 @@
 from __future__ import annotations
 
 import pytest
-
 from workflows.decorators import step
 from workflows.events import (
     StartEvent,
     StopEvent,
 )
-from workflows.workflow import Workflow
 from workflows.testing import WorkflowTestRunner
+from workflows.workflow import Workflow
 
 from .conftest import OneTestEvent  # type: ignore[import]
 

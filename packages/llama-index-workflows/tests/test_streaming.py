@@ -5,12 +5,11 @@ import asyncio
 from typing import AsyncGenerator
 
 import pytest
-
 from workflows.context import Context
-from workflows.testing import WorkflowTestRunner
 from workflows.decorators import step
 from workflows.errors import WorkflowRuntimeError, WorkflowTimeoutError
 from workflows.events import Event, StartEvent, StopEvent
+from workflows.testing import WorkflowTestRunner
 from workflows.workflow import Workflow
 
 from .conftest import OneTestEvent  # type: ignore[import]

@@ -1,8 +1,10 @@
 from __future__ import annotations
-from abc import abstractmethod, ABC
-from datetime import datetime
-from typing import Literal, Optional, List, Any
+
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from datetime import datetime
+from typing import Any, List, Literal
+
 from pydantic import (
     BaseModel,
     field_serializer,
@@ -12,18 +14,17 @@ from pydantic import (
 from workflows.context import JsonSerializer
 from workflows.events import StopEvent
 
-
 Status = Literal["running", "completed", "failed", "cancelled"]
 
 
 @dataclass()
 class HandlerQuery:
     # Matches if any of the handler_ids match
-    handler_id_in: Optional[List[str]] = None
+    handler_id_in: List[str] | None = None
     # Matches if any of the workflow_names match
-    workflow_name_in: Optional[List[str]] = None
+    workflow_name_in: List[str] | None = None
     # Matches if the status flag matches
-    status_in: Optional[List[Status]] = None
+    status_in: List[Status] | None = None
 
 
 class PersistentHandler(BaseModel):

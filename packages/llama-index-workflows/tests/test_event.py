@@ -5,7 +5,6 @@ from typing import Any, cast
 
 import pytest
 from pydantic import PrivateAttr
-
 from workflows.context import JsonSerializer
 from workflows.events import Event, StopEvent
 

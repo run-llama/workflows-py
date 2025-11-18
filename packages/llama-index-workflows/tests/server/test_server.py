@@ -6,7 +6,6 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 from starlette.middleware import Middleware
-
 from workflows.server import WorkflowServer
 from workflows.workflow import Workflow
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from typing import Callable, Generic, TypeVar, overload
 import weakref
+from typing import Callable, Generic, TypeVar, overload
 
 K = TypeVar("K")
 V = TypeVar("V")

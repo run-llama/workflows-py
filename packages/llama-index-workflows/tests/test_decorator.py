@@ -4,7 +4,6 @@
 import re
 
 import pytest
-
 from workflows.decorators import step
 from workflows.errors import WorkflowValidationError
 from workflows.events import Event, StartEvent, StopEvent

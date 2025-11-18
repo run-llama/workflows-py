@@ -1,19 +1,20 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2025 LlamaIndex Inc.
 
+import json
+
 import pytest
 from workflows.events import (
     Event,
-    StopEvent,
-    StepStateChanged,
     StepState,
+    StepStateChanged,
+    StopEvent,
 )
 from workflows.protocol.serializable_events import (
     EventEnvelope,
     EventEnvelopeWithMetadata,
     EventValidationError,
 )
-import json
 
 
 def test_envelope_user_defined_event() -> None:

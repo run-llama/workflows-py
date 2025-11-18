@@ -1,10 +1,10 @@
 from workflows import Workflow, step
 from workflows.context import Context
 from workflows.events import (
+    HumanResponseEvent,
+    InputRequiredEvent,
     StartEvent,
     StopEvent,
-    InputRequiredEvent,
-    HumanResponseEvent,
 )
 from workflows.server import WorkflowServer
 
