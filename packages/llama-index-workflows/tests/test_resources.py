@@ -12,6 +12,11 @@ from workflows.events import Event, StartEvent, StopEvent
 from workflows.resource import Resource, ResourceManager
 from workflows.workflow import Workflow
 
+# Global counters used in resource workflow tests
+cc: int
+cc1: int
+cc2: int
+
 
 class SecondEvent(Event):
     msg: str = Field(description="A message")

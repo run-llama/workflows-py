@@ -23,6 +23,7 @@ async def wait_for_passing(
     if last_exception:
         raise last_exception
     else:
+        func_name = getattr(func, "__name__", repr(func))
         raise TimeoutError(
-            f"Function {func.__name__} timed out after {max_duration} seconds"
+            f"Function {func_name} timed out after {max_duration} seconds"
         )

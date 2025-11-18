@@ -17,8 +17,11 @@ from workflows import Workflow
 from workflows.events import StopEvent
 from workflows.server import WorkflowServer
 from workflows.client.client import WorkflowClient
-from .conftest import ExternalEvent, RequestedExternalEvent
-from .util import wait_for_passing
+from .conftest import (  # type: ignore[import]
+    ExternalEvent,
+    RequestedExternalEvent,
+)
+from .util import wait_for_passing  # type: ignore[import]
 
 
 def _get_free_port() -> int:

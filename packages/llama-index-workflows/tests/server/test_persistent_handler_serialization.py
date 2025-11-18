@@ -21,7 +21,7 @@ def test_stop_event_round_trip() -> None:
     dumped = handler.model_dump(mode="python")
     restored = PersistentHandler(**dumped)
     assert isinstance(restored.result, StopEvent)
-    assert cast(StopEvent, restored.result).result == 1
+    assert restored.result.result == 1
 
 
 def test_legacy_result_dict_is_coerced_to_stop_event() -> None:
@@ -31,13 +31,13 @@ def test_legacy_result_dict_is_coerced_to_stop_event() -> None:
     )
 
     assert isinstance(handler.result, StopEvent)
-    assert cast(StopEvent, handler.result).result == legacy_payload
+    assert handler.result.result == legacy_payload
 
     dumped = handler.model_dump(mode="python")
 
     restored = PersistentHandler(**dumped)
     assert isinstance(restored.result, StopEvent)
-    assert cast(StopEvent, restored.result).result == legacy_payload
+    assert restored.result.result == legacy_payload
 
 
 class MyStop(StopEvent):
@@ -55,10 +55,10 @@ def test_stop_event_subclass_round_trip() -> None:
 
     restored = PersistentHandler(**dumped)
     assert isinstance(restored.result, MyStop)
-    assert cast(MyStop, restored.result).result == payload
+    assert restored.result.result == payload
 
 
 def test_converts_to_stop_event() -> None:
     handler = PersistentHandler(**_base_handler_kwargs(), result=123)  # type: ignore[arg-type]
     assert isinstance(handler.result, StopEvent)
-    assert cast(StopEvent, handler.result).result == 123
+    assert handler.result.result == 123

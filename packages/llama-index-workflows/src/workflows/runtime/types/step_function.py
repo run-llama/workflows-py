@@ -40,7 +40,7 @@ class StepWorkerFunction(Protocol, Generic[R]):
         event: Event,
         context: Context,  # TODO - pass an identifier and re-hydrate from the plugin for distributed step workers
         workflow: Workflow,
-    ) -> Awaitable[list[StepFunctionResult[R, Any]]]: ...
+    ) -> Awaitable[list[StepFunctionResult[R]]]: ...
 
 
 async def partial(
@@ -81,7 +81,7 @@ def as_step_worker_function(func: Callable[P, Awaitable[R]]) -> StepWorkerFuncti
         event: Event,
         context: Context,
         workflow: Workflow,
-    ) -> list[StepFunctionResult[R, Any]]:
+    ) -> list[StepFunctionResult[R]]:
         returns = Returns[R](return_values=[])
 
         token = StepWorkerStateContextVar.set(

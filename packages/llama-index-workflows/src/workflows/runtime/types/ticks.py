@@ -17,7 +17,7 @@ events that can occur during workflow execution:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Generic, Union
+from typing import Generic, Union
 
 from workflows.events import Event
 from workflows.decorators import R
@@ -31,7 +31,7 @@ class TickStepResult(Generic[R]):
     step_name: str
     worker_id: int
     event: Event
-    result: list[StepFunctionResult[R, Any]]
+    result: list[StepFunctionResult[R]]
 
 
 @dataclass(frozen=True)
