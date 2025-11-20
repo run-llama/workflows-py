@@ -1,6 +1,6 @@
-# llama-index-workflows
+# llama-index-utils-workflow
 
-## 2.11.3
+## 0.5.1
 
 ### Patch Changes
 
@@ -8,9 +8,3 @@
 - 91159d7: Moving `_extract_workflow_structure` to its own module in workflow core
 - 300fd05: Add stricter ruff formatting checks
 - 32ae78a: Switch build backend to uv
-
-## 2.11.2
-
-### Patch Changes
-
-- ee56c97: Fix remove task functionality on \_execute_task, specially when the task has gone missing
