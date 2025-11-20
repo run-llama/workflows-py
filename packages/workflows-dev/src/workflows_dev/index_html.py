@@ -18,6 +18,7 @@ def default_index_path() -> Path:
     """Return the default path to the debugger index.html file."""
     return (
         Path(__file__).resolve().parents[3]
+        / "llama-index-workflows"
         / "src"
         / "workflows"
         / "server"
