@@ -53,6 +53,8 @@ jobs:
           version: pnpm -w run version
           # Custom publish script
           publish: pnpm -w run publish
+          setupGitUser: false          # don’t override git user to github-actions[bot], instead use the app token user
+          commitMode: github-api       # commits/tags attributed to the GITHUB_TOKEN owner (app token user)
         env:
           # Use the created app token, otherwise PRs won't run workflows
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
