@@ -74,7 +74,7 @@ def _truncate_label(label: str, max_length: int) -> str:
     return label if len(label) <= max_length else f"{label[: max_length - 1]}*"
 
 
-def _extract_workflow_structure(
+def extract_workflow_structure(
     workflow: Workflow, max_label_length: Optional[int] = None
 ) -> DrawWorkflowGraph:
     """Extract workflow structure into an intermediate representation."""
