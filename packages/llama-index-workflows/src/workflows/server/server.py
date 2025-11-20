@@ -50,6 +50,7 @@ from workflows.protocol.serializable_events import (
     EventEnvelopeWithMetadata,
     EventValidationError,
 )
+from workflows.representation_utils import extract_workflow_structure
 from workflows.server.abstract_workflow_store import (
     AbstractWorkflowStore,
     HandlerQuery,
@@ -61,8 +62,6 @@ from workflows.types import RunResultT
 
 # Protocol models are used on the client side; server responds with plain dicts
 from workflows.utils import _nanoid as nanoid
-
-from .representation_utils import _extract_workflow_structure
 
 logger = logging.getLogger()
 
@@ -623,7 +622,7 @@ class WorkflowServer:
         """
         workflow = self._extract_workflow(request)
         try:
-            workflow_graph = _extract_workflow_structure(workflow.workflow)
+            workflow_graph = extract_workflow_structure(workflow.workflow)
         except Exception as e:
             raise HTTPException(
                 detail=f"Error while getting JSON workflow representation: {e}",
