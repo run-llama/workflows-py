@@ -75,24 +75,17 @@ def ground_truth_repr() -> DrawWorkflowGraph:
     )
 
 
-def test_extract_workflow_structure() -> None:
+def test_extract_workflow_structure(ground_truth_repr: DrawWorkflowGraph) -> None:
     wf = DummyWorkflow()
     graph = extract_workflow_structure(workflow=wf)
     assert isinstance(graph, DrawWorkflowGraph)
-    assert sorted(["end_step", "middle_step", "start_step"]) == sorted(
-        [node.id for node in graph.nodes if node.node_type == "step"]
-    )
-    assert sorted(["StopEvent", "StartEvent", "OneTestEvent", "LastEvent"]) == sorted(
-        [node.id for node in graph.nodes if node.node_type == "event"]
-    )
-    expected_edges = [
-        DrawWorkflowEdge(source="end_step", target="StopEvent"),
-        DrawWorkflowEdge(source="LastEvent", target="end_step"),
-        DrawWorkflowEdge(source="middle_step", target="LastEvent"),
-        DrawWorkflowEdge(source="OneTestEvent", target="middle_step"),
-        DrawWorkflowEdge(source="start_step", target="OneTestEvent"),
-        DrawWorkflowEdge(source="StartEvent", target="start_step"),
-    ]
+    assert sorted(
+        [node.id for node in ground_truth_repr.nodes if node.node_type == "step"]
+    ) == sorted([node.id for node in graph.nodes if node.node_type == "step"])
+    assert sorted(
+        [node.id for node in ground_truth_repr.nodes if node.node_type == "event"]
+    ) == sorted([node.id for node in graph.nodes if node.node_type == "event"])
+    expected_edges = ground_truth_repr.edges
     for edge in expected_edges:
         assert edge in graph.edges
 
