@@ -21,7 +21,7 @@ from typing import Any, Generator, List, cast
 import click
 import tomlkit
 from packaging.version import Version
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 def run_command(
@@ -194,4 +194,4 @@ class PyProjectContainer(BaseModel):
 class PyProject(BaseModel):
     name: str
     version: str
-    dependencies: list[str]
+    dependencies: list[str] = Field(default_factory=list)
