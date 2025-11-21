@@ -166,8 +166,9 @@ class BrokerState:
 
         # Start with a base state from the workflow
         base_state = BrokerState.from_workflow(workflow)
-        # Always set is_running to False on deserialization - the workflow will set it to True when it starts
-        base_state.is_running = False
+        # Unfortunately, important to preserve this state, since the workflow needs to know this to decide
+        # whether to create a start_event from kwargs (it only constructs and passes a start event if not already running)
+        base_state.is_running = serialized.is_running
 
         # Restore worker state (queues, collected events, waiters)
         # We do this regardless of is_running state so workflows can resume from where they left off

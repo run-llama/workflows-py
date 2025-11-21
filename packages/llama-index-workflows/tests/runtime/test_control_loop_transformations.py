@@ -421,7 +421,10 @@ def test_cancel_run(base_state: BrokerState) -> None:
     tick = TickCancelRun()
     new_state, commands = _process_cancel_run_tick(tick, base_state)
 
-    assert new_state.is_running is False
+    # This is perhaps unintuitive, but it's important to be able to cancel and resume a workflow
+    # based on this state--Workflow uses this as a signal to determine whether to pass or construct
+    # a start event
+    assert new_state.is_running is True
     assert len(commands) == 2
     assert isinstance(commands[0], CommandPublishEvent)
     assert isinstance(commands[1], CommandHalt)

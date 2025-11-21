@@ -55,6 +55,10 @@ class MyStop(StopEvent):
     outcome: str
 
 
+class ResumeStartEvent(StartEvent):
+    topic: str
+
+
 def test_fn() -> None:
     print("test_fn")
 
@@ -555,6 +559,52 @@ async def test_human_in_the_loop_with_resume() -> None:
     step2_runs = await new_handler.ctx.store.get("step2_runs")  # type:ignore
     assert step1_runs == 1
     assert step2_runs == 1
+
+
+@pytest.mark.asyncio
+async def test_human_in_the_loop_resume_custom_start_event_inactive_ctx() -> None:
+    class CustomHumanWorkflow(Workflow):
+        @step
+        async def ask(self, ctx: Context, ev: ResumeStartEvent) -> InputRequiredEvent:
+            runs = await ctx.store.get("ask_runs", default=0)
+            await ctx.store.set("ask_runs", runs + 1)
+            return InputRequiredEvent(prefix=ev.topic)  # type: ignore[arg-type]
+
+        @step
+        async def complete(self, ctx: Context, ev: HumanResponseEvent) -> StopEvent:
+            runs = await ctx.store.get("complete_runs", default=0)
+            await ctx.store.set("complete_runs", runs + 1)
+            return StopEvent(result=ev.response)
+
+    workflow = CustomHumanWorkflow()
+    handler: WorkflowHandler = workflow.run(topic="pizza")
+    assert handler.ctx
+
+    async for event in handler.stream_events():
+        if isinstance(event, InputRequiredEvent):
+            break
+
+    await handler.cancel_run()
+    ctx_dict = handler.ctx.to_dict()
+    assert ctx_dict["is_running"]
+
+    resumed_ctx = Context.from_dict(workflow, ctx_dict)
+    resumed_handler = workflow.run(ctx=resumed_ctx)
+    resumed_handler.ctx.send_event(HumanResponseEvent(response="42"))  # type: ignore[arg-type]
+
+    events = []
+    async for event in resumed_handler.stream_events():
+        events.append(event)
+
+    assert events == [StopEvent(result="42")]
+
+    final_result = await resumed_handler
+    assert final_result == "42"
+
+    ask_runs = await resumed_handler.ctx.store.get("ask_runs")  # type: ignore[arg-type]
+    complete_runs = await resumed_handler.ctx.store.get("complete_runs")  # type: ignore[arg-type]
+    assert ask_runs == 1
+    assert complete_runs == 1
 
 
 class DummyWorkflowForConcurrentRunsTest(Workflow):
