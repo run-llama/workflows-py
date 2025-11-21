@@ -1,14 +1,18 @@
 ---
+sidebar:
+  order: 9
 title: Resource Objects
 ---
 
 Resources are external dependencies you can inject into the steps of a workflow.
 
-As a simple example, look at `memory` in the following workflow:
+As a simple example, look at `memory` from llama-index in the following workflow:
 
 ```python
 from workflows.resource import Resource
+from llama_index.core.llms import ChatMessage
 from llama_index.core.memory import Memory
+from typing import Annotated
 
 
 def get_memory(*args, **kwargs):

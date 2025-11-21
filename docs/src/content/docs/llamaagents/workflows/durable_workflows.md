@@ -1,4 +1,6 @@
 ---
+sidebar:
+  order: 13
 title: Writing durable workflows
 ---
 

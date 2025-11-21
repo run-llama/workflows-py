@@ -1,4 +1,6 @@
 ---
+sidebar:
+  order: 12
 title: Run Your Workflow as a Server
 ---
 
@@ -33,8 +35,9 @@ class GreetingWorkflow(Workflow):
             ctx.write_event_to_stream(StreamEvent(sequence=i))
             await asyncio.sleep(0.3)
 
-        name = getattr(ev, "name", "World")
+        name = ev.get("name", "World")
         return StopEvent(result=f"Hello, {name}!")
+
 greet_wf = GreetingWorkflow()
 
 

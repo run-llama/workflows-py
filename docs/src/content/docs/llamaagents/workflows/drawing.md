@@ -1,8 +1,14 @@
 ---
+sidebar:
+  order: 8
 title: Drawing a Workflow
 ---
 
-Workflows can be visualized, using the power of type annotations in your step definitions. You can either draw all possible paths through the workflow, or the most recent execution, to help with debugging.
+Workflows can be visualized, using the power of type annotations in your step definitions.
+
+There are two main ways to visualize your workflows.
+
+## 1. Converting a Workflow to HTML
 
 First install:
 
@@ -19,35 +25,40 @@ from llama_index.utils.workflow import (
 )
 
 # Draw all
-draw_all_possible_flows(JokeFlow, filename="joke_flow_all.html")
+draw_all_possible_flows(MyWorkflow, filename="all_paths.html")
 
 # Draw an execution
-w = JokeFlow()
+w = MyWorkflow()
 handler = w.run(topic="Pirates")
 await handler
-draw_most_recent_execution(handler, filename="joke_flow_recent.html")
+draw_most_recent_execution(handler, filename="most_recent.html")
 ```
 
-<div id="working-with-global-context-state"></div>
-## Working with Global Context/State
+## 2. Using the `workflow-debugger`
 
-Optionally, you can choose to use global context between steps. For example, maybe multiple steps access the original `query` input from the user. You can store this in global context so that every step has access.
+Workflows ship with a [`WorkflowServer`](/python/llamaagents/workflows/deployment) that allows you to convert workflows to API's. As part of the `WorkflowServer`, a debugging UI is provided as the home `/` page.
+
+Using this server app, you can visualize and run your workflows.
+
+![workflow debugger](./assets/ui_sample.png)
+
+Setting up the server is straightforward:
 
 ```python
-from workflows import Context
+import asyncio
+from workflows import Workflow, step
+from workflows.events import StartEvent, StopEvent
 
+class MyWorkflow(Workflow):
+    @step
+    async def my_step(self, ev: StartEvent) -> StopEvent:
+        return StopEvent(result="Done!")
 
-@step
-async def query(self, ctx: Context, ev: MyEvent) -> StopEvent:
-    # retrieve from context
-    query = await ctx.store.get("query")
+async def main():
+    server = WorkflowServer()
+    server.add_workflow("my_workflow", MyWorkflow())
+    await server.serve("0.0.0.0", "8080")
 
-    # do something with context and event
-    val = ...
-    result = ...
-
-    # store in context
-    await ctx.store.set("key", val)
-
-    return StopEvent(result=result)
+if __name__ == "__main__":
+    asyncio.run(main())
 ```

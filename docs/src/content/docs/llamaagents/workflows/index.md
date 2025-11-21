@@ -1,18 +1,31 @@
 ---
+sidebar:
+  order: 1
 title: Introduction
 ---
 
-A `Workflow` in LlamaIndex is an event-driven abstraction used to chain together several events. Workflows are made up
-of `steps`, with each step responsible for handling certain event types and emitting new events.
+## What is a workflow?
 
-You can create a `Workflow` to do anything! Build an agent, a RAG flow, an extraction flow, or anything else you want.
+A workflow is an event-driven, step-based way to control the execution flow of an application.
 
-Workflows are also automatically instrumented, so you get observability into each step using tools like [Arize Phoenix](/python/framework/module_guides/observability/#arize-phoenix-local). (**NOTE:** Observability works for integrations that take advantage of the newer instrumentation system. Usage may vary.)
+Your application is divided into sections called Steps which are triggered by Events, and themselves emit Events which trigger further steps. By combining steps and events, you can create arbitrarily complex flows that encapsulate logic and make your application more maintainable and easier to understand. A step can be anything from a single line of code to a complex agent. They can have arbitrary inputs and outputs, which are passed around by Events.
+
+## Why workflows?
+
+As generative AI applications become more complex, it becomes harder to manage the flow of data and control the execution of the application. Workflows provide a way to manage this complexity by breaking the application into smaller, more manageable pieces.
+
+Other frameworks and LlamaIndex itself have attempted to solve this problem previously with directed acyclic graphs (DAGs) but these have a number of limitations that workflows do not:
+
+- Logic like loops and branches needed to be encoded into the edges of graphs, which made them hard to read and understand.
+- Passing data between nodes in a DAG created complexity around optional and default values and which parameters should be passed.
+- DAGs did not feel natural to developers trying to developing complex, looping, branching AI applications.
+
+The event-based pattern and vanilla python approach of Workflows resolves these problems.
 
 
 :::note
 The Workflows library can be installed standalone, via `pip install llama-index-workflows`. However,
-`llama-index-core` comes with a stable version of Workflows included.
+`llama-index-core` comes with an installation of Workflows included.
 
 In order to maintain the `llama_index` API stable and avoid breaking changes, when installing `llama-index-core` or
 the `llama-index` umbrella package, Workflows can be accessed with the import path `llama_index.core.workflow`.
@@ -58,7 +71,7 @@ class JokeEvent(Event):
 
 
 class JokeFlow(Workflow):
-    llm = OpenAI()
+    llm = OpenAI(model="gpt-4.1")
 
     @step
     async def generate_joke(self, ev: StartEvent) -> JokeEvent:
@@ -82,6 +95,8 @@ result = await w.run(topic="pirates")
 print(str(result))
 ```
 
+![joke](./assets/joke.png)
+
 There's a few moving pieces here, so let's go through this piece by piece.
 
 ### Defining Workflow Events
@@ -97,7 +112,7 @@ Events are user-defined pydantic objects. You control the attributes and any oth
 
 ```python
 class JokeFlow(Workflow):
-    llm = OpenAI(model="gpt-4o-mini")
+    llm = OpenAI(model="gpt-4.1")
     ...
 ```
 
@@ -128,6 +143,8 @@ The `StartEvent` is a bit of a special object since it can hold arbitrary attrib
 `ev.topic`, which would raise an error if it wasn't there. You could also do `ev.get("topic")` to handle the case where
 the attribute might not be there without raising an error.
 
+Fur further type safety, you can also subclass the `StartEvent`.
+
 At this point, you may have noticed that we haven't explicitly told the workflow what events are handled by which steps.
 Instead, the `@step` decorator is used to infer the input and output types of each step. Furthermore, these inferred
 input and output types are also used to verify for you that the workflow is valid before running!
@@ -155,6 +172,8 @@ we passed in the `result` parameter.
 
 In this case, the result is a string, but it could be a dictionary, list, or any other object.
 
+You can also subclass the `StopEvent` class for further type safety.
+
 ### Running the Workflow
 
 ```python
@@ -170,65 +189,9 @@ The `.run()` method is async, so we use await here to wait for the result. The k
 become fields of the special `StartEvent` that will be automatically emitted and start the workflow. As we have seen,
 in this case `topic` will be accessed from the step with `ev.topic`.
 
-### Decorating non-class Functions
-
-You can also decorate and attach steps to a workflow without subclassing it.
-
-Below is the `JokeFlow` from earlier, but defined without subclassing.
-
-```python
-import asyncio
-
-from workflows import Workflow, step
-from workflows.events import (
-    Event,
-    StartEvent,
-    StopEvent,
-)
-from llama_index.llms.openai import OpenAI
-
-
-class JokeEvent(Event):
-    joke: str
-
-
-joke_flow = Workflow
-
-
-@step(workflow=joke_flow)
-async def generate_joke(ev: StartEvent) -> JokeEvent:
-    topic = ev.topic
-
-    prompt = f"Write your best joke about {topic}."
-
-    llm = OpenAI()
-    response = await llm.acomplete(prompt)
-    return JokeEvent(joke=str(response))
-
-
-@step(workflow=joke_flow)
-async def critique_joke(ev: JokeEvent) -> StopEvent:
-    joke = ev.joke
-
-    prompt = (
-        f"Give a thorough analysis and critique of the following joke: {joke}"
-    )
-
-    llm = OpenAI()
-    response = await llm.acomplete(prompt)
-    return StopEvent(result=str(response))
-
-async def main():
-    res = await joke_flow(timeout=60, verbose=True).run(topic="pirates")
-    print(res)
-
-asyncio.run(main())
-```
-
 ## Examples
 
-To help you become more familiar with the workflow concept and its features, LlamaIndex documentation offers example
-notebooks that you can run for hands-on learning:
+To help you become more familiar with the workflow concept and its features, LlamaIndex documentation offers example notebooks that you can run for hands-on learning:
 
 - [Common Workflow Patterns](/python/examples/workflow/workflows_cookbook/) walks you through common usage patterns
 like looping and state management using simple workflows. It's usually a great place to start.
