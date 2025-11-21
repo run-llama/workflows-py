@@ -1,5 +1,16 @@
 # llama-index-workflows
 
+## 2.11.4
+
+### Patch Changes
+
+- 95abac0: Update debugger assets
+
+  - JavaScript: https://cdn.jsdelivr.net/npm/@llamaindex/workflow-debugger@0.2.0/dist/app.js
+  - CSS: https://cdn.jsdelivr.net/npm/@llamaindex/workflow-debugger@0.2.0/dist/app.css
+
+- 8f344bd: Fix resuming from serialized context for workflows that uses typed events
+
 ## 2.11.3
 
 ### Patch Changes
