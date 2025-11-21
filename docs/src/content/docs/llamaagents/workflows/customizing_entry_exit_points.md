@@ -1,8 +1,10 @@
 ---
+sidebar:
+  order: 7
 title: Customizing entry and exit points
 ---
 
-Most of the times, relying on the default entry and exit points we have seen in the [Getting Started](/python/workflows/) section is enough.
+Most of the times, relying on the default entry and exit points we have seen in the [Getting Started](/python/llamaagents/workflows/) section is enough.
 However, workflows support custom events where you normally would expect `StartEvent` and `StopEvent`, let's see how.
 
 ## Using a custom `StartEvent`
@@ -41,7 +43,7 @@ class JokeFlow(Workflow):
     ) -> JokeEvent:
         # Build a query engine using the index and the llm from the start event
         query_engine = ev.an_index.as_query_engine(llm=ev.an_llm)
-        topic = query_engine.query(
+        topic = await query_engine.aquery(
             f"What is the closest topic to {a_string_field}"
         )
         # Use the llm attached to the start event to instruct the model
