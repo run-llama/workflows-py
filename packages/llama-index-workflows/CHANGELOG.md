@@ -1,5 +1,14 @@
 # llama-index-workflows
 
+## 2.11.5
+
+### Patch Changes
+
+- 27a4cf0: Update debugger assets
+
+  - JavaScript: https://cdn.jsdelivr.net/npm/@llamaindex/workflow-debugger@0.2.2/dist/app.js
+  - CSS: https://cdn.jsdelivr.net/npm/@llamaindex/workflow-debugger@0.2.2/dist/app.css
+
 ## 2.11.4
 
 ### Patch Changes
