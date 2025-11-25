@@ -4,7 +4,7 @@ sidebar:
   order: 18
 ---
 :::caution
-Cloud deployments of LlamaAgents are now in beta preview and broadly available for feedback. You can try them out locally or deploy to LlamaCloud to share what you learn.
+Cloud deployments of LlamaAgents are now in beta preview and broadly available for feedback. You can try them out locally or deploy to LlamaCloud and send us feedback with the in-app button.
 :::
 
 LlamaAgents reads configuration from your repository to run your app. The configuration is defined in your project's `pyproject.toml`.

@@ -5,7 +5,7 @@ sidebar:
 ---
 
 :::caution
-Cloud deployments of LlamaAgents are now in beta preview and broadly available for feedback. You can try them out locally or deploy to LlamaCloud to share what you learn.
+Cloud deployments of LlamaAgents are now in beta preview and broadly available for feedback. You can try them out locally or deploy to LlamaCloud and send us feedback with the in-app button.
 :::
 
 Our React library, `@llamaindex/ui`, is the recommended way to integrate your UI with a LlamaAgents workflow server and LlamaCloud. It comes pre-installed in any of our templates containing a UI. The library provides both React hooks for custom integrations and standard components.
