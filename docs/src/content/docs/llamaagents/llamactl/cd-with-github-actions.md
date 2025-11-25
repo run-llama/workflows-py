@@ -4,7 +4,7 @@ sidebar:
   order: 19
 ---
 :::caution
-LlamaAgents is currently in alpha. You can try it out locally or [request access by contacting us](https://landing.llamaindex.ai/llamaagents?utm_source=docs).
+Cloud deployments of LlamaAgents are now in beta preview and broadly available for feedback. You can try them out locally or deploy to LlamaCloud to share what you learn.
 :::
 
 As described in the [Getting Started](/python/llamaagents/llamactl/getting-started) guide, deploying a LlamaAgent to LlamaCloud requires connecting it to a `git` source (specifically, GitHub).
