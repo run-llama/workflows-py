@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from _collections_abc import dict_items, dict_keys, dict_values
 from enum import Enum
-from typing import Any, Type
+from typing import Any, Literal, Type
 
 from pydantic import (
     BaseModel,
@@ -207,6 +207,125 @@ class StopEvent(Event):
 
     def __str__(self) -> str:
         return str(self._result)
+
+
+class WorkflowFailedEvent(StopEvent):
+    """Stop event emitted when a workflow fails due to an unhandled exception."""
+
+    status: Literal["failed"] = Field(
+        default="failed", description="Terminal state indicator."
+    )
+    step_name: str | None = Field(
+        default=None, description="Name of the step that raised the exception."
+    )
+    error_type: str = Field(description="Exception type that caused the failure.")
+    message: str | None = Field(
+        default=None, description="String representation of the exception."
+    )
+    attempts: int | None = Field(
+        default=None,
+        description="Attempt count consumed for the failing step when retries exhausted.",
+    )
+
+    @classmethod
+    def from_exception(
+        cls,
+        *,
+        exception: Exception,
+        step_name: str | None = None,
+        attempts: int | None = None,
+    ) -> "WorkflowFailedEvent":
+        """Build a failure stop event from an exception instance."""
+        message = str(exception).strip() or None
+        payload = {
+            "status": "failed",
+            "step_name": step_name,
+            "error_type": type(exception).__name__,
+            "message": message,
+            "attempts": attempts,
+        }
+        return cls(
+            result=payload,
+            step_name=step_name,
+            error_type=payload["error_type"],
+            message=message,
+            attempts=attempts,
+        )
+
+
+class WorkflowCancelledEvent(StopEvent):
+    """Stop event emitted when a workflow run is cancelled."""
+
+    status: Literal["cancelled"] = Field(
+        default="cancelled", description="Terminal state indicator."
+    )
+    reason: str = Field(
+        default="Run cancelled by user.",
+        description="Human-readable reason for the cancellation.",
+    )
+    cancelled_by: str | None = Field(
+        default="user",
+        description="Identifier describing who initiated the cancellation.",
+    )
+
+    @classmethod
+    def user_requested(
+        cls, reason: str | None = None, cancelled_by: str = "user"
+    ) -> "WorkflowCancelledEvent":
+        """Build a cancellation event triggered by a user request."""
+        final_reason = reason or "Run cancelled by user."
+        payload = {
+            "status": "cancelled",
+            "reason": final_reason,
+            "cancelled_by": cancelled_by,
+        }
+        return cls(
+            result=payload,
+            reason=final_reason,
+            cancelled_by=cancelled_by,
+        )
+
+
+class WorkflowTimedOutEvent(StopEvent):
+    """Stop event emitted when a workflow exceeds its allotted timeout."""
+
+    status: Literal["timed_out"] = Field(
+        default="timed_out", description="Terminal state indicator."
+    )
+    timeout_seconds: float = Field(
+        description="Configured timeout threshold that was exceeded."
+    )
+    active_steps: list[str] = Field(
+        default_factory=list,
+        description="Names of steps that were still running when the timeout fired.",
+    )
+    message: str | None = Field(
+        default=None,
+        description="Detailed timeout message (typically mirrors the raised exception).",
+    )
+
+    @classmethod
+    def build(
+        cls,
+        *,
+        timeout_seconds: float,
+        active_steps: list[str] | None = None,
+        message: str | None = None,
+    ) -> "WorkflowTimedOutEvent":
+        """Build a timeout stop event with helpful metadata."""
+        normalized_steps = sorted(active_steps or [])
+        payload = {
+            "status": "timed_out",
+            "timeout_seconds": timeout_seconds,
+            "active_steps": normalized_steps,
+            "message": message,
+        }
+        return cls(
+            result=payload,
+            timeout_seconds=timeout_seconds,
+            active_steps=normalized_steps,
+            message=message,
+        )
 
 
 class InputRequiredEvent(Event):

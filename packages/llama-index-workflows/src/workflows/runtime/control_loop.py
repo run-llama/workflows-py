@@ -22,6 +22,9 @@ from workflows.events import (
     StepState,
     StepStateChanged,
     StopEvent,
+    WorkflowCancelledEvent,
+    WorkflowFailedEvent,
+    WorkflowTimedOutEvent,
 )
 from workflows.runtime.types.commands import (
     CommandCompleteRun,
@@ -435,7 +438,12 @@ def _process_step_result_tick(
             else:
                 # used as a sentinel to end the stream. Perhaps reconsider this and have an alternate failure stop event
                 state.is_running = False
-                commands.append(CommandPublishEvent(event=StopEvent()))
+                failure_event = WorkflowFailedEvent.from_exception(
+                    exception=result.exception,
+                    step_name=tick.step_name,
+                    attempts=this_execution.attempts + 1,
+                )
+                commands.append(CommandPublishEvent(event=failure_event))
                 commands.append(
                     CommandFailWorkflow(
                         step_name=tick.step_name, exception=result.exception
@@ -651,8 +659,9 @@ def _process_cancel_run_tick(
     # retain running state, for resumption.
     # TODO - when/if we persist stream events, this StopEvent should be reconsidered, as there should only ever be one stop event.
     # Perhaps on resumption, if the workflow is running, then any existing stop events of a "cancellation" type should be omitted from the stream.
+    cancellation_event = WorkflowCancelledEvent.user_requested()
     return state, [
-        CommandPublishEvent(event=StopEvent()),
+        CommandPublishEvent(event=cancellation_event),
         CommandHalt(exception=WorkflowCancelledByUser()),
     ]
 
@@ -679,11 +688,15 @@ def _process_timeout_tick(
         if active_steps
         else "No steps active"
     )
+    exception = WorkflowTimeoutError(
+        f"Operation timed out after {tick.timeout} seconds. {steps_info}"
+    )
+    timeout_event = WorkflowTimedOutEvent.build(
+        timeout_seconds=tick.timeout,
+        active_steps=active_steps,
+        message=str(exception),
+    )
     return state, [
-        CommandPublishEvent(event=StopEvent()),
-        CommandHalt(
-            exception=WorkflowTimeoutError(
-                f"Operation timed out after {tick.timeout} seconds. {steps_info}"
-            )
-        ),
+        CommandPublishEvent(event=timeout_event),
+        CommandHalt(exception=exception),
     ]

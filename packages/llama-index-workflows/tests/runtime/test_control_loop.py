@@ -26,6 +26,9 @@ from workflows.events import (
     StartEvent,
     StepStateChanged,
     StopEvent,
+    WorkflowCancelledEvent,
+    WorkflowFailedEvent,
+    WorkflowTimedOutEvent,
 )
 from workflows.retry_policy import ConstantDelayRetryPolicy
 from workflows.runtime.control_loop import control_loop
@@ -264,10 +267,10 @@ async def test_control_loop_with_external_event(test_plugin: MockRuntimePlugin) 
 @pytest.mark.asyncio
 async def test_control_loop_timeout(test_plugin: MockRuntimePlugin) -> None:
     """
-    Test that workflow timeout raises WorkflowTimeoutError and publishes StopEvent.
+    Test that workflow timeout raises WorkflowTimeoutError and publishes a richer StopEvent.
 
-    When a workflow times out, an empty StopEvent should be published to the stream
-    to signal stream closure before the exception is raised.
+    When a workflow times out, a dedicated WorkflowTimedOutEvent should be published
+    to the stream to signal closure before the exception is raised.
     """
 
     class SlowWorkflow(Workflow):
@@ -293,11 +296,15 @@ async def test_control_loop_timeout(test_plugin: MockRuntimePlugin) -> None:
     with pytest.raises(WorkflowTimeoutError):
         await asyncio.wait_for(task, timeout=1.0)
 
-    # Verify an empty StopEvent was published to the stream
-    assert stop_event is not None, (
-        "Timeout should publish empty StopEvent to stream before raising exception"
-    )
-    assert stop_event.result is None, "Timeout StopEvent should have None result"
+    # Verify a WorkflowTimedOutEvent was published to the stream
+    assert isinstance(
+        stop_event, WorkflowTimedOutEvent
+    ), "Timeout should publish WorkflowTimedOutEvent before raising exception"
+    assert stop_event.timeout_seconds == pytest.approx(
+        0.01
+    ), "Timed out event should record timeout threshold"
+    assert stop_event.status == "timed_out"
+    assert stop_event.message is not None and "Operation timed out" in stop_event.message
 
 
 @pytest.mark.asyncio
@@ -336,7 +343,7 @@ async def test_control_loop_step_failure_publishes_stop_event(
 ) -> None:
     """
     Test that when a step fails permanently (retries exhausted),
-    an empty StopEvent is published to the stream before raising the exception.
+    a WorkflowFailedEvent is published to the stream before raising the exception.
 
     This allows external consumers to know the workflow stream has ended.
     """
@@ -362,11 +369,13 @@ async def test_control_loop_step_failure_publishes_stop_event(
     with pytest.raises(ValueError, match="intentional failure"):
         await asyncio.wait_for(task, timeout=1.0)
 
-    # Verify that an empty StopEvent was published before the exception
-    assert stop_event is not None, (
-        "Empty StopEvent should be published to stream when step fails permanently"
-    )
-    assert stop_event.result is None, "Failure StopEvent should have None result"
+    # Verify that a detailed failure stop event was published before the exception
+    assert isinstance(
+        stop_event, WorkflowFailedEvent
+    ), "Failure should emit WorkflowFailedEvent on the stream"
+    assert stop_event.error_type == "ValueError"
+    assert stop_event.step_name == "always_fails"
+    assert stop_event.attempts == 1
 
 
 @pytest.mark.asyncio
@@ -616,7 +625,7 @@ async def test_control_loop_user_cancellation(test_plugin: MockRuntimePlugin) ->
     """
     Test that user cancellation raises WorkflowCancelledByUser and publishes StopEvent.
 
-    When a workflow is cancelled, an empty StopEvent should be published to the stream
+    When a workflow is cancelled, a WorkflowCancelledEvent should be published to the stream
     to signal stream closure before the exception is raised.
     """
 
@@ -647,8 +656,9 @@ async def test_control_loop_user_cancellation(test_plugin: MockRuntimePlugin) ->
     with pytest.raises(WorkflowCancelledByUser):
         await asyncio.wait_for(task, timeout=1.0)
 
-    # Verify an empty StopEvent was published to the stream
-    assert stop_event is not None, (
-        "Cancellation should publish empty StopEvent to stream before raising exception"
-    )
-    assert stop_event.result is None, "Cancellation StopEvent should have None result"
+    # Verify a cancellation stop event was published to the stream
+    assert isinstance(
+        stop_event, WorkflowCancelledEvent
+    ), "Cancellation should emit WorkflowCancelledEvent before raising exception"
+    assert stop_event.reason == "Run cancelled by user."
+    assert stop_event.status == "cancelled"
