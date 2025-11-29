@@ -22,6 +22,9 @@ from workflows.events import (
     StepState,
     StepStateChanged,
     StopEvent,
+    WorkflowCancelledEvent,
+    WorkflowFailedEvent,
+    WorkflowTimedOutEvent,
 )
 from workflows.retry_policy import ConstantDelayRetryPolicy
 from workflows.runtime.control_loop import (
@@ -214,6 +217,11 @@ def test_step_worker_failed_without_retry(base_state: BrokerState) -> None:
 
     assert new_state.is_running is False
     assert any(isinstance(c, CommandFailWorkflow) for c in commands)
+    published_events = [
+        c.event for c in commands if isinstance(c, CommandPublishEvent)
+    ]
+    # First published command is NOT_RUNNING StepStateChanged, second should be WorkflowFailedEvent
+    assert any(isinstance(ev, WorkflowFailedEvent) for ev in published_events)
 
 
 def test_collected_events(base_state: BrokerState) -> None:
@@ -427,6 +435,7 @@ def test_cancel_run(base_state: BrokerState) -> None:
     assert new_state.is_running is True
     assert len(commands) == 2
     assert isinstance(commands[0], CommandPublishEvent)
+    assert isinstance(commands[0].event, WorkflowCancelledEvent)
     assert isinstance(commands[1], CommandHalt)
 
 
@@ -447,6 +456,8 @@ def test_timeout(base_state: BrokerState) -> None:
     new_state, commands = _process_timeout_tick(tick, base_state)
 
     assert new_state.is_running is False
+    assert isinstance(commands[0], CommandPublishEvent)
+    assert isinstance(commands[0].event, WorkflowTimedOutEvent)
     assert isinstance(commands[1], CommandHalt)
     assert isinstance(commands[1].exception, WorkflowTimeoutError)
 
