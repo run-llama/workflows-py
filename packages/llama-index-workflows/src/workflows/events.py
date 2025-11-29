@@ -237,17 +237,9 @@ class WorkflowFailedEvent(StopEvent):
     ) -> "WorkflowFailedEvent":
         """Build a failure stop event from an exception instance."""
         message = str(exception).strip() or None
-        payload = {
-            "status": "failed",
-            "step_name": step_name,
-            "error_type": type(exception).__name__,
-            "message": message,
-            "attempts": attempts,
-        }
         return cls(
-            result=payload,
             step_name=step_name,
-            error_type=payload["error_type"],
+            error_type=type(exception).__name__,
             message=message,
             attempts=attempts,
         )
@@ -274,16 +266,7 @@ class WorkflowCancelledEvent(StopEvent):
     ) -> "WorkflowCancelledEvent":
         """Build a cancellation event triggered by a user request."""
         final_reason = reason or "Run cancelled by user."
-        payload = {
-            "status": "cancelled",
-            "reason": final_reason,
-            "cancelled_by": cancelled_by,
-        }
-        return cls(
-            result=payload,
-            reason=final_reason,
-            cancelled_by=cancelled_by,
-        )
+        return cls(reason=final_reason, cancelled_by=cancelled_by)
 
 
 class WorkflowTimedOutEvent(StopEvent):
@@ -314,14 +297,7 @@ class WorkflowTimedOutEvent(StopEvent):
     ) -> "WorkflowTimedOutEvent":
         """Build a timeout stop event with helpful metadata."""
         normalized_steps = sorted(active_steps or [])
-        payload = {
-            "status": "timed_out",
-            "timeout_seconds": timeout_seconds,
-            "active_steps": normalized_steps,
-            "message": message,
-        }
         return cls(
-            result=payload,
             timeout_seconds=timeout_seconds,
             active_steps=normalized_steps,
             message=message,
