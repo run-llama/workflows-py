@@ -438,9 +438,10 @@ def _process_step_result_tick(
             else:
                 # used as a sentinel to end the stream. Perhaps reconsider this and have an alternate failure stop event
                 state.is_running = False
-                failure_event = WorkflowFailedEvent.from_exception(
-                    exception=result.exception,
+                failure_event = WorkflowFailedEvent(
                     step_name=tick.step_name,
+                    error_type=type(result.exception).__name__,
+                    message=str(result.exception).strip() or None,
                     attempts=this_execution.attempts + 1,
                 )
                 commands.append(CommandPublishEvent(event=failure_event))
@@ -659,7 +660,7 @@ def _process_cancel_run_tick(
     # retain running state, for resumption.
     # TODO - when/if we persist stream events, this StopEvent should be reconsidered, as there should only ever be one stop event.
     # Perhaps on resumption, if the workflow is running, then any existing stop events of a "cancellation" type should be omitted from the stream.
-    cancellation_event = WorkflowCancelledEvent.user_requested()
+    cancellation_event = WorkflowCancelledEvent()
     return state, [
         CommandPublishEvent(event=cancellation_event),
         CommandHalt(exception=WorkflowCancelledByUser()),
@@ -691,9 +692,9 @@ def _process_timeout_tick(
     exception = WorkflowTimeoutError(
         f"Operation timed out after {tick.timeout} seconds. {steps_info}"
     )
-    timeout_event = WorkflowTimedOutEvent.build(
+    timeout_event = WorkflowTimedOutEvent(
         timeout_seconds=tick.timeout,
-        active_steps=active_steps,
+        active_steps=sorted(active_steps),
         message=str(exception),
     )
     return state, [
