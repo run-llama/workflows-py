@@ -6,19 +6,24 @@ sidebar:
 
 ## LlamaAgents at a Glance
 
-LlamaAgents helps you build, serve and deploy small, workflow‑driven agentic apps using LlamaIndex, locally and on LlamaCloud. Define LlamaIndex [workflows](/python/llamaagents/workflows), run them as durable APIs that can pause for input, optionally add a UI, and deploy to LlamaCloud in seconds.
 
-LlamaAgents is for developers and teams building automation, internal tools, and app‑like agent experiences without heavy infrastructure work.
+LlamaAgents helps you build, serve and deploy workflow‑driven, document-centric agentic apps fast.
 
-Build and ship small, focused agentic apps—fast. Start from either our templated LlamaIndex workflow apps, or from workflows you've already prototyped, iterate locally, and deploy to LlamaCloud right from your terminal in seconds.
+Agentic applications are difficult to develop: LLMs are slow and expensive. Pipelines are complex, non-deterministic. There's usually a need to keep a human in the loop to monitor and approve decisions or results. On top of this, the eco-system undergoes constant churn,
+and changes in best practices.
 
-- Write [LlamaIndex Python workflows](/python/llamaagents/workflows/), and serve them as an API. For example, make a request to process incoming files, analyze them, and return the result or forward them on to another system.
-- Workflow runs are durable, and can wait indefinitely for human or other external inputs before proceeding.
-- Optionally add a UI for user-driven applications. Make custom chat applications, data extraction and review applications.
-- Deploy your app in seconds to LlamaCloud. Call it as an API with your API key, or visit it secured with your LlamaCloud login.
+LlamaAgents is a suite of tools to help you easily handle these challenges, while getting out of your way for the rest. At their core is our [Workflows](/python/llamaagents/workflows/) library, which is a powerful, event-driven framework for building agentic applications. It makes defining complex workflows easy, and durability simple and opt-in without the complicated infrastructure.
 
-LlamaAgents is built on top of [LlamaIndex Workflows](/python/llamaagents/workflows/). Use the [`llamactl`](/python/llamaagents/llamactl/getting-started/) command line interface (CLI) to scaffold projects (`llamactl init`), run them locally (`llamactl serve`), and deploy to LlamaCloud (`llamactl deployments create`).
+With Cloud LlamaAgents, you can easily develop and deploy your workflows as durable APIs and UIs on our cloud. **Click-to-deploy from predefined applications directly in [LlamaCloud](https://cloud.llamaindex.ai/).** Later, fork and customize with git, or develop and deploy from your own git repository with `llamactl`.
 
-In addition to LlamaAgents, LlamaIndex publishes additional SDKs to facilitate rapid development:
-- Our `llama-cloud-services` JS and Python SDKs offer a simple way to persist ad hoc Agent Data. [Read more here](/python/llamaagents/llamactl/agent-data-overview).
-- Our `@llamaindex/ui` React library offers off-the-shelf components and hooks to facilitate developing workflow-driven UIs.
+Llama Agents are applications composed of the following components:
+
+**[Workflows](/python/llamaagents/workflows/)** - Define complex pipelines easily with our event-driven workflows. They can be as deterministic or dynamic as needed. They easily support loops, branching, and parallel execution. Pause for input from a human or other external system. You can easily embed them in your application as a simple async process, serve as an API, or embed them in your pre-existing python API.
+
+**[`llamactl` cli](/python/llamaagents/llamactl/getting-started/)** - Develop and deploy Python workflow powered full-stack applications quickly with the `llamactl` CLI. Initialize from our templates with `llamactl init`, or develop from scratch. Just configure your `pyproject.toml` with your workflows, and serve them with `llamactl serve`. Manage your deployments to LlamaCloud with `llamactl deployments`, and then view them in [LlamaCloud](https://cloud.llamaindex.ai/).
+
+**`llama-cloud-services`** - You can easily integrate with the rest of LlamaCloud's document focused primitives via `llama-cloud-services`, and use [agent data](/python/llamaagents/llamactl/agent-data-overview/) to persist your application state without managing the infrastructure.
+
+Develop workflow powered react frontends, using our [@llamaindex/ui](https://developers.llamaindex.ai/python/llamaagents/llamactl/ui-hooks/) library. Deploy alongside your backend workflows with llamactl, or embed in your existing react application.
+
+Use your deployed workflows as an API. You can call them as a REST API, or use our python [Workflows client](https://developers.llamaindex.ai/python/llamaagents/workflows/deployment/#using-workflowclient-to-interact-with-servers) to easily integrate with your server.
