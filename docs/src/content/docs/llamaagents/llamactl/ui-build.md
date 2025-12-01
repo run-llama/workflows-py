@@ -4,7 +4,7 @@ sidebar:
   order: 10
 ---
 :::caution
-Cloud deployments of LlamaAgents is still in alpha. You can try it out locally, or [request access by contacting us](https://landing.llamaindex.ai/llamaagents?utm_source=docs)
+Cloud deployments of LlamaAgents are now in beta preview and broadly available for feedback. You can try them out locally or deploy to LlamaCloud and send us feedback with the in-app button.
 :::
 
 This page explains how to configure a custom frontend that builds and communicates with your LlamaAgents workflow server. If you've started from a template, you're good to go. Read on to learn more.
