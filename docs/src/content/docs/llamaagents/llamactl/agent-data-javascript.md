@@ -22,11 +22,13 @@ Key imports:
 import {
   AgentClient,
   createAgentDataClient,
+  type ExtractedData,
   type TypedAgentData,
   type TypedAgentDataItems,
   type TypedAggregateGroupItems,
   type SearchAgentDataOptions,
   type AggregateAgentDataOptions,
+  StatusType,
 } from "@llama-cloud-services/beta/agent";
 ```
 
