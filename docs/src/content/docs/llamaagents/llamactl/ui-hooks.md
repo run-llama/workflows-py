@@ -41,59 +41,54 @@ export function Providers({ children }: { children: React.ReactNode }) {
 }
 ```
 
-### Start a run
+### List available workflows
 
-Start a workflow by name with `useWorkflow`. Call `createHandler` with a JSON input payload to get back a handler state immediately, then use `useHandler` to stream events.
+Use `useWorkflows` to list all workflows available in the deployment:
 
 ```tsx
-import { useState } from "react";
-import { useWorkflow, useHandler } from "@llamaindex/ui";
+import { useWorkflows } from "@llamaindex/ui";
 
-export function RunButton() {
-  const workflow = useWorkflow("my_workflow");
-  const [handlerId, setHandlerId] = useState<string | null>(null);
-  const handler = useHandler(handlerId);
+export function WorkflowList() {
+  const { state, sync } = useWorkflows();
 
-  async function handleClick() {
-    const handlerState = await workflow.createHandler({ user_id: "123" });
-    // handlerState contains handler_id, status, etc.
-    setHandlerId(handlerState.handler_id);
-  }
+  if (state.loading) return <div>Loading…</div>;
 
   return (
-    <>
-      <button onClick={handleClick}>Run Workflow</button>
-      {handlerId && <HandlerDetails handlerId={handlerId} />}
-    </>
+    <div>
+      <button onClick={() => sync()}>Refresh</button>
+      <ul>
+        {Object.values(state.workflows).map((w) => (
+          <li key={w.name}>{w.name}</li>
+        ))}
+      </ul>
+    </div>
   );
 }
 ```
 
-### Run to completion
+### Start a run
 
-For simple request/response workflows, use `runToCompletion` to run the workflow and wait for the final result:
+Start a workflow by name with `useWorkflow`. Call `createHandler` with a JSON input payload to get back a handler state immediately.
 
 ```tsx
+import { useState } from "react";
 import { useWorkflow } from "@llamaindex/ui";
-import { useEffect, useState } from "react";
 
-export function SimpleQuery() {
-  const workflow = useWorkflow("metadata");
-  const [result, setResult] = useState<any>(null);
-  const [loading, setLoading] = useState(true);
+export function CreateHandler() {
+  const workflow = useWorkflow("stream");
+  const [handlerId, setHandlerId] = useState<string | null>(null);
 
-  useEffect(() => {
-    workflow.runToCompletion({ query: "What is the answer?" })
-      .then((handlerState) => {
-        if (handlerState.status === "completed") {
-          setResult(handlerState.result?.data);
-        }
-      })
-      .finally(() => setLoading(false));
-  }, []);
+  async function handleClick() {
+    const handlerState = await workflow.createHandler({});
+    setHandlerId(handlerState.handler_id);
+  }
 
-  if (loading) return <div>Loading...</div>;
-  return <pre>{JSON.stringify(result, null, 2)}</pre>;
+  return (
+    <div>
+      <button onClick={handleClick}>Create Handler</button>
+      {handlerId && <div>Created: {handlerId}</div>}
+    </div>
+  );
 }
 ```
 
@@ -103,71 +98,36 @@ Subscribe to a handler's live event stream using `subscribeToEvents`:
 
 ```tsx
 import { useEffect, useState } from "react";
-import { useHandler, WorkflowEvent, isStopEvent } from "@llamaindex/ui";
+import { useWorkflow, useHandler, WorkflowEvent, isStopEvent } from "@llamaindex/ui";
 
-export function HandlerDetails({ handlerId }: { handlerId: string }) {
+export function StreamEvents() {
+  const workflow = useWorkflow("stream");
+  const [handlerId, setHandlerId] = useState<string | null>(null);
   const handler = useHandler(handlerId);
   const [events, setEvents] = useState<WorkflowEvent[]>([]);
 
+  async function start() {
+    setEvents([]);
+    const h = await workflow.createHandler({});
+    setHandlerId(h.handler_id);
+  }
+
   useEffect(() => {
     if (!handlerId) return;
-
-    const subscription = handler.subscribeToEvents({
-      onData: (event) => {
-        setEvents((prev) => [...prev, event]);
-      },
-      onSuccess: (allEvents) => {
-        console.log("Workflow completed with", allEvents.length, "events");
-      },
-      onError: (error) => {
-        console.error("Workflow failed:", error);
-      },
+    const sub = handler.subscribeToEvents({
+      onData: (event) => setEvents((prev) => [...prev, event]),
     });
-
-    return () => subscription.unsubscribe();
+    return () => sub.unsubscribe();
   }, [handlerId]);
 
-  // Find the final StopEvent to extract the workflow result
   const stop = events.find(isStopEvent);
 
   return (
     <div>
-      <div>
-        <strong>{handler.state.handler_id}</strong> — {handler.state.status}
-      </div>
-      {stop ? (
-        <pre>{JSON.stringify(stop.data, null, 2)}</pre>
-      ) : (
-        <pre style={{ maxHeight: 240, overflow: "auto" }}>
-          {JSON.stringify(events, null, 2)}
-        </pre>
-      )}
-    </div>
-  );
-}
-```
-
-### Send events to a handler
-
-Use `sendEvent` to send events back to the workflow, enabling human-in-the-loop patterns:
-
-```tsx
-import { useHandler } from "@llamaindex/ui";
-
-export function SendEventExample({ handlerId }: { handlerId: string }) {
-  const handler = useHandler(handlerId);
-
-  const sendMove = (direction: string) => {
-    handler.sendEvent({
-      type: "PlayerMoveEvent",
-      value: { direction },
-    } as any);
-  };
-
-  return (
-    <div>
-      <button onClick={() => sendMove("north")}>Go North</button>
-      <button onClick={() => sendMove("south")}>Go South</button>
+      <button onClick={start}>Start & Stream</button>
+      {handlerId && <div>Status: {handler.state.status}</div>}
+      {stop && <pre>{JSON.stringify(stop.data, null, 2)}</pre>}
+      {!stop && events.length > 0 && <div>{events.length} events received</div>}
     </div>
   );
 }
@@ -182,12 +142,10 @@ import { useHandlers } from "@llamaindex/ui";
 
 export function RecentRuns() {
   const { state, sync } = useHandlers({
-    query: { workflow_name: ["my_workflow"], status: ["running", "completed"] },
-    sync: true, // auto-fetch on mount (default)
+    query: { status: ["running", "completed"] },
   });
 
   if (state.loading) return <div>Loading…</div>;
-  if (state.loadingError) return <div>Error: {state.loadingError}</div>;
 
   const handlers = Object.values(state.handlers);
 
@@ -197,7 +155,7 @@ export function RecentRuns() {
       <ul>
         {handlers.map((h) => (
           <li key={h.handler_id}>
-            {h.handler_id} — {h.status}
+            {h.handler_id.slice(0, 8)}… — {h.status}
           </li>
         ))}
       </ul>
@@ -207,71 +165,6 @@ export function RecentRuns() {
 ```
 
 The `sync` option controls whether to fetch handlers on mount. Call `sync()` manually to refresh the list from the server at any time.
-
-### Track running workflows with actions
-
-`useHandlers` also provides actions for working with handlers in the list, including subscribing to their events:
-
-```tsx
-import { useHandlers, WorkflowEvent } from "@llamaindex/ui";
-import { useEffect, useRef } from "react";
-
-export function WorkflowProgress({ workflowName }: { workflowName: string }) {
-  const handlersService = useHandlers({
-    query: { workflow_name: [workflowName], status: ["running"] },
-  });
-  const subscribed = useRef<Set<string>>(new Set());
-
-  const runningHandlers = Object.values(handlersService.state.handlers).filter(
-    (h) => h.status === "running"
-  );
-
-  // Subscribe to events for each running handler
-  useEffect(() => {
-    for (const handler of runningHandlers) {
-      if (!subscribed.current.has(handler.handler_id)) {
-        subscribed.current.add(handler.handler_id);
-        handlersService.actions(handler.handler_id).subscribeToEvents({
-          onData(event) {
-            console.log("Event:", event.type, event.data);
-          },
-          onComplete() {
-            subscribed.current.delete(handler.handler_id);
-          },
-        });
-      }
-    }
-  }, [runningHandlers.map((h) => h.handler_id).join(",")]);
-
-  return (
-    <div>
-      {runningHandlers.length} running workflow{runningHandlers.length === 1 ? "" : "s"}
-    </div>
-  );
-}
-```
-
-### List available workflows
-
-Use `useWorkflows` to list all workflows available in the deployment:
-
-```tsx
-import { useWorkflows } from "@llamaindex/ui";
-
-export function WorkflowList() {
-  const { state } = useWorkflows();
-
-  if (state.loading) return <div>Loading…</div>;
-
-  return (
-    <ul>
-      {Object.values(state.workflows).map((w) => (
-        <li key={w.name}>{w.name}</li>
-      ))}
-    </ul>
-  );
-}
-```
 
 ### Hook Reference
 
