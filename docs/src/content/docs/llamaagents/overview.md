@@ -10,15 +10,15 @@ LlamaAgents helps you build, deploy, and manage **multi-step document workflows*
 
 Document pipelines are deceptively hard: parsing is messy, extraction requires iteration, and you often need a human in the loop to review results. On top of the AI logic, you're left wiring up infrastructure, persistence, and deployment—work that distracts from the actual problem you're solving.
 
-LlamaAgents handles this for you. Our [event-driven Workflows framework](/python/llamaagents/workflows/) makes complex pipelines straightforward to define, with built-in support for branching, parallelism, and [human-in-the-loop](/python/llamaagents/workflows/human-in-the-loop/) review. Durability and [observability](/python/llamaagents/workflows/observability/) are built in. Deploy your workflows as APIs and UIs on LlamaCloud—or self-host with a single command.
+LlamaAgents gets you from zero to a working pipeline quickly. Start from templates, configure, and deploy. When you need customization, it's real Python underneath: fork, edit, and customize without a rewrite. Under the hood, our [event-driven Workflows framework](/python/llamaagents/workflows/) handles branching, parallelism, [human-in-the-loop](/python/llamaagents/workflows/human-in-the-loop/) review, durability, and [observability](/python/llamaagents/workflows/observability/).
 
 ### Get Started
 
-**Quickstart**: [Click-to-deploy a starter template](/python/llamaagents/llamactl/click-to-deploy/) directly in [LlamaCloud](https://cloud.llamaindex.ai/). Choose a pre-built workflow like SEC Insights or Invoice Matching, configure secrets, and deploy. Fork and customize with git when ready.
+**Start fast**: [Click-to-deploy a starter template](/python/llamaagents/llamactl/click-to-deploy/) directly in [LlamaCloud](https://cloud.llamaindex.ai/). Choose a pre-built workflow like SEC Insights or Invoice Matching, configure, and deploy.
 
-**Build from scratch**: Use the [`llamactl` CLI](/python/llamaagents/llamactl/getting-started/) to initialize from templates, develop locally with hot-reload, and deploy to LlamaCloud or self-host.
+**Customize**: When you need more control, fork to GitHub and edit the Python code directly. Use the [`llamactl` CLI](/python/llamaagents/llamactl/getting-started/) to develop locally with hot-reload, then deploy to LlamaCloud or self-host.
 
-**Integrate into existing apps**: Use the [Workflows library](/python/llamaagents/workflows/) directly. Run workflows as async processes in your code, or [mount them as endpoints](/python/llamaagents/workflows/deployment/) in your own server.
+**Go deeper**: Use the [Workflows library](/python/llamaagents/workflows/) directly in your own applications. Run workflows as async processes, or [mount them as endpoints](/python/llamaagents/workflows/deployment/) in your existing server.
 
 ### Components
 
