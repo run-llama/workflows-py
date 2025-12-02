@@ -10,23 +10,23 @@ LlamaAgents helps you build, deploy, and manage **multi-step document workflows*
 
 Document pipelines are deceptively hard: parsing is messy, extraction requires iteration, and you often need a human in the loop to review results. On top of the AI logic, you're left wiring up infrastructure, persistence, and deployment—work that distracts from the actual problem you're solving.
 
-LlamaAgents gets you from zero to a working pipeline quickly. Start from templates, configure, and deploy. When you need customization, it's real Python underneath: fork, edit, and customize without a rewrite. Under the hood, our [event-driven Workflows framework](/python/llamaagents/workflows/) handles branching, parallelism, [human-in-the-loop](/python/llamaagents/workflows/human-in-the-loop/) review, durability, and [observability](/python/llamaagents/workflows/observability/).
+LlamaAgents gets you from zero to a working pipeline quickly. Start from templates, configure and deploy. When you need customization, it's real Python underneath: fork and extend without a rewrite. Under the hood, our event-driven [Agent Workflows framework](/python/llamaagents/workflows/) handles branching, parallelism, [human-in-the-loop](/python/llamaagents/workflows/human-in-the-loop/) review, durability, and [observability](/python/llamaagents/workflows/observability/).
 
 ### Get Started
 
-**Start fast**: [Click-to-deploy a starter template](/python/llamaagents/llamactl/click-to-deploy/) directly in [LlamaCloud](https://cloud.llamaindex.ai/). Choose a pre-built workflow like SEC Insights or Invoice Matching, configure, and deploy.
+**Start fast**: [Click-to-deploy a starter template](/python/llamaagents/llamactl/click-to-deploy/) directly in [LlamaCloud](https://cloud.llamaindex.ai/). Choose a pre-built workflow like SEC Insights or Invoice Matching, configure and deploy.
 
-**Customize**: When you need more control, fork to GitHub and edit the Python code directly. Use the [`llamactl` CLI](/python/llamaagents/llamactl/getting-started/) to develop locally with hot-reload, then deploy to LlamaCloud or self-host.
+**Customize**: When you need more control, fork to GitHub and edit the Python code directly. Use the [`llamactl` CLI](/python/llamaagents/llamactl/getting-started/) to develop locally, then deploy to LlamaCloud or self-host.
 
-**Go deeper**: Use the [Workflows library](/python/llamaagents/workflows/) directly in your own applications. Run workflows as async processes, or [mount them as endpoints](/python/llamaagents/workflows/deployment/) in your existing server.
+**Go deeper**: Use [Agent Workflows](/python/llamaagents/workflows/) directly in your own applications. Run workflows as async processes, or [mount them as endpoints](/python/llamaagents/workflows/deployment/) in your existing server.
 
 ### Components
 
-**[`llamactl` CLI](/python/llamaagents/llamactl/getting-started/)**: Develop and deploy workflow-powered full-stack applications. Initialize from [starter templates](/python/llamaagents/llamactl-reference/commands-init/), serve locally, and deploy to LlamaCloud.
+**[`llamactl` CLI](/python/llamaagents/llamactl/getting-started/)**: The development and deployment tool. Initialize from [starter templates](/python/llamaagents/llamactl-reference/commands-init/), serve locally, and deploy to LlamaCloud or export for self-hosting.
 
-**[Agent Workflows](/python/llamaagents/workflows/)**: The event-driven orchestration framework. Define pipelines with loops, branching, and parallel execution. Pause for human review. Built-in durability and [observability](/python/llamaagents/workflows/observability/).
+**[Agent Workflows](/python/llamaagents/workflows/)**: The event-driven orchestration framework. Use standalone as an async library, or let `llamactl` serve them. Built-in durability and [observability](/python/llamaagents/workflows/observability/).
 
-**`llama-cloud-services`**: Use LlamaCloud's document primitives (Parse, Extract, Classify), [Agent Data](/python/llamaagents/llamactl/agent-data-overview/) for structured storage, and vector indexes for retrieval. `llamactl` handles authentication automatically.
+**[`llama-cloud-services`](/python/cloud/)**: LlamaCloud's document primitives (Parse, Extract, Classify), [Agent Data](/python/llamaagents/llamactl/agent-data-overview/) for structured storage, and vector indexes for retrieval. `llamactl` handles authentication automatically.
 
 **[@llamaindex/ui](/python/llamaagents/llamactl/ui-hooks/)**: React hooks for workflow-powered frontends. Deploy alongside your backend with `llamactl`.
 
