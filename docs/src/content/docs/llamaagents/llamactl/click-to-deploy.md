@@ -103,31 +103,6 @@ To remove a deployment:
 Deleting a deployment is permanent. All associated resources and data will be removed.
 :::
 
-## For developers: using llamactl
+## Next steps
 
-If you prefer working from the command line, or want to develop and test locally before deploying, use `llamactl`:
-
-```bash
-# Initialize from a template
-llamactl init
-
-# Develop locally
-llamactl serve
-
-# Deploy to LlamaCloud
-llamactl deployments create
-```
-
-See [Getting Started with llamactl](/python/llamaagents/llamactl/getting-started) for the complete CLI workflow.
-
-## Build document workflows with LlamaCloud
-
-LlamaAgents starter templates demonstrate how to orchestrate LlamaCloud's document services into complete workflows. The core building blocks are:
-
-- **[LlamaParse](/python/cloud/llamaparse/getting_started)**: Transform documents into clean, structured markdown
-- **[LlamaClassify](/python/cloud/llamaclassify/getting_started)**: Categorize documents by type using natural-language rules
-- **[LlamaExtract](/python/cloud/llamaextract/getting_started)**: Extract structured data with custom schemas
-
-For a detailed example of combining these services, see the [Parse → Classify → Extract workflow notebook](https://github.com/run-llama/llama_cloud_services/blob/main/examples/misc/parse_classify_extract_workflow.ipynb).
-
-For the underlying orchestration framework, see [LlamaIndex Workflows](/python/llamaagents/workflows/).
+Ready to dive into the code? Learn how to author and configure workflows in [Serving your Workflows](/python/llamaagents/llamactl/workflow-api).

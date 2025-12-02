@@ -19,6 +19,10 @@ LlamaAgents uses the [`llamactl` CLI for development](https://pypi.org/project/l
   - Linux: Follow your distro instructions: [git-scm.com/download/linux](https://git-scm.com/download/linux)
   - Windows: use [Chocolatey](https://community.chocolatey.org/packages/git.install)
 
+:::tip[Prefer a UI?]
+You can also deploy starter templates directly from the LlamaCloud dashboard—no CLI or dependencies required. See [Click-to-Deploy from LlamaCloud](/python/llamaagents/llamactl/click-to-deploy).
+:::
+
 ## Install
 
 Choose one:
@@ -96,7 +100,7 @@ For a more detailed reference on how to define and expose workflows, see [Workfl
 
 ## Create a Cloud Deployment
 
-LlamaAgents applications can be rapidly deployed just by pointing to a source git repository. With the provided repository configuration, LlamaCloud will clone, build, and serve your app. It can even access GitHub private repositories by installing the [GitHub app](https://github.com/apps/llama-deploy)
+LlamaAgents applications can be rapidly deployed just by pointing to a source git repository. With the provided repository configuration, LlamaCloud will clone, build, and serve your app. It can even access GitHub private repositories by installing the [GitHub app](https://github.com/apps/llama-deploy).
 
 Example:
 
