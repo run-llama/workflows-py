@@ -15,7 +15,7 @@ Skip the database setup. LlamaAgents workflows and JavaScript UIs share a persis
 Agent Data is a queryable store for JSON records produced by your agents. Each record is linked to a `deployment_name` (the deployed agent) and an optional `collection` (a logical bucket; defaults to `default`). Use it to persist extractions, events, metrics, and other structured output, then search and aggregate across records.
 
 Key concepts:
-- **deployment_name**: the identifier of the agent deployment the data belongs to. Access is authorized against that agent’s project.
+- **deployment_name**: the identifier of the agent deployment the data belongs to. Access is authorized against that agent's project.
 - **collection**: a logical namespace within an agent for organizing different data types or apps. Storage is JSON. We recommend storing homogeneous data types within a single collection.
 - **data**: the JSON payload shaped by your app. SDKs provide typed wrappers.
 
@@ -62,6 +62,19 @@ Nested fields are addressed using dot notation. For example, `{"data.age": {"gt"
 SDKs and environments:
 - The **JavaScript SDK** can be used in the browser. When your UI is deployed on LlamaCloud alongside your agent, it is automatically authenticated. In other environments, provide an API key. You can also set `Project-Id` on the underlying HTTP client to pin all requests to a project.
 - The **Python SDK** runs server‑side and uses your API key and an optional base URL.
+
+### ExtractedData wrapper
+
+For extraction workflows, the SDKs provide a specialized `ExtractedData<T>` wrapper type. This wrapper is designed for workflows where extracted data goes through review and approval stages. It maintains:
+
+- **original_data**: The data as originally extracted (immutable reference)
+- **data**: The current state after any human corrections
+- **status**: Workflow status (`pending_review`, `accepted`, `rejected`, `error`, or custom)
+- **overall_confidence**: Aggregated confidence score across all fields
+- **field_metadata**: Per-field metadata including confidence scores and citations
+- **file_id / file_name / file_hash**: Source file references for linking back to documents
+
+Using `ExtractedData` enables human-in-the-loop review workflows and provides traceability from extracted fields back to source documents.
 
 Next steps:
 - Python usage: see [Agent Data (Python)](/python/llamaagents/llamactl/agent-data-python)

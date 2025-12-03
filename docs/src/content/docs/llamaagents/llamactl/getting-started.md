@@ -11,6 +11,10 @@ Cloud deployments of LlamaAgents are now in beta preview and broadly available f
 
 LlamaAgents uses the [`llamactl` CLI for development](https://pypi.org/project/llamactl/). `llamactl` bootstraps an application server that manages running and persisting your workflows, and a control plane for managing cloud deployments of applications. It has some system pre-requisites that must be installed in order to work:
 
+:::tip[Prefer a UI?]
+You can also deploy starter templates directly from the LlamaCloud dashboard—no CLI or dependencies required. See [Click-to-Deploy from LlamaCloud](/python/llamaagents/llamactl/click-to-deploy).
+:::
+
 - Make sure you have [`uv`](https://docs.astral.sh/uv/getting-started/installation/) installed. `uv` is a Python package manager and build tool. `llamactl` integrates with it in order to quickly manage your project's build and dependencies.
 - Windows support is experimental (as of version `0.3.14`) and requires some adjustments to run `llamactl` without issues: see [our dedicated guide](https://github.com/run-llama/llamactl-windows) on the topic. For a better user experience, it is still advisable to use WSL2 (e.g., Ubuntu) and follow the Linux instructions. See [Install WSL](https://learn.microsoft.com/windows/wsl/install).
 - Likewise, Node.js is required for UI development. For macOS and Linux, we recommend installing Node via [`nvm`](https://github.com/nvm-sh/nvm) to manage versions. You can use your node package manager of choice (`npm`, `pnpm`, or `yarn`). For Windows, we recommend using [Chocolatey](https://community.chocolatey.org/packages/nodejs) for the installation process.
@@ -18,6 +22,7 @@ LlamaAgents uses the [`llamactl` CLI for development](https://pypi.org/project/l
   - macOS: [Install via Xcode Command Line Tools](https://git-scm.com/download/mac) or Homebrew (`brew install git`)
   - Linux: Follow your distro instructions: [git-scm.com/download/linux](https://git-scm.com/download/linux)
   - Windows: use [Chocolatey](https://community.chocolatey.org/packages/git.install)
+
 
 ## Install
 
@@ -96,7 +101,7 @@ For a more detailed reference on how to define and expose workflows, see [Workfl
 
 ## Create a Cloud Deployment
 
-LlamaAgents applications can be rapidly deployed just by pointing to a source git repository. With the provided repository configuration, LlamaCloud will clone, build, and serve your app. It can even access GitHub private repositories by installing the [GitHub app](https://github.com/apps/llama-deploy)
+LlamaAgents applications can be rapidly deployed just by pointing to a source git repository. With the provided repository configuration, LlamaCloud will clone, build, and serve your app. It can even access GitHub private repositories by installing the [GitHub app](https://github.com/apps/llama-deploy).
 
 Example:
 

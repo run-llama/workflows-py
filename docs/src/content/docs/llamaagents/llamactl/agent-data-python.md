@@ -182,3 +182,108 @@ for grp in raw_groups.items:  # each item is an AggregateGroup object
     print(grp.group_key, grp.count, grp.first_item)  # first_item is a dict
 print(raw_groups.next_page_token, raw_groups.total_size)
 ```
+
+### ExtractedData wrapper
+
+For extraction workflows, use `ExtractedData[T]` as the type parameter for your Agent Data client. This wrapper type is designed for workflows where data goes through review and approval stages.
+
+```python
+from llama_cloud_services.beta.agent_data import AsyncAgentDataClient, ExtractedData
+
+class Invoice(BaseModel):
+    vendor: str | None = None
+    total: float | None = None
+    date: str | None = None
+
+# Client stores ExtractedData[Invoice] records
+client = AsyncAgentDataClient(
+    type=ExtractedData[Invoice],
+    collection="invoices",
+    deployment_name=deployment_name,
+    client=base_client,
+)
+```
+
+**Creating from LlamaExtract results:**
+
+The `from_extraction_result` factory method creates an `ExtractedData` instance directly from a LlamaExtract result, automatically capturing field metadata (confidence scores, citations):
+
+```python
+from llama_cloud_services import LlamaExtract
+from llama_cloud_services.beta.agent_data import ExtractedData
+
+extractor = LlamaExtract()
+result = await extractor.aextract(data_schema=Invoice, files="invoice.pdf")
+
+# Automatically extracts confidence scores and citations from the extraction result
+extracted = ExtractedData.from_extraction_result(
+    result=result,
+    schema=Invoice,
+    status="pending_review",  # optional, defaults to "pending_review"
+)
+
+await client.create_item(extracted)
+```
+
+**Creating manually:**
+
+Use `ExtractedData.create` when you need to transform the data to a different schema or construct extracted data from other sources:
+
+```python
+from llama_cloud_services.beta.agent_data import ExtractedData
+
+invoice = Invoice(vendor="Acme Corp", total=1500.00, date="2024-01-15")
+
+extracted = ExtractedData.create(
+    data=invoice,
+    status="pending_review",
+    file_id="file-abc123",  # LlamaCloud file ID for linking
+    file_name="invoice.pdf",
+    file_hash="sha256:...",  # optional content hash for deduplication
+    field_metadata={
+        "vendor": {"confidence": 0.95, "citation": [{"page": 1, "matching_text": "Acme Corp"}]},
+        "total": {"confidence": 0.92},
+    },
+)
+```
+
+**ExtractedData fields:**
+
+| Field | Description |
+|-------|-------------|
+| `original_data` | The data as originally extracted (preserved for change tracking) |
+| `data` | The current state of the data (updated by human review) |
+| `status` | Workflow status: `pending_review`, `accepted`, `rejected`, `error`, or custom string |
+| `overall_confidence` | Aggregated confidence score (auto-calculated from field_metadata) |
+| `field_metadata` | Dict mapping field paths to `ExtractedFieldMetadata` (confidence, citations) |
+| `file_id` | LlamaCloud file ID of the source document |
+| `file_name` | Name of the source file |
+| `file_hash` | Content hash for deduplication |
+| `metadata` | Additional application-specific metadata |
+
+**Transforming schemas:**
+
+When you need a different presentation schema than what was extracted:
+
+```python
+# Extract with one schema
+result = await extractor.aextract(data_schema=RawInvoice, files="invoice.pdf")
+raw_invoice = RawInvoice.model_validate(result.data)
+
+# Transform to presentation schema
+presentation = PresentationInvoice(
+    vendor_name=raw_invoice.vendor,
+    amount=raw_invoice.total,
+    # ... additional transformations
+)
+
+# Preserve field metadata for citations/confidence if fields align
+field_metadata = result.extraction_metadata.get("field_metadata", {})
+
+extracted = ExtractedData.create(
+    data=presentation,
+    file_id=result.file.id,
+    file_name=result.file.name,
+    field_metadata=field_metadata,  # retains citation/confidence for matching paths
+)
+```
