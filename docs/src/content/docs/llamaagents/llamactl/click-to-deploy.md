@@ -32,9 +32,9 @@ Each starter template is a complete, working document workflow application that 
 
 LlamaCloud will clone the template repository, build your application, and deploy it. This typically takes 1–3 minutes. Once deployed, your agent will appear in the deployments list with its status.
 
-### Launch and test your agent
+### View your agent
 
-Once deployment status shows **Running**, click **Launch** to open your agent's UI. Most starters include a web interface where you can:
+Once deployment status shows **Running**, click **Visit** to open your agent's UI. Most starters include a web interface where you can:
 
 - Upload documents for processing
 - View extracted data and classifications
