@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from _collections_abc import dict_items, dict_keys, dict_values
 from enum import Enum
-from typing import Any, Type
+from typing import Any, Literal, Type
 
 from pydantic import (
     BaseModel,
@@ -208,6 +208,57 @@ class StopEvent(Event):
     def __str__(self) -> str:
         return str(self._result)
 
+
+class WorkflowFailedEvent(StopEvent):
+    """Stop event emitted when a workflow fails due to an unhandled exception."""
+
+    status: Literal["failed"] = Field(
+        default="failed", description="Terminal state indicator."
+    )
+    step_name: str | None = Field(
+        default=None, description="Name of the step that raised the exception."
+    )
+    error_type: str = Field(description="Exception type that caused the failure.")
+    message: str | None = Field(
+        default=None, description="String representation of the exception."
+    )
+    attempts: int | None = Field(
+        default=None,
+        description="Attempt count consumed for the failing step when retries exhausted.",
+    )
+
+class WorkflowCancelledEvent(StopEvent):
+    """Stop event emitted when a workflow run is cancelled."""
+
+    status: Literal["cancelled"] = Field(
+        default="cancelled", description="Terminal state indicator."
+    )
+    reason: str = Field(
+        default="Run cancelled by user.",
+        description="Human-readable reason for the cancellation.",
+    )
+    cancelled_by: str | None = Field(
+        default="user",
+        description="Identifier describing who initiated the cancellation.",
+    )
+
+class WorkflowTimedOutEvent(StopEvent):
+    """Stop event emitted when a workflow exceeds its allotted timeout."""
+
+    status: Literal["timed_out"] = Field(
+        default="timed_out", description="Terminal state indicator."
+    )
+    timeout_seconds: float = Field(
+        description="Configured timeout threshold that was exceeded."
+    )
+    active_steps: list[str] = Field(
+        default_factory=list,
+        description="Names of steps that were still running when the timeout fired.",
+    )
+    message: str | None = Field(
+        default=None,
+        description="Detailed timeout message (typically mirrors the raised exception).",
+    )
 
 class InputRequiredEvent(Event):
     """Emitted when human input is required to proceed.
