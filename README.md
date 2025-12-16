@@ -1,5 +1,4 @@
-# LlamaIndex Workflows
-
+# LlamaIndex İşakışları
 [![Unit Testing](https://github.com/run-llama/workflows/actions/workflows/test.yml/badge.svg)](https://github.com/run-llama/workflows/actions/workflows/test.yml)
 [![Coverage Status](https://coveralls.io/repos/github/run-llama/workflows/badge.svg?branch=main)](https://coveralls.io/github/run-llama/workflows?branch=main)
 [![GitHub contributors](https://img.shields.io/github/contributors/run-llama/workflows)](https://github.com/run-llama/llama-index-workflows/graphs/contributors)
@@ -10,37 +9,37 @@
 [![Twitter](https://img.shields.io/twitter/follow/llama_index)](https://x.com/llama_index)
 [![Reddit](https://img.shields.io/reddit/subreddit-subscribers/LlamaIndex?style=plastic&logo=reddit&label=r%2FLlamaIndex&labelColor=white)](https://www.reddit.com/r/LlamaIndex/)
 
-LlamaIndex Workflows are a framework for orchestrating and chaining together complex systems of steps and events.
+LlamaIndex Workflows, karmaşık adım ve olay sistemlerini düzenlemek ve birbirine zincirlemek için kullanılan bir çerçevedir.
 
-## What can you build with Workflows?
+## Workflows ile neler inşa edebilirsiniz?
 
-Workflows shine when you need to orchestrate complex, multi-step processes that involve AI models, APIs, and decision-making. Here are some examples of what you can build:
+Workflows; yapay zeka modellerini, API'leri ve karar verme mekanizmalarını içeren karmaşık, çok adımlı süreçleri yönetmeniz gerektiğinde öne çıkar. İşte inşa edebileceklerinize dair bazı örnekler:
 
-- **AI Agents** - Create intelligent systems that can reason, make decisions, and take actions across multiple steps
-- **Document Processing Pipelines** - Build systems that ingest, analyze, summarize, and route documents through various processing stages
-- **Multi-Model AI Applications** - Coordinate between different AI models (LLMs, vision models, etc.) to solve complex tasks
-- **Research Assistants** - Develop workflows that can search, analyze, synthesize information, and provide comprehensive answers
-- **Content Generation Systems** - Create pipelines that generate, review, edit, and publish content with human-in-the-loop approval
-- **Customer Support Automation** - Build intelligent routing systems that can understand, categorize, and respond to customer inquiries
+- **Yapay Zeka Ajanları** - Birden fazla adımda akıl yürütebilen, kararlar alabilen ve eyleme geçebilen akıllı sistemler oluşturun
+- **Doküman İşleme Boru Hatları** - Dokümanları çeşitli işleme aşamalarından geçirerek alan, analiz eden, özetleyen ve yönlendiren sistemler inşa edin
+- **Çok Modelli Yapay Zeka Uygulamaları** - Karmaşık görevleri çözmek için farklı yapay zeka modelleri (LLM'ler, görü modelleri vb.) arasında koordinasyon sağlayın
+- **Araştırma Asistanları** - Bilgiyi arayabilen, analiz edebilen, sentezleyebilen ve kapsamlı yanıtlar sağlayabilen iş akışları geliştirin
+- **İçerik Üretim Sistemleri** - İnsan onaylı süreçlerle içerik üreten, gözden geçiren, düzenleyen ve yayınlayan boru hatları oluşturun
+- **Müşteri Destek Otomasyonu** - Müşteri taleplerini anlayabilen, kategorize edebilen ve yanıtlayabilen akıllı yönlendirme sistemleri inşa edin
 
-The async-first, event-driven architecture makes it easy to build workflows that can route between different capabilities, implement parallel processing patterns, loop over complex sequences, and maintain state across multiple steps - all the features you need to make your AI applications production-ready.
+Asenkron öncelikli (async-first), olay güdümlü (event-driven) mimari; farklı yetenekler arasında yönlendirme yapabilen, paralel işleme modelleri uygulayabilen, karmaşık diziler üzerinde döngü kurabilen ve birden fazla adımda durumu (state) koruyabilen iş akışları oluşturmayı kolaylaştırır - yapay zeka uygulamalarınızı üretime hazır hale getirmek için ihtiyacınız olan tüm özellikler.
 
-## Key Features
+## Temel Özellikler
 
-- **async-first** - workflows are built around python's async functionality - steps are async functions that process incoming events from an asyncio queue and emit new events to other queues. This also means that workflows work best in your async apps like FastAPI, Jupyter Notebooks, etc.
-- **event-driven** - workflows consist of steps and events. Organizing your code around events and steps makes it easier to reason about and test.
-- **state management** - each run of a workflow is self-contained, meaning you can launch a workflow, save information within it, serialize the state of a workflow and resume it later.
-- **observability** - workflows are automatically instrumented for observability, meaning you can use tools like `Arize Phoenix` and `OpenTelemetry` right out of the box.
+- **async-first (asenkron öncelikli)** - iş akışları Python'un async işlevselliği etrafında oluşturulmuştur; adımlar, bir asyncio kuyruğundan gelen olayları işleyen ve diğer kuyruklara yeni olaylar yayan async fonksiyonlardır. Bu aynı zamanda iş akışlarının FastAPI, Jupyter Notebook vb. gibi async uygulamalarınızda en iyi şekilde çalıştığı anlamına gelir.
+- **event-driven (olay güdümlü)** - iş akışları adımlardan ve olaylardan oluşur. Kodunuzu olaylar ve adımlar etrafında organize etmek, mantık yürütmeyi ve test etmeyi kolaylaştırır.
+- **state management (durum yönetimi)** - bir iş akışının her çalıştırılması kendi içinde bağımsızdır; yani bir iş akışını başlatabilir, içine bilgi kaydedebilir, iş akışının durumunu serileştirebilir ve daha sonra devam ettirebilirsiniz.
+- **observability (gözlemlenebilirlik)** - iş akışları gözlemlenebilirlik için otomatik olarak donatılmıştır, yani `Arize Phoenix` ve `OpenTelemetry` gibi araçları kurulum gerektirmeden doğrudan kullanabilirsiniz.
 
-## Quick Start
+## Hızlı Başlangıç
 
-Install the package:
+Paketi yükleyin:
 
 ```bash
 pip install llama-index-workflows
 ```
 
-And create your first workflow:
+Ve ilk iş akışınızı oluşturun:
 
 ```python
 import asyncio
@@ -85,15 +84,15 @@ if __name__ == "__main__":
     asyncio.run(main())
 ```
 
-In the example above
-- Steps that accept a `StartEvent` will be run first.
-- Steps that return a `StopEvent` will end the workflow.
-- Intermediate events are user defined and can be used to pass information between steps.
-- The `Context` object is also used to share information between steps.
+Yukarıdaki örnekte
+- `StartEvent` kabul eden adımlar ilk olarak çalıştırılır.
+- `StopEvent` döndüren adımlar iş akışını sonlandırır.
+- Ara olaylar kullanıcı tanımlıdır ve adımlar arasında bilgi aktarmak için kullanılabilir.
+- `Context` nesnesi de adımlar arasında bilgi paylaşmak için kullanılır.
 
-Visit the [complete documentation](https://docs.llamaindex.ai/en/stable/understanding/workflows/) for more examples using `llama-index`!
+`llama-index` kullanan daha fazla örnek için [kapsamlı dokümantasyonu](https://docs.llamaindex.ai/en/stable/understanding/workflows/) ziyaret edin!
 
-## More examples
+## Daha Fazla Örnek
 
 - [Basic Feature Run-Through](./examples/feature_walkthrough.ipynb)
 - [Building a Function Calling Agent with `llama-index`](./examples/agent.ipynb)
@@ -104,6 +103,6 @@ Visit the [complete documentation](https://docs.llamaindex.ai/en/stable/understa
   - [Arize Phoenix + LlamaIndex](./examples/observability/workflows_observablitiy_arize_phoenix.ipynb)
   - [Langfuse + LlamaIndex](./examples/observability/workflows_observablitiy_langfuse.ipynb)
 
-## Related Packages
+## İlgili Paketler
 
 - [Typescript Workflows](https://github.com/run-llama/workflows-ts)
