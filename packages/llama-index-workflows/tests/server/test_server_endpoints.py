@@ -321,7 +321,10 @@ async def test_run_workflow_nowait_success(client: AsyncClient) -> None:
     assert "handler_id" in data
     assert "status" in data
     assert data["status"] == "running"
-    assert len(data["handler_id"]) == 10  # Default nanoid length
+    handler_id = data["handler_id"]
+    assert len(handler_id) == 10  # Default nanoid length
+    # Verify handler_id is alphanumeric only (no quotes or special characters)
+    assert handler_id.isalnum(), f"handler_id should be alphanumeric: {handler_id!r}"
 
 
 @pytest.mark.asyncio
@@ -336,7 +339,10 @@ async def test_run_workflow_nowait_with_start_event(client: AsyncClient) -> None
     assert "handler_id" in data
     assert "status" in data
     assert data["status"] == "running"
-    assert len(data["handler_id"]) == 10  # Default nanoid length
+    handler_id = data["handler_id"]
+    assert len(handler_id) == 10  # Default nanoid length
+    # Verify handler_id is alphanumeric only (no quotes or special characters)
+    assert handler_id.isalnum(), f"handler_id should be alphanumeric: {handler_id!r}"
 
 
 @pytest.mark.asyncio
@@ -1252,3 +1258,56 @@ async def test_run_sync_removes_handler_even_with_unconsumed_events(
 
     # The synchronous run path should clean up the handler from memory even if events remain
     assert len(server._handlers) == 0
+
+
+@pytest.mark.asyncio
+async def test_handler_id_no_trailing_quote_in_json_response(
+    client: AsyncClient,
+) -> None:
+    """Verify handler_id in JSON response doesn't have trailing quotes.
+
+    Regression test for issue where handler_id was reported to have trailing
+    double quotes, causing URL-encoding issues in subsequent requests.
+    """
+    # Test multiple times to catch any intermittent issues
+    for _ in range(5):
+        response = await client.post(
+            "/workflows/test/run-nowait", json={"kwargs": {"message": "test"}}
+        )
+        assert response.status_code == 200
+
+        # Get raw JSON text to inspect serialization
+        raw_text = response.text
+
+        # Parse JSON
+        data = response.json()
+        handler_id = data["handler_id"]
+
+        # Check for trailing/leading quotes
+        assert not handler_id.endswith('"'), (
+            f"handler_id has trailing quote: {handler_id!r}"
+        )
+        assert not handler_id.startswith('"'), (
+            f"handler_id has leading quote: {handler_id!r}"
+        )
+
+        # Verify it's alphanumeric only (nanoid uses A-Z, a-z, 0-9)
+        assert handler_id.isalnum(), (
+            f"handler_id contains non-alphanumeric chars: {handler_id!r}"
+        )
+
+        # Verify length is 10 (default nanoid length)
+        assert len(handler_id) == 10, (
+            f"handler_id has unexpected length: {len(handler_id)}"
+        )
+
+        # Verify the raw JSON doesn't have malformed handler_id
+        # Expected format: "handler_id":"<10-char-alnum>" or "handler_id": "<10-char-alnum>"
+        import re
+
+        match = re.search(r'"handler_id"\s*:\s*"([^"]*)"', raw_text)
+        assert match, f"handler_id not found in expected format in raw JSON: {raw_text}"
+        raw_handler_id = match.group(1)
+        assert raw_handler_id == handler_id, (
+            f"Mismatch between parsed and raw handler_id: {handler_id!r} vs {raw_handler_id!r}"
+        )
