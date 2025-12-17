@@ -1,5 +1,11 @@
 # llama-index-utils-workflow
 
+## 0.5.2
+
+### Patch Changes
+
+- 8e84276: Increase minimum llama-index-workflows version
+
 ## 0.5.1
 
 ### Patch Changes
