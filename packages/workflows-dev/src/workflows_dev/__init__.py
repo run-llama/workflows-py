@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from .cli import cli
+from workflows_dev.cli import cli
 
 __all__ = ["cli", "main"]
 

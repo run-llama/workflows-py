@@ -5,7 +5,7 @@ from pathlib import Path
 
 import click
 
-from . import changesets, gha, git_utils, index_html, versioning
+from workflows_dev import changesets, gha, git_utils, index_html, versioning
 
 
 @click.group()

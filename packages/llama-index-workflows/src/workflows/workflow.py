@@ -39,9 +39,17 @@ logger = logging.getLogger()
 
 
 class WorkflowMeta(type):
+    def __new__(
+        mcs, name: str, bases: Tuple[type, ...], dct: dict[str, Any]
+    ) -> "WorkflowMeta":
+        # Create a fresh _step_functions dict for this class BEFORE __set_name__
+        # is called on any descriptors. This ensures descriptors add to this class's
+        # own dict rather than a parent's dict.
+        dct["_step_functions"] = {}
+        return super().__new__(mcs, name, bases, dct)
+
     def __init__(cls, name: str, bases: Tuple[type, ...], dct: dict[str, Any]) -> None:
         super().__init__(name, bases, dct)
-        cls._step_functions: dict[str, StepFunction] = {}
 
 
 class Workflow(metaclass=WorkflowMeta):
