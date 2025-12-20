@@ -1644,7 +1644,7 @@ wheels = [
 
 [[package]]
 name = "llama-index-utils-workflow"
-version = "0.5.1"
+version = "0.5.2"
 source = { editable = "packages/llama-index-utils-workflow" }
 dependencies = [
     { name = "llama-index-core" },
