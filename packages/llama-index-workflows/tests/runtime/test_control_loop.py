@@ -656,7 +656,7 @@ async def test_control_loop_user_cancellation(test_plugin: MockRuntimePlugin) ->
 
 @pytest.mark.asyncio
 async def test_control_loop_retry_with_delay(
-    test_plugin_with_time_machine: tuple[MockRuntimePlugin, "time_machine.Traveller"],
+    test_plugin_with_time_machine: tuple[MockRuntimePlugin, time_machine.Coordinates],
 ) -> None:
     """Test that retry delay is enforced between attempts."""
     test_plugin, _ = test_plugin_with_time_machine
@@ -697,7 +697,7 @@ async def test_control_loop_retry_with_delay(
 
 @pytest.mark.asyncio
 async def test_control_loop_retry_gives_up_after_max_attempts(
-    test_plugin_with_time_machine: tuple[MockRuntimePlugin, "time_machine.Traveller"],
+    test_plugin_with_time_machine: tuple[MockRuntimePlugin, time_machine.Coordinates],
 ) -> None:
     """Test that workflow fails after exhausting maximum_attempts."""
     test_plugin, _ = test_plugin_with_time_machine
@@ -729,7 +729,7 @@ async def test_control_loop_retry_gives_up_after_max_attempts(
 
 @pytest.mark.asyncio
 async def test_control_loop_retry_exhaustion_respects_total_time(
-    test_plugin_with_time_machine: tuple[MockRuntimePlugin, "time_machine.Traveller"],
+    test_plugin_with_time_machine: tuple[MockRuntimePlugin, time_machine.Coordinates],
 ) -> None:
     """Test that retry policy receives correct elapsed_time across retries."""
     test_plugin, _ = test_plugin_with_time_machine

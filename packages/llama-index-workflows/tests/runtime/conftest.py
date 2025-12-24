@@ -33,7 +33,7 @@ class MockRuntimePlugin(WorkflowRuntime):
     """Mock WorkflowRuntime for testing control loops."""
 
     def __init__(
-        self, run_id: str, traveller: Optional[time_machine.Traveller] = None
+        self, run_id: str, traveller: Optional[time_machine.Coordinates] = None
     ) -> None:
         self.run_id = run_id
         # Queue for events sent from external sources (e.g., via send_event)
@@ -101,7 +101,7 @@ async def test_plugin() -> MockRuntimePlugin:
 
 @pytest.fixture
 async def test_plugin_with_time_machine() -> AsyncGenerator[
-    tuple[MockRuntimePlugin, time_machine.Traveller], None
+    tuple[MockRuntimePlugin, time_machine.Coordinates], None
 ]:
     """Plugin with time-machine at epoch 1000.0, tick=True."""
     with time_machine.travel(1000.0, tick=True) as traveller:
