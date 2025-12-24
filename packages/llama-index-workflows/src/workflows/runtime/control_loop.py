@@ -180,7 +180,8 @@ class _ControlLoopRunner:
                     step_name=command.step_name,
                     attempts=command.attempts,
                     first_attempt_at=command.first_attempt_at,
-                )
+                ),
+                delay=command.delay,
             )
             return None
         elif isinstance(command, CommandRunWorker):
@@ -615,7 +616,11 @@ def _process_add_event_tick(
         is_accepted = type(tick.event) in step_config.accepted_events
         if is_accepted and (tick.step_name is None or tick.step_name == step_name):
             subcommands = _add_or_enqueue_event(
-                EventAttempt(event=tick.event),
+                EventAttempt(
+                    event=tick.event,
+                    attempts=tick.attempts,
+                    first_attempt_at=tick.first_attempt_at,
+                ),
                 step_name,
                 state.workers[step_name],
                 now_seconds,

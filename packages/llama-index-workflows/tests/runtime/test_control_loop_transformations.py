@@ -506,3 +506,110 @@ def test_rewind_restarts_workers(base_state: BrokerState) -> None:
     run_cmds = [c for c in commands if isinstance(c, CommandRunWorker)]
     assert len(run_cmds) == 2
     assert len(new_state.workers["test_step"].in_progress) == 2
+
+
+def test_add_event_tick_preserves_retry_metadata(base_state: BrokerState) -> None:
+    """Test that attempts and first_attempt_at are preserved from TickAddEvent."""
+    now = 200.0
+    first_attempt_time = 100.0
+    attempts = 3
+
+    tick = TickAddEvent(
+        event=MyTestEvent(value=42),
+        attempts=attempts,
+        first_attempt_at=first_attempt_time,
+    )
+
+    new_state, commands = _process_add_event_tick(tick, base_state, now_seconds=now)
+
+    # Verify the worker was started
+    run_cmds = [c for c in commands if isinstance(c, CommandRunWorker)]
+    assert len(run_cmds) == 1
+
+    # Verify retry metadata was preserved in the InProgressState
+    in_progress = new_state.workers["test_step"].in_progress
+    assert len(in_progress) == 1
+    assert in_progress[0].attempts == attempts
+    assert in_progress[0].first_attempt_at == first_attempt_time
+
+
+def test_add_event_tick_uses_now_when_no_retry_metadata(
+    base_state: BrokerState,
+) -> None:
+    """Test that fresh events get attempts=0 and first_attempt_at=now."""
+    now = 200.0
+
+    tick = TickAddEvent(event=MyTestEvent(value=42))  # No retry metadata
+
+    new_state, _ = _process_add_event_tick(tick, base_state, now_seconds=now)
+
+    in_progress = new_state.workers["test_step"].in_progress
+    assert len(in_progress) == 1
+    assert in_progress[0].attempts == 0
+    assert in_progress[0].first_attempt_at == now
+
+
+def test_step_worker_failed_retry_preserves_delay(base_state: BrokerState) -> None:
+    """Test that CommandQueueEvent includes delay from retry policy."""
+    retry_delay = 5.0
+    base_state.workers["test_step"].config.retry_policy = ConstantDelayRetryPolicy(
+        maximum_attempts=3, delay=retry_delay
+    )
+    event = MyTestEvent(value=42)
+    add_worker(base_state, event)
+
+    tick: TickStepResult[Any] = TickStepResult(
+        step_name="test_step",
+        worker_id=0,
+        event=event,
+        result=[StepWorkerFailed(exception=ValueError("test"), failed_at=110.0)],
+    )
+
+    _, commands = _process_step_result_tick(tick, base_state, now_seconds=110.0)
+
+    queue_cmds = [c for c in commands if isinstance(c, CommandQueueEvent)]
+    assert len(queue_cmds) == 1
+    assert queue_cmds[0].delay == retry_delay
+    assert queue_cmds[0].attempts == 1
+    assert queue_cmds[0].first_attempt_at == 100.0  # from add_worker fixture
+    assert queue_cmds[0].step_name == "test_step"
+
+
+def test_step_worker_failed_retry_preserves_first_attempt_at(
+    base_state: BrokerState,
+) -> None:
+    """Test that first_attempt_at stays constant across retries."""
+    base_state.workers["test_step"].config.retry_policy = ConstantDelayRetryPolicy(
+        maximum_attempts=5, delay=1.0
+    )
+    event = MyTestEvent(value=42)
+
+    original_first_attempt_at = 50.0
+    # Simulate a worker that's already been retried twice
+    base_state.workers["test_step"].in_progress.append(
+        InProgressState(
+            event=event,
+            worker_id=0,
+            shared_state=StepWorkerState(
+                step_name="test_step",
+                collected_events={},
+                collected_waiters=[],
+            ),
+            attempts=2,  # Already retried twice
+            first_attempt_at=original_first_attempt_at,
+        )
+    )
+
+    tick: TickStepResult[Any] = TickStepResult(
+        step_name="test_step",
+        worker_id=0,
+        event=event,
+        result=[StepWorkerFailed(exception=ValueError("test"), failed_at=200.0)],
+    )
+
+    _, commands = _process_step_result_tick(tick, base_state, now_seconds=200.0)
+
+    queue_cmds = [c for c in commands if isinstance(c, CommandQueueEvent)]
+    assert len(queue_cmds) == 1
+    assert queue_cmds[0].attempts == 3  # incremented from 2
+    assert queue_cmds[0].first_attempt_at == original_first_attempt_at  # preserved!
