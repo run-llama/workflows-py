@@ -16,7 +16,8 @@ dev = [
   "pytest-timeout>=2.4.0",
   "structlog>=25.5.0",
   "starlette>=0.39.0",
-  "uvicorn>=0.32.0"
+  "uvicorn>=0.32.0",
+  "time-machine>=2.19.0,<3.0.0"
 ]
 
 [project]

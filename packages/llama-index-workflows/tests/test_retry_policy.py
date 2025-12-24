@@ -16,8 +16,7 @@ async def test_retry_e2e() -> None:
         """Empty event to signal a step to increment a counter in the Context."""
 
     class DummyWorkflow(Workflow):
-        # Set a small delay to avoid impacting the CI speed too much
-        @step(retry_policy=ConstantDelayRetryPolicy(delay=0.2))
+        @step(retry_policy=ConstantDelayRetryPolicy(delay=0.2, maximum_attempts=4))
         async def flaky_step(self, ctx: Context, ev: StartEvent) -> StopEvent:
             count = await ctx.store.get("counter", default=0)
             ctx.send_event(CountEvent())
