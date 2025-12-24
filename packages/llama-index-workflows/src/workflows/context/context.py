@@ -479,6 +479,10 @@ class Context(Generic[MODEL_T]):
     ) -> T:
         """Wait for the next matching event of type `event_type`.
 
+        The runtime pauses by throwing an internal control-flow exception and replays
+        the entire step when the event arrives, so keep this call near the top of the
+        step and make any preceding work safe to repeat.
+
         Optionally emits a `waiter_event` to the event stream once per `waiter_id` to
         inform callers that the workflow is waiting for external input.
         This helps to prevent duplicate waiter events from being sent to the event stream.
