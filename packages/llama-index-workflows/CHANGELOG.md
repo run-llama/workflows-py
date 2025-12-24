@@ -1,5 +1,15 @@
 # llama-index-workflows
 
+## 2.11.6
+
+### Patch Changes
+
+- 94fa8ce: Fix infinite retries with no delay
+- f8fa366: Update debugger assets
+
+  - JavaScript: https://cdn.jsdelivr.net/npm/@llamaindex/workflow-debugger@0.2.10/dist/app.js
+  - CSS: https://cdn.jsdelivr.net/npm/@llamaindex/workflow-debugger@0.2.10/dist/app.css
+
 ## 2.11.5
 
 ### Patch Changes
