@@ -12,10 +12,12 @@ The control loop is the core event processing engine that:
 """
 
 import asyncio
+import time
 import uuid
 from typing import Coroutine, Optional, Union
 
 import pytest
+import time_machine
 from workflows.context import Context
 from workflows.decorators import step
 from workflows.errors import WorkflowCancelledByUser, WorkflowTimeoutError
@@ -27,7 +29,7 @@ from workflows.events import (
     StepStateChanged,
     StopEvent,
 )
-from workflows.retry_policy import ConstantDelayRetryPolicy
+from workflows.retry_policy import ConstantDelayRetryPolicy, RetryPolicy
 from workflows.runtime.control_loop import control_loop
 from workflows.runtime.types.internal_state import BrokerState
 from workflows.runtime.types.step_function import as_step_worker_function
@@ -307,9 +309,7 @@ async def test_control_loop_retry_policy(test_plugin: MockRuntimePlugin) -> None
     """
 
     class RetryWorkflow(Workflow):
-        def __init__(self) -> None:
-            super().__init__(timeout=1.0)
-            self.attempts = 0
+        attempts = 0
 
         @step(retry_policy=ConstantDelayRetryPolicy(maximum_attempts=2, delay=0))
         async def flaky(self, ev: StartEvent) -> StopEvent:
@@ -318,7 +318,7 @@ async def test_control_loop_retry_policy(test_plugin: MockRuntimePlugin) -> None
                 raise RuntimeError("fail once")
             return StopEvent(result=f"ok_{self.attempts}")
 
-    wf = RetryWorkflow()
+    wf = RetryWorkflow(timeout=1.0)
 
     result = await run_control_loop(
         workflow=wf,
@@ -652,3 +652,147 @@ async def test_control_loop_user_cancellation(test_plugin: MockRuntimePlugin) ->
         "Cancellation should publish empty StopEvent to stream before raising exception"
     )
     assert stop_event.result is None, "Cancellation StopEvent should have None result"
+
+
+@pytest.mark.asyncio
+async def test_control_loop_retry_with_delay(
+    test_plugin_with_time_machine: tuple[MockRuntimePlugin, "time_machine.Traveller"],
+) -> None:
+    """Test that retry delay is enforced between attempts."""
+    test_plugin, _ = test_plugin_with_time_machine
+    retry_delay = 0.02
+
+    class DelayedRetryWorkflow(Workflow):
+        attempt_times: list[float] = []
+
+        @step(
+            retry_policy=ConstantDelayRetryPolicy(maximum_attempts=3, delay=retry_delay)
+        )
+        async def flaky(self, ev: StartEvent) -> StopEvent:
+            self.attempt_times.append(time.time())
+            if len(self.attempt_times) < 3:
+                raise RuntimeError(f"fail attempt {len(self.attempt_times)}")
+            return StopEvent(result=f"ok_after_{len(self.attempt_times)}_attempts")
+
+    wf = DelayedRetryWorkflow(timeout=5.0)
+
+    result = await run_control_loop(
+        workflow=wf,
+        start_event=StartEvent(),
+        plugin=test_plugin,
+    )
+
+    assert isinstance(result, StopEvent)
+    assert result.result == "ok_after_3_attempts"
+
+    assert len(wf.attempt_times) == 3
+    for i in range(1, len(wf.attempt_times)):
+        elapsed = wf.attempt_times[i] - wf.attempt_times[i - 1]
+        assert elapsed >= retry_delay * 0.8, (
+            f"expected >= {retry_delay * 0.8:.3f}s, got {elapsed:.3f}s"
+        )
+    # Verify time-machine is active (epoch starts at 1000.0)
+    assert wf.attempt_times[0] >= 1000.0
+
+
+@pytest.mark.asyncio
+async def test_control_loop_retry_gives_up_after_max_attempts(
+    test_plugin_with_time_machine: tuple[MockRuntimePlugin, "time_machine.Traveller"],
+) -> None:
+    """Test that workflow fails after exhausting maximum_attempts."""
+    test_plugin, _ = test_plugin_with_time_machine
+    max_attempts = 3
+
+    class AlwaysFailsWorkflow(Workflow):
+        attempt_count = 0
+
+        @step(
+            retry_policy=ConstantDelayRetryPolicy(
+                maximum_attempts=max_attempts, delay=0.01
+            )
+        )
+        async def always_fails(self, ev: StartEvent) -> StopEvent:
+            self.attempt_count += 1
+            raise ValueError(f"fail #{self.attempt_count}")
+
+    wf = AlwaysFailsWorkflow(timeout=5.0)
+
+    with pytest.raises(ValueError, match="fail #3"):
+        await run_control_loop(
+            workflow=wf,
+            start_event=StartEvent(),
+            plugin=test_plugin,
+        )
+
+    assert wf.attempt_count == max_attempts
+
+
+@pytest.mark.asyncio
+async def test_control_loop_retry_exhaustion_respects_total_time(
+    test_plugin_with_time_machine: tuple[MockRuntimePlugin, "time_machine.Traveller"],
+) -> None:
+    """Test that retry policy receives correct elapsed_time across retries."""
+    test_plugin, _ = test_plugin_with_time_machine
+    retry_delay = 0.01
+
+    class ElapsedTimeTrackingPolicy(RetryPolicy):
+        def __init__(self, retry_delay: float) -> None:
+            self.retry_delay = retry_delay
+            self.observed_elapsed_times: list[float] = []
+            self.observed_attempts: list[int] = []
+
+        def next(
+            self,
+            elapsed_time: float,
+            attempts: int,
+            error: BaseException,
+        ) -> Optional[float]:
+            self.observed_elapsed_times.append(elapsed_time)
+            self.observed_attempts.append(attempts)
+            return self.retry_delay
+
+    policy = ElapsedTimeTrackingPolicy(retry_delay=retry_delay)
+
+    class TrackedRetryWorkflow(Workflow):
+        total_calls = 0
+
+        @step(retry_policy=policy)
+        async def always_fail(self, ev: StartEvent) -> StopEvent:
+            self.total_calls += 1
+            if self.total_calls < 5:
+                raise RuntimeError(f"fail {self.total_calls}")
+            return StopEvent(result="eventually_ok")
+
+    wf = TrackedRetryWorkflow(timeout=5.0)
+
+    result = await run_control_loop(
+        workflow=wf,
+        start_event=StartEvent(),
+        plugin=test_plugin,
+    )
+
+    assert isinstance(result, StopEvent)
+    assert result.result == "eventually_ok"
+
+    # Verify we had the expected number of failures (4 failures, 5th succeeds)
+    assert len(policy.observed_elapsed_times) == 4, (
+        f"Expected 4 retry attempts (failures), got {len(policy.observed_elapsed_times)}"
+    )
+
+    # Elapsed times should be strictly increasing (not reset to 0)
+    # If first_attempt_at was being reset on each retry, all elapsed times would be ~0
+    for i in range(1, len(policy.observed_elapsed_times)):
+        assert (
+            policy.observed_elapsed_times[i] > policy.observed_elapsed_times[i - 1]
+        ), f"Elapsed time should increase: {policy.observed_elapsed_times}"
+
+    # Elapsed times should grow: ~0, ~retry_delay, ~2*retry_delay, ...
+    for i, elapsed in enumerate(policy.observed_elapsed_times):
+        min_expected = retry_delay * i * 0.8
+        assert elapsed >= min_expected, (
+            f"elapsed[{i}]: expected >= {min_expected:.4f}, got {elapsed:.4f}"
+        )
+
+    # Attempts should increment: 1, 2, 3, 4
+    expected_attempts = list(range(1, len(policy.observed_attempts) + 1))
+    assert policy.observed_attempts == expected_attempts
