@@ -6,6 +6,7 @@ build-backend = "uv_build"
 dev = [
   "pytest-xdist>=3.8.0",
   "ruff>=0.14.5",
+  "time-machine>=2.19.0",
   "ty>=0.0.1a26"
 ]
 
