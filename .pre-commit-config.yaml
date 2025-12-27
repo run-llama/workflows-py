@@ -22,6 +22,7 @@ repos:
       - id: ruff-format
       - id: ruff-check
         args: [--fix, --exit-non-zero-on-fix]
+        exclude: ^nested_workflow.py$
 
   - repo: local
     hooks:

@@ -259,9 +259,249 @@ class Workflow(metaclass=WorkflowMeta):
 
         cls._step_functions[func.__name__] = func
 
+    def include_workflow(
+        self,
+        workflow_class: type[Workflow],
+        start_event: type[Event],
+        stop_event: type[Event],
+        namespace: str | None = None,
+    ) -> None:
+        """
+        Include another workflow's steps into this workflow.
+
+        This "unrolls" all steps from the child workflow into the parent workflow,
+        creating a seamless composition where both workflows share the same Context
+        and event flow. Event adapters are created at the boundaries to map between
+        parent and child event types.
+
+        Args:
+            workflow_class: The workflow class to include.
+            start_event: Event type in this workflow that should trigger the child
+                workflow (mapped to child's StartEvent).
+            stop_event: Event type to emit when the child workflow completes
+                (mapped from child's StopEvent).
+            namespace: Optional namespace prefix for child step names to avoid
+                conflicts. If not provided, uses the workflow class name.
+
+        Raises:
+            WorkflowValidationError: If the child workflow is invalid or if there
+                are step name conflicts.
+
+        Examples:
+            ```python
+            workflow = ParentWorkflow()
+            workflow.include_workflow(
+                ChildWorkflow,
+                start_event=TriggerChildEvent,
+                stop_event=ChildCompleteEvent,
+                namespace="child"
+            )
+            ```
+
+        The child workflow can still be run standalone, and when included, all its
+        internal steps execute normally while the parent's Context flows through.
+        """
+        # Use workflow class name as default namespace
+        if namespace is None:
+            namespace = workflow_class.__name__
+
+        # Create a temporary instance to introspect the child workflow
+        # TODO: how can we skip this instantiation?
+        child = workflow_class(disable_validation=True)
+
+        # Get child's start and stop event types
+        child_start_event = child.start_event_class
+        child_stop_event = child.stop_event_class
+
+        # Validate that start_event and stop_event are Event subclasses
+        if not (issubclass(start_event, Event) and issubclass(stop_event, Event)):
+            msg = "start_event and stop_event must be Event subclasses"
+            raise WorkflowValidationError(msg)
+
+        # Get all steps from child workflow
+        child_steps = child._get_steps()
+
+        # Identify the boundary steps (those that accept StartEvent or return StopEvent)
+        # Note: A step can be BOTH a start and stop step if it directly accepts
+        # StartEvent and returns StopEvent
+        categorized_steps = []  # List of (step_name, step_func, is_start, is_stop)
+
+        for step_name, step_func in child_steps.items():
+            if step_name == "_done":
+                continue
+
+            config = step_func._step_config
+            is_start_step = child_start_event in config.accepted_events
+            is_stop_step = child_stop_event in config.return_types
+
+            categorized_steps.append(
+                (step_name, step_func, is_start_step, is_stop_step)
+            )
+
+        # Track which steps have been added
+        existing_steps = {
+            **get_steps_from_class(self),
+            **self._step_functions,
+        }
+
+        # Process each step, creating appropriate adapters
+        for step_name, step_func, is_start_step, is_stop_step in categorized_steps:
+            # Determine which adapters are needed
+            input_adapter = (start_event, child_start_event) if is_start_step else None
+            output_adapter = (child_stop_event, stop_event) if is_stop_step else None
+
+            # Create the appropriate step
+            if is_start_step or is_stop_step:
+                # Boundary step - needs adaptation
+                adapted_step = self._create_boundary_step(
+                    step_func,
+                    namespace,
+                    step_name,
+                    input_adapter=input_adapter,
+                    output_adapter=output_adapter,
+                )
+                step_to_add = adapted_step
+            else:
+                # Intermediate step - just namespace it
+                step_to_add = self._create_namespaced_step(
+                    step_func, namespace, step_name
+                )
+
+            # Add the step if not already present
+            if step_to_add.__name__ not in existing_steps:
+                try:
+                    self.add_step(step_to_add)
+                    # Update existing_steps to prevent duplicate additions
+                    existing_steps[step_to_add.__name__] = step_to_add
+                except WorkflowValidationError as e:
+                    msg = f"Failed to include workflow {workflow_class.__name__}: {str(e)}"
+                    raise WorkflowValidationError(msg) from e
+
+    def _create_boundary_step(
+        self,
+        step_func: StepFunction,
+        namespace: str,
+        step_name: str,
+        input_adapter: tuple[type[Event], type[Event]] | None,
+        output_adapter: tuple[type[Event], type[Event]] | None,
+    ) -> StepFunction:
+        """
+        Create an adapted boundary step that handles event conversion.
+
+        This wraps a child workflow step that sits at the boundary (accepts StartEvent
+        or returns StopEvent) and adapts it to use the parent workflow's events.
+        """
+        original_config: StepConfig = step_func._step_config
+
+        # Create wrapper that handles event adaptation
+        async def boundary_wrapper(*args: Any, **kwargs: Any) -> Any:
+            # If we need to adapt input, convert from parent event to child event
+            if input_adapter:
+                parent_event_type, child_event_type = input_adapter
+                # Find the event argument (should be the one matching parent_event_type)
+                new_args = []
+                for arg in args:
+                    if isinstance(arg, parent_event_type):
+                        # Convert parent event to child event
+                        event_dict = arg.model_dump()
+                        child_event = child_event_type(**event_dict)
+                        new_args.append(child_event)
+                    else:
+                        new_args.append(arg)
+                args = tuple(new_args)
+
+            # Call the original step function
+            result = await step_func(*args, **kwargs)
+
+            # If we need to adapt output, convert from child event to parent event
+            if output_adapter:
+                child_event_type, parent_event_type = output_adapter
+                if isinstance(result, child_event_type):
+                    event_dict = result.model_dump()
+                    result = parent_event_type(**event_dict)
+
+            return result
+
+        # Set the namespaced name
+        boundary_wrapper.__name__ = f"{namespace}__{step_name}"
+
+        # Copy annotations
+        boundary_wrapper.__annotations__ = step_func.__annotations__.copy()
+
+        # Adapt the step config
+        adapted_accepted_events = original_config.accepted_events.copy()
+        if input_adapter:
+            parent_event_type, child_event_type = input_adapter
+            adapted_accepted_events = [
+                parent_event_type if e == child_event_type else e
+                for e in adapted_accepted_events
+            ]
+
+        adapted_return_types = original_config.return_types.copy()
+        if output_adapter:
+            child_event_type, parent_event_type = output_adapter
+            adapted_return_types = [
+                parent_event_type if e == child_event_type else e
+                for e in adapted_return_types
+            ]
+
+        # Create adapted config
+        new_config = StepConfig(
+            accepted_events=adapted_accepted_events,
+            event_name=original_config.event_name,
+            return_types=adapted_return_types,
+            context_parameter=original_config.context_parameter,
+            num_workers=original_config.num_workers,
+            retry_policy=original_config.retry_policy,
+            resources=original_config.resources.copy(),
+            context_state_type=original_config.context_state_type,
+        )
+
+        boundary_wrapper._step_config = new_config  # type: ignore
+        return boundary_wrapper  # type: ignore
+
+    def _create_namespaced_step(
+        self, step_func: StepFunction, namespace: str, step_name: str
+    ) -> StepFunction:
+        """
+        Create a namespaced version of a step function.
+
+        This wraps the original step function to preserve its behavior while
+        giving it a unique name in the parent workflow.
+        """
+        # Get the original step config
+        original_config: StepConfig = step_func._step_config
+
+        # Create wrapper that delegates to original step
+        async def namespaced_wrapper(*args: Any, **kwargs: Any) -> Any:
+            return await step_func(*args, **kwargs)
+
+        # Set the namespaced name
+        namespaced_wrapper.__name__ = f"{namespace}__{step_name}"
+
+        # Copy annotations from original function
+        namespaced_wrapper.__annotations__ = step_func.__annotations__.copy()
+
+        # Create a new step config with the same settings
+        new_config = StepConfig(
+            accepted_events=original_config.accepted_events.copy(),
+            event_name=original_config.event_name,
+            return_types=original_config.return_types.copy(),
+            context_parameter=original_config.context_parameter,
+            num_workers=original_config.num_workers,
+            retry_policy=original_config.retry_policy,
+            resources=original_config.resources.copy(),
+            context_state_type=original_config.context_state_type,
+        )
+
+        # Attach the config to the wrapper
+        namespaced_wrapper._step_config = new_config  # type: ignore
+
+        return namespaced_wrapper  # type: ignore
+
     def _get_steps(self) -> dict[str, StepFunction]:
         """Returns all the steps, whether defined as methods or free functions."""
-        return {**get_steps_from_instance(self), **self.__class__._step_functions}
+        return {**get_steps_from_instance(self), **self._step_functions}
 
     def _get_start_event_instance(
         self, start_event: StartEvent | None, **kwargs: Any
