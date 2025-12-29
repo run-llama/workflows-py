@@ -4,12 +4,11 @@ sidebar:
   order: 2
 ---
 
-We provide a set of agent templates, both as full-stack apps with a UI, and as headless servers. These templates aim to cover a number of most common use-cases, and are intended as a starting point for your own custom agents. 
+We provide a set of agent templates, both as full-stack apps with a UI, and as headless servers. These templates aim to cover a number of most common use-cases, and are intended as a starting point for your own custom agents.
 
-You can pull these templates via our [llamactl CLI](/python/llamaagents/llamactl/getting-started/), which will create a local repository for your agent project, equipped with all the source-code and UI elements. 
+You can pull these templates via our [llamactl CLI](/python/llamaagents/llamactl/getting-started/), which will create a local repository for your agent project, equipped with all the source-code and UI elements.
 
 > This list of agents is not final, expect changes and updates along the way.
-> 
 
 ### Available LlamaAgent Templates
 
