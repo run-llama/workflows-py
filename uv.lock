@@ -1675,7 +1675,7 @@ dev = [
 
 [[package]]
 name = "llama-index-workflows"
-version = "2.11.5"
+version = "2.11.6"
 source = { editable = "packages/llama-index-workflows" }
 dependencies = [
     { name = "eval-type-backport", marker = "python_full_version < '3.10'" },
