@@ -22,6 +22,9 @@ from workflows.events import (
     StepState,
     StepStateChanged,
     StopEvent,
+    WorkflowCancelledEvent,
+    WorkflowFailedEvent,
+    WorkflowTimedOutEvent,
     WorkflowIdleEvent,
 )
 from workflows.runtime.types.commands import (
@@ -454,13 +457,20 @@ def _process_step_result_tick(
                     )
                 )
             else:
-                # used as a sentinel to end the stream. Perhaps reconsider this and have an alternate failure stop event
+                # Publish a WorkflowFailedEvent to inform stream consumers about the failure
                 state.is_running = False
-                commands.append(CommandPublishEvent(event=StopEvent()))
+                exception = result.exception
                 commands.append(
-                    CommandFailWorkflow(
-                        step_name=tick.step_name, exception=result.exception
+                    CommandPublishEvent(
+                        event=WorkflowFailedEvent(
+                            step_name=tick.step_name,
+                            exception_type=type(exception).__qualname__,
+                            exception_message=str(exception),
+                        )
                     )
+                )
+                commands.append(
+                    CommandFailWorkflow(step_name=tick.step_name, exception=exception)
                 )
         elif isinstance(result, AddCollectedEvent):
             # The current state of collected events.
@@ -682,10 +692,10 @@ def _process_cancel_run_tick(
 ) -> tuple[BrokerState, list[WorkflowCommand]]:
     state = init.deepcopy()
     # retain running state, for resumption.
-    # TODO - when/if we persist stream events, this StopEvent should be reconsidered, as there should only ever be one stop event.
+    # TODO - when/if we persist stream events, this WorkflowCancelledEvent should be reconsidered, as there should only ever be one stop event.
     # Perhaps on resumption, if the workflow is running, then any existing stop events of a "cancellation" type should be omitted from the stream.
     return state, [
-        CommandPublishEvent(event=StopEvent()),
+        CommandPublishEvent(event=WorkflowCancelledEvent()),
         CommandHalt(exception=WorkflowCancelledByUser()),
     ]
 
@@ -713,7 +723,12 @@ def _process_timeout_tick(
         else "No steps active"
     )
     return state, [
-        CommandPublishEvent(event=StopEvent()),
+        CommandPublishEvent(
+            event=WorkflowTimedOutEvent(
+                timeout=tick.timeout,
+                active_steps=active_steps,
+            )
+        ),
         CommandHalt(
             exception=WorkflowTimeoutError(
                 f"Operation timed out after {tick.timeout} seconds. {steps_info}"

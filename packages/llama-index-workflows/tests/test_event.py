@@ -6,7 +6,14 @@ from typing import Any, cast
 import pytest
 from pydantic import PrivateAttr
 from workflows.context import JsonSerializer
-from workflows.events import Event, StopEvent
+from workflows.events import (
+    Event,
+    StopEvent,
+    WorkflowCancelledEvent,
+    WorkflowFailedEvent,
+    WorkflowTerminationEvent,
+    WorkflowTimedOutEvent,
+)
 
 
 class _TestEvent(Event):
@@ -162,3 +169,143 @@ def test_custom_stop_event_repr_no_result() -> None:
     ev = CustomStopEvent(foo="foo", bar=42)
     rep = repr(ev)
     assert rep == "CustomStopEvent(foo='foo', bar=42)"
+
+
+# Tests for WorkflowTerminationEvent subclasses
+
+
+def test_workflow_termination_event_is_stop_event() -> None:
+    """Verify WorkflowTerminationEvent is a subclass of StopEvent."""
+    assert issubclass(WorkflowTerminationEvent, StopEvent)
+    assert issubclass(WorkflowTimedOutEvent, WorkflowTerminationEvent)
+    assert issubclass(WorkflowCancelledEvent, WorkflowTerminationEvent)
+    assert issubclass(WorkflowFailedEvent, WorkflowTerminationEvent)
+
+
+def test_workflow_timed_out_event() -> None:
+    """Test WorkflowTimedOutEvent creation and attributes."""
+    ev = WorkflowTimedOutEvent(timeout=30.0, active_steps=["step1", "step2"])
+    assert ev.timeout == 30.0
+    assert ev.active_steps == ["step1", "step2"]
+    assert isinstance(ev, StopEvent)
+
+
+def test_workflow_timed_out_event_empty_active_steps() -> None:
+    """Test WorkflowTimedOutEvent with no active steps."""
+    ev = WorkflowTimedOutEvent(timeout=5.0, active_steps=[])
+    assert ev.timeout == 5.0
+    assert ev.active_steps == []
+
+
+def test_workflow_timed_out_event_serialization() -> None:
+    """Test WorkflowTimedOutEvent serialization and deserialization."""
+    ev = WorkflowTimedOutEvent(timeout=30.0, active_steps=["step1", "step2"])
+    data_dict = ev.model_dump()
+    assert data_dict == {"timeout": 30.0, "active_steps": ["step1", "step2"]}
+
+    serializer = JsonSerializer()
+    serialized_ev = serializer.serialize(ev)
+    deserialized_ev = serializer.deserialize(serialized_ev)
+
+    assert type(deserialized_ev).__name__ == type(ev).__name__
+    deserialized_ev = cast(WorkflowTimedOutEvent, deserialized_ev)
+    assert ev.timeout == deserialized_ev.timeout
+    assert ev.active_steps == deserialized_ev.active_steps
+
+
+def test_workflow_timed_out_event_repr() -> None:
+    """Test WorkflowTimedOutEvent string representation."""
+    ev = WorkflowTimedOutEvent(timeout=10.0, active_steps=["my_step"])
+    rep = repr(ev)
+    assert "WorkflowTimedOutEvent" in rep
+    assert "timeout=10.0" in rep
+    assert "active_steps=['my_step']" in rep
+
+
+def test_workflow_cancelled_event() -> None:
+    """Test WorkflowCancelledEvent creation."""
+    ev = WorkflowCancelledEvent()
+    assert isinstance(ev, StopEvent)
+    assert isinstance(ev, WorkflowTerminationEvent)
+
+
+def test_workflow_cancelled_event_serialization() -> None:
+    """Test WorkflowCancelledEvent serialization and deserialization."""
+    ev = WorkflowCancelledEvent()
+    data_dict = ev.model_dump()
+    assert data_dict == {}
+
+    serializer = JsonSerializer()
+    serialized_ev = serializer.serialize(ev)
+    deserialized_ev = serializer.deserialize(serialized_ev)
+
+    assert type(deserialized_ev).__name__ == type(ev).__name__
+
+
+def test_workflow_cancelled_event_repr() -> None:
+    """Test WorkflowCancelledEvent string representation."""
+    ev = WorkflowCancelledEvent()
+    rep = repr(ev)
+    assert rep == "WorkflowCancelledEvent()"
+
+
+def test_workflow_failed_event() -> None:
+    """Test WorkflowFailedEvent creation and attributes."""
+    ev = WorkflowFailedEvent(
+        step_name="my_step",
+        exception_type="ValueError",
+        exception_message="Something went wrong",
+    )
+    assert ev.step_name == "my_step"
+    assert ev.exception_type == "ValueError"
+    assert ev.exception_message == "Something went wrong"
+    assert isinstance(ev, StopEvent)
+
+
+def test_workflow_failed_event_serialization() -> None:
+    """Test WorkflowFailedEvent serialization and deserialization."""
+    ev = WorkflowFailedEvent(
+        step_name="failing_step",
+        exception_type="RuntimeError",
+        exception_message="Test failure",
+    )
+    data_dict = ev.model_dump()
+    assert data_dict == {
+        "step_name": "failing_step",
+        "exception_type": "RuntimeError",
+        "exception_message": "Test failure",
+    }
+
+    serializer = JsonSerializer()
+    serialized_ev = serializer.serialize(ev)
+    deserialized_ev = serializer.deserialize(serialized_ev)
+
+    assert type(deserialized_ev).__name__ == type(ev).__name__
+    deserialized_ev = cast(WorkflowFailedEvent, deserialized_ev)
+    assert ev.step_name == deserialized_ev.step_name
+    assert ev.exception_type == deserialized_ev.exception_type
+    assert ev.exception_message == deserialized_ev.exception_message
+
+
+def test_workflow_failed_event_repr() -> None:
+    """Test WorkflowFailedEvent string representation."""
+    ev = WorkflowFailedEvent(
+        step_name="my_step",
+        exception_type="ValueError",
+        exception_message="error msg",
+    )
+    rep = repr(ev)
+    assert "WorkflowFailedEvent" in rep
+    assert "step_name='my_step'" in rep
+    assert "exception_type='ValueError'" in rep
+    assert "exception_message='error msg'" in rep
+
+
+def test_workflow_failed_event_with_nested_exception_type() -> None:
+    """Test WorkflowFailedEvent with a qualified exception type name."""
+    ev = WorkflowFailedEvent(
+        step_name="api_step",
+        exception_type="http.client.HTTPException",
+        exception_message="Connection refused",
+    )
+    assert ev.exception_type == "http.client.HTTPException"

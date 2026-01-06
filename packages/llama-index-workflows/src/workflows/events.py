@@ -209,6 +209,81 @@ class StopEvent(Event):
         return str(self._result)
 
 
+class WorkflowTerminationEvent(StopEvent):
+    """Base class for events indicating abnormal workflow termination.
+
+    This is the parent class for all events that signal the workflow has ended
+    due to an error condition, timeout, or cancellation rather than normal completion.
+    These events are published to the stream to inform consumers about why the workflow
+    ended before raising the corresponding exception.
+    """
+
+
+class WorkflowTimedOutEvent(WorkflowTerminationEvent):
+    """Published when a workflow exceeds its configured timeout.
+
+    This event is published to the event stream when a workflow times out,
+    allowing consumers to understand why the workflow ended before the
+    WorkflowTimeoutError exception is raised.
+
+    Attributes:
+        timeout: The timeout duration in seconds that was exceeded.
+        active_steps: List of step names that were still active when the timeout occurred.
+
+    Examples:
+        ```python
+        async for event in handler.stream_events():
+            if isinstance(event, WorkflowTimedOutEvent):
+                print(f"Workflow timed out after {event.timeout}s")
+                print(f"Active steps: {event.active_steps}")
+        ```
+    """
+
+    timeout: float
+    active_steps: list[str]
+
+
+class WorkflowCancelledEvent(WorkflowTerminationEvent):
+    """Published when a workflow is cancelled by the user.
+
+    This event is published to the event stream when a workflow is cancelled
+    via the handler or programmatically, allowing consumers to understand why
+    the workflow ended before the WorkflowCancelledByUser exception is raised.
+
+    Examples:
+        ```python
+        async for event in handler.stream_events():
+            if isinstance(event, WorkflowCancelledEvent):
+                print("Workflow was cancelled by user")
+        ```
+    """
+
+
+class WorkflowFailedEvent(WorkflowTerminationEvent):
+    """Published when a workflow step fails permanently.
+
+    This event is published to the event stream when a step fails and all
+    retries are exhausted, allowing consumers to understand why the workflow
+    ended before the exception is raised.
+
+    Attributes:
+        step_name: The name of the step that failed.
+        exception_type: The fully qualified type name of the exception that caused the failure.
+        exception_message: The string representation of the exception message.
+
+    Examples:
+        ```python
+        async for event in handler.stream_events():
+            if isinstance(event, WorkflowFailedEvent):
+                print(f"Step '{event.step_name}' failed: {event.exception_message}")
+        ```
+    """
+
+    step_name: str
+    exception_type: str
+    exception_message: str
+
+
 class InputRequiredEvent(Event):
     """Emitted when human input is required to proceed.
 
