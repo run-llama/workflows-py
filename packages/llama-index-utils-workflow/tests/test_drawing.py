@@ -5,6 +5,7 @@ from llama_index.utils.workflow import (
     draw_all_possible_flows,
     draw_all_possible_flows_mermaid,
     draw_most_recent_execution,
+    draw_most_recent_execution_mermaid,
 )
 from workflows.workflow import Workflow
 
@@ -275,3 +276,37 @@ async def test_mermaid_empty_filename(workflow: Workflow) -> None:
 
     # Both should be identical
     assert result1 == result2
+
+
+@pytest.mark.asyncio
+async def test_draw_most_recent_execution_mermaid(workflow: Workflow) -> None:
+    """Test Mermaid diagram generation for the most recent execution."""
+    handler = workflow.run()
+    await handler
+
+    with patch("builtins.open", mock_open()) as mock_file:
+        result = draw_most_recent_execution_mermaid(
+            handler, filename="test_recent.mermaid"
+        )
+
+        # Verify file was written
+        mock_file.assert_called_once_with("test_recent.mermaid", "w")
+
+        # Verify basic structure
+        assert isinstance(result, str)
+        assert result.startswith("flowchart TD")
+
+        # Verify it contains style definitions
+        assert "classDef stepStyle fill:#ADD8E6" in result
+        assert "classDef startEventStyle fill:#E27AFF" in result
+        assert "classDef stopEventStyle fill:#FFA07A" in result
+        assert "classDef defaultEventStyle fill:#90EE90" in result
+        assert "classDef externalStyle fill:#BEDAE4" in result
+
+        # Verify it contains nodes and edges
+        lines = result.split("\n")
+        node_lines = [line for line in lines if ":::" in line]
+        edge_lines = [line for line in lines if " --> " in line]
+        assert len(node_lines) > 0
+        assert len(edge_lines) > 0
+
