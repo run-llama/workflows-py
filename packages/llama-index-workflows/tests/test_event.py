@@ -250,12 +250,14 @@ def test_workflow_failed_event() -> None:
     """Test WorkflowFailedEvent creation and attributes."""
     ev = WorkflowFailedEvent(
         step_name="my_step",
-        exception_type="ValueError",
+        exception_type="builtins.ValueError",
         exception_message="Something went wrong",
+        traceback="Traceback (most recent call last):\n  ...\nValueError: Something went wrong\n",
     )
     assert ev.step_name == "my_step"
-    assert ev.exception_type == "ValueError"
+    assert ev.exception_type == "builtins.ValueError"
     assert ev.exception_message == "Something went wrong"
+    assert "ValueError" in ev.traceback
     assert isinstance(ev, StopEvent)
 
 
@@ -263,14 +265,16 @@ def test_workflow_failed_event_serialization() -> None:
     """Test WorkflowFailedEvent serialization and deserialization."""
     ev = WorkflowFailedEvent(
         step_name="failing_step",
-        exception_type="RuntimeError",
+        exception_type="builtins.RuntimeError",
         exception_message="Test failure",
+        traceback="Traceback...\nRuntimeError: Test failure\n",
     )
     data_dict = ev.model_dump()
     assert data_dict == {
         "step_name": "failing_step",
-        "exception_type": "RuntimeError",
+        "exception_type": "builtins.RuntimeError",
         "exception_message": "Test failure",
+        "traceback": "Traceback...\nRuntimeError: Test failure\n",
     }
 
     serializer = JsonSerializer()
@@ -282,19 +286,21 @@ def test_workflow_failed_event_serialization() -> None:
     assert ev.step_name == deserialized_ev.step_name
     assert ev.exception_type == deserialized_ev.exception_type
     assert ev.exception_message == deserialized_ev.exception_message
+    assert ev.traceback == deserialized_ev.traceback
 
 
 def test_workflow_failed_event_repr() -> None:
     """Test WorkflowFailedEvent string representation."""
     ev = WorkflowFailedEvent(
         step_name="my_step",
-        exception_type="ValueError",
+        exception_type="builtins.ValueError",
         exception_message="error msg",
+        traceback="...",
     )
     rep = repr(ev)
     assert "WorkflowFailedEvent" in rep
     assert "step_name='my_step'" in rep
-    assert "exception_type='ValueError'" in rep
+    assert "exception_type='builtins.ValueError'" in rep
     assert "exception_message='error msg'" in rep
 
 
@@ -304,5 +310,6 @@ def test_workflow_failed_event_with_nested_exception_type() -> None:
         step_name="api_step",
         exception_type="http.client.HTTPException",
         exception_message="Connection refused",
+        traceback="Traceback...",
     )
     assert ev.exception_type == "http.client.HTTPException"

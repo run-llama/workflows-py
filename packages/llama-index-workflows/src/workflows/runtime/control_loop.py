@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+import traceback
 from dataclasses import replace
 from typing import TYPE_CHECKING
 
@@ -460,12 +461,21 @@ def _process_step_result_tick(
                 # Publish a WorkflowFailedEvent to inform stream consumers about the failure
                 state.is_running = False
                 exception = result.exception
+                exc_type = type(exception)
+                exc_module = exc_type.__module__
+                exc_qualname = f"{exc_module}.{exc_type.__qualname__}"
+                exc_traceback = "".join(
+                    traceback.format_exception(
+                        exc_type, exception, exception.__traceback__
+                    )
+                )
                 commands.append(
                     CommandPublishEvent(
                         event=WorkflowFailedEvent(
                             step_name=tick.step_name,
-                            exception_type=type(exception).__qualname__,
+                            exception_type=exc_qualname,
                             exception_message=str(exception),
+                            traceback=exc_traceback,
                         )
                     )
                 )

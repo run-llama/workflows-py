@@ -260,18 +260,21 @@ class WorkflowFailedEvent(StopEvent):
         step_name: The name of the step that failed.
         exception_type: The fully qualified type name of the exception that caused the failure.
         exception_message: The string representation of the exception message.
+        traceback: The formatted stack trace of the exception.
 
     Examples:
         ```python
         async for event in handler.stream_events():
             if isinstance(event, WorkflowFailedEvent):
                 print(f"Step '{event.step_name}' failed: {event.exception_message}")
+                print(event.traceback)
         ```
     """
 
     step_name: str
     exception_type: str
     exception_message: str
+    traceback: str
 
 
 class InputRequiredEvent(Event):
