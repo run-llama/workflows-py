@@ -691,9 +691,7 @@ def _process_cancel_run_tick(
     tick: TickCancelRun, init: BrokerState
 ) -> tuple[BrokerState, list[WorkflowCommand]]:
     state = init.deepcopy()
-    # retain running state, for resumption.
-    # TODO - when/if we persist stream events, this WorkflowCancelledEvent should be reconsidered, as there should only ever be one stop event.
-    # Perhaps on resumption, if the workflow is running, then any existing stop events of a "cancellation" type should be omitted from the stream.
+    # Retain running state for resumption.
     return state, [
         CommandPublishEvent(event=WorkflowCancelledEvent()),
         CommandHalt(exception=WorkflowCancelledByUser()),

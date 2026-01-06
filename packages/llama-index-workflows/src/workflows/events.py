@@ -209,17 +209,7 @@ class StopEvent(Event):
         return str(self._result)
 
 
-class WorkflowTerminationEvent(StopEvent):
-    """Base class for events indicating abnormal workflow termination.
-
-    This is the parent class for all events that signal the workflow has ended
-    due to an error condition, timeout, or cancellation rather than normal completion.
-    These events are published to the stream to inform consumers about why the workflow
-    ended before raising the corresponding exception.
-    """
-
-
-class WorkflowTimedOutEvent(WorkflowTerminationEvent):
+class WorkflowTimedOutEvent(StopEvent):
     """Published when a workflow exceeds its configured timeout.
 
     This event is published to the event stream when a workflow times out,
@@ -243,7 +233,7 @@ class WorkflowTimedOutEvent(WorkflowTerminationEvent):
     active_steps: list[str]
 
 
-class WorkflowCancelledEvent(WorkflowTerminationEvent):
+class WorkflowCancelledEvent(StopEvent):
     """Published when a workflow is cancelled by the user.
 
     This event is published to the event stream when a workflow is cancelled
@@ -259,7 +249,7 @@ class WorkflowCancelledEvent(WorkflowTerminationEvent):
     """
 
 
-class WorkflowFailedEvent(WorkflowTerminationEvent):
+class WorkflowFailedEvent(StopEvent):
     """Published when a workflow step fails permanently.
 
     This event is published to the event stream when a step fails and all

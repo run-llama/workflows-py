@@ -11,7 +11,6 @@ from workflows.events import (
     StopEvent,
     WorkflowCancelledEvent,
     WorkflowFailedEvent,
-    WorkflowTerminationEvent,
     WorkflowTimedOutEvent,
 )
 
@@ -171,15 +170,14 @@ def test_custom_stop_event_repr_no_result() -> None:
     assert rep == "CustomStopEvent(foo='foo', bar=42)"
 
 
-# Tests for WorkflowTerminationEvent subclasses
+# Tests for workflow termination event subclasses
 
 
-def test_workflow_termination_event_is_stop_event() -> None:
-    """Verify WorkflowTerminationEvent is a subclass of StopEvent."""
-    assert issubclass(WorkflowTerminationEvent, StopEvent)
-    assert issubclass(WorkflowTimedOutEvent, WorkflowTerminationEvent)
-    assert issubclass(WorkflowCancelledEvent, WorkflowTerminationEvent)
-    assert issubclass(WorkflowFailedEvent, WorkflowTerminationEvent)
+def test_workflow_termination_events_are_stop_events() -> None:
+    """Verify workflow termination events are subclasses of StopEvent."""
+    assert issubclass(WorkflowTimedOutEvent, StopEvent)
+    assert issubclass(WorkflowCancelledEvent, StopEvent)
+    assert issubclass(WorkflowFailedEvent, StopEvent)
 
 
 def test_workflow_timed_out_event() -> None:
@@ -226,7 +224,6 @@ def test_workflow_cancelled_event() -> None:
     """Test WorkflowCancelledEvent creation."""
     ev = WorkflowCancelledEvent()
     assert isinstance(ev, StopEvent)
-    assert isinstance(ev, WorkflowTerminationEvent)
 
 
 def test_workflow_cancelled_event_serialization() -> None:
