@@ -542,6 +542,162 @@ def draw_most_recent_execution(
     net.show(filename, notebook=notebook)
 
 
+def draw_most_recent_execution_mermaid(
+    handler: WorkflowHandler,
+    filename: str = "workflow_recent_execution.mermaid",
+    max_label_length: int | None = None,
+) -> str:
+    """
+    Draws the most recent execution of the workflow as a Mermaid diagram.
+
+    Args:
+        handler: The workflow handler after a run.
+        filename: Output Mermaid filename. If empty, no file is written.
+        max_label_length: Maximum label length before truncation (None = no limit).
+
+    Returns:
+        The Mermaid diagram as a string.
+    """
+    if handler.ctx is None or handler.ctx._broker_run is None:
+        raise ValueError("No context/run info in this handler. Has it been run yet?")
+    ticks: List[WorkflowTick] = handler.ctx._broker_run._tick_log
+
+    # Build execution DAG from ticks
+    nodes: Dict[str, Tuple[str, str, type | None]] = {}
+    edges: List[Tuple[str, str]] = []
+    event_node_by_identity: Dict[int, str] = {}
+    step_seq: Dict[str, int] = {}
+
+    # Optional external node for externally added events
+    external_node_id = "external_step"
+    nodes[external_node_id] = ("external_step", "external", None)
+
+    def ensure_event_node(ev: Event) -> str:
+        key = id(ev)
+        if key in event_node_by_identity:
+            return event_node_by_identity[key]
+        label = type(ev).__name__
+        node_id = f"event:{label}#{len(event_node_by_identity)}"
+        # Truncate label if requested (node label only, id remains stable)
+        display_label = (
+            _truncate_label(label, max_label_length) if max_label_length else label
+        )
+        nodes[node_id] = (display_label, "event", type(ev))
+        event_node_by_identity[key] = node_id
+        return node_id
+
+    # Helper to enumerate events emitted from a step result list
+    def iter_emitted_events(step_tick: TickStepResult[Any]) -> List[Event]:
+        emitted: List[Event] = []
+        for r in step_tick.result:
+            if isinstance(r, StepWorkerResult) and isinstance(r.result, Event):
+                emitted.append(r.result)
+            elif isinstance(r, AddCollectedEvent):
+                emitted.append(r.event)
+        return emitted
+
+    for idx, t in enumerate(ticks):
+        if isinstance(t, TickAddEvent):
+            ev_id = ensure_event_node(t.event)
+            edges.append((external_node_id, ev_id))
+        elif isinstance(t, TickStepResult):
+            # Create a step execution node
+            step_seq[t.step_name] = step_seq.get(t.step_name, 0) + 1
+            seq = step_seq[t.step_name]
+            step_node_id = f"step:{t.step_name}#{seq}"
+            step_label = f"{t.step_name}#{seq}"
+            display_label = (
+                _truncate_label(step_label, max_label_length)
+                if max_label_length
+                else step_label
+            )
+            nodes[step_node_id] = (display_label, "step", None)
+
+            # consumed event -> step
+            in_event_node_id = ensure_event_node(t.event)
+            edges.append((in_event_node_id, step_node_id))
+
+            # step -> emitted events
+            for out_ev in iter_emitted_events(t):
+                out_event_node_id = ensure_event_node(out_ev)
+                edges.append((step_node_id, out_event_node_id))
+
+    # Render with Mermaid
+    mermaid_lines = ["flowchart TD"]
+    added_nodes = set()
+    added_edges = set()
+
+    # Create a mapping from original node_id to a cleaned mermaid ID
+    cleaned_ids = {
+        node_id: node_id.replace(":", "_").replace("#", "_")
+        for node_id in nodes.keys()
+    }
+
+    # Add nodes
+    for node_id, (label, node_type, ev_type) in nodes.items():
+        clean_id = cleaned_ids[node_id]
+        if clean_id not in added_nodes:
+            added_nodes.add(clean_id)
+
+            # Determine shape
+            if node_type == "step" or node_type == "external":
+                shape_start, shape_end = "[", "]"
+            else:  # event
+                shape_start, shape_end = "([", "])"
+
+            # Determine style
+            css_class = "defaultEventStyle"  # default
+            if node_type == "step":
+                css_class = "stepStyle"
+            elif node_type == "external":
+                css_class = "externalStyle"
+            elif node_type == "event" and ev_type:
+                if issubclass(ev_type, StartEvent):
+                    css_class = "startEventStyle"
+                elif issubclass(ev_type, StopEvent):
+                    css_class = "stopEventStyle"
+
+            mermaid_lines.append(
+                f'    {clean_id}{shape_start}"{label}"{shape_end}:::{css_class}'
+            )
+
+    # Add edges
+    for src, dst in edges:
+        source_id = cleaned_ids[src]
+        target_id = cleaned_ids[dst]
+        edge_str = f"{source_id} --> {target_id}"
+        if edge_str not in added_edges:
+            added_edges.add(edge_str)
+            mermaid_lines.append(f"    {edge_str}")
+
+    # Add style definitions
+    mermaid_lines.extend(
+        [
+            "    classDef stepStyle fill:#ADD8E6,color:#000000,line-height:1.2",
+            "    classDef externalStyle fill:#BEDAE4,color:#000000,line-height:1.2",
+            "    classDef startEventStyle fill:#E27AFF,color:#000000",
+            "    classDef stopEventStyle fill:#FFA07A,color:#000000",
+            "    classDef defaultEventStyle fill:#90EE90,color:#000000",
+            "    classDef reactAgentStyle fill:#E27AFF,color:#000000",
+            "    classDef codeActAgentStyle fill:#66ccff,color:#000000",
+            "    classDef defaultAgentStyle fill:#90EE90,color:#000000",
+            "    classDef toolStyle fill:#ff9966,color:#000000",
+            "    classDef workflowBaseStyle fill:#90EE90,color:#000000",
+            "    classDef workflowAgentStyle fill:#66ccff,color:#000000",
+            "    classDef workflowToolStyle fill:#ff9966,color:#000000",
+            "    classDef workflowHandoffStyle fill:#E27AFF,color:#000000",
+        ]
+    )
+
+    diagram_string = "\n".join(mermaid_lines)
+
+    if filename:
+        with open(filename, "w") as f:
+            f.write(diagram_string)
+
+    return diagram_string
+
+
 def draw_all_possible_flows_mermaid(
     workflow: Workflow,
     filename: str = "workflow_all_flows.mermaid",
