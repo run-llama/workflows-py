@@ -277,6 +277,22 @@ class InternalDispatchEvent(Event):
     pass
 
 
+class WorkflowIdleEvent(InternalDispatchEvent):
+    """Emitted when workflow transitions to idle (waiting on external input).
+
+    A workflow is idle when:
+    1. The workflow is running (hasn't completed/failed/cancelled)
+    2. All steps have no pending events in their queues
+    3. All steps have no workers currently executing
+    4. At least one step has an active waiter (from ctx.wait_for_event())
+
+    This event is intentionally minimal - no metadata beyond the event type.
+    Resumption from idle is signaled by StepStateChanged with StepState.RUNNING.
+    """
+
+    pass
+
+
 class StepState(Enum):
     # is enqueued, but no capacity yet available to run
     PREPARING = "preparing"

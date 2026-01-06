@@ -32,6 +32,7 @@ from workflows.events import (
     StepState,
     StepStateChanged,
     StopEvent,
+    WorkflowIdleEvent,
 )
 from workflows.handler import WorkflowHandler
 from workflows.protocol import (
@@ -1428,6 +1429,7 @@ class _WorkflowHandler:
     _workflow_store: AbstractWorkflowStore
     _persistence_backoff: list[float]
     _on_finish: Callable[[], Awaitable[None]] | None = None
+    idle_since: datetime | None = None
 
     def _as_persistent(self) -> PersistentHandler:
         """Persist the current handler state immediately to the workflow store."""
@@ -1445,6 +1447,7 @@ class _WorkflowHandler:
             started_at=self.started_at,
             updated_at=self.updated_at,
             completed_at=self.completed_at,
+            idle_since=self.idle_since,
             ctx=self.run_handler.ctx.to_dict() if self.run_handler.ctx else {},
         )
         return persistent
@@ -1570,6 +1573,15 @@ class _WorkflowHandler:
             await self.checkpoint()
             self._on_finish = on_finish
             async for event in self.run_handler.stream_events(expose_internal=True):
+                # Track idle state transitions
+                if isinstance(event, WorkflowIdleEvent):
+                    self.idle_since = datetime.now(timezone.utc)
+                elif (
+                    isinstance(event, StepStateChanged)
+                    and event.step_state == StepState.RUNNING
+                ):
+                    self.idle_since = None  # Resumed from idle
+
                 if (  # Watch for a specific internal event that signals the step is complete
                     isinstance(event, StepStateChanged)
                     and event.step_state == StepState.NOT_RUNNING
