@@ -149,3 +149,4 @@ cython_debug/
 openapi.json
 workflow_all_flows.mermaid
 node_modules/
+.cecli*

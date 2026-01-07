@@ -3,7 +3,12 @@ requires = ["uv_build>=0.9.10,<0.10.0"]
 build-backend = "uv_build"
 
 [dependency-groups]
-dev = ["pytest>=8.4.2", "pytest-asyncio>=1.0.0", "pytest-cov>=6.1.1"]
+dev = [
+  "pre-commit>=4.3.0",
+  "pytest>=8.4.2",
+  "pytest-asyncio>=1.0.0",
+  "pytest-cov>=6.1.1"
+]
 
 [project]
 name = "llama-index-utils-workflow"
