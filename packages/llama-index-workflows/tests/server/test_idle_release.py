@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from typing import AsyncGenerator
 
 import pytest
+import time_machine
 from workflows import Context, Workflow, step
 from workflows.events import HumanResponseEvent, StartEvent, StopEvent
 from workflows.server import WorkflowServer
@@ -627,3 +628,280 @@ async def test_bug_concurrent_reloads_create_duplicate_handlers(
             f"by concurrent reloads. Only one should be created. "
             f"The extra instances are leaked and may process events independently."
         )
+
+
+# =============================================================================
+# REVIEWER-FLAGGED BUG TESTS
+# =============================================================================
+
+
+@pytest.mark.asyncio
+async def test_bug_release_handler_leaks_runtime_if_checkpoint_fails(
+    memory_store: MemoryWorkflowStore,
+    waiting_workflow: Workflow,
+) -> None:
+    """BUG: _release_handler removes handler from _handlers before checkpoint().
+
+    If checkpoint() raises after the handler is already removed from _handlers,
+    the runtime cancel path never runs, leaking a live workflow with no
+    in-memory reference.
+
+    The current _release_handler structure is:
+    1. Pop from _handlers (handler removed from memory)
+    2. Call checkpoint() (if this fails, exception propagates)
+    3. Cancel runtime (never reached if step 2 fails)
+
+    This test triggers a realistic failure by storing a non-serializable object
+    (a lambda) in the context state. When the idle release timer fires and
+    tries to checkpoint, serialization fails and the runtime leaks.
+
+    The fix should ensure that if ANY part of release fails, the workflow
+    runtime is still properly cancelled (e.g., use try/finally).
+    """
+    # Use a moderate timeout - long enough to set up test conditions,
+    # short enough to not slow down tests significantly
+    idle_timeout = timedelta(milliseconds=100)
+
+    # time_machine with tick=True gives us deterministic timestamps while
+    # allowing real async operations to proceed normally
+    with time_machine.travel(1000.0, tick=True):
+        server = WorkflowServer(
+            workflow_store=memory_store,
+            idle_release_timeout=idle_timeout,
+            persistence_backoff=[],  # No retries - fail immediately
+        )
+        server.add_workflow(
+            "test", waiting_workflow, additional_events=[WaitableExternalEvent]
+        )
+
+        await server.start()
+        run_handler = None
+        try:
+            handler_id = "checkpoint-fail-test"
+            handler = waiting_workflow.run()
+            await server._run_workflow_handler(handler_id, "test", handler)
+
+            # Wait for workflow to become idle
+            async def check_idle() -> None:
+                wrapper = server._handlers.get(handler_id)
+                if wrapper is None or wrapper.idle_since is None:
+                    raise ValueError("Not idle yet")
+
+            await wait_for_passing(check_idle)
+
+            # Capture reference to verify runtime is stopped
+            wrapper = server._handlers[handler_id]
+            run_handler = wrapper.run_handler
+            ctx = run_handler.ctx
+            assert ctx is not None
+
+            # Store a non-serializable object in context store
+            # This will cause checkpoint() to fail when it tries to serialize
+            await ctx.store.set("bad_data", lambda x: x)  # lambdas can't be serialized
+
+            # Wait for the idle release timer to fire (100ms + buffer)
+            await asyncio.sleep(0.25)
+
+            # Verify handler was removed from _handlers (release started)
+            assert handler_id not in server._handlers, "Handler should be removed"
+
+            # BUG: The run_handler should be done/cancelled even if checkpoint failed
+            # but it's still running because the cancel code was never reached
+            assert run_handler.done(), (
+                "BUG: run_handler is still running after release attempt failed. "
+                "_release_handler pops from _handlers before checkpoint(), so if "
+                "checkpoint() raises (e.g., due to non-serializable state), the "
+                "cancel path is never reached and the workflow runtime leaks."
+            )
+        finally:
+            # Clean up the leaked runtime manually (since the bug prevents normal cleanup)
+            if run_handler is not None and not run_handler.done():
+                run_handler.cancel()
+                try:
+                    await run_handler.cancel_run()
+                except Exception:
+                    pass
+            await server.stop()
+
+
+@pytest.mark.asyncio
+async def test_bug_post_event_clears_idle_before_send_fails(
+    memory_store: MemoryWorkflowStore, waiting_workflow: Workflow
+) -> None:
+    """BUG: _post_event calls mark_active() before ctx.send_event().
+
+    If deserialization succeeds but send_event() fails (bad step name, runtime
+    errors, etc.), idle_since is already cleared and the timer is cancelled
+    with no subsequent idle event to re-arm it. This causes idle handlers
+    to stick around forever.
+
+    This test uses the real HTTP endpoint to post an event with a bad step name.
+
+    The fix should either:
+    1. Call mark_active() AFTER send_event() succeeds, or
+    2. Restore idle state if send_event() fails
+    """
+    from httpx import ASGITransport, AsyncClient
+
+    # Use a moderate timeout for the test
+    idle_timeout = timedelta(milliseconds=100)
+
+    # time_machine with tick=True gives us deterministic timestamps while
+    # allowing real async operations to proceed normally
+    with time_machine.travel(1000.0, tick=True):
+        server = WorkflowServer(
+            workflow_store=memory_store,
+            idle_release_timeout=idle_timeout,
+        )
+        server.add_workflow(
+            "test", waiting_workflow, additional_events=[WaitableExternalEvent]
+        )
+
+        async with server.contextmanager():
+            transport = ASGITransport(app=server.app)
+            async with AsyncClient(
+                transport=transport, base_url="http://test"
+            ) as client:
+                # Start a workflow via HTTP
+                response = await client.post("/workflows/test/run-nowait", json={})
+                assert response.status_code == 200
+                handler_id = response.json()["handler_id"]
+
+                # Wait for workflow to become idle
+                async def check_idle() -> None:
+                    wrapper = server._handlers.get(handler_id)
+                    if wrapper is None or wrapper.idle_since is None:
+                        raise ValueError("Not idle yet")
+
+                await wait_for_passing(check_idle)
+
+                wrapper = server._handlers[handler_id]
+                assert wrapper.idle_since is not None
+
+                # Post an event with a bad step name via HTTP - this will fail
+                response = await client.post(
+                    f"/events/{handler_id}",
+                    json={
+                        "event": {
+                            "type": "WaitableExternalEvent",
+                            "value": {"response": "test"},
+                        },
+                        "step": "nonexistent_step",  # This step doesn't exist
+                    },
+                )
+                # The endpoint returns 400 for bad step
+                assert response.status_code == 400
+
+                # At this point, mark_active() was called but send_event() failed.
+                # The workflow is still actually idle, but idle_since was cleared.
+                assert wrapper.idle_since is None, (
+                    "idle_since should be cleared by mark_active"
+                )
+                assert wrapper._idle_release_timer is None, "timer should be cancelled"
+
+                # Wait for the timeout period (100ms + buffer)
+                await asyncio.sleep(0.25)
+
+                # BUG: The handler should eventually be released, but it won't be
+                # because idle_since was cleared and no timer is running.
+                assert handler_id not in server._handlers, (
+                    "BUG: Handler is stuck in memory after send_event() failed. "
+                    "mark_active() cleared idle_since and cancelled the timer before "
+                    "send_event() was called. When send_event() failed, there was no "
+                    "mechanism to re-arm the idle timer, so the handler is never released."
+                )
+
+
+@pytest.mark.asyncio
+async def test_bug_release_and_reload_race_condition(
+    memory_store: MemoryWorkflowStore,
+    waiting_workflow: Workflow,
+) -> None:
+    """BUG: Release/reload isn't coordinated.
+
+    _try_reload_handler uses KeyedLock, but _release_handler does not.
+    This means release can overlap with reload, and the release checkpoint()
+    can overwrite newer state from the reloaded handler.
+
+    This test demonstrates the race by simulating what happens when release
+    checkpoint is delayed and executes after reload has updated the state:
+    1. Start handler, wait for idle, capture old state
+    2. Reload handler and update to new state (idle_since=None)
+    3. Simulate delayed release checkpoint writing old state
+    4. Verify old state overwrites new state (the bug)
+
+    The fix should have _release_handler use the same KeyedLock.
+    """
+    # time_machine with tick=True gives us deterministic timestamps
+    with time_machine.travel(1000.0, tick=True):
+        server = WorkflowServer(
+            workflow_store=memory_store,
+            idle_release_timeout=None,  # Disable auto-release for manual control
+        )
+        server.add_workflow(
+            "test", waiting_workflow, additional_events=[WaitableExternalEvent]
+        )
+
+        async with server.contextmanager():
+            # Start workflow and wait for it to become idle
+            handler = waiting_workflow.run()
+            handler_id = "race-test-handler"
+            await server._run_workflow_handler(handler_id, "test", handler)
+
+            # Wait for workflow to become idle
+            async def check_idle() -> None:
+                wrapper = server._handlers.get(handler_id)
+                if wrapper is None or wrapper.idle_since is None:
+                    raise ValueError("Not idle yet")
+
+            await wait_for_passing(check_idle)
+
+            wrapper = server._handlers[handler_id]
+            original_idle_since = wrapper.idle_since
+            assert original_idle_since is not None
+
+            # Capture the "old" persistent state (what release would checkpoint)
+            old_persistent_state = wrapper._as_persistent()
+            assert old_persistent_state.idle_since == original_idle_since
+
+            # Simulate release removing handler from memory
+            server._handlers.pop(handler_id, None)
+
+            # Now simulate the race: reload happens while release checkpoint is pending
+            # 1. Reload the handler
+            reloaded = await server._try_reload_handler(handler_id)
+            assert reloaded is not None
+
+            # 2. The reloaded handler receives an event and becomes active
+            reloaded.mark_active()
+            assert reloaded.idle_since is None
+
+            # 3. Checkpoint the new state
+            await reloaded.checkpoint()
+
+            # Verify the store has the correct (new) state
+            persisted = await memory_store.query(
+                HandlerQuery(handler_id_in=[handler_id])
+            )
+            assert persisted[0].idle_since is None, "Store should have new state"
+
+            # 4. NOW the delayed release checkpoint writes OLD state
+            # This is what happens when release and reload race without coordination
+            await memory_store.update(old_persistent_state)
+
+            # Check what's in the store now
+            persisted = await memory_store.query(
+                HandlerQuery(handler_id_in=[handler_id])
+            )
+            assert len(persisted) == 1
+
+            # BUG: The persisted state was overwritten by the stale release checkpoint.
+            # Without proper locking, the release checkpoint can happen after reload
+            # has updated the state, causing data loss.
+            assert persisted[0].idle_since is None, (
+                f"BUG: Stale release checkpoint overwrote newer state from reload. "
+                f"Expected idle_since=None (from reload), "
+                f"but got idle_since={persisted[0].idle_since}. "
+                f"_release_handler should use KeyedLock to coordinate with "
+                f"_try_reload_handler."
+            )
