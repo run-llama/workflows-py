@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2025 LlamaIndex Inc.
-from __future__ import annotations
-
 import json
+
+from __future__ import annotations
 from typing import Any, Dict, List, Tuple, Union, cast
 
 from llama_index.core.agent.workflow import (
