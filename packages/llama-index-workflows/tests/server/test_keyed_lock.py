@@ -2,6 +2,8 @@
 # Copyright (c) 2025 LlamaIndex Inc.
 """Tests for KeyedLock utility."""
 
+from __future__ import annotations
+
 import asyncio
 
 import pytest
@@ -222,3 +224,133 @@ async def test_waiter_cancelled_while_waiting(locks: KeyedLock) -> None:
     await t1
     # Now fully cleaned up
     assert "key" not in locks._locks
+
+
+async def test_parallel_access_mutual_exclusion_with_race_detection(
+    locks: KeyedLock,
+) -> None:
+    """Test that parallel access is mutually exclusive using race condition detection.
+
+    This test would fail if two tasks could execute their critical sections
+    in parallel, as the non-atomic increment/decrement would produce wrong results.
+    """
+    # Shared state that would be corrupted by parallel access
+    shared_value = 0
+    iterations = 50
+
+    async def increment_task() -> None:
+        nonlocal shared_value
+        async with locks("key"):
+            # Read-modify-write pattern that would fail under parallel access
+            current = shared_value
+            await asyncio.sleep(0)  # Yield to event loop
+            shared_value = current + 1
+
+    # Launch all tasks simultaneously
+    tasks = [asyncio.create_task(increment_task()) for _ in range(iterations)]
+    await asyncio.gather(*tasks)
+
+    # If mutual exclusion works, we should have exactly `iterations` increments
+    # If parallel access occurred, we'd likely have less due to lost updates
+    assert shared_value == iterations
+
+
+async def test_parallel_access_no_interleaving(locks: KeyedLock) -> None:
+    """Test that operations within a lock never interleave.
+
+    Verifies that for any key, the sequence of enter/exit events is always
+    properly nested (enter, exit, enter, exit) and never interleaved
+    (enter, enter, exit, exit).
+    """
+    events: list[tuple[str, str]] = []  # (task_name, event_type)
+    num_tasks = 20
+
+    async def task(name: str) -> None:
+        async with locks("shared"):
+            events.append((name, "enter"))
+            await asyncio.sleep(0.001)  # Yield to allow interleaving if broken
+            events.append((name, "exit"))
+
+    # Start all tasks at roughly the same time
+    tasks = [asyncio.create_task(task(f"task_{i}")) for i in range(num_tasks)]
+    await asyncio.gather(*tasks)
+
+    # Verify proper nesting: each enter must be immediately followed by exit
+    # from the same task (no interleaving)
+    assert len(events) == num_tasks * 2
+    for i in range(0, len(events), 2):
+        enter_event = events[i]
+        exit_event = events[i + 1]
+        assert enter_event[1] == "enter", f"Expected enter at position {i}"
+        assert exit_event[1] == "exit", f"Expected exit at position {i + 1}"
+        assert enter_event[0] == exit_event[0], (
+            f"Interleaving detected: {enter_event[0]} entered but "
+            f"{exit_event[0]} exited at positions {i}, {i + 1}"
+        )
+
+
+async def test_parallel_access_simultaneous_start(locks: KeyedLock) -> None:
+    """Test mutual exclusion when tasks start at exactly the same time.
+
+    Uses a barrier to ensure all tasks begin acquiring the lock simultaneously.
+    """
+    num_tasks = 10
+    barrier = asyncio.Barrier(num_tasks)
+    active_count = 0
+    max_active = 0
+    completed_order: list[int] = []
+
+    async def task(task_id: int) -> None:
+        nonlocal active_count, max_active
+        # Wait for all tasks to be ready
+        await barrier.wait()
+        # Now all tasks try to acquire the lock at once
+        async with locks("key"):
+            active_count += 1
+            max_active = max(max_active, active_count)
+            await asyncio.sleep(0.001)
+            completed_order.append(task_id)
+            active_count -= 1
+
+    tasks = [asyncio.create_task(task(i)) for i in range(num_tasks)]
+    await asyncio.gather(*tasks)
+
+    # Only one task should ever be active at a time
+    assert max_active == 1, f"Max concurrent was {max_active}, expected 1"
+    # All tasks should have completed
+    assert len(completed_order) == num_tasks
+    # Each task should appear exactly once
+    assert sorted(completed_order) == list(range(num_tasks))
+
+
+async def test_parallel_access_stress_test(locks: KeyedLock) -> None:
+    """Stress test with high concurrency to detect subtle race conditions."""
+    num_tasks = 100
+    num_iterations = 10
+    results: list[int] = []
+    current_holder: int | None = None
+
+    async def task(task_id: int) -> None:
+        nonlocal current_holder
+        for _ in range(num_iterations):
+            async with locks("stress_key"):
+                # Check no other task holds the lock
+                assert current_holder is None, (
+                    f"Task {task_id} entered while {current_holder} was holding"
+                )
+                current_holder = task_id
+                await asyncio.sleep(0)  # Yield to event loop
+                # Verify we still hold the lock
+                assert current_holder == task_id, (
+                    f"Task {task_id} lost lock to {current_holder}"
+                )
+                results.append(task_id)
+                current_holder = None
+
+    tasks = [asyncio.create_task(task(i)) for i in range(num_tasks)]
+    await asyncio.gather(*tasks)
+
+    # Should have recorded all iterations from all tasks
+    assert len(results) == num_tasks * num_iterations
+    # Lock should be cleaned up
+    assert "stress_key" not in locks._locks

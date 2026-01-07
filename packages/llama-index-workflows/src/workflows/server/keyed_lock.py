@@ -22,6 +22,7 @@ class KeyedLock:
     """
 
     def __init__(self) -> None:
+        self._lock_lock = asyncio.Lock()
         self._locks: dict[str, asyncio.Lock] = {}
         self._refs: dict[str, int] = {}
 
@@ -34,10 +35,11 @@ class KeyedLock:
         """
         # Get or create lock and register interest.
         # No await between these lines = atomic in asyncio.
-        if key not in self._locks:
-            self._locks[key] = asyncio.Lock()
-            self._refs[key] = 0
-        self._refs[key] += 1
+        async with self._lock_lock:
+            if key not in self._locks:
+                self._locks[key] = asyncio.Lock()
+                self._refs[key] = 0
+            self._refs[key] += 1
 
         try:
             async with self._locks[key]:
@@ -45,7 +47,8 @@ class KeyedLock:
         finally:
             # Deregister and cleanup if last.
             # No await between these lines = atomic in asyncio.
-            self._refs[key] -= 1
-            if self._refs[key] == 0:
-                del self._locks[key]
-                del self._refs[key]
+            async with self._lock_lock:
+                self._refs[key] -= 1
+                if self._refs[key] == 0:
+                    del self._locks[key]
+                    del self._refs[key]
