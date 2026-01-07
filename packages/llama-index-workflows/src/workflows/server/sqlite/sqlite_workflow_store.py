@@ -32,7 +32,7 @@ class SqliteWorkflowStore(AbstractWorkflowStore):
 
         clauses, params = filter_spec
         sql = """SELECT handler_id, workflow_name, status, run_id, error, result,
-                        started_at, updated_at, completed_at, ctx FROM handlers"""
+                        started_at, updated_at, completed_at, idle_since, ctx FROM handlers"""
         if clauses:
             sql = f"{sql} WHERE {' AND '.join(clauses)}"
         conn = sqlite3.connect(self.db_path)
@@ -52,8 +52,8 @@ class SqliteWorkflowStore(AbstractWorkflowStore):
         cursor.execute(
             """
             INSERT INTO handlers (handler_id, workflow_name, status, run_id, error, result,
-                                  started_at, updated_at, completed_at, ctx)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                  started_at, updated_at, completed_at, idle_since, ctx)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(handler_id) DO UPDATE SET
                 workflow_name = excluded.workflow_name,
                 status = excluded.status,
@@ -63,6 +63,7 @@ class SqliteWorkflowStore(AbstractWorkflowStore):
                 started_at = excluded.started_at,
                 updated_at = excluded.updated_at,
                 completed_at = excluded.completed_at,
+                idle_since = excluded.idle_since,
                 ctx = excluded.ctx
             """,
             (
@@ -77,6 +78,7 @@ class SqliteWorkflowStore(AbstractWorkflowStore):
                 handler.started_at.isoformat() if handler.started_at else None,
                 handler.updated_at.isoformat() if handler.updated_at else None,
                 handler.completed_at.isoformat() if handler.completed_at else None,
+                handler.idle_since.isoformat() if handler.idle_since else None,
                 json.dumps(handler.ctx),
             ),
         )
@@ -130,6 +132,10 @@ class SqliteWorkflowStore(AbstractWorkflowStore):
                 return None
             add_in_clause("status", query.status_in)
 
+        if query.idle_before is not None:
+            clauses.append("idle_since IS NOT NULL AND idle_since < ?")
+            params.append(query.idle_before.isoformat())
+
         if not clauses:
             return clauses, params
 
@@ -147,5 +153,6 @@ def _row_to_persistent_handler(row: tuple) -> PersistentHandler:
         started_at=datetime.fromisoformat(row[6]) if row[6] else None,
         updated_at=datetime.fromisoformat(row[7]) if row[7] else None,
         completed_at=datetime.fromisoformat(row[8]) if row[8] else None,
-        ctx=json.loads(row[9]),
+        idle_since=datetime.fromisoformat(row[9]) if row[9] else None,
+        ctx=json.loads(row[10]),
     )
