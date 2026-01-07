@@ -410,6 +410,64 @@ def _extract_agent_workflow_structure(
     return DrawWorkflowGraph(nodes=nodes, edges=edges)
 
 
+def _extract_execution_graph(
+    handler: WorkflowHandler, max_label_length: int | None = None
+) -> Tuple[Dict[str, Tuple[str, str, type | None]], List[Tuple[str, str]]]:
+    """Helper to extract nodes and edges from the workflow handler's tick log."""
+    if handler.ctx is None or handler.ctx._broker_run is None:
+        raise ValueError("No context/run info in this handler. Has it been run yet?")
+    
+    ticks: List[WorkflowTick] = handler.ctx._broker_run._tick_log
+    nodes: Dict[str, Tuple[str, str, type | None]] = {}
+    edges: List[Tuple[str, str]] = []
+    event_node_by_identity: Dict[int, str] = {}
+    step_seq: Dict[str, int] = {}
+
+    external_node_id = "external_step"
+    nodes[external_node_id] = ("external_step", "external", None)
+
+    def ensure_event_node(ev: Event) -> str:
+        key = id(ev)
+        if key in event_node_by_identity:
+            return event_node_by_identity[key]
+        label = type(ev).__name__
+        node_id = f"event:{label}#{len(event_node_by_identity)}"
+        display_label = _truncate_label(label, max_label_length) if max_label_length else label
+        nodes[node_id] = (display_label, "event", type(ev))
+        event_node_by_identity[key] = node_id
+        return node_id
+
+    def iter_emitted_events(step_tick: TickStepResult[Any]) -> List[Event]:
+        emitted: List[Event] = []
+        for r in step_tick.result:
+            if isinstance(r, StepWorkerResult) and isinstance(r.result, Event):
+                emitted.append(r.result)
+            elif isinstance(r, AddCollectedEvent):
+                emitted.append(r.event)
+        return emitted
+
+    for t in ticks:
+        if isinstance(t, TickAddEvent):
+            ev_id = ensure_event_node(t.event)
+            edges.append((external_node_id, ev_id))
+        elif isinstance(t, TickStepResult):
+            step_seq[t.step_name] = step_seq.get(t.step_name, 0) + 1
+            seq = step_seq[t.step_name]
+            step_node_id = f"step:{t.step_name}#{seq}"
+            step_label = f"{t.step_name}#{seq}"
+            display_label = _truncate_label(step_label, max_label_length) if max_label_length else step_label
+            nodes[step_node_id] = (display_label, "step", None)
+
+            in_event_node_id = ensure_event_node(t.event)
+            edges.append((in_event_node_id, step_node_id))
+
+            for out_ev in iter_emitted_events(t):
+                out_event_node_id = ensure_event_node(out_ev)
+                edges.append((step_node_id, out_event_node_id))
+    
+    return nodes, edges
+
+
 def draw_all_possible_flows(
     workflow: Workflow,
     filename: str = "workflow_all_flows.html",
@@ -532,63 +590,6 @@ def draw_agent_workflow_mermaid(
     """
     graph = _extract_agent_workflow_structure(agent_workflow)
     return _render_mermaid(graph, filename)
-
-def _extract_execution_graph(
-    handler: WorkflowHandler, max_label_length: int | None = None
-) -> Tuple[Dict[str, Tuple[str, str, type | None]], List[Tuple[str, str]]]:
-    """Helper to extract nodes and edges from the workflow handler's tick log."""
-    if handler.ctx is None or handler.ctx._broker_run is None:
-        raise ValueError("No context/run info in this handler. Has it been run yet?")
-    
-    ticks: List[WorkflowTick] = handler.ctx._broker_run._tick_log
-    nodes: Dict[str, Tuple[str, str, type | None]] = {}
-    edges: List[Tuple[str, str]] = []
-    event_node_by_identity: Dict[int, str] = {}
-    step_seq: Dict[str, int] = {}
-
-    external_node_id = "external_step"
-    nodes[external_node_id] = ("external_step", "external", None)
-
-    def ensure_event_node(ev: Event) -> str:
-        key = id(ev)
-        if key in event_node_by_identity:
-            return event_node_by_identity[key]
-        label = type(ev).__name__
-        node_id = f"event:{label}#{len(event_node_by_identity)}"
-        display_label = _truncate_label(label, max_label_length) if max_label_length else label
-        nodes[node_id] = (display_label, "event", type(ev))
-        event_node_by_identity[key] = node_id
-        return node_id
-
-    def iter_emitted_events(step_tick: TickStepResult[Any]) -> List[Event]:
-        emitted: List[Event] = []
-        for r in step_tick.result:
-            if isinstance(r, StepWorkerResult) and isinstance(r.result, Event):
-                emitted.append(r.result)
-            elif isinstance(r, AddCollectedEvent):
-                emitted.append(r.event)
-        return emitted
-
-    for t in ticks:
-        if isinstance(t, TickAddEvent):
-            ev_id = ensure_event_node(t.event)
-            edges.append((external_node_id, ev_id))
-        elif isinstance(t, TickStepResult):
-            step_seq[t.step_name] = step_seq.get(t.step_name, 0) + 1
-            seq = step_seq[t.step_name]
-            step_node_id = f"step:{t.step_name}#{seq}"
-            step_label = f"{t.step_name}#{seq}"
-            display_label = _truncate_label(step_label, max_label_length) if max_label_length else step_label
-            nodes[step_node_id] = (display_label, "step", None)
-
-            in_event_node_id = ensure_event_node(t.event)
-            edges.append((in_event_node_id, step_node_id))
-
-            for out_ev in iter_emitted_events(t):
-                out_event_node_id = ensure_event_node(out_ev)
-                edges.append((step_node_id, out_event_node_id))
-    
-    return nodes, edges
 
 
 def draw_most_recent_execution(
