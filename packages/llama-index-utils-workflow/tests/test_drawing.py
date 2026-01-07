@@ -309,4 +309,3 @@ async def test_draw_most_recent_execution_mermaid(workflow: Workflow) -> None:
         edge_lines = [line for line in lines if " --> " in line]
         assert len(node_lines) > 0
         assert len(edge_lines) > 0
-

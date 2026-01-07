@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2025 LlamaIndex Inc.
-
 from __future__ import annotations
 
+import json
 from typing import Any, Dict, List, Tuple, Union, cast
 
 from llama_index.core.agent.workflow import (
@@ -416,7 +416,7 @@ def _extract_execution_graph(
     """Helper to extract nodes and edges from the workflow handler's tick log."""
     if handler.ctx is None or handler.ctx._broker_run is None:
         raise ValueError("No context/run info in this handler. Has it been run yet?")
-    
+
     ticks: List[WorkflowTick] = handler.ctx._broker_run._tick_log
     nodes: Dict[str, Tuple[str, str, type | None]] = {}
     edges: List[Tuple[str, str]] = []
@@ -432,7 +432,9 @@ def _extract_execution_graph(
             return event_node_by_identity[key]
         label = type(ev).__name__
         node_id = f"event:{label}#{len(event_node_by_identity)}"
-        display_label = _truncate_label(label, max_label_length) if max_label_length else label
+        display_label = (
+            _truncate_label(label, max_label_length) if max_label_length else label
+        )
         nodes[node_id] = (display_label, "event", type(ev))
         event_node_by_identity[key] = node_id
         return node_id
@@ -455,7 +457,11 @@ def _extract_execution_graph(
             seq = step_seq[t.step_name]
             step_node_id = f"step:{t.step_name}#{seq}"
             step_label = f"{t.step_name}#{seq}"
-            display_label = _truncate_label(step_label, max_label_length) if max_label_length else step_label
+            display_label = (
+                _truncate_label(step_label, max_label_length)
+                if max_label_length
+                else step_label
+            )
             nodes[step_node_id] = (display_label, "step", None)
 
             in_event_node_id = ensure_event_node(t.event)
@@ -464,7 +470,7 @@ def _extract_execution_graph(
             for out_ev in iter_emitted_events(t):
                 out_event_node_id = ensure_event_node(out_ev)
                 edges.append((step_node_id, out_event_node_id))
-    
+
     return nodes, edges
 
 
@@ -486,6 +492,7 @@ def draw_all_possible_flows(
     """
     graph = _extract_workflow_structure(workflow, max_label_length)
     _render_pyvis(graph, filename, notebook)
+
 
 def draw_all_possible_flows_mermaid(
     workflow: Workflow,
@@ -615,11 +622,17 @@ def draw_most_recent_execution(
         net.add_edge(src, dst)
 
     options = {
-        "layout": {"hierarchical": {"enabled": True, "direction": "LR", "nodeSpacing": 150, "levelSeparation": 120}},
-        "physics": {"enabled": False}
+        "layout": {
+            "hierarchical": {
+                "enabled": True,
+                "direction": "LR",
+                "nodeSpacing": 150,
+                "levelSeparation": 120,
+            }
+        },
+        "physics": {"enabled": False},
     }
     try:
-        import json
         net.set_options(json.dumps(options))
     except Exception:
         pass
@@ -635,21 +648,31 @@ def draw_most_recent_execution_mermaid(
     """Draws the most recent execution of the workflow as a Mermaid diagram."""
     nodes, edges = _extract_execution_graph(handler, max_label_length)
     mermaid_lines = ["flowchart TD"]
-    
-    cleaned_ids = {node_id: node_id.replace(":", "_").replace("#", "_") for node_id in nodes.keys()}
+
+    cleaned_ids = {
+        node_id: node_id.replace(":", "_").replace("#", "_") for node_id in nodes.keys()
+    }
 
     for node_id, (label, node_type, ev_type) in nodes.items():
         clean_id = cleaned_ids[node_id]
-        shape_start, shape_end = ("[", "]") if node_type in ["step", "external"] else ("([", "])")
-        
-        css_class = "defaultEventStyle"
-        if node_type == "step": css_class = "stepStyle"
-        elif node_type == "external": css_class = "externalStyle"
-        elif node_type == "event" and ev_type:
-            if issubclass(ev_type, StartEvent): css_class = "startEventStyle"
-            elif issubclass(ev_type, StopEvent): css_class = "stopEventStyle"
+        shape_start, shape_end = (
+            ("[", "]") if node_type in ["step", "external"] else ("([", "])")
+        )
 
-        mermaid_lines.append(f'    {clean_id}{shape_start}"{label}"{shape_end}:::{css_class}')
+        css_class = "defaultEventStyle"
+        if node_type == "step":
+            css_class = "stepStyle"
+        elif node_type == "external":
+            css_class = "externalStyle"
+        elif node_type == "event" and ev_type:
+            if issubclass(ev_type, StartEvent):
+                css_class = "startEventStyle"
+            elif issubclass(ev_type, StopEvent):
+                css_class = "stopEventStyle"
+
+        mermaid_lines.append(
+            f'    {clean_id}{shape_start}"{label}"{shape_end}:::{css_class}'
+        )
 
     for src, dst in edges:
         mermaid_lines.append(f"    {cleaned_ids[src]} --> {cleaned_ids[dst]}")
@@ -667,7 +690,7 @@ def draw_most_recent_execution_mermaid(
         "classDef workflowBaseStyle fill:#90EE90,color:#000000",
         "classDef workflowAgentStyle fill:#66ccff,color:#000000",
         "classDef workflowToolStyle fill:#ff9966,color:#000000",
-        "classDef workflowHandoffStyle fill:#E27AFF,color:#000000"
+        "classDef workflowHandoffStyle fill:#E27AFF,color:#000000",
     ]
     mermaid_lines.extend([f"    {s}" for s in styles])
 
@@ -677,5 +700,3 @@ def draw_most_recent_execution_mermaid(
             f.write(diagram_string)
 
     return diagram_string
-
-
