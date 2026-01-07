@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-# Copyright (c) 2025 LlamaIndex Inc.
+# Copyright (c) 2026 LlamaIndex Inc.
 
 """Test fixtures and utilities for runtime tests."""
 
