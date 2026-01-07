@@ -1186,9 +1186,6 @@ class WorkflowServer:
                     detail=f"Failed to deserialize event: {e}", status_code=400
                 )
 
-            # Mark handler as active before sending event to prevent idle release race
-            wrapper.mark_active()
-
             # Send the event to the context
             try:
                 ctx.send_event(event, step=step)
@@ -1196,6 +1193,10 @@ class WorkflowServer:
                 raise HTTPException(
                     detail=f"Failed to send event: {e}", status_code=400
                 )
+
+            # Mark handler as active AFTER send_event succeeds to ensure
+            # idle state isn't cleared if event delivery fails
+            wrapper.mark_active()
 
             return JSONResponse(SendEventResponse(status="sent").model_dump())
 
@@ -1423,36 +1424,41 @@ class WorkflowServer:
         """Release an idle handler from memory, keeping it in persistence."""
         handler_id = wrapper.handler_id
 
-        # Remove from memory FIRST to prevent race conditions where cancelling
-        # the handler triggers _stream_events to cancel the timer, which would
-        # interrupt this method before the pop happens.
-        self._handlers.pop(handler_id, None)
-        self._results.pop(handler_id, None)
+        # Use lock to coordinate with _try_reload_handler and prevent race
+        # where release checkpoint overwrites newer state from reload
+        async with self._reload_lock(handler_id):
+            # Remove from memory FIRST to prevent race conditions where cancelling
+            # the handler triggers _stream_events to cancel the timer, which would
+            # interrupt this method before the pop happens.
+            self._handlers.pop(handler_id, None)
+            self._results.pop(handler_id, None)
 
-        # Cancel the idle release timer to prevent re-entry
-        wrapper._cancel_idle_release_timer()
+            # Cancel the idle release timer to prevent re-entry
+            wrapper._cancel_idle_release_timer()
 
-        # Final checkpoint to ensure latest state is persisted
-        await wrapper.checkpoint()
-
-        # Stop the workflow runtime to prevent memory leaks
-        if not wrapper.run_handler.done():
             try:
-                wrapper.run_handler.cancel()
-            except Exception:
-                pass
-            try:
-                await wrapper.run_handler.cancel_run()
-            except Exception:
-                pass
+                # Final checkpoint to ensure latest state is persisted
+                await wrapper.checkpoint()
+            finally:
+                # Always stop the workflow runtime to prevent memory leaks,
+                # even if checkpoint fails
+                if not wrapper.run_handler.done():
+                    try:
+                        wrapper.run_handler.cancel()
+                    except Exception:
+                        pass
+                    try:
+                        await wrapper.run_handler.cancel_run()
+                    except Exception:
+                        pass
 
-        # Cancel the streaming task
-        if wrapper.task and not wrapper.task.done():
-            wrapper.task.cancel()
-            try:
-                await wrapper.task
-            except asyncio.CancelledError:
-                pass
+                # Cancel the streaming task
+                if wrapper.task and not wrapper.task.done():
+                    wrapper.task.cancel()
+                    try:
+                        await wrapper.task
+                    except asyncio.CancelledError:
+                        pass
 
         logger.info(f"Released idle workflow {handler_id} from memory")
 

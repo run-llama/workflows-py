@@ -725,21 +725,18 @@ async def test_bug_release_handler_leaks_runtime_if_checkpoint_fails(
 
 
 @pytest.mark.asyncio
-async def test_bug_post_event_clears_idle_before_send_fails(
+async def test_failed_send_event_preserves_idle_state(
     memory_store: MemoryWorkflowStore, waiting_workflow: Workflow
 ) -> None:
-    """BUG: _post_event calls mark_active() before ctx.send_event().
+    """Verify that failed send_event() doesn't clear idle state.
 
-    If deserialization succeeds but send_event() fails (bad step name, runtime
-    errors, etc.), idle_since is already cleared and the timer is cancelled
-    with no subsequent idle event to re-arm it. This causes idle handlers
-    to stick around forever.
+    When send_event() fails (bad step name, runtime errors, etc.), the idle
+    state should be preserved so the idle release timer can still fire.
 
-    This test uses the real HTTP endpoint to post an event with a bad step name.
+    This test verifies the fix for the bug where mark_active() was called
+    BEFORE send_event(), causing idle state to be cleared even on failure.
 
-    The fix should either:
-    1. Call mark_active() AFTER send_event() succeeds, or
-    2. Restore idle state if send_event() fails
+    The fix: mark_active() is now called AFTER send_event() succeeds.
     """
     from httpx import ASGITransport, AsyncClient
 
@@ -776,7 +773,8 @@ async def test_bug_post_event_clears_idle_before_send_fails(
                 await wait_for_passing(check_idle)
 
                 wrapper = server._handlers[handler_id]
-                assert wrapper.idle_since is not None
+                original_idle_since = wrapper.idle_since
+                assert original_idle_since is not None
 
                 # Post an event with a bad step name via HTTP - this will fail
                 response = await client.post(
@@ -792,23 +790,21 @@ async def test_bug_post_event_clears_idle_before_send_fails(
                 # The endpoint returns 400 for bad step
                 assert response.status_code == 400
 
-                # At this point, mark_active() was called but send_event() failed.
-                # The workflow is still actually idle, but idle_since was cleared.
-                assert wrapper.idle_since is None, (
-                    "idle_since should be cleared by mark_active"
+                # FIX: mark_active() is now called AFTER send_event() succeeds.
+                # Since send_event() failed, idle state should be preserved.
+                assert wrapper.idle_since == original_idle_since, (
+                    "idle_since should be preserved when send_event() fails"
                 )
-                assert wrapper._idle_release_timer is None, "timer should be cancelled"
+                assert wrapper._idle_release_timer is not None, (
+                    "timer should still be running"
+                )
 
                 # Wait for the timeout period (100ms + buffer)
                 await asyncio.sleep(0.25)
 
-                # BUG: The handler should eventually be released, but it won't be
-                # because idle_since was cleared and no timer is running.
+                # Handler should be released by the timer since idle state was preserved
                 assert handler_id not in server._handlers, (
-                    "BUG: Handler is stuck in memory after send_event() failed. "
-                    "mark_active() cleared idle_since and cancelled the timer before "
-                    "send_event() was called. When send_event() failed, there was no "
-                    "mechanism to re-arm the idle timer, so the handler is never released."
+                    "Handler should be released after idle timeout"
                 )
 
 
