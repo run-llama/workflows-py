@@ -381,3 +381,238 @@ async def test_idle_release_disabled_when_timeout_none(
         wrapper = server._handlers[handler_id]
         # Timer should not be set since idle_release_timeout is None
         assert wrapper._idle_release_timer is None
+
+
+@pytest.mark.asyncio
+async def test_bug_idle_release_leaves_workflow_runtime_alive(
+    memory_store: MemoryWorkflowStore, waiting_workflow: Workflow
+) -> None:
+    """BUG: Idle release should stop the workflow runtime, but it doesn't.
+
+    When a workflow is released from memory, the underlying WorkflowHandler
+    and its context/broker should be cancelled. Currently, _release_handler
+    only cancels the server's stream task and removes from _handlers, but
+    the actual workflow runtime keeps running in the background.
+
+    This test captures a reference to the run_handler before release, then
+    verifies it should be done/cancelled after release.
+    """
+    server = WorkflowServer(
+        workflow_store=memory_store,
+        idle_release_timeout=timedelta(milliseconds=50),
+    )
+    server.add_workflow(
+        "test", waiting_workflow, additional_events=[WaitableExternalEvent]
+    )
+
+    async with server.contextmanager():
+        # Start a workflow
+        handler_id = "runtime-leak-test"
+        handler = server._workflows["test"].run()
+        await server._run_workflow_handler(handler_id, "test", handler)
+
+        # Wait for workflow to become idle
+        async def check_idle() -> None:
+            wrapper = server._handlers.get(handler_id)
+            if wrapper is None or wrapper.idle_since is None:
+                raise ValueError("Not idle yet")
+
+        await wait_for_passing(check_idle)
+
+        # Capture reference to the run_handler before release
+        wrapper = server._handlers[handler_id]
+        run_handler = wrapper.run_handler
+
+        # Wait for release
+        await asyncio.sleep(0.15)
+        assert handler_id not in server._handlers, "Handler should be released"
+
+        # BUG: The run_handler should be done/cancelled after release,
+        # but it's still running because _release_handler doesn't stop it
+        assert run_handler.done(), (
+            "BUG: run_handler is still running after release - "
+            "workflow runtime was not stopped, causing memory leak"
+        )
+
+
+@pytest.mark.asyncio
+async def test_bug_consumer_mutex_blocks_release_without_reschedule(
+    memory_store: MemoryWorkflowStore, waiting_workflow: Workflow
+) -> None:
+    """BUG: If consumer_mutex is locked when timer fires, release is skipped forever.
+
+    The idle release timer checks if consumer_mutex is locked and skips release
+    if so. However, it does NOT reschedule another timer attempt. This means
+    if a client briefly holds a stream during the timeout window and then
+    disconnects, the handler will never be released.
+
+    This test holds the mutex during the timer, releases it, then verifies
+    the handler should eventually be released (but won't be due to the bug).
+    """
+    server = WorkflowServer(
+        workflow_store=memory_store,
+        # Use longer timeout so we can grab mutex before timer fires
+        idle_release_timeout=timedelta(milliseconds=100),
+    )
+    server.add_workflow(
+        "test", waiting_workflow, additional_events=[WaitableExternalEvent]
+    )
+
+    async with server.contextmanager():
+        # Start workflow
+        handler_id = "mutex-reschedule-test"
+        handler = server._workflows["test"].run()
+        await server._run_workflow_handler(handler_id, "test", handler)
+
+        # Wait for workflow to become idle
+        async def check_idle() -> None:
+            wrapper = server._handlers.get(handler_id)
+            if wrapper is None or wrapper.idle_since is None:
+                raise ValueError("Not idle yet")
+
+        await wait_for_passing(check_idle)
+
+        wrapper = server._handlers[handler_id]
+
+        # Grab the mutex immediately after idle, before timer fires
+        async with wrapper.consumer_mutex:
+            # Wait for the timer to fire and be blocked by mutex
+            await asyncio.sleep(0.2)
+            # Handler should still be present (timer was blocked by mutex)
+            assert handler_id in server._handlers, "Handler released while mutex held"
+
+        # Now mutex is released - handler should eventually be released
+        # but it won't be because the timer doesn't reschedule
+        # Wait a reasonable amount of time for a reschedule to happen
+        await asyncio.sleep(0.3)
+
+        # BUG: Handler is never released because no reschedule happened
+        assert handler_id not in server._handlers, (
+            "BUG: Handler was never released after mutex was unlocked - "
+            "timer should have been rescheduled but wasn't"
+        )
+
+
+@pytest.mark.asyncio
+async def test_bug_race_between_event_post_and_idle_timer(
+    memory_store: MemoryWorkflowStore, waiting_workflow: Workflow
+) -> None:
+    """BUG: Race condition where event is posted but timer releases handler.
+
+    When an event is posted to wake a workflow, the idle_since is only cleared
+    when StepStateChanged(RUNNING) is observed in _stream_events. However,
+    the idle timer can fire in the window between event posting and the
+    running event being processed, causing the handler to be released while
+    the workflow is actively processing.
+
+    This test demonstrates the race by:
+    1. Starting a workflow that becomes idle
+    2. Sending an event to wake it
+    3. Checking that idle_since is cleared immediately (it won't be - that's the bug)
+    """
+    server = WorkflowServer(
+        workflow_store=memory_store,
+        # Long timeout - we're testing the race window, not the timer
+        idle_release_timeout=timedelta(minutes=5),
+    )
+    server.add_workflow(
+        "test", waiting_workflow, additional_events=[WaitableExternalEvent]
+    )
+
+    async with server.contextmanager():
+        handler_id = "race-test"
+        handler = server._workflows["test"].run()
+        await server._run_workflow_handler(handler_id, "test", handler)
+
+        # Wait for workflow to become idle
+        async def check_idle() -> None:
+            wrapper = server._handlers.get(handler_id)
+            if wrapper is None or wrapper.idle_since is None:
+                raise ValueError("Not idle yet")
+
+        await wait_for_passing(check_idle)
+
+        wrapper = server._handlers[handler_id]
+        assert wrapper.idle_since is not None, "Should be idle"
+
+        # Record idle_since before sending event
+        idle_since_before = wrapper.idle_since
+
+        # Send event to wake the workflow
+        ctx = wrapper.run_handler.ctx
+        assert ctx is not None
+        ctx.send_event(WaitableExternalEvent(response="wake-up"))
+
+        # Immediately after sending the event, idle_since should be cleared
+        # to prevent the timer from firing during the race window.
+        # BUG: idle_since is NOT cleared here - it's only cleared when
+        # StepStateChanged(RUNNING) is observed, which creates a race window.
+        assert wrapper.idle_since is None, (
+            f"BUG: idle_since is still set to {idle_since_before} after event was posted. "
+            "This creates a race window where the idle release timer could fire "
+            "between event posting and the RUNNING state being observed. "
+            "idle_since should be cleared atomically when an event is sent."
+        )
+
+
+@pytest.mark.asyncio
+async def test_bug_concurrent_reloads_create_duplicate_handlers(
+    memory_store: MemoryWorkflowStore, waiting_workflow: Workflow
+) -> None:
+    """BUG: Concurrent reload requests can create multiple handlers.
+
+    _try_reload_handler has no locking mechanism, so two parallel requests
+    can both reload and start the same workflow. This creates split-brain
+    scenarios where multiple workflow instances process events independently.
+
+    This test fires multiple reload requests in parallel and checks that
+    only one succeeds in creating a handler.
+    """
+    server = WorkflowServer(
+        workflow_store=memory_store,
+        idle_release_timeout=timedelta(minutes=5),
+    )
+    server.add_workflow(
+        "test", waiting_workflow, additional_events=[WaitableExternalEvent]
+    )
+
+    # Seed a persisted idle handler
+    idle_time = datetime.now(timezone.utc) - timedelta(minutes=2)
+    ctx = Context(waiting_workflow).to_dict()
+    handler_id = "concurrent-reload-test"
+    await memory_store.update(
+        PersistentHandler(
+            handler_id=handler_id,
+            workflow_name="test",
+            status="running",
+            idle_since=idle_time,
+            ctx=ctx,
+        )
+    )
+
+    async with server.contextmanager():
+        assert handler_id not in server._handlers
+
+        # Track how many workflow instances were created
+        instances_created: list[object] = []
+
+        async def reload_and_track() -> None:
+            wrapper = await server._try_reload_handler(handler_id)
+            if wrapper is not None:
+                # Track the actual run_handler object identity
+                instances_created.append(id(wrapper.run_handler))
+
+        # Fire 5 concurrent reload requests
+        await asyncio.gather(*[reload_and_track() for _ in range(5)])
+
+        # We should have exactly one handler in memory
+        assert handler_id in server._handlers
+
+        # BUG: Multiple unique workflow instances may have been created
+        # (even though only one ends up in _handlers, the others are leaked)
+        unique_instances = set(instances_created)
+        assert len(unique_instances) == 1, (
+            f"BUG: {len(unique_instances)} different workflow instances were created "
+            f"by concurrent reloads. Only one should be created. "
+            f"The extra instances are leaked and may process events independently."
+        )
