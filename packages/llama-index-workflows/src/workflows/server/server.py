@@ -202,14 +202,12 @@ class WorkflowServer:
         """
         handlers = await self._workflow_store.query(
             HandlerQuery(
-                status_in=["running"], workflow_name_in=list(self._workflows.keys())
+                status_in=["running"],
+                workflow_name_in=list(self._workflows.keys()),
+                is_idle=False,
             )
         )
         for persistent in handlers:
-            # Skip idle handlers - they'll be loaded on-demand when events arrive
-            if persistent.idle_since is not None:
-                continue
-
             workflow = self._workflows[persistent.workflow_name]
             try:
                 await self._start_workflow(

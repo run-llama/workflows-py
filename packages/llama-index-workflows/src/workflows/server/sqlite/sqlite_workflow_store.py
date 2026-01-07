@@ -132,9 +132,11 @@ class SqliteWorkflowStore(AbstractWorkflowStore):
                 return None
             add_in_clause("status", query.status_in)
 
-        if query.idle_before is not None:
-            clauses.append("idle_since IS NOT NULL AND idle_since < ?")
-            params.append(query.idle_before.isoformat())
+        if query.is_idle is not None:
+            if query.is_idle:
+                clauses.append("idle_since IS NOT NULL")
+            else:
+                clauses.append("idle_since IS NULL")
 
         if not clauses:
             return clauses, params

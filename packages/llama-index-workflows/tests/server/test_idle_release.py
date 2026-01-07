@@ -59,13 +59,13 @@ async def server_with_idle_release(
 
 
 @pytest.mark.asyncio
-async def test_idle_before_query_filter_memory_store() -> None:
-    """Test that idle_before filter works in MemoryWorkflowStore."""
+async def test_is_idle_query_filter_memory_store() -> None:
+    """Test that is_idle filter works in MemoryWorkflowStore."""
     store = MemoryWorkflowStore()
 
     now = datetime.now(timezone.utc)
 
-    # Handler that is idle (idle_since in the past)
+    # Handler that is idle (has idle_since set)
     await store.update(
         PersistentHandler(
             handler_id="idle-1",
@@ -87,10 +87,10 @@ async def test_idle_before_query_filter_memory_store() -> None:
         )
     )
 
-    # Handler that became idle recently (after the cutoff)
+    # Another idle handler
     await store.update(
         PersistentHandler(
-            handler_id="recent-idle",
+            handler_id="idle-2",
             workflow_name="test",
             status="running",
             idle_since=now - timedelta(seconds=10),
@@ -98,12 +98,19 @@ async def test_idle_before_query_filter_memory_store() -> None:
         )
     )
 
-    # Query for handlers idle before 1 minute ago
-    cutoff = now - timedelta(minutes=1)
-    results = await store.query(HandlerQuery(idle_before=cutoff))
+    # Query for idle handlers
+    idle_results = await store.query(HandlerQuery(is_idle=True))
+    assert len(idle_results) == 2
+    assert {r.handler_id for r in idle_results} == {"idle-1", "idle-2"}
 
-    assert len(results) == 1
-    assert results[0].handler_id == "idle-1"
+    # Query for non-idle handlers
+    active_results = await store.query(HandlerQuery(is_idle=False))
+    assert len(active_results) == 1
+    assert active_results[0].handler_id == "active-1"
+
+    # Query without filter returns all
+    all_results = await store.query(HandlerQuery())
+    assert len(all_results) == 3
 
 
 @pytest.mark.asyncio
