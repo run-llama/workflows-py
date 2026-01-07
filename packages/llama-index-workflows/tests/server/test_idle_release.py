@@ -664,7 +664,7 @@ async def test_bug_release_handler_leaks_runtime_if_checkpoint_fails(
 
     # time_machine with tick=True gives us deterministic timestamps while
     # allowing real async operations to proceed normally
-    with time_machine.travel(1000.0, tick=True):
+    with time_machine.travel("2026-01-07T12:27:00.000-08:00", tick=True):
         server = WorkflowServer(
             workflow_store=memory_store,
             idle_release_timeout=idle_timeout,
@@ -745,7 +745,7 @@ async def test_failed_send_event_preserves_idle_state(
 
     # time_machine with tick=True gives us deterministic timestamps while
     # allowing real async operations to proceed normally
-    with time_machine.travel(1000.0, tick=True):
+    with time_machine.travel("2026-01-07T12:27:00.000-08:00", tick=True):
         server = WorkflowServer(
             workflow_store=memory_store,
             idle_release_timeout=idle_timeout,
@@ -809,27 +809,25 @@ async def test_failed_send_event_preserves_idle_state(
 
 
 @pytest.mark.asyncio
-async def test_bug_release_and_reload_race_condition(
+async def test_release_skips_checkpoint_if_handler_was_reloaded(
     memory_store: MemoryWorkflowStore,
     waiting_workflow: Workflow,
 ) -> None:
-    """BUG: Release/reload isn't coordinated.
+    """Verify that _release_handler skips checkpoint if handler was reloaded.
 
-    _try_reload_handler uses KeyedLock, but _release_handler does not.
-    This means release can overlap with reload, and the release checkpoint()
-    can overwrite newer state from the reloaded handler.
+    When release and reload race, _release_handler should detect if a new
+    handler instance is now in _handlers and skip the checkpoint to avoid
+    overwriting newer state.
 
-    This test demonstrates the race by simulating what happens when release
-    checkpoint is delayed and executes after reload has updated the state:
-    1. Start handler, wait for idle, capture old state
-    2. Reload handler and update to new state (idle_since=None)
-    3. Simulate delayed release checkpoint writing old state
-    4. Verify old state overwrites new state (the bug)
-
-    The fix should have _release_handler use the same KeyedLock.
+    This test verifies:
+    1. Start handler, wait for idle
+    2. Reload the handler (simulating it was released earlier)
+    3. Update the reloaded handler's state
+    4. Call _release_handler with the OLD wrapper
+    5. Verify the old release doesn't overwrite the new state
     """
     # time_machine with tick=True gives us deterministic timestamps
-    with time_machine.travel(1000.0, tick=True):
+    with time_machine.travel("2026-01-07T12:27:00.000-08:00", tick=True):
         server = WorkflowServer(
             workflow_store=memory_store,
             idle_release_timeout=None,  # Disable auto-release for manual control
@@ -852,52 +850,51 @@ async def test_bug_release_and_reload_race_condition(
 
             await wait_for_passing(check_idle)
 
-            wrapper = server._handlers[handler_id]
-            original_idle_since = wrapper.idle_since
+            old_wrapper = server._handlers[handler_id]
+            original_idle_since = old_wrapper.idle_since
             assert original_idle_since is not None
 
-            # Capture the "old" persistent state (what release would checkpoint)
-            old_persistent_state = wrapper._as_persistent()
-            assert old_persistent_state.idle_since == original_idle_since
+            # Checkpoint the old state (simulating what release would have done)
+            await old_wrapper.checkpoint()
 
-            # Simulate release removing handler from memory
+            # Simulate the scenario where handler was released and then reloaded:
+            # Remove old handler from memory
             server._handlers.pop(handler_id, None)
 
-            # Now simulate the race: reload happens while release checkpoint is pending
-            # 1. Reload the handler
+            # Reload the handler (this gets the persisted state)
             reloaded = await server._try_reload_handler(handler_id)
             assert reloaded is not None
+            assert reloaded is not old_wrapper  # Different instance
 
-            # 2. The reloaded handler receives an event and becomes active
+            # The reloaded handler receives an event and becomes active
             reloaded.mark_active()
             assert reloaded.idle_since is None
 
-            # 3. Checkpoint the new state
+            # Checkpoint the new state
             await reloaded.checkpoint()
 
-            # Verify the store has the correct (new) state
+            # Verify store has the new state (idle_since=None)
             persisted = await memory_store.query(
                 HandlerQuery(handler_id_in=[handler_id])
             )
             assert persisted[0].idle_since is None, "Store should have new state"
 
-            # 4. NOW the delayed release checkpoint writes OLD state
-            # This is what happens when release and reload race without coordination
-            await memory_store.update(old_persistent_state)
+            # NOW call _release_handler with the OLD wrapper
+            # This simulates a delayed release that happens after reload
+            # The fix should detect that a different handler is in _handlers
+            # and skip the checkpoint
+            await server._release_handler(old_wrapper)
 
-            # Check what's in the store now
+            # Verify the store still has the correct (new) state
             persisted = await memory_store.query(
                 HandlerQuery(handler_id_in=[handler_id])
             )
             assert len(persisted) == 1
 
-            # BUG: The persisted state was overwritten by the stale release checkpoint.
-            # Without proper locking, the release checkpoint can happen after reload
-            # has updated the state, causing data loss.
+            # With the fix, the old release should have skipped the checkpoint
+            # because it detected a different handler instance in _handlers
             assert persisted[0].idle_since is None, (
-                f"BUG: Stale release checkpoint overwrote newer state from reload. "
+                f"Release should have skipped checkpoint since handler was reloaded. "
                 f"Expected idle_since=None (from reload), "
-                f"but got idle_since={persisted[0].idle_since}. "
-                f"_release_handler should use KeyedLock to coordinate with "
-                f"_try_reload_handler."
+                f"but got idle_since={persisted[0].idle_since}."
             )

@@ -1427,6 +1427,37 @@ class WorkflowServer:
         # Use lock to coordinate with _try_reload_handler and prevent race
         # where release checkpoint overwrites newer state from reload
         async with self._reload_lock(handler_id):
+            # Check if this handler was already replaced by a reload.
+            # If a different handler instance is now in _handlers, skip
+            # checkpointing to avoid overwriting newer state.
+            current = self._handlers.get(handler_id)
+            if current is not None and current is not wrapper:
+                logger.debug(
+                    f"Skipping release checkpoint for {handler_id}: "
+                    "handler was already reloaded"
+                )
+                # Mark to skip any further checkpoints (including auto-checkpoint
+                # in _stream_events when we cancel the task)
+                wrapper._skip_checkpoint = True
+                # Still need to cancel the old runtime
+                wrapper._cancel_idle_release_timer()
+                if not wrapper.run_handler.done():
+                    try:
+                        wrapper.run_handler.cancel()
+                    except Exception:
+                        pass
+                    try:
+                        await wrapper.run_handler.cancel_run()
+                    except Exception:
+                        pass
+                if wrapper.task and not wrapper.task.done():
+                    wrapper.task.cancel()
+                    try:
+                        await wrapper.task
+                    except asyncio.CancelledError:
+                        pass
+                return
+
             # Remove from memory FIRST to prevent race conditions where cancelling
             # the handler triggers _stream_events to cancel the timer, which would
             # interrupt this method before the pop happens.
@@ -1555,6 +1586,7 @@ class _WorkflowHandler:
     _idle_release_timeout: timedelta | None = None
     _on_idle_release: Callable[["_WorkflowHandler"], Awaitable[None]] | None = None
     _idle_release_timer: asyncio.Task[None] | None = None
+    _skip_checkpoint: bool = False  # Set to prevent checkpointing stale handlers
 
     def _as_persistent(self) -> PersistentHandler:
         """Persist the current handler state immediately to the workflow store."""
@@ -1582,6 +1614,9 @@ class _WorkflowHandler:
 
     async def checkpoint(self) -> None:
         """Persist with retry/backoff; cancel handler when retries exhausted."""
+        if self._skip_checkpoint:
+            logger.debug(f"Skipping checkpoint for handler {self.handler_id}")
+            return
         backoffs = list(self._persistence_backoff)
         try:
             persistent = self._as_persistent()
