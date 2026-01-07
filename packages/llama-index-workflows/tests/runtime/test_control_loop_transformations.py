@@ -10,7 +10,7 @@ testing them in isolation without running the full async control loop.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from workflows.decorators import StepConfig
@@ -56,6 +56,7 @@ from workflows.runtime.types.results import (
     AddWaiter,
     DeleteCollectedEvent,
     DeleteWaiter,
+    StepFunctionResult,
     StepWorkerFailed,
     StepWorkerResult,
     StepWorkerState,
@@ -253,19 +254,20 @@ def test_waiters(base_state: BrokerState) -> None:
     event = MyTestEvent(value=42)
     add_worker(base_state, event)
 
+    result = AddWaiter(
+        waiter_id="w1",
+        waiter_event=InputRequiredEvent(),
+        requirements={},
+        timeout=None,
+        event_type=OtherEvent,
+    )
     # Add waiter
     tick: TickStepResult[Any] = TickStepResult(
         step_name="test_step",
         worker_id=0,
         event=event,
         result=[
-            AddWaiter(
-                waiter_id="w1",
-                waiter_event=InputRequiredEvent(),
-                requirements={},
-                timeout=None,
-                event_type=OtherEvent,
-            )
+            cast(StepFunctionResult[Any], result),
         ],
     )
     new_state, _ = _process_step_result_tick(tick, base_state, now_seconds=110.0)
@@ -679,19 +681,19 @@ def test_idle_event_emitted_on_transition_to_idle(base_state: BrokerState) -> No
     base_state.workers["test_step"].collected_waiters.append(waiter)
 
     # Process result that completes the worker but leaves waiter active
-    tick: TickStepResult[Any] = TickStepResult(
+    result = AddWaiter(
+        waiter_id="w1",
+        waiter_event=None,
+        requirements={},
+        timeout=None,
+        event_type=OtherEvent,
+    )
+
+    tick: TickStepResult[Any] = TickStepResult[Any](
         step_name="test_step",
         worker_id=0,
         event=event,
-        result=[
-            AddWaiter(
-                waiter_id="w1",
-                waiter_event=None,
-                requirements={},
-                timeout=None,
-                event_type=OtherEvent,
-            )
-        ],
+        result=[cast(StepFunctionResult[Any], result)],
     )
 
     new_state, commands = _process_step_result_tick(tick, base_state, now_seconds=110.0)

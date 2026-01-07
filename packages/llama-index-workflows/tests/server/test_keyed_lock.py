@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import asyncio
+import sys
 
 import pytest
 from workflows.server.keyed_lock import KeyedLock
@@ -289,13 +290,17 @@ async def test_parallel_access_no_interleaving(locks: KeyedLock) -> None:
         )
 
 
+@pytest.mark.skipif(
+    sys.version_info < (3, 10),
+    reason="asyncio.Barrier is not available in Python < 3.10",
+)
 async def test_parallel_access_simultaneous_start(locks: KeyedLock) -> None:
     """Test mutual exclusion when tasks start at exactly the same time.
 
     Uses a barrier to ensure all tasks begin acquiring the lock simultaneously.
     """
     num_tasks = 10
-    barrier = asyncio.Barrier(num_tasks)
+    barrier = asyncio.Barrier(num_tasks)  # type: ignore[unresolved-attribute]
     active_count = 0
     max_active = 0
     completed_order: list[int] = []
