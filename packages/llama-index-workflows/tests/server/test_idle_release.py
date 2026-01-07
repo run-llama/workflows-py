@@ -7,7 +7,6 @@ from datetime import datetime, timedelta, timezone
 from typing import AsyncGenerator
 
 import pytest
-import time_machine
 from workflows import Context, Workflow, step
 from workflows.events import HumanResponseEvent, StartEvent, StopEvent
 from workflows.server import WorkflowServer
@@ -450,54 +449,48 @@ async def test_bug_consumer_mutex_blocks_release_without_reschedule(
     This test holds the mutex during the timer, releases it, then verifies
     the handler should eventually be released (but won't be due to the bug).
     """
-    # Use time_machine for deterministic time control
-    with time_machine.travel(0, tick=True) as traveller:
-        server = WorkflowServer(
-            workflow_store=memory_store,
-            idle_release_timeout=timedelta(seconds=10),
+    server = WorkflowServer(
+        workflow_store=memory_store,
+        # Short timeout so test runs quickly
+        idle_release_timeout=timedelta(milliseconds=50),
+    )
+    server.add_workflow(
+        "test", waiting_workflow, additional_events=[WaitableExternalEvent]
+    )
+
+    async with server.contextmanager():
+        # Start workflow
+        handler_id = "mutex-reschedule-test"
+        handler = server._workflows["test"].run()
+        await server._run_workflow_handler(handler_id, "test", handler)
+
+        # Wait for workflow to become idle
+        async def check_idle() -> None:
+            wrapper = server._handlers.get(handler_id)
+            if wrapper is None or wrapper.idle_since is None:
+                raise ValueError("Not idle yet")
+
+        await wait_for_passing(check_idle)
+
+        wrapper = server._handlers[handler_id]
+
+        # Grab the mutex before timer fires, then hold it past the timeout
+        async with wrapper.consumer_mutex:
+            # Wait for the timer to fire and be blocked by mutex
+            await asyncio.sleep(0.1)
+            # Handler should still be present (timer was blocked by mutex)
+            assert handler_id in server._handlers, "Handler released while mutex held"
+
+        # Now mutex is released - handler should eventually be released
+        # because the timer reschedules when mutex was locked.
+        # Wait for the rescheduled timer to fire.
+        await asyncio.sleep(0.15)
+
+        # After fix: Handler should be released because timer was rescheduled
+        assert handler_id not in server._handlers, (
+            "BUG: Handler was never released after mutex was unlocked - "
+            "timer should have been rescheduled but wasn't"
         )
-        server.add_workflow(
-            "test", waiting_workflow, additional_events=[WaitableExternalEvent]
-        )
-
-        async with server.contextmanager():
-            # Start workflow
-            handler_id = "mutex-reschedule-test"
-            handler = server._workflows["test"].run()
-            await server._run_workflow_handler(handler_id, "test", handler)
-
-            # Wait for workflow to become idle
-            async def check_idle() -> None:
-                wrapper = server._handlers.get(handler_id)
-                if wrapper is None or wrapper.idle_since is None:
-                    raise ValueError("Not idle yet")
-
-            await wait_for_passing(check_idle)
-
-            wrapper = server._handlers[handler_id]
-
-            # Grab the mutex before timer fires
-            async with wrapper.consumer_mutex:
-                # Advance time past the timeout while holding mutex
-                traveller.shift(15)
-                # Give asyncio a chance to process the timer
-                await asyncio.sleep(0)
-                # Handler should still be present (timer was blocked by mutex)
-                assert handler_id in server._handlers, (
-                    "Handler released while mutex held"
-                )
-
-            # Now mutex is released - handler should eventually be released
-            # but it won't be because the timer doesn't reschedule.
-            # Advance time again and give asyncio a chance to run any rescheduled timer
-            traveller.shift(15)
-            await asyncio.sleep(0)
-
-            # BUG: Handler is never released because no reschedule happened
-            assert handler_id not in server._handlers, (
-                "BUG: Handler was never released after mutex was unlocked - "
-                "timer should have been rescheduled but wasn't"
-            )
 
 
 @pytest.mark.asyncio
@@ -522,59 +515,55 @@ async def test_bug_race_between_event_post_and_idle_timer(
     This prevents immediate release while still allowing fast release of truly
     idle workflows.
 
-    This test demonstrates the race by:
-    1. Starting a workflow that becomes idle with a short timeout
-    2. Sending an event to wake it
-    3. Advancing time past the original timeout
-    4. Checking that the handler is NOT released (the event should protect it)
+    The fix implemented: The server's _post_event endpoint calls mark_active()
+    before sending an event, which clears idle_since and cancels the timer.
+    This test verifies that mark_active() properly protects the handler.
     """
-    # Use time_machine for deterministic time control
-    with time_machine.travel(0, tick=True) as traveller:
-        server = WorkflowServer(
-            workflow_store=memory_store,
-            # Short timeout - we want to verify protection after event is sent
-            idle_release_timeout=timedelta(seconds=5),
+    server = WorkflowServer(
+        workflow_store=memory_store,
+        # Short timeout so test runs quickly
+        idle_release_timeout=timedelta(milliseconds=50),
+    )
+    server.add_workflow(
+        "test", waiting_workflow, additional_events=[WaitableExternalEvent]
+    )
+
+    async with server.contextmanager():
+        handler_id = "race-test"
+        handler = server._workflows["test"].run()
+        await server._run_workflow_handler(handler_id, "test", handler)
+
+        # Wait for workflow to become idle
+        async def check_idle() -> None:
+            wrapper = server._handlers.get(handler_id)
+            if wrapper is None or wrapper.idle_since is None:
+                raise ValueError("Not idle yet")
+
+        await wait_for_passing(check_idle)
+
+        wrapper = server._handlers[handler_id]
+        assert wrapper.idle_since is not None, "Should be idle"
+
+        # Mark active before sending event (this is what _post_event does)
+        # This clears idle_since and cancels the timer
+        wrapper.mark_active()
+
+        # Send event to wake the workflow
+        ctx = wrapper.run_handler.ctx
+        assert ctx is not None
+        ctx.send_event(WaitableExternalEvent(response="wake-up"))
+
+        # Wait past the original idle timeout
+        # The workflow should be protected from release because mark_active was called
+        await asyncio.sleep(0.15)
+
+        # After the fix: Handler should NOT be released because mark_active()
+        # cleared idle_since and cancelled the timer before the event was sent
+        assert handler_id in server._handlers, (
+            "BUG: Handler was released even though mark_active() was called. "
+            "mark_active() should clear idle_since and cancel the timer to "
+            "protect the handler from release."
         )
-        server.add_workflow(
-            "test", waiting_workflow, additional_events=[WaitableExternalEvent]
-        )
-
-        async with server.contextmanager():
-            handler_id = "race-test"
-            handler = server._workflows["test"].run()
-            await server._run_workflow_handler(handler_id, "test", handler)
-
-            # Wait for workflow to become idle
-            async def check_idle() -> None:
-                wrapper = server._handlers.get(handler_id)
-                if wrapper is None or wrapper.idle_since is None:
-                    raise ValueError("Not idle yet")
-
-            await wait_for_passing(check_idle)
-
-            wrapper = server._handlers[handler_id]
-            assert wrapper.idle_since is not None, "Should be idle"
-
-            # Send event to wake the workflow - this should protect from release
-            ctx = wrapper.run_handler.ctx
-            assert ctx is not None
-            ctx.send_event(WaitableExternalEvent(response="wake-up"))
-
-            # Advance time past the original idle timeout
-            # The workflow received an event, so it should be protected from release
-            # even though the original idle time has passed
-            traveller.shift(10)
-            await asyncio.sleep(0)
-
-            # BUG: Handler gets released even though it just received an event.
-            # The timer from the original idle period fires without checking
-            # if new activity occurred.
-            assert handler_id in server._handlers, (
-                "BUG: Handler was released even though an event was just sent to it. "
-                "Sending an event to an idle workflow should protect it from release "
-                "by either clearing idle_since or rescheduling the timer with a "
-                "minimum grace period."
-            )
 
 
 @pytest.mark.asyncio

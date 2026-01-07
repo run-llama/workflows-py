@@ -58,6 +58,7 @@ from workflows.server.abstract_workflow_store import (
     PersistentHandler,
     Status,
 )
+from workflows.server.keyed_lock import KeyedLock
 from workflows.server.memory_workflow_store import MemoryWorkflowStore
 from workflows.types import RunResultT
 
@@ -100,6 +101,9 @@ class WorkflowServer:
                 allow_credentials=True,
             )
         ]
+
+        # Lock to prevent concurrent reloads of the same handler
+        self._reload_lock = KeyedLock()
 
         self._routes = [
             Route(
@@ -1182,6 +1186,9 @@ class WorkflowServer:
                     detail=f"Failed to deserialize event: {e}", status_code=400
                 )
 
+            # Mark handler as active before sending event to prevent idle release race
+            wrapper.mark_active()
+
             # Send the event to the context
             try:
                 ctx.send_event(event, step=step)
@@ -1416,10 +1423,30 @@ class WorkflowServer:
         """Release an idle handler from memory, keeping it in persistence."""
         handler_id = wrapper.handler_id
 
+        # Remove from memory FIRST to prevent race conditions where cancelling
+        # the handler triggers _stream_events to cancel the timer, which would
+        # interrupt this method before the pop happens.
+        self._handlers.pop(handler_id, None)
+        self._results.pop(handler_id, None)
+
+        # Cancel the idle release timer to prevent re-entry
+        wrapper._cancel_idle_release_timer()
+
         # Final checkpoint to ensure latest state is persisted
         await wrapper.checkpoint()
 
-        # Cancel the streaming task (doesn't cancel the workflow)
+        # Stop the workflow runtime to prevent memory leaks
+        if not wrapper.run_handler.done():
+            try:
+                wrapper.run_handler.cancel()
+            except Exception:
+                pass
+            try:
+                await wrapper.run_handler.cancel_run()
+            except Exception:
+                pass
+
+        # Cancel the streaming task
         if wrapper.task and not wrapper.task.done():
             wrapper.task.cancel()
             try:
@@ -1427,57 +1454,62 @@ class WorkflowServer:
             except asyncio.CancelledError:
                 pass
 
-        # Remove from memory
-        self._handlers.pop(handler_id, None)
-        self._results.pop(handler_id, None)
-
         logger.info(f"Released idle workflow {handler_id} from memory")
 
     async def _try_reload_handler(self, handler_id: str) -> _WorkflowHandler | None:
-        """Attempt to reload a released handler from persistence."""
-        found = await self._workflow_store.query(
-            HandlerQuery(handler_id_in=[handler_id])
-        )
-        if not found:
-            return None
+        """Attempt to reload a released handler from persistence.
 
-        handler_data = found[0]
+        Uses per-handler locking to prevent concurrent reloads from creating
+        duplicate workflow instances.
+        """
+        async with self._reload_lock(handler_id):
+            # Check if handler was already reloaded by another concurrent request
+            if handler_id in self._handlers:
+                return self._handlers[handler_id]
 
-        if handler_data.status != "running":
-            return None  # Can't reload completed/failed/cancelled
-
-        workflow = self._workflows.get(handler_data.workflow_name)
-        if workflow is None:
-            logger.warning(
-                f"Cannot reload {handler_id}: workflow {handler_data.workflow_name} not registered"
+            found = await self._workflow_store.query(
+                HandlerQuery(handler_id_in=[handler_id])
             )
-            return None
+            if not found:
+                return None
 
-        try:
-            context = Context.from_dict(workflow=workflow, data=handler_data.ctx)
-            wrapper = await self._start_workflow(
-                workflow=_NamedWorkflow(
-                    name=handler_data.workflow_name, workflow=workflow
-                ),
-                handler_id=handler_id,
-                context=context,
-            )
+            handler_data = found[0]
 
-            # Restore idle_since from persisted state
-            wrapper.idle_since = handler_data.idle_since
+            if handler_data.status != "running":
+                return None  # Can't reload completed/failed/cancelled
 
-            # If workflow was idle when released, start the release timer
-            # (it will be cancelled if an event wakes the workflow)
-            if wrapper.idle_since is not None:
-                wrapper._start_idle_release_timer()
+            workflow = self._workflows.get(handler_data.workflow_name)
+            if workflow is None:
+                logger.warning(
+                    f"Cannot reload {handler_id}: workflow {handler_data.workflow_name} not registered"
+                )
+                return None
 
-            logger.info(f"Reloaded workflow {handler_id} from persistence")
-            return wrapper
-        except Exception as e:
-            logger.error(f"Failed to reload handler {handler_id}: {e}")
-            raise HTTPException(
-                detail=f"Failed to reload handler: {e}", status_code=500
-            )
+            try:
+                context = Context.from_dict(workflow=workflow, data=handler_data.ctx)
+                wrapper = await self._start_workflow(
+                    workflow=_NamedWorkflow(
+                        name=handler_data.workflow_name, workflow=workflow
+                    ),
+                    handler_id=handler_id,
+                    context=context,
+                )
+
+                # Restore idle_since from persisted state
+                wrapper.idle_since = handler_data.idle_since
+
+                # If workflow was idle when released, start the release timer
+                # (it will be cancelled if an event wakes the workflow)
+                if wrapper.idle_since is not None:
+                    wrapper._start_idle_release_timer()
+
+                logger.info(f"Reloaded workflow {handler_id} from persistence")
+                return wrapper
+            except Exception as e:
+                logger.error(f"Failed to reload handler {handler_id}: {e}")
+                raise HTTPException(
+                    detail=f"Failed to reload handler: {e}", status_code=500
+                )
 
     def _event_registry(self, workflow_name: str) -> dict[str, type[Event]]:
         items = {e.__name__: e for e in self._workflows[workflow_name].events}
@@ -1664,7 +1696,11 @@ class _WorkflowHandler:
             try:
                 await asyncio.sleep(timeout_seconds)
                 # Only release if still idle and no active stream consumers
-                if self.idle_since is not None and not self.consumer_mutex.locked():
+                if self.idle_since is not None:
+                    if self.consumer_mutex.locked():
+                        # Mutex is locked - reschedule to try again later
+                        self._start_idle_release_timer()
+                        return
                     if self._on_idle_release is not None:
                         await self._on_idle_release(self)
             except asyncio.CancelledError:
@@ -1677,6 +1713,14 @@ class _WorkflowHandler:
         if self._idle_release_timer is not None:
             self._idle_release_timer.cancel()
             self._idle_release_timer = None
+
+    def mark_active(self) -> None:
+        """Mark this handler as active (not idle).
+
+        Call this when an event is being sent to prevent premature release.
+        """
+        self.idle_since = None
+        self._cancel_idle_release_timer()
 
     def start_streaming(self, on_finish: Callable[[], Awaitable[None]]) -> None:
         """Start streaming events from the handler and managing state."""
