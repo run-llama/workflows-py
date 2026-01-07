@@ -389,6 +389,8 @@ async def test_control_loop_step_failure_publishes_stop_event(
     assert "ValueError: intentional failure" in stop_event.traceback, (
         "Failed event should contain the traceback"
     )
+    assert stop_event.attempts == 1, "Failed event should contain the attempt count"
+    assert stop_event.elapsed_seconds >= 0, "Failed event should contain elapsed time"
 
 
 @pytest.mark.asyncio

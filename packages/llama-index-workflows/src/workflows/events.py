@@ -261,12 +261,15 @@ class WorkflowFailedEvent(StopEvent):
         exception_type: The fully qualified type name of the exception that caused the failure.
         exception_message: The string representation of the exception message.
         traceback: The formatted stack trace of the exception.
+        attempts: The total number of attempts made before giving up.
+        elapsed_seconds: Time in seconds from first attempt to final failure.
 
     Examples:
         ```python
         async for event in handler.stream_events():
             if isinstance(event, WorkflowFailedEvent):
-                print(f"Step '{event.step_name}' failed: {event.exception_message}")
+                print(f"Step '{event.step_name}' failed after {event.attempts} attempts")
+                print(f"Total time: {event.elapsed_seconds:.2f}s")
                 print(event.traceback)
         ```
     """
@@ -275,6 +278,8 @@ class WorkflowFailedEvent(StopEvent):
     exception_type: str
     exception_message: str
     traceback: str
+    attempts: int
+    elapsed_seconds: float
 
 
 class InputRequiredEvent(Event):

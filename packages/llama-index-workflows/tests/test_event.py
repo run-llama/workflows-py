@@ -253,11 +253,15 @@ def test_workflow_failed_event() -> None:
         exception_type="builtins.ValueError",
         exception_message="Something went wrong",
         traceback="Traceback (most recent call last):\n  ...\nValueError: Something went wrong\n",
+        attempts=3,
+        elapsed_seconds=1.5,
     )
     assert ev.step_name == "my_step"
     assert ev.exception_type == "builtins.ValueError"
     assert ev.exception_message == "Something went wrong"
     assert "ValueError" in ev.traceback
+    assert ev.attempts == 3
+    assert ev.elapsed_seconds == 1.5
     assert isinstance(ev, StopEvent)
 
 
@@ -268,6 +272,8 @@ def test_workflow_failed_event_serialization() -> None:
         exception_type="builtins.RuntimeError",
         exception_message="Test failure",
         traceback="Traceback...\nRuntimeError: Test failure\n",
+        attempts=2,
+        elapsed_seconds=0.5,
     )
     data_dict = ev.model_dump()
     assert data_dict == {
@@ -275,6 +281,8 @@ def test_workflow_failed_event_serialization() -> None:
         "exception_type": "builtins.RuntimeError",
         "exception_message": "Test failure",
         "traceback": "Traceback...\nRuntimeError: Test failure\n",
+        "attempts": 2,
+        "elapsed_seconds": 0.5,
     }
 
     serializer = JsonSerializer()
@@ -287,6 +295,8 @@ def test_workflow_failed_event_serialization() -> None:
     assert ev.exception_type == deserialized_ev.exception_type
     assert ev.exception_message == deserialized_ev.exception_message
     assert ev.traceback == deserialized_ev.traceback
+    assert ev.attempts == deserialized_ev.attempts
+    assert ev.elapsed_seconds == deserialized_ev.elapsed_seconds
 
 
 def test_workflow_failed_event_repr() -> None:
@@ -296,6 +306,8 @@ def test_workflow_failed_event_repr() -> None:
         exception_type="builtins.ValueError",
         exception_message="error msg",
         traceback="...",
+        attempts=1,
+        elapsed_seconds=0.1,
     )
     rep = repr(ev)
     assert "WorkflowFailedEvent" in rep
@@ -311,5 +323,9 @@ def test_workflow_failed_event_with_nested_exception_type() -> None:
         exception_type="http.client.HTTPException",
         exception_message="Connection refused",
         traceback="Traceback...",
+        attempts=5,
+        elapsed_seconds=10.0,
     )
     assert ev.exception_type == "http.client.HTTPException"
+    assert ev.attempts == 5
+    assert ev.elapsed_seconds == 10.0

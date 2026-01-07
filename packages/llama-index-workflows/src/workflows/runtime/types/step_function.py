@@ -125,7 +125,7 @@ def as_step_worker_function(func: Callable[P, Awaitable[R]]) -> StepWorkerFuncti
                 returns.return_values.append(e.add)
             except Exception as e:
                 returns.return_values.append(
-                    StepWorkerFailed(exception=e, failed_at=time.monotonic())
+                    StepWorkerFailed(exception=e, failed_at=time.time())
                 )
             return returns.return_values
         finally:

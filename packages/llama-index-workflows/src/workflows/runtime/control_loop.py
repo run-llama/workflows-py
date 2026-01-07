@@ -469,6 +469,8 @@ def _process_step_result_tick(
                         exc_type, exception, exception.__traceback__
                     )
                 )
+                total_attempts = this_execution.attempts + 1
+                elapsed = result.failed_at - this_execution.first_attempt_at
                 commands.append(
                     CommandPublishEvent(
                         event=WorkflowFailedEvent(
@@ -476,6 +478,8 @@ def _process_step_result_tick(
                             exception_type=exc_qualname,
                             exception_message=str(exception),
                             traceback=exc_traceback,
+                            attempts=total_attempts,
+                            elapsed_seconds=elapsed,
                         )
                     )
                 )
