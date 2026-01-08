@@ -62,28 +62,28 @@ class WorkflowGraphResponse(BaseModel):
 
 
 class WorkflowGraphNode(BaseModel):
-    id: str
-    label: str
-    node_type: str
-    title: str | None
-    event_type: str | None
+    """Node in the workflow graph.
 
-
-class WorkflowGraphResourceNode(BaseModel):
-    """Node representing a resource dependency in the workflow graph.
-
-    Contains metadata about the resource factory for debugging and visualization.
+    Represents steps, events, external nodes, or resources.
+    Resource-specific fields are optional and only populated for resource nodes.
     """
 
     id: str
     label: str
-    node_type: str  # Always "resource"
-    type_name: str | None  # The type annotation, e.g., "AsyncLlamaCloud"
-    getter_name: str | None  # The factory function name, e.g., "get_llama_cloud_client"
-    source_file: str | None  # Path to the source file containing the getter
-    source_line: int | None  # Line number where the getter is defined
-    docstring: str | None  # Documentation string of the getter function
-    unique_hash: str | None  # Unique identifier for deduplication
+    node_type: str  # 'step', 'event', 'external', 'resource'
+    title: str | None = None
+    event_type: str | None = None
+    # Resource-specific fields (only populated when node_type == "resource")
+    type_name: str | None = None  # The type annotation, e.g., "AsyncLlamaCloud"
+    getter_name: str | None = None  # The factory function name
+    source_file: str | None = None  # Path to the source file containing the getter
+    source_line: int | None = None  # Line number where the getter is defined
+    docstring: str | None = None  # Documentation string of the getter function
+    unique_hash: str | None = None  # Unique identifier for deduplication
+
+
+# Backwards compatibility alias
+WorkflowGraphResourceNode = WorkflowGraphNode
 
 
 class WorkflowGraphEdge(BaseModel):
@@ -95,7 +95,6 @@ class WorkflowGraphEdge(BaseModel):
 class WorkflowGraphNodeEdges(BaseModel):
     nodes: list[WorkflowGraphNode]
     edges: list[WorkflowGraphEdge]
-    resource_nodes: list[WorkflowGraphResourceNode] = []
 
 
 __all__ = [

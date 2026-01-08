@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import List, Optional
 
 from workflows import Workflow
@@ -51,14 +51,7 @@ class DrawWorkflowNode:
             node_type=self.node_type,
             title=self.title,
             event_type=self.event_type.__name__ if self.event_type else None,
-        )
-
-    def to_resource_response_model(self) -> WorkflowGraphResourceNode:
-        """Convert to resource response model (for resource nodes only)."""
-        return WorkflowGraphResourceNode(
-            id=self.id,
-            label=self.label,
-            node_type=self.node_type,
+            # Resource-specific fields
             type_name=self.type_name,
             getter_name=self.getter_name,
             source_file=self.source_file,
@@ -66,6 +59,11 @@ class DrawWorkflowNode:
             docstring=self.docstring,
             unique_hash=self.unique_hash,
         )
+
+    # Backwards compatibility alias
+    def to_resource_response_model(self) -> WorkflowGraphResourceNode:
+        """Convert to resource response model (for resource nodes only)."""
+        return self.to_response_model()
 
     @classmethod
     def from_resource_definition(
@@ -122,16 +120,17 @@ class DrawWorkflowGraph:
 
     nodes: List[DrawWorkflowNode]
     edges: List[DrawWorkflowEdge]
-    resource_nodes: List[DrawWorkflowNode] = field(default_factory=list)
 
     def to_response_model(self) -> WorkflowGraphNodeEdges:
         return WorkflowGraphNodeEdges(
             nodes=[node.to_response_model() for node in self.nodes],
             edges=[edge.to_response_model() for edge in self.edges],
-            resource_nodes=[
-                rn.to_resource_response_model() for rn in self.resource_nodes
-            ],
         )
+
+    @property
+    def resource_nodes(self) -> List[DrawWorkflowNode]:
+        """Get resource nodes (for backwards compatibility)."""
+        return [n for n in self.nodes if n.node_type == "resource"]
 
 
 def _truncate_label(label: str, max_length: int) -> str:
@@ -150,11 +149,8 @@ def extract_workflow_structure(
 
     nodes: List[DrawWorkflowNode] = []
     edges: List[DrawWorkflowEdge] = []
-    resource_nodes: List[DrawWorkflowResourceNode] = []
     added_nodes: set[str] = set()  # Track added node IDs to avoid duplicates
-    added_resource_nodes: dict[
-        str, DrawWorkflowResourceNode
-    ] = {}  # Track by unique_hash
+    added_resource_nodes: dict[str, DrawWorkflowNode] = {}  # Track by unique_hash
 
     step_config: Optional[StepConfig] = None
 
@@ -273,10 +269,8 @@ def extract_workflow_structure(
         for resource_def in step_config.resources:
             resource_hash = resource_def.resource.unique_id
             if resource_hash not in added_resource_nodes:
-                resource_node = DrawWorkflowResourceNode.from_resource_definition(
-                    resource_def
-                )
-                resource_nodes.append(resource_node)
+                resource_node = DrawWorkflowNode.from_resource_definition(resource_def)
+                nodes.append(resource_node)
                 added_resource_nodes[resource_hash] = resource_node
 
     # Second pass: Add edges
@@ -316,4 +310,4 @@ def extract_workflow_structure(
                 )
             )
 
-    return DrawWorkflowGraph(nodes=nodes, edges=edges, resource_nodes=resource_nodes)
+    return DrawWorkflowGraph(nodes=nodes, edges=edges)

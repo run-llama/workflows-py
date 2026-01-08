@@ -95,34 +95,25 @@ def _render_pyvis(
     for node in graph.nodes:
         color = _get_node_color(node)
         shape = _get_node_shape(node)
+
+        # Build title - for resources include metadata
+        title = node.title
+        if node.node_type == "resource":
+            title_parts = [f"Type: {node.type_name or 'Unknown'}"]
+            if node.getter_name:
+                title_parts.append(f"Getter: {node.getter_name}")
+            if node.source_file:
+                location = node.source_file
+                if node.source_line:
+                    location += f":{node.source_line}"
+                title_parts.append(f"Source: {location}")
+            if node.docstring:
+                title_parts.append(f"Doc: {node.docstring[:100]}...")
+            title = "\n".join(title_parts)
+
         net.add_node(
             node.id,
             label=node.label,
-            title=node.title,
-            color=color,
-            shape=shape,
-        )
-
-    # Add resource nodes
-    for resource_node in graph.resource_nodes:
-        color = _get_node_color(resource_node)
-        shape = _get_node_shape(resource_node)
-        # Build title with resource metadata
-        title_parts = [f"Type: {resource_node.type_name or 'Unknown'}"]
-        if resource_node.getter_name:
-            title_parts.append(f"Getter: {resource_node.getter_name}")
-        if resource_node.source_file:
-            location = resource_node.source_file
-            if resource_node.source_line:
-                location += f":{resource_node.source_line}"
-            title_parts.append(f"Source: {location}")
-        if resource_node.docstring:
-            title_parts.append(f"Doc: {resource_node.docstring[:100]}...")
-        title = "\n".join(title_parts)
-
-        net.add_node(
-            resource_node.id,
-            label=resource_node.label,
             title=title,
             color=color,
             shape=shape,
@@ -219,13 +210,9 @@ def _render_mermaid(graph: DrawWorkflowGraph, filename: str) -> str:
     added_edges: set[str] = set()
 
     # Build lookup dictionary for all nodes
-    node_by_id: dict[str, DrawWorkflowNode] = {}
-    for node in graph.nodes:
-        node_by_id[node.id] = node
-    for resource_node in graph.resource_nodes:
-        node_by_id[resource_node.id] = resource_node
+    node_by_id: dict[str, DrawWorkflowNode] = {node.id: node for node in graph.nodes}
 
-    # Add regular nodes
+    # Add nodes
     for node in graph.nodes:
         clean_id = _get_clean_node_id(node)
 
@@ -238,21 +225,6 @@ def _render_mermaid(graph: DrawWorkflowGraph, filename: str) -> str:
             css_class = _get_mermaid_css_class(node)
             mermaid_lines.append(
                 f'    {clean_id}{shape_start}"{node.label}"{shape_end}:::{css_class}'
-            )
-
-    # Add resource nodes
-    for resource_node in graph.resource_nodes:
-        clean_id = _get_clean_node_id(resource_node)
-
-        if clean_id not in added_nodes:
-            added_nodes.add(clean_id)
-
-            shape = _get_node_shape(resource_node)
-            shape_start, shape_end = _get_mermaid_shape(shape)
-
-            css_class = _get_mermaid_css_class(resource_node)
-            mermaid_lines.append(
-                f'    {clean_id}{shape_start}"{resource_node.label}"{shape_end}:::{css_class}'
             )
 
     # Add edges

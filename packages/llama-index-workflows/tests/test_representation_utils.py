@@ -319,9 +319,10 @@ def test_graph_with_resources_to_response_model() -> None:
 
     response = graph.to_response_model()
 
-    # Check resource_nodes are included
-    assert len(response.resource_nodes) == 1
-    rn = response.resource_nodes[0]
+    # Check resource nodes are in the nodes list
+    resource_nodes = [n for n in response.nodes if n.node_type == "resource"]
+    assert len(resource_nodes) == 1
+    rn = resource_nodes[0]
     assert rn.type_name == "DatabaseClient"
     assert rn.getter_name == "get_database_client"
 
