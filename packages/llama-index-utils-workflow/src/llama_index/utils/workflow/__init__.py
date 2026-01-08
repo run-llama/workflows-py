@@ -195,23 +195,7 @@ def _get_mermaid_css_class(node: DrawWorkflowNode) -> str:
 
 def _get_clean_node_id(node: DrawWorkflowNode) -> str:
     """Get a clean Mermaid-compatible ID for a node."""
-    if node.node_type == "step":
-        return f"step_{_clean_id_for_mermaid(node.id)}"
-    elif node.node_type == "external":
-        return node.id  # external_step is already clean
-    elif node.node_type == "resource":
-        return f"resource_{_clean_id_for_mermaid(node.id)}"
-    elif node.node_type in [
-        "agent",
-        "tool",
-        "workflow_base",
-        "workflow_agent",
-        "workflow_tool",
-        "workflow_handoff",
-    ]:
-        return _clean_id_for_mermaid(node.id)
-    else:  # event
-        return f"event_{_clean_id_for_mermaid(node.id)}"
+    return f"{node.node_type}_{_clean_id_for_mermaid(node.id)}"
 
 
 def _get_mermaid_shape(shape: str) -> tuple[str, str]:
