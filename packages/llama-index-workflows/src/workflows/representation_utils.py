@@ -301,14 +301,14 @@ def extract_workflow_structure(
             if issubclass(event_type, HumanResponseEvent):
                 edges.append(DrawWorkflowEdge("external_step", event_type.__name__))
 
-        # Edges from resources to steps (with variable name as label)
+        # Edges from steps to resources (with variable name as label)
         for resource_def in step_config.resources:
             resource_hash = resource_def.resource.unique_id
             resource_node = added_resource_nodes[resource_hash]
             edges.append(
                 DrawWorkflowEdge(
-                    source=resource_node.id,
-                    target=step_name,
+                    source=step_name,
+                    target=resource_node.id,
                     label=resource_def.name,  # The variable name
                 )
             )

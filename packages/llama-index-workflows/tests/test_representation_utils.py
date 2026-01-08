@@ -195,17 +195,17 @@ def test_extract_workflow_structure_with_resources() -> None:
 
 
 def test_resource_node_edges_have_variable_names() -> None:
-    """Test that edges from resources to steps have the variable name as label."""
+    """Test that edges from steps to resources have the variable name as label."""
     wf = WorkflowWithResources()
     graph = extract_workflow_structure(workflow=wf)
 
-    # Find edges from resource nodes
-    resource_edges = [e for e in graph.edges if e.source.startswith("resource_")]
+    # Find edges to resource nodes
+    resource_edges = [e for e in graph.edges if e.target.startswith("resource_")]
 
     assert len(resource_edges) == 1
     edge = resource_edges[0]
     assert edge.label == "db_client"  # The variable name
-    assert edge.target == "step_with_resource"
+    assert edge.source == "step_with_resource"
 
 
 def test_resource_nodes_are_deduplicated() -> None:
@@ -241,8 +241,8 @@ def test_resource_nodes_are_deduplicated() -> None:
     # Should have only one resource node (deduplicated)
     assert len(graph.resource_nodes) == 1
 
-    # But should have two edges (one to each step)
-    resource_edges = [e for e in graph.edges if e.source.startswith("resource_")]
+    # But should have two edges (one from each step)
+    resource_edges = [e for e in graph.edges if e.target.startswith("resource_")]
     assert len(resource_edges) == 2
 
     # Both edges should have the variable name "db"
@@ -279,7 +279,7 @@ def test_multiple_different_resources() -> None:
     assert type_names == {"DatabaseClient", "CacheClient"}
 
     # Should have two edges with different labels
-    resource_edges = [e for e in graph.edges if e.source.startswith("resource_")]
+    resource_edges = [e for e in graph.edges if e.target.startswith("resource_")]
     assert len(resource_edges) == 2
 
     labels = {e.label for e in resource_edges}

@@ -386,7 +386,7 @@ async def test_pyvis_resource_nodes_rendered(workflow_with_resources: Workflow) 
         for call in node_calls:
             args, kwargs = call
             node_id = args[0]
-            if node_id.startswith("resource_"):
+            if "resource_" in node_id:
                 resource_nodes.append((node_id, kwargs))
 
         assert len(resource_nodes) > 0, "Should have resource nodes"
