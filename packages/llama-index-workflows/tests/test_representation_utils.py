@@ -180,9 +180,10 @@ def test_extract_workflow_structure_with_resources() -> None:
     graph = extract_workflow_structure(workflow=wf)
 
     # Should have resource nodes
-    assert len(graph.resource_nodes) == 1
+    resource_nodes = [n for n in graph.nodes if n.node_type == "resource"]
+    assert len(resource_nodes) == 1
 
-    resource_node = graph.resource_nodes[0]
+    resource_node = resource_nodes[0]
     assert resource_node.node_type == "resource"
     assert resource_node.type_name == "DatabaseClient"
     assert resource_node.getter_name == "get_database_client"
@@ -238,7 +239,8 @@ def test_resource_nodes_are_deduplicated() -> None:
     graph = extract_workflow_structure(workflow=wf)
 
     # Should have only one resource node (deduplicated)
-    assert len(graph.resource_nodes) == 1
+    resource_nodes = [n for n in graph.nodes if n.node_type == "resource"]
+    assert len(resource_nodes) == 1
 
     # But should have two edges (one from each step)
     resource_edges = [e for e in graph.edges if e.target.startswith("resource_")]
@@ -272,9 +274,10 @@ def test_multiple_different_resources() -> None:
     graph = extract_workflow_structure(workflow=wf)
 
     # Should have two different resource nodes
-    assert len(graph.resource_nodes) == 2
+    resource_nodes = [n for n in graph.nodes if n.node_type == "resource"]
+    assert len(resource_nodes) == 2
 
-    type_names = {rn.type_name for rn in graph.resource_nodes}
+    type_names = {rn.type_name for rn in resource_nodes}
     assert type_names == {"DatabaseClient", "CacheClient"}
 
     # Should have two edges with different labels
@@ -299,7 +302,7 @@ def test_resource_node_to_response_model() -> None:
         unique_hash="abc123",
     )
 
-    response = resource_node.to_resource_response_model()
+    response = resource_node.to_response_model()
 
     assert response.id == "resource_abc123"
     assert response.label == "TestType"

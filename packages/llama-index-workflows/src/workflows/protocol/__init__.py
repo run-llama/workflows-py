@@ -82,10 +82,6 @@ class WorkflowGraphNode(BaseModel):
     unique_hash: str | None = None  # Unique identifier for deduplication
 
 
-# Backwards compatibility alias
-WorkflowGraphResourceNode = WorkflowGraphNode
-
-
 class WorkflowGraphEdge(BaseModel):
     source: str
     target: str
@@ -109,7 +105,6 @@ __all__ = [
     "WorkflowEventsListResponse",
     "WorkflowGraphResponse",
     "WorkflowGraphNode",
-    "WorkflowGraphResourceNode",
     "WorkflowGraphEdge",
     "WorkflowGraphNodeEdges",
 ]

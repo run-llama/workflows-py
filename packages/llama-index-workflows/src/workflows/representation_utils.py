@@ -12,7 +12,6 @@ from workflows.protocol import (
     WorkflowGraphEdge,
     WorkflowGraphNode,
     WorkflowGraphNodeEdges,
-    WorkflowGraphResourceNode,
 )
 from workflows.resource import ResourceDefinition
 from workflows.utils import (
@@ -51,7 +50,6 @@ class DrawWorkflowNode:
             node_type=self.node_type,
             title=self.title,
             event_type=self.event_type.__name__ if self.event_type else None,
-            # Resource-specific fields
             type_name=self.type_name,
             getter_name=self.getter_name,
             source_file=self.source_file,
@@ -59,11 +57,6 @@ class DrawWorkflowNode:
             docstring=self.docstring,
             unique_hash=self.unique_hash,
         )
-
-    # Backwards compatibility alias
-    def to_resource_response_model(self) -> WorkflowGraphResourceNode:
-        """Convert to resource response model (for resource nodes only)."""
-        return self.to_response_model()
 
     @classmethod
     def from_resource_definition(
@@ -94,10 +87,6 @@ class DrawWorkflowNode:
         )
 
 
-# Backwards compatibility alias
-DrawWorkflowResourceNode = DrawWorkflowNode
-
-
 @dataclass
 class DrawWorkflowEdge:
     """Represents an edge in the workflow graph."""
@@ -126,11 +115,6 @@ class DrawWorkflowGraph:
             nodes=[node.to_response_model() for node in self.nodes],
             edges=[edge.to_response_model() for edge in self.edges],
         )
-
-    @property
-    def resource_nodes(self) -> List[DrawWorkflowNode]:
-        """Get resource nodes (for backwards compatibility)."""
-        return [n for n in self.nodes if n.node_type == "resource"]
 
 
 def _truncate_label(label: str, max_length: int) -> str:
