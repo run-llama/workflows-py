@@ -24,7 +24,6 @@ from workflows.representation_utils import (
     DrawWorkflowEdge,
     DrawWorkflowGraph,
     DrawWorkflowNode,
-    DrawWorkflowResourceNode,
     _truncate_label,
 )
 from workflows.representation_utils import (
@@ -34,7 +33,7 @@ from workflows.runtime.types.results import AddCollectedEvent, StepWorkerResult
 from workflows.runtime.types.ticks import TickAddEvent, TickStepResult, WorkflowTick
 
 
-def _get_node_color(node: DrawWorkflowNode | DrawWorkflowResourceNode) -> str:
+def _get_node_color(node: DrawWorkflowNode) -> str:
     """Determine color for a node based on its type and event_type."""
     if node.node_type == "step":
         return "#ADD8E6"  # Light blue for steps
@@ -43,12 +42,11 @@ def _get_node_color(node: DrawWorkflowNode | DrawWorkflowResourceNode) -> str:
     elif node.node_type == "resource":
         return "#DDA0DD"  # Plum/light purple for resources
     elif node.node_type == "event":
-        if isinstance(node, DrawWorkflowNode) and node.event_type:
+        if node.event_type:
             return _determine_event_color(node.event_type)
         return "#90EE90"
     elif node.node_type == "agent":
-        # Determine color based on agent type
-        if isinstance(node, DrawWorkflowNode) and node.event_type:
+        if node.event_type:
             if issubclass(node.event_type, ReActAgent):
                 return "#E27AFF"
             elif issubclass(node.event_type, CodeActAgent):
@@ -68,28 +66,22 @@ def _get_node_color(node: DrawWorkflowNode | DrawWorkflowResourceNode) -> str:
         return "#90EE90"  # Default light green
 
 
-def _get_node_shape(node: DrawWorkflowNode | DrawWorkflowResourceNode) -> str:
+def _get_node_shape(node: DrawWorkflowNode) -> str:
     """Determine shape for a node based on its type."""
-    if node.node_type == "step" or node.node_type == "external":
-        return "box"  # Steps and external_step use box
+    if node.node_type in ("step", "external"):
+        return "box"
     elif node.node_type == "event":
-        return "ellipse"  # Events use ellipse
+        return "ellipse"
     elif node.node_type == "resource":
-        return "hexagon"  # Resources use hexagon
-    elif node.node_type == "agent":
-        return "ellipse"  # Agents use ellipse
-    elif node.node_type == "tool":
-        return "ellipse"  # Tools use ellipse (matching original ellipsis behavior)
+        return "hexagon"
+    elif node.node_type in ("agent", "tool", "workflow_agent", "workflow_handoff"):
+        return "ellipse"
     elif node.node_type == "workflow_base":
-        return "diamond"  # Workflow base uses diamond
-    elif node.node_type == "workflow_agent":
-        return "ellipse"  # Workflow agents use ellipse
+        return "diamond"
     elif node.node_type == "workflow_tool":
-        return "box"  # Workflow tools use box (matching original square behavior)
-    elif node.node_type == "workflow_handoff":
-        return "ellipse"  # Handoff nodes use ellipse
+        return "box"
     else:
-        return "box"  # Default shape
+        return "box"
 
 
 def _render_pyvis(
@@ -165,7 +157,7 @@ def _clean_id_for_mermaid(name: str) -> str:
     return name.replace(" ", "_").replace("-", "_").replace(".", "_")
 
 
-def _get_mermaid_css_class(node: DrawWorkflowNode | DrawWorkflowResourceNode) -> str:
+def _get_mermaid_css_class(node: DrawWorkflowNode) -> str:
     """Determine CSS class for a node in Mermaid based on its type and event_type."""
     if node.node_type == "step":
         return "stepStyle"
@@ -174,15 +166,14 @@ def _get_mermaid_css_class(node: DrawWorkflowNode | DrawWorkflowResourceNode) ->
     elif node.node_type == "resource":
         return "resourceStyle"
     elif node.node_type == "event":
-        if isinstance(node, DrawWorkflowNode) and node.event_type:
+        if node.event_type:
             if issubclass(node.event_type, StartEvent):
                 return "startEventStyle"
             elif issubclass(node.event_type, StopEvent):
                 return "stopEventStyle"
         return "defaultEventStyle"
     elif node.node_type == "agent":
-        # Determine class based on agent type
-        if isinstance(node, DrawWorkflowNode) and node.event_type:
+        if node.event_type:
             if issubclass(node.event_type, ReActAgent):
                 return "reactAgentStyle"
             elif issubclass(node.event_type, CodeActAgent):
@@ -202,9 +193,7 @@ def _get_mermaid_css_class(node: DrawWorkflowNode | DrawWorkflowResourceNode) ->
         return "defaultEventStyle"
 
 
-def _get_clean_node_id(
-    node: DrawWorkflowNode | DrawWorkflowResourceNode,
-) -> str:
+def _get_clean_node_id(node: DrawWorkflowNode) -> str:
     """Get a clean Mermaid-compatible ID for a node."""
     if node.node_type == "step":
         return f"step_{_clean_id_for_mermaid(node.id)}"
@@ -245,8 +234,8 @@ def _render_mermaid(graph: DrawWorkflowGraph, filename: str) -> str:
     added_nodes: set[str] = set()
     added_edges: set[str] = set()
 
-    # Build lookup dictionaries for nodes
-    node_by_id: dict[str, DrawWorkflowNode | DrawWorkflowResourceNode] = {}
+    # Build lookup dictionary for all nodes
+    node_by_id: dict[str, DrawWorkflowNode] = {}
     for node in graph.nodes:
         node_by_id[node.id] = node
     for resource_node in graph.resource_nodes:

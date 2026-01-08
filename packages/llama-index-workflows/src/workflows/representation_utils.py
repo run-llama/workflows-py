@@ -23,15 +23,26 @@ from workflows.utils import (
 
 @dataclass
 class DrawWorkflowNode:
-    """Represents a node in the workflow graph."""
+    """Represents a node in the workflow graph.
+
+    This is a unified node type that can represent steps, events, external nodes,
+    and resources. Resource-specific fields are optional and only populated for
+    resource nodes.
+    """
 
     id: str
     label: str
     node_type: str  # 'step', 'event', 'external', 'resource'
     title: Optional[str] = None
-    event_type: Optional[type] = (
-        None  # Store the actual event type for styling decisions
-    )
+    # Event-specific field
+    event_type: Optional[type] = None
+    # Resource-specific fields
+    type_name: Optional[str] = None  # e.g., "AsyncLlamaCloud"
+    getter_name: Optional[str] = None  # e.g., "get_llama_cloud_client"
+    source_file: Optional[str] = None
+    source_line: Optional[int] = None
+    docstring: Optional[str] = None
+    unique_hash: Optional[str] = None
 
     def to_response_model(self) -> WorkflowGraphNode:
         return WorkflowGraphNode(
@@ -42,22 +53,8 @@ class DrawWorkflowNode:
             event_type=self.event_type.__name__ if self.event_type else None,
         )
 
-
-@dataclass
-class DrawWorkflowResourceNode:
-    """Represents a resource node in the workflow graph."""
-
-    id: str
-    label: str
-    node_type: str = "resource"
-    type_name: Optional[str] = None  # e.g., "AsyncLlamaCloud"
-    getter_name: Optional[str] = None  # e.g., "get_llama_cloud_client"
-    source_file: Optional[str] = None
-    source_line: Optional[int] = None
-    docstring: Optional[str] = None
-    unique_hash: Optional[str] = None
-
-    def to_response_model(self) -> WorkflowGraphResourceNode:
+    def to_resource_response_model(self) -> WorkflowGraphResourceNode:
+        """Convert to resource response model (for resource nodes only)."""
         return WorkflowGraphResourceNode(
             id=self.id,
             label=self.label,
@@ -73,8 +70,8 @@ class DrawWorkflowResourceNode:
     @classmethod
     def from_resource_definition(
         cls, resource_def: ResourceDefinition
-    ) -> "DrawWorkflowResourceNode":
-        """Create a DrawWorkflowResourceNode from a ResourceDefinition."""
+    ) -> "DrawWorkflowNode":
+        """Create a DrawWorkflowNode from a ResourceDefinition."""
         resource = resource_def.resource
 
         # Get type name from annotation
@@ -99,6 +96,10 @@ class DrawWorkflowResourceNode:
         )
 
 
+# Backwards compatibility alias
+DrawWorkflowResourceNode = DrawWorkflowNode
+
+
 @dataclass
 class DrawWorkflowEdge:
     """Represents an edge in the workflow graph."""
@@ -121,13 +122,15 @@ class DrawWorkflowGraph:
 
     nodes: List[DrawWorkflowNode]
     edges: List[DrawWorkflowEdge]
-    resource_nodes: List[DrawWorkflowResourceNode] = field(default_factory=list)
+    resource_nodes: List[DrawWorkflowNode] = field(default_factory=list)
 
     def to_response_model(self) -> WorkflowGraphNodeEdges:
         return WorkflowGraphNodeEdges(
             nodes=[node.to_response_model() for node in self.nodes],
             edges=[edge.to_response_model() for edge in self.edges],
-            resource_nodes=[rn.to_response_model() for rn in self.resource_nodes],
+            resource_nodes=[
+                rn.to_resource_response_model() for rn in self.resource_nodes
+            ],
         )
 
 

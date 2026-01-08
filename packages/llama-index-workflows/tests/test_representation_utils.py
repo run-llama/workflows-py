@@ -7,7 +7,6 @@ from workflows.representation_utils import (
     DrawWorkflowEdge,
     DrawWorkflowGraph,
     DrawWorkflowNode,
-    DrawWorkflowResourceNode,
     extract_workflow_structure,
 )
 from workflows.resource import Resource
@@ -287,8 +286,8 @@ def test_multiple_different_resources() -> None:
 
 
 def test_resource_node_to_response_model() -> None:
-    """Test that DrawWorkflowResourceNode converts to response model correctly."""
-    resource_node = DrawWorkflowResourceNode(
+    """Test that DrawWorkflowNode converts to resource response model correctly."""
+    resource_node = DrawWorkflowNode(
         id="resource_abc123",
         label="TestType",
         node_type="resource",
@@ -300,7 +299,7 @@ def test_resource_node_to_response_model() -> None:
         unique_hash="abc123",
     )
 
-    response = resource_node.to_response_model()
+    response = resource_node.to_resource_response_model()
 
     assert response.id == "resource_abc123"
     assert response.label == "TestType"
