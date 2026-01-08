@@ -1,3 +1,5 @@
+import hashlib
+import inspect
 from dataclasses import dataclass
 from typing import List, Optional
 
@@ -62,8 +64,13 @@ class DrawWorkflowNode:
     def from_resource_definition(
         cls, resource_def: ResourceDefinition
     ) -> "DrawWorkflowNode":
-        """Create a DrawWorkflowNode from a ResourceDefinition."""
+        """Create a DrawWorkflowNode from a ResourceDefinition.
+
+        Extracts metadata (source file, line number, docstring) lazily here
+        rather than at Resource creation time for performance.
+        """
         resource = resource_def.resource
+        factory = resource._factory
 
         # Get type name from annotation
         type_name: Optional[str] = None
@@ -74,16 +81,33 @@ class DrawWorkflowNode:
             else:
                 type_name = str(type_annotation)
 
+        # Extract source metadata lazily
+        source_file: Optional[str] = None
+        source_line: Optional[int] = None
+        try:
+            source_file = inspect.getfile(factory)
+        except (TypeError, OSError):
+            pass
+        try:
+            _, source_line = inspect.getsourcelines(factory)
+        except (TypeError, OSError):
+            pass
+        docstring = inspect.getdoc(factory)
+
+        # Compute unique hash for deduplication
+        hash_input = f"{resource.name}:{source_file or 'unknown'}"
+        unique_hash = hashlib.sha256(hash_input.encode()).hexdigest()[:12]
+
         return cls(
-            id=f"resource_{resource.unique_id}",
+            id=f"resource_{unique_hash}",
             label=type_name or resource.name,
             node_type="resource",
             type_name=type_name,
             getter_name=resource.name,
-            source_file=resource.source_file,
-            source_line=resource.source_line,
-            docstring=resource.docstring,
-            unique_hash=resource.unique_id,
+            source_file=source_file,
+            source_line=source_line,
+            docstring=docstring,
+            unique_hash=unique_hash,
         )
 
 
@@ -134,7 +158,7 @@ def extract_workflow_structure(
     nodes: List[DrawWorkflowNode] = []
     edges: List[DrawWorkflowEdge] = []
     added_nodes: set[str] = set()  # Track added node IDs to avoid duplicates
-    added_resource_nodes: dict[str, DrawWorkflowNode] = {}  # Track by unique_hash
+    added_resource_nodes: dict[int, DrawWorkflowNode] = {}  # Track by factory id
 
     step_config: Optional[StepConfig] = None
 
@@ -249,13 +273,13 @@ def extract_workflow_structure(
                 )
                 added_nodes.add("external_step")
 
-        # Add resource nodes (deduplicated by unique_hash)
+        # Add resource nodes (deduplicated by factory identity)
         for resource_def in step_config.resources:
-            resource_hash = resource_def.resource.unique_id
-            if resource_hash not in added_resource_nodes:
+            factory_id = id(resource_def.resource._factory)
+            if factory_id not in added_resource_nodes:
                 resource_node = DrawWorkflowNode.from_resource_definition(resource_def)
                 nodes.append(resource_node)
-                added_resource_nodes[resource_hash] = resource_node
+                added_resource_nodes[factory_id] = resource_node
 
     # Second pass: Add edges
     for step_name, step_func in steps.items():
@@ -284,8 +308,8 @@ def extract_workflow_structure(
 
         # Edges from steps to resources (with variable name as label)
         for resource_def in step_config.resources:
-            resource_hash = resource_def.resource.unique_id
-            resource_node = added_resource_nodes[resource_hash]
+            factory_id = id(resource_def.resource._factory)
+            resource_node = added_resource_nodes[factory_id]
             edges.append(
                 DrawWorkflowEdge(
                     source=step_name,

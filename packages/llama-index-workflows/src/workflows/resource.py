@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import inspect
 from typing import (
     Any,
@@ -26,8 +25,7 @@ class _Resource(Generic[T]):
     """Internal wrapper for resource factories.
 
     Wraps sync/async factories and records metadata such as the qualified name
-    and cache behavior. Also captures source location metadata for graph
-    visualization and debugging.
+    and cache behavior.
     """
 
     def __init__(self, factory: Callable[..., T | Awaitable[T]], cache: bool) -> None:
@@ -35,39 +33,6 @@ class _Resource(Generic[T]):
         self._is_async = inspect.iscoroutinefunction(factory)
         self.name = getattr(factory, "__qualname__", type(factory).__name__)
         self.cache = cache
-
-        # Extract source location metadata
-        self.source_file: str | None = None
-        self.source_line: int | None = None
-
-        try:
-            self.source_file = inspect.getfile(factory)
-        except (TypeError, OSError):
-            pass
-
-        try:
-            _, self.source_line = inspect.getsourcelines(factory)
-        except (TypeError, OSError):
-            pass
-
-        self.docstring: str | None = inspect.getdoc(factory)
-
-        # Generate a unique hash for the factory function
-        self._hash = self._compute_hash()
-
-    def _compute_hash(self) -> str:
-        """Compute a unique hash for this resource factory.
-
-        The hash is based on the qualified name and source file to allow
-        deduplication while remaining stable across runs.
-        """
-        hash_input = f"{self.name}:{self.source_file or 'unknown'}"
-        return hashlib.sha256(hash_input.encode()).hexdigest()[:12]
-
-    @property
-    def unique_id(self) -> str:
-        """Return a unique identifier for this resource factory."""
-        return self._hash
 
     async def call(self) -> T:
         """Invoke the underlying factory, awaiting if necessary."""
