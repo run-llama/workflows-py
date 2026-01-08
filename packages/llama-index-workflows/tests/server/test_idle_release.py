@@ -8,13 +8,12 @@ from typing import AsyncGenerator
 
 import pytest
 import time_machine
+from httpx import ASGITransport, AsyncClient
 from workflows import Context, Workflow, step
 from workflows.events import HumanResponseEvent, StartEvent, StopEvent
 from workflows.server import WorkflowServer
 from workflows.server.abstract_workflow_store import HandlerQuery, PersistentHandler
 from workflows.server.memory_workflow_store import MemoryWorkflowStore
-
-from .util import wait_for_passing  # type: ignore[import]
 
 
 class WaitableExternalEvent(HumanResponseEvent):
@@ -250,33 +249,39 @@ async def test_active_stream_consumer_prevents_release(
     memory_store: MemoryWorkflowStore, waiting_workflow: Workflow
 ) -> None:
     """Test that a workflow with an active stream consumer is not released."""
-    server = WorkflowServer(
-        workflow_store=memory_store,
-        idle_release_timeout=timedelta(milliseconds=10),
-    )
-    server.add_workflow(
-        "test", waiting_workflow, additional_events=[WaitableExternalEvent]
-    )
+    from .util import async_yield
 
-    async with server.contextmanager():
-        # Start workflow
-        handler_id = "consumer-test-1"
-        handler = server._workflows["test"].run()
-        await server._run_workflow_handler(handler_id, "test", handler)
+    idle_timeout = timedelta(milliseconds=10)
 
-        wrapper = server._handlers[handler_id]
+    with time_machine.travel("2026-01-07T12:00:00Z", tick=False) as traveller:
+        server = WorkflowServer(
+            workflow_store=memory_store,
+            idle_release_timeout=idle_timeout,
+        )
+        server.add_workflow(
+            "test", waiting_workflow, additional_events=[WaitableExternalEvent]
+        )
 
-        # Simulate an active consumer by locking the mutex
-        async with wrapper.consumer_mutex:
-            # Force idle state and trigger timer
-            wrapper.idle_since = datetime.now(timezone.utc)
-            wrapper._start_idle_release_timer()
+        async with server.contextmanager():
+            # Start workflow
+            handler_id = "consumer-test-1"
+            handler = server._workflows["test"].run()
+            await server._run_workflow_handler(handler_id, "test", handler)
 
-            # Wait for timer to fire (should be blocked by consumer_mutex)
-            await asyncio.sleep(0.05)
+            wrapper = server._handlers[handler_id]
 
-            # Should NOT be released because consumer_mutex is locked
-            assert handler_id in server._handlers
+            # Simulate an active consumer by locking the mutex
+            async with wrapper.consumer_mutex:
+                # Force idle state and trigger timer
+                wrapper.idle_since = datetime.now(timezone.utc)
+                wrapper._start_idle_release_timer()
+
+                # Advance time past the timeout (timer should be blocked by mutex)
+                traveller.shift(timedelta(milliseconds=50))
+                await async_yield(10)
+
+                # Should NOT be released because consumer_mutex is locked
+                assert handler_id in server._handlers
 
 
 @pytest.mark.asyncio
@@ -286,8 +291,8 @@ async def test_reloaded_idle_workflow_is_released_again(
     """Test that a reloaded workflow that stays idle gets released again."""
     from .util import async_yield
 
-    # Use a very short timeout so the test runs fast
-    idle_timeout = timedelta(milliseconds=10)
+    # Use very short timeout - this test needs real time for timers
+    idle_timeout = timedelta(milliseconds=1)
 
     server = WorkflowServer(
         workflow_store=memory_store,
@@ -309,7 +314,7 @@ async def test_reloaded_idle_workflow_is_released_again(
         assert wrapper is not None and wrapper.idle_since is not None
 
         # Wait for the idle release timer to fire
-        await asyncio.sleep(0.02)
+        await asyncio.sleep(0.005)
         assert handler_id not in server._handlers
 
         # Reload the workflow (simulating an event arriving)
@@ -325,7 +330,7 @@ async def test_reloaded_idle_workflow_is_released_again(
         assert reloaded._idle_release_timer is not None
 
         # Wait for it to be released again
-        await asyncio.sleep(0.02)
+        await asyncio.sleep(0.005)
         assert handler_id not in server._handlers
 
 
@@ -386,6 +391,8 @@ async def test_idle_release_disabled_when_timeout_none(
     memory_store: MemoryWorkflowStore, waiting_workflow: Workflow
 ) -> None:
     """Test that no timer is started when idle_release_timeout is None."""
+    from .util import async_yield
+
     server = WorkflowServer(
         workflow_store=memory_store,
         idle_release_timeout=None,  # Disabled
@@ -400,15 +407,11 @@ async def test_idle_release_disabled_when_timeout_none(
         handler = server._workflows["test"].run()
         await server._run_workflow_handler(handler_id, "test", handler)
 
-        # Wait for workflow to become idle
-        async def check_idle() -> None:
-            wrapper = server._handlers.get(handler_id)
-            if wrapper is None or wrapper.idle_since is None:
-                raise ValueError("Not idle yet")
+        # Wait for workflow to become idle (just needs event loop iterations)
+        await async_yield(20)
+        wrapper = server._handlers.get(handler_id)
+        assert wrapper is not None and wrapper.idle_since is not None
 
-        await wait_for_passing(check_idle)
-
-        wrapper = server._handlers[handler_id]
         # Timer should not be set since idle_release_timeout is None
         assert wrapper._idle_release_timer is None
 
@@ -768,8 +771,6 @@ async def test_failed_send_event_preserves_idle_state(
 
     The fix: mark_active() is now called AFTER send_event() succeeds.
     """
-    from httpx import ASGITransport, AsyncClient
-
     from .util import async_yield
 
     idle_timeout = timedelta(milliseconds=100)
@@ -851,8 +852,10 @@ async def test_release_skips_checkpoint_if_handler_was_reloaded(
     4. Call _release_handler with the OLD wrapper
     5. Verify the old release doesn't overwrite the new state
     """
-    # time_machine with tick=True gives us deterministic timestamps
-    with time_machine.travel("2026-01-07T12:27:00.000-08:00", tick=True):
+    from .util import async_yield
+
+    # time_machine with tick=False for fast test execution
+    with time_machine.travel("2026-01-07T12:27:00.000-08:00", tick=False):
         server = WorkflowServer(
             workflow_store=memory_store,
             idle_release_timeout=None,  # Disable auto-release for manual control
@@ -867,13 +870,10 @@ async def test_release_skips_checkpoint_if_handler_was_reloaded(
             handler_id = "race-test-handler"
             await server._run_workflow_handler(handler_id, "test", handler)
 
-            # Wait for workflow to become idle
-            async def check_idle() -> None:
-                wrapper = server._handlers.get(handler_id)
-                if wrapper is None or wrapper.idle_since is None:
-                    raise ValueError("Not idle yet")
-
-            await wait_for_passing(check_idle)
+            # Wait for workflow to become idle (just needs event loop iterations)
+            await async_yield(20)
+            wrapper = server._handlers.get(handler_id)
+            assert wrapper is not None and wrapper.idle_since is not None
 
             old_wrapper = server._handlers[handler_id]
             original_idle_since = old_wrapper.idle_since
