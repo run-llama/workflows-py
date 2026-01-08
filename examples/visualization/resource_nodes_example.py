@@ -24,7 +24,6 @@ from workflows import Workflow, step
 from workflows.events import Event, StartEvent, StopEvent
 from workflows.resource import Resource
 
-
 # --- Mock resource types ---
 
 
@@ -154,7 +153,9 @@ class RAGWorkflow(Workflow):
             context = "Cached context"
         else:
             # Query the database for relevant documents
-            results = db.query(f"SELECT content FROM documents WHERE query = '{ev.query}'")
+            results = db.query(
+                f"SELECT content FROM documents WHERE query = '{ev.query}'"
+            )
             context = " ".join(str(r) for r in results) or "No context found"
 
             # Cache the result
