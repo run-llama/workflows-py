@@ -1352,6 +1352,7 @@ class WorkflowServer:
         handler_id: str,
         start_event: StartEvent | None = None,
         context: Context | None = None,
+        idle_since: datetime | None = None,
     ) -> _WorkflowHandler:
         """Start a workflow and return a wrapper for the handler."""
         with instrument_tags({"handler_id": handler_id}):
@@ -1360,12 +1361,16 @@ class WorkflowServer:
                 start_event=start_event,
             )
             wrapper = await self._run_workflow_handler(
-                handler_id, workflow.name, handler
+                handler_id, workflow.name, handler, idle_since=idle_since
             )
             return wrapper
 
     async def _run_workflow_handler(
-        self, handler_id: str, workflow_name: str, handler: WorkflowHandler
+        self,
+        handler_id: str,
+        workflow_name: str,
+        handler: WorkflowHandler,
+        idle_since: datetime | None = None,
     ) -> _WorkflowHandler:
         """
         Creates a wrapper for the handler and starts streaming events.
@@ -1388,6 +1393,7 @@ class WorkflowServer:
             _idle_release_timeout=self._idle_release_timeout,
             _on_idle_release=self._release_handler,
         )
+        wrapper.idle_since = idle_since
         # Initial checkpoint before registration; fail fast if persistence is unavailable
         await wrapper.checkpoint()
         # Now register and start streaming
@@ -1530,10 +1536,8 @@ class WorkflowServer:
                     ),
                     handler_id=handler_id,
                     context=context,
+                    idle_since=handler_data.idle_since,
                 )
-
-                # Restore idle_since from persisted state
-                wrapper.idle_since = handler_data.idle_since
 
                 # If workflow was idle when released, start the release timer
                 # (it will be cancelled if an event wakes the workflow)
