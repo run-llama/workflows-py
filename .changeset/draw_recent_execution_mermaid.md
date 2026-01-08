@@ -1,5 +1,5 @@
 ---
-"llama-index-utils-workflows": minor
+"llama-index-utils-workflow": minor
 ---
 
 Added new function draw_most_recent_execution_mermaid
