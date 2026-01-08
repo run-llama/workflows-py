@@ -69,14 +69,33 @@ class WorkflowGraphNode(BaseModel):
     event_type: str | None
 
 
+class WorkflowGraphResourceNode(BaseModel):
+    """Node representing a resource dependency in the workflow graph.
+
+    Contains metadata about the resource factory for debugging and visualization.
+    """
+
+    id: str
+    label: str
+    node_type: str  # Always "resource"
+    type_name: str | None  # The type annotation, e.g., "AsyncLlamaCloud"
+    getter_name: str | None  # The factory function name, e.g., "get_llama_cloud_client"
+    source_file: str | None  # Path to the source file containing the getter
+    source_line: int | None  # Line number where the getter is defined
+    docstring: str | None  # Documentation string of the getter function
+    unique_hash: str | None  # Unique identifier for deduplication
+
+
 class WorkflowGraphEdge(BaseModel):
     source: str
     target: str
+    label: str | None = None  # Optional edge label (e.g., variable name for resources)
 
 
 class WorkflowGraphNodeEdges(BaseModel):
     nodes: list[WorkflowGraphNode]
     edges: list[WorkflowGraphEdge]
+    resource_nodes: list[WorkflowGraphResourceNode] = []
 
 
 __all__ = [
@@ -91,6 +110,7 @@ __all__ = [
     "WorkflowEventsListResponse",
     "WorkflowGraphResponse",
     "WorkflowGraphNode",
+    "WorkflowGraphResourceNode",
     "WorkflowGraphEdge",
     "WorkflowGraphNodeEdges",
 ]

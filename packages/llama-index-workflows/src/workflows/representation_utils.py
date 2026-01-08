@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Optional
 
 from workflows import Workflow
@@ -12,7 +12,9 @@ from workflows.protocol import (
     WorkflowGraphEdge,
     WorkflowGraphNode,
     WorkflowGraphNodeEdges,
+    WorkflowGraphResourceNode,
 )
+from workflows.resource import ResourceDefinition
 from workflows.utils import (
     get_steps_from_class,
     get_steps_from_instance,
@@ -25,7 +27,7 @@ class DrawWorkflowNode:
 
     id: str
     label: str
-    node_type: str  # 'step', 'event', 'external'
+    node_type: str  # 'step', 'event', 'external', 'resource'
     title: Optional[str] = None
     event_type: Optional[type] = (
         None  # Store the actual event type for styling decisions
@@ -42,16 +44,74 @@ class DrawWorkflowNode:
 
 
 @dataclass
+class DrawWorkflowResourceNode:
+    """Represents a resource node in the workflow graph."""
+
+    id: str
+    label: str
+    node_type: str = "resource"
+    type_name: Optional[str] = None  # e.g., "AsyncLlamaCloud"
+    getter_name: Optional[str] = None  # e.g., "get_llama_cloud_client"
+    source_file: Optional[str] = None
+    source_line: Optional[int] = None
+    docstring: Optional[str] = None
+    unique_hash: Optional[str] = None
+
+    def to_response_model(self) -> WorkflowGraphResourceNode:
+        return WorkflowGraphResourceNode(
+            id=self.id,
+            label=self.label,
+            node_type=self.node_type,
+            type_name=self.type_name,
+            getter_name=self.getter_name,
+            source_file=self.source_file,
+            source_line=self.source_line,
+            docstring=self.docstring,
+            unique_hash=self.unique_hash,
+        )
+
+    @classmethod
+    def from_resource_definition(
+        cls, resource_def: ResourceDefinition
+    ) -> "DrawWorkflowResourceNode":
+        """Create a DrawWorkflowResourceNode from a ResourceDefinition."""
+        resource = resource_def.resource
+
+        # Get type name from annotation
+        type_name: Optional[str] = None
+        if resource_def.type_annotation is not None:
+            type_annotation = resource_def.type_annotation
+            if hasattr(type_annotation, "__name__"):
+                type_name = type_annotation.__name__
+            else:
+                type_name = str(type_annotation)
+
+        return cls(
+            id=f"resource_{resource.unique_id}",
+            label=type_name or resource.name,
+            node_type="resource",
+            type_name=type_name,
+            getter_name=resource.name,
+            source_file=resource.source_file,
+            source_line=resource.source_line,
+            docstring=resource.docstring,
+            unique_hash=resource.unique_id,
+        )
+
+
+@dataclass
 class DrawWorkflowEdge:
     """Represents an edge in the workflow graph."""
 
     source: str
     target: str
+    label: Optional[str] = None  # Edge label (e.g., variable name for resources)
 
     def to_response_model(self) -> WorkflowGraphEdge:
         return WorkflowGraphEdge(
             source=self.source,
             target=self.target,
+            label=self.label,
         )
 
 
@@ -61,11 +121,13 @@ class DrawWorkflowGraph:
 
     nodes: List[DrawWorkflowNode]
     edges: List[DrawWorkflowEdge]
+    resource_nodes: List[DrawWorkflowResourceNode] = field(default_factory=list)
 
     def to_response_model(self) -> WorkflowGraphNodeEdges:
         return WorkflowGraphNodeEdges(
             nodes=[node.to_response_model() for node in self.nodes],
             edges=[edge.to_response_model() for edge in self.edges],
+            resource_nodes=[rn.to_response_model() for rn in self.resource_nodes],
         )
 
 
@@ -83,9 +145,13 @@ def extract_workflow_structure(
     if not steps:
         steps = get_steps_from_instance(workflow)
 
-    nodes = []
-    edges = []
-    added_nodes = set()  # Track added node IDs to avoid duplicates
+    nodes: List[DrawWorkflowNode] = []
+    edges: List[DrawWorkflowEdge] = []
+    resource_nodes: List[DrawWorkflowResourceNode] = []
+    added_nodes: set[str] = set()  # Track added node IDs to avoid duplicates
+    added_resource_nodes: dict[
+        str, DrawWorkflowResourceNode
+    ] = {}  # Track by unique_hash
 
     step_config: Optional[StepConfig] = None
 
@@ -200,6 +266,16 @@ def extract_workflow_structure(
                 )
                 added_nodes.add("external_step")
 
+        # Add resource nodes (deduplicated by unique_hash)
+        for resource_def in step_config.resources:
+            resource_hash = resource_def.resource.unique_id
+            if resource_hash not in added_resource_nodes:
+                resource_node = DrawWorkflowResourceNode.from_resource_definition(
+                    resource_def
+                )
+                resource_nodes.append(resource_node)
+                added_resource_nodes[resource_hash] = resource_node
+
     # Second pass: Add edges
     for step_name, step_func in steps.items():
         step_config = step_func._step_config
@@ -225,4 +301,16 @@ def extract_workflow_structure(
             if issubclass(event_type, HumanResponseEvent):
                 edges.append(DrawWorkflowEdge("external_step", event_type.__name__))
 
-    return DrawWorkflowGraph(nodes=nodes, edges=edges)
+        # Edges from resources to steps (with variable name as label)
+        for resource_def in step_config.resources:
+            resource_hash = resource_def.resource.unique_id
+            resource_node = added_resource_nodes[resource_hash]
+            edges.append(
+                DrawWorkflowEdge(
+                    source=resource_node.id,
+                    target=step_name,
+                    label=resource_def.name,  # The variable name
+                )
+            )
+
+    return DrawWorkflowGraph(nodes=nodes, edges=edges, resource_nodes=resource_nodes)
