@@ -629,9 +629,7 @@ class WorkflowServer:
                 detail=f"Error while getting JSON workflow representation: {e}",
                 status_code=500,
             )
-        return JSONResponse(
-            WorkflowGraphResponse(graph=workflow_graph.to_response_model()).model_dump()
-        )
+        return JSONResponse(WorkflowGraphResponse(graph=workflow_graph).model_dump())
 
     async def _run_workflow_nowait(self, request: Request) -> JSONResponse:
         """

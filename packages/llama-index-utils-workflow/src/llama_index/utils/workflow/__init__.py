@@ -8,8 +8,6 @@ from typing import Any, Dict, List, Tuple, Union, cast
 from llama_index.core.agent.workflow import (
     AgentWorkflow,
     BaseWorkflowAgent,
-    CodeActAgent,
-    ReActAgent,
 )
 from llama_index.core.tools import AsyncBaseTool, BaseTool
 from pyvis.network import Network
@@ -20,10 +18,12 @@ from workflows.events import (
     StopEvent,
 )
 from workflows.handler import WorkflowHandler
+from workflows.protocol import (
+    WorkflowGraphEdge,
+    WorkflowGraphNode,
+    WorkflowGraphNodeEdges,
+)
 from workflows.representation_utils import (
-    DrawWorkflowEdge,
-    DrawWorkflowGraph,
-    DrawWorkflowNode,
     _truncate_label,
 )
 from workflows.representation_utils import (
@@ -33,7 +33,7 @@ from workflows.runtime.types.results import AddCollectedEvent, StepWorkerResult
 from workflows.runtime.types.ticks import TickAddEvent, TickStepResult, WorkflowTick
 
 
-def _get_node_color(node: DrawWorkflowNode) -> str:
+def _get_node_color(node: WorkflowGraphNode) -> str:
     """Determine color for a node based on its type and event_type."""
     if node.node_type == "step":
         return "#ADD8E6"  # Light blue for steps
@@ -42,15 +42,16 @@ def _get_node_color(node: DrawWorkflowNode) -> str:
     elif node.node_type == "resource":
         return "#DDA0DD"  # Plum/light purple for resources
     elif node.node_type == "event":
-        if node.event_type:
-            return _determine_event_color(node.event_type)
-        return "#90EE90"
+        if node.is_subclass_of("StartEvent"):
+            return "#E27AFF"  # Pink for start events
+        elif node.is_subclass_of("StopEvent"):
+            return "#FFA07A"  # Orange for stop events
+        return "#90EE90"  # Light green for other events
     elif node.node_type == "agent":
-        if node.event_type:
-            if issubclass(node.event_type, ReActAgent):
-                return "#E27AFF"
-            elif issubclass(node.event_type, CodeActAgent):
-                return "#66ccff"
+        if node.is_subclass_of("ReActAgent"):
+            return "#E27AFF"
+        elif node.is_subclass_of("CodeActAgent"):
+            return "#66ccff"
         return "#90EE90"
     elif node.node_type == "tool":
         return "#ff9966"  # Orange for tools
@@ -66,7 +67,7 @@ def _get_node_color(node: DrawWorkflowNode) -> str:
         return "#90EE90"  # Default light green
 
 
-def _get_node_shape(node: DrawWorkflowNode) -> str:
+def _get_node_shape(node: WorkflowGraphNode) -> str:
     """Determine shape for a node based on its type."""
     if node.node_type in ("step", "external"):
         return "box"
@@ -85,7 +86,7 @@ def _get_node_shape(node: DrawWorkflowNode) -> str:
 
 
 def _render_pyvis(
-    graph: DrawWorkflowGraph, filename: str, notebook: bool = False
+    graph: WorkflowGraphNodeEdges, filename: str, notebook: bool = False
 ) -> None:
     """Render workflow graph using Pyvis."""
 
@@ -148,7 +149,7 @@ def _clean_id_for_mermaid(name: str) -> str:
     return name.replace(" ", "_").replace("-", "_").replace(".", "_")
 
 
-def _get_mermaid_css_class(node: DrawWorkflowNode) -> str:
+def _get_mermaid_css_class(node: WorkflowGraphNode) -> str:
     """Determine CSS class for a node in Mermaid based on its type and event_type."""
     if node.node_type == "step":
         return "stepStyle"
@@ -157,18 +158,16 @@ def _get_mermaid_css_class(node: DrawWorkflowNode) -> str:
     elif node.node_type == "resource":
         return "resourceStyle"
     elif node.node_type == "event":
-        if node.event_type:
-            if issubclass(node.event_type, StartEvent):
-                return "startEventStyle"
-            elif issubclass(node.event_type, StopEvent):
-                return "stopEventStyle"
+        if node.is_subclass_of("StartEvent"):
+            return "startEventStyle"
+        elif node.is_subclass_of("StopEvent"):
+            return "stopEventStyle"
         return "defaultEventStyle"
     elif node.node_type == "agent":
-        if node.event_type:
-            if issubclass(node.event_type, ReActAgent):
-                return "reactAgentStyle"
-            elif issubclass(node.event_type, CodeActAgent):
-                return "codeActAgentStyle"
+        if node.is_subclass_of("ReActAgent"):
+            return "reactAgentStyle"
+        elif node.is_subclass_of("CodeActAgent"):
+            return "codeActAgentStyle"
         return "defaultAgentStyle"
     elif node.node_type == "tool":
         return "toolStyle"
@@ -184,7 +183,7 @@ def _get_mermaid_css_class(node: DrawWorkflowNode) -> str:
         return "defaultEventStyle"
 
 
-def _get_clean_node_id(node: DrawWorkflowNode) -> str:
+def _get_clean_node_id(node: WorkflowGraphNode) -> str:
     """Get a clean Mermaid-compatible ID for a node."""
     return f"{node.node_type}_{_clean_id_for_mermaid(node.id)}"
 
@@ -203,14 +202,14 @@ def _get_mermaid_shape(shape: str) -> tuple[str, str]:
         return "[", "]"
 
 
-def _render_mermaid(graph: DrawWorkflowGraph, filename: str) -> str:
+def _render_mermaid(graph: WorkflowGraphNodeEdges, filename: str) -> str:
     """Render workflow graph using Mermaid."""
     mermaid_lines = ["flowchart TD"]
     added_nodes: set[str] = set()
     added_edges: set[str] = set()
 
     # Build lookup dictionary for all nodes
-    node_by_id: dict[str, DrawWorkflowNode] = {node.id: node for node in graph.nodes}
+    node_by_id: dict[str, WorkflowGraphNode] = {node.id: node for node in graph.nodes}
 
     # Add nodes
     for node in graph.nodes:
@@ -277,17 +276,30 @@ def _render_mermaid(graph: DrawWorkflowGraph, filename: str) -> str:
     return diagram_string
 
 
-def _extract_single_agent_structure(agent: BaseWorkflowAgent) -> DrawWorkflowGraph:
+def _get_type_chain(cls: type, base: type) -> list[str]:
+    """Get type inheritance chain up to (but not including) base class."""
+    names: list[str] = [cls.__name__]
+    for parent in cls.mro()[1:]:
+        if parent is base:
+            break
+        if isinstance(parent, type) and issubclass(parent, base):
+            names.append(parent.__name__)
+    return names
+
+
+def _extract_single_agent_structure(agent: BaseWorkflowAgent) -> WorkflowGraphNodeEdges:
     """Extract the structure of a single agent."""
     nodes = []
     edges = []
 
     # Add agent node
-    agent_node = DrawWorkflowNode(
+    agent_type = type(agent)
+    agent_node = WorkflowGraphNode(
         id="agent",
         label=agent.name,
         node_type="agent",
-        event_type=type(agent),  # Store agent type for color determination
+        event_type=agent_type.__name__,
+        event_types=_get_type_chain(agent_type, BaseWorkflowAgent),
     )
     nodes.append(agent_node)
 
@@ -296,7 +308,7 @@ def _extract_single_agent_structure(agent: BaseWorkflowAgent) -> DrawWorkflowGra
     if tools is not None and len(tools) > 0:
         for i, tool in enumerate(tools):
             tool_id = f"tool_{i}"
-            tool_node = DrawWorkflowNode(
+            tool_node = WorkflowGraphNode(
                 id=tool_id,
                 label=f"Tool {i + 1}: {tool.metadata.get_name()}",
                 node_type="tool",
@@ -304,27 +316,27 @@ def _extract_single_agent_structure(agent: BaseWorkflowAgent) -> DrawWorkflowGra
             nodes.append(tool_node)
 
             # Add edge from agent to tool
-            edges.append(DrawWorkflowEdge("agent", tool_id))
+            edges.append(WorkflowGraphEdge(source="agent", target=tool_id))
 
-    return DrawWorkflowGraph(nodes=nodes, edges=edges)
+    return WorkflowGraphNodeEdges(nodes=nodes, edges=edges)
 
 
 def _process_tools_and_handoffs(
     agent: BaseWorkflowAgent,
     processed_agents: List[str],
     all_agents: Dict[str, BaseWorkflowAgent],
-    nodes: List[DrawWorkflowNode],
-    edges: List[DrawWorkflowEdge],
+    nodes: List[WorkflowGraphNode],
+    edges: List[WorkflowGraphEdge],
     root_agent: str,
-) -> Tuple[List[DrawWorkflowNode], List[DrawWorkflowEdge], List[str]]:
+) -> Tuple[List[WorkflowGraphNode], List[WorkflowGraphEdge], List[str]]:
     if agent.name not in processed_agents:
         nodes.append(
-            DrawWorkflowNode(
+            WorkflowGraphNode(
                 id=agent.name, label=agent.name, node_type="workflow_agent"
             )
         )
         if agent.name == root_agent:
-            edges.append(DrawWorkflowEdge("user", root_agent))
+            edges.append(WorkflowGraphEdge(source="user", target=root_agent))
         for t in agent.tools or []:
             if isinstance(t, BaseTool):
                 fn_name = t.metadata.get_name()
@@ -333,28 +345,18 @@ def _process_tools_and_handoffs(
                 fn_name = getattr(t, "__name__", type(t).__name__)
             node_id = f"{agent.name}_{fn_name}"
             nodes.append(
-                DrawWorkflowNode(
+                WorkflowGraphNode(
                     id=node_id,
                     label=fn_name,
                     node_type="workflow_tool",
                 )
             )
-            edges.append(DrawWorkflowEdge(agent.name, node_id))
+            edges.append(WorkflowGraphEdge(source=agent.name, target=node_id))
         if agent.can_handoff_to:
             for a in agent.can_handoff_to:
-                edges.append(
-                    DrawWorkflowEdge(
-                        agent.name,
-                        a,
-                    )
-                )
+                edges.append(WorkflowGraphEdge(source=agent.name, target=a))
         else:
-            edges.append(
-                DrawWorkflowEdge(
-                    agent.name,
-                    "output",
-                )
-            )
+            edges.append(WorkflowGraphEdge(source=agent.name, target="output"))
         processed_agents.append(agent.name)
 
     if agent.can_handoff_to:
@@ -374,18 +376,18 @@ def _process_tools_and_handoffs(
 
 def _extract_agent_workflow_structure(
     agent_workflow: AgentWorkflow,
-) -> DrawWorkflowGraph:
+) -> WorkflowGraphNodeEdges:
     """Extract the structure of an agent workflow."""
-    nodes: List[DrawWorkflowNode] = []
-    edges: List[DrawWorkflowEdge] = []
+    nodes: List[WorkflowGraphNode] = []
+    edges: List[WorkflowGraphEdge] = []
 
     # Add base workflow node
-    user_node = DrawWorkflowNode(
+    user_node = WorkflowGraphNode(
         id="user",
         label="User",
         node_type="workflow_base",
     )
-    output_node = DrawWorkflowNode(
+    output_node = WorkflowGraphNode(
         id="output", label="Output", node_type="workflow_base"
     )
     nodes.extend([user_node, output_node])
@@ -403,9 +405,9 @@ def _extract_agent_workflow_structure(
         )
     if all(edge.target != "output" for edge in edges):
         agent_nodes = [n for n in nodes if n.node_type == "workflow_agent"]
-        edges.append(DrawWorkflowEdge(agent_nodes[-1].id, "output"))
+        edges.append(WorkflowGraphEdge(source=agent_nodes[-1].id, target="output"))
 
-    return DrawWorkflowGraph(nodes=nodes, edges=edges)
+    return WorkflowGraphNodeEdges(nodes=nodes, edges=edges)
 
 
 def _extract_execution_graph(

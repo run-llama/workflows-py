@@ -72,7 +72,9 @@ class WorkflowGraphNode(BaseModel):
     label: str
     node_type: str  # 'step', 'event', 'external', 'resource'
     title: str | None = None
-    event_type: str | None = None
+    # Event metadata (only populated when node_type == "event")
+    event_type: str | None = None  # The event class name
+    event_types: list[str] | None = None  # Inheritance chain for subclass checks
     # Resource-specific fields (only populated when node_type == "resource")
     type_name: str | None = None  # The type annotation, e.g., "AsyncLlamaCloud"
     getter_name: str | None = None  # The factory function name
@@ -80,6 +82,12 @@ class WorkflowGraphNode(BaseModel):
     source_line: int | None = None  # Line number where the getter is defined
     docstring: str | None = None  # Documentation string of the getter function
     unique_hash: str | None = None  # Unique identifier for deduplication
+
+    def is_subclass_of(self, *type_names: str) -> bool:
+        """Check if this node's event_type is a subclass of any of the given types."""
+        if not self.event_types:
+            return False
+        return any(name in self.event_types for name in type_names)
 
 
 class WorkflowGraphEdge(BaseModel):

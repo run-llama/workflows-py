@@ -3,87 +3,88 @@ from typing import Annotated
 import pytest
 from workflows.decorators import step
 from workflows.events import Event, StartEvent, StopEvent
-from workflows.representation_utils import (
-    DrawWorkflowEdge,
-    DrawWorkflowGraph,
-    DrawWorkflowNode,
-    extract_workflow_structure,
+from workflows.protocol import (
+    WorkflowGraphEdge,
+    WorkflowGraphNode,
+    WorkflowGraphNodeEdges,
 )
+from workflows.representation_utils import extract_workflow_structure
 from workflows.resource import Resource
 from workflows.workflow import Workflow
 
-from .conftest import DummyWorkflow, LastEvent, OneTestEvent  # type: ignore[import]
+from .conftest import DummyWorkflow  # type: ignore[import]
 
 
 @pytest.fixture()
-def ground_truth_repr() -> DrawWorkflowGraph:
-    return DrawWorkflowGraph(
+def ground_truth_repr() -> WorkflowGraphNodeEdges:
+    return WorkflowGraphNodeEdges(
         nodes=[
-            DrawWorkflowNode(
+            WorkflowGraphNode(
                 id="end_step",
                 label="end_step",
                 node_type="step",
                 title=None,
-                event_type=None,
             ),
-            DrawWorkflowNode(
+            WorkflowGraphNode(
                 id="LastEvent",
                 label="LastEvent",
                 node_type="event",
                 title=None,
-                event_type=LastEvent,
+                event_type="LastEvent",
+                event_types=["LastEvent"],
             ),
-            DrawWorkflowNode(
+            WorkflowGraphNode(
                 id="StopEvent",
                 label="StopEvent",
                 node_type="event",
                 title=None,
-                event_type=StopEvent,
+                event_type="StopEvent",
+                event_types=["StopEvent"],
             ),
-            DrawWorkflowNode(
+            WorkflowGraphNode(
                 id="middle_step",
                 label="middle_step",
                 node_type="step",
                 title=None,
-                event_type=None,
             ),
-            DrawWorkflowNode(
+            WorkflowGraphNode(
                 id="OneTestEvent",
                 label="OneTestEvent",
                 node_type="event",
                 title=None,
-                event_type=OneTestEvent,
+                event_type="OneTestEvent",
+                event_types=["OneTestEvent"],
             ),
-            DrawWorkflowNode(
+            WorkflowGraphNode(
                 id="start_step",
                 label="start_step",
                 node_type="step",
                 title=None,
-                event_type=None,
             ),
-            DrawWorkflowNode(
+            WorkflowGraphNode(
                 id="StartEvent",
                 label="StartEvent",
                 node_type="event",
                 title=None,
-                event_type=StartEvent,
+                event_type="StartEvent",
+                event_types=["StartEvent"],
             ),
         ],
         edges=[
-            DrawWorkflowEdge(source="end_step", target="StopEvent"),
-            DrawWorkflowEdge(source="LastEvent", target="end_step"),
-            DrawWorkflowEdge(source="middle_step", target="LastEvent"),
-            DrawWorkflowEdge(source="OneTestEvent", target="middle_step"),
-            DrawWorkflowEdge(source="start_step", target="OneTestEvent"),
-            DrawWorkflowEdge(source="StartEvent", target="start_step"),
+            WorkflowGraphEdge(source="end_step", target="StopEvent"),
+            WorkflowGraphEdge(source="LastEvent", target="end_step"),
+            WorkflowGraphEdge(source="middle_step", target="LastEvent"),
+            WorkflowGraphEdge(source="OneTestEvent", target="middle_step"),
+            WorkflowGraphEdge(source="start_step", target="OneTestEvent"),
+            WorkflowGraphEdge(source="StartEvent", target="start_step"),
         ],
     )
 
 
-def test_extract_workflow_structure(ground_truth_repr: DrawWorkflowGraph) -> None:
+def test_extract_workflow_structure(ground_truth_repr: WorkflowGraphNodeEdges) -> None:
     wf = DummyWorkflow()
     graph = extract_workflow_structure(workflow=wf)
-    assert isinstance(graph, DrawWorkflowGraph)
+    assert isinstance(graph, WorkflowGraphNodeEdges)
     assert sorted(
         [node.id for node in ground_truth_repr.nodes if node.node_type == "step"]
     ) == sorted([node.id for node in graph.nodes if node.node_type == "step"])
@@ -106,37 +107,49 @@ def test_extract_workflow_structure_trim_label() -> None:
     )
 
 
-def test_graph_to_response_model() -> None:
-    graph = DrawWorkflowGraph(
+def test_graph_serialization() -> None:
+    """Test that WorkflowGraphNodeEdges serializes correctly to JSON."""
+    graph = WorkflowGraphNodeEdges(
         nodes=[
-            DrawWorkflowNode(
-                id="test", label="test", node_type="step", title=None, event_type=None
-            ),
-            DrawWorkflowNode(
+            WorkflowGraphNode(id="test", label="test", node_type="step", title=None),
+            WorkflowGraphNode(
                 id="OneTestEvent",
                 label="OneTestEvent",
                 node_type="event",
                 title=None,
-                event_type=OneTestEvent,
+                event_type="OneTestEvent",
+                event_types=["OneTestEvent"],
             ),
         ],
-        edges=[DrawWorkflowEdge(source="test", target="OneTestEvent")],
+        edges=[WorkflowGraphEdge(source="test", target="OneTestEvent")],
     )
-    res = graph.to_response_model()
-    assert len(res.nodes) == 2
-    assert res.nodes[0].event_type is None
-    assert res.nodes[0].title is None
-    assert res.nodes[0].node_type == "step"
-    assert res.nodes[0].label == "test"
-    assert res.nodes[0].id == "test"
-    assert res.nodes[1].event_type == OneTestEvent.__name__
-    assert res.nodes[1].title is None
-    assert res.nodes[1].node_type == "event"
-    assert res.nodes[1].label == "OneTestEvent"
-    assert res.nodes[1].id == "OneTestEvent"
-    assert len(res.edges) == 1
-    assert res.edges[0].source == "test"
-    assert res.edges[0].target == "OneTestEvent"
+    # Test direct access
+    assert len(graph.nodes) == 2
+    assert graph.nodes[0].event_type is None
+    assert graph.nodes[0].title is None
+    assert graph.nodes[0].node_type == "step"
+    assert graph.nodes[0].label == "test"
+    assert graph.nodes[0].id == "test"
+    assert graph.nodes[1].event_type == "OneTestEvent"
+    assert graph.nodes[1].event_types == ["OneTestEvent"]
+    assert graph.nodes[1].title is None
+    assert graph.nodes[1].node_type == "event"
+    assert graph.nodes[1].label == "OneTestEvent"
+    assert graph.nodes[1].id == "OneTestEvent"
+    assert len(graph.edges) == 1
+    assert graph.edges[0].source == "test"
+    assert graph.edges[0].target == "OneTestEvent"
+
+    # Test JSON serialization (round-trip works)
+    data = graph.model_dump()
+    assert data["nodes"][0]["event_type"] is None
+    assert data["nodes"][1]["event_type"] == "OneTestEvent"
+    assert data["nodes"][1]["event_types"] == ["OneTestEvent"]
+
+    # Test deserialization
+    restored = WorkflowGraphNodeEdges.model_validate(data)
+    assert restored.nodes[1].event_type == "OneTestEvent"
+    assert restored.nodes[1].is_subclass_of("OneTestEvent")
 
 
 # --- Resource node tests ---
@@ -288,9 +301,9 @@ def test_multiple_different_resources() -> None:
     assert labels == {"db", "cache"}
 
 
-def test_resource_node_to_response_model() -> None:
-    """Test that DrawWorkflowNode converts to resource response model correctly."""
-    resource_node = DrawWorkflowNode(
+def test_resource_node_serialization() -> None:
+    """Test that WorkflowGraphNode resource serializes correctly."""
+    resource_node = WorkflowGraphNode(
         id="resource_abc123",
         label="TestType",
         node_type="resource",
@@ -302,54 +315,53 @@ def test_resource_node_to_response_model() -> None:
         unique_hash="abc123",
     )
 
-    response = resource_node.to_response_model()
+    assert resource_node.id == "resource_abc123"
+    assert resource_node.label == "TestType"
+    assert resource_node.node_type == "resource"
+    assert resource_node.type_name == "TestType"
+    assert resource_node.getter_name == "get_test_type"
+    assert resource_node.source_file == "/path/to/file.py"
+    assert resource_node.source_line == 42
+    assert resource_node.docstring == "Test docstring"
+    assert resource_node.unique_hash == "abc123"
 
-    assert response.id == "resource_abc123"
-    assert response.label == "TestType"
-    assert response.node_type == "resource"
-    assert response.type_name == "TestType"
-    assert response.getter_name == "get_test_type"
-    assert response.source_file == "/path/to/file.py"
-    assert response.source_line == 42
-    assert response.docstring == "Test docstring"
-    assert response.unique_hash == "abc123"
+    # Test serialization
+    data = resource_node.model_dump()
+    assert data["id"] == "resource_abc123"
+    assert data["type_name"] == "TestType"
 
 
-def test_graph_with_resources_to_response_model() -> None:
-    """Test that DrawWorkflowGraph with resources converts correctly."""
+def test_graph_with_resources() -> None:
+    """Test that workflow graph with resources is correct."""
     wf = WorkflowWithResources()
     graph = extract_workflow_structure(workflow=wf)
 
-    response = graph.to_response_model()
-
     # Check resource nodes are in the nodes list
-    resource_nodes = [n for n in response.nodes if n.node_type == "resource"]
+    resource_nodes = [n for n in graph.nodes if n.node_type == "resource"]
     assert len(resource_nodes) == 1
     rn = resource_nodes[0]
     assert rn.type_name == "DatabaseClient"
     assert rn.getter_name == "get_database_client"
 
     # Check edges with labels
-    resource_edges = [e for e in response.edges if e.label is not None]
+    resource_edges = [e for e in graph.edges if e.label is not None]
     assert len(resource_edges) == 1
     assert resource_edges[0].label == "db_client"
 
 
-def test_edge_with_label_to_response_model() -> None:
-    """Test that DrawWorkflowEdge with label converts correctly."""
-    edge = DrawWorkflowEdge(source="resource_123", target="my_step", label="my_var")
-    response = edge.to_response_model()
+def test_edge_with_label() -> None:
+    """Test that WorkflowGraphEdge with label works correctly."""
+    edge = WorkflowGraphEdge(source="resource_123", target="my_step", label="my_var")
 
-    assert response.source == "resource_123"
-    assert response.target == "my_step"
-    assert response.label == "my_var"
+    assert edge.source == "resource_123"
+    assert edge.target == "my_step"
+    assert edge.label == "my_var"
 
 
-def test_edge_without_label_to_response_model() -> None:
-    """Test that DrawWorkflowEdge without label converts correctly."""
-    edge = DrawWorkflowEdge(source="event_A", target="step_B")
-    response = edge.to_response_model()
+def test_edge_without_label() -> None:
+    """Test that WorkflowGraphEdge without label works correctly."""
+    edge = WorkflowGraphEdge(source="event_A", target="step_B")
 
-    assert response.source == "event_A"
-    assert response.target == "step_B"
-    assert response.label is None
+    assert edge.source == "event_A"
+    assert edge.target == "step_B"
+    assert edge.label is None
