@@ -1,6 +1,7 @@
+from __future__ import annotations
+
 import hashlib
 import inspect
-from typing import Optional
 
 from workflows import Workflow
 from workflows.decorators import StepConfig, StepFunction
@@ -11,9 +12,13 @@ from workflows.events import (
     StopEvent,
 )
 from workflows.protocol import (
+    WorkflowEventNode,
+    WorkflowExternalNode,
     WorkflowGraphEdge,
     WorkflowGraphNode,
     WorkflowGraphNodeEdges,
+    WorkflowResourceNode,
+    WorkflowStepNode,
 )
 from workflows.resource import ResourceDefinition
 from workflows.utils import (
@@ -37,8 +42,8 @@ def _get_event_type_chain(cls: type) -> list[str]:
     return names
 
 
-def _create_resource_node(resource_def: ResourceDefinition) -> WorkflowGraphNode:
-    """Create a WorkflowGraphNode from a ResourceDefinition.
+def _create_resource_node(resource_def: ResourceDefinition) -> WorkflowResourceNode:
+    """Create a WorkflowResourceNode from a ResourceDefinition.
 
     Extracts metadata (source file, line number, docstring) lazily here
     rather than at Resource creation time for performance.
@@ -47,7 +52,7 @@ def _create_resource_node(resource_def: ResourceDefinition) -> WorkflowGraphNode
     factory = resource._factory
 
     # Get type name from annotation
-    type_name: Optional[str] = None
+    type_name: str | None = None
     if resource_def.type_annotation is not None:
         type_annotation = resource_def.type_annotation
         if hasattr(type_annotation, "__name__"):
@@ -56,8 +61,8 @@ def _create_resource_node(resource_def: ResourceDefinition) -> WorkflowGraphNode
             type_name = str(type_annotation)
 
     # Extract source metadata lazily
-    source_file: Optional[str] = None
-    source_line: Optional[int] = None
+    source_file: str | None = None
+    source_line: int | None = None
     try:
         source_file = inspect.getfile(factory)
     except (TypeError, OSError):
@@ -72,10 +77,13 @@ def _create_resource_node(resource_def: ResourceDefinition) -> WorkflowGraphNode
     hash_input = f"{resource.name}:{source_file or 'unknown'}"
     unique_hash = hashlib.sha256(hash_input.encode()).hexdigest()[:12]
 
-    return WorkflowGraphNode(
-        id=f"resource_{unique_hash}",
-        label=type_name or resource.name,
-        node_type="resource",
+    # Label: prefer type_name, then getter_name, then id
+    node_id = f"resource_{unique_hash}"
+    label = type_name or resource.name or node_id
+
+    return WorkflowResourceNode(
+        id=node_id,
+        label=label,
         type_name=type_name,
         getter_name=resource.name,
         source_file=source_file,
@@ -85,14 +93,7 @@ def _create_resource_node(resource_def: ResourceDefinition) -> WorkflowGraphNode
     )
 
 
-def _truncate_label(label: str, max_length: int) -> str:
-    """Helper to truncate long labels."""
-    return label if len(label) <= max_length else f"{label[: max_length - 1]}*"
-
-
-def extract_workflow_structure(
-    workflow: Workflow, max_label_length: Optional[int] = None
-) -> WorkflowGraphNodeEdges:
+def extract_workflow_structure(workflow: Workflow) -> WorkflowGraphNodeEdges:
     """Extract workflow structure into a graph representation."""
     # Get workflow steps
     steps: dict[str, StepFunction] = get_steps_from_class(workflow)
@@ -102,9 +103,9 @@ def extract_workflow_structure(
     nodes: list[WorkflowGraphNode] = []
     edges: list[WorkflowGraphEdge] = []
     added_nodes: set[str] = set()  # Track added node IDs to avoid duplicates
-    added_resource_nodes: dict[int, WorkflowGraphNode] = {}  # Track by factory id
+    added_resource_nodes: dict[int, WorkflowResourceNode] = {}  # Track by factory id
 
-    step_config: Optional[StepConfig] = None
+    step_config: StepConfig | None = None
 
     # Only one kind of `StopEvent` is allowed in a `Workflow`.
     # Assuming that `Workflow` is validated before drawing, it's enough to find the first one.
@@ -125,26 +126,8 @@ def extract_workflow_structure(
         step_config = step_func._step_config
 
         # Add step node
-        step_label = (
-            _truncate_label(step_name, max_label_length)
-            if max_label_length
-            else step_name
-        )
-        step_title = (
-            step_name
-            if max_label_length and len(step_name) > max_label_length
-            else None
-        )
-
         if step_name not in added_nodes:
-            nodes.append(
-                WorkflowGraphNode(
-                    id=step_name,
-                    label=step_label,
-                    node_type="step",
-                    title=step_title,
-                )
-            )
+            nodes.append(WorkflowStepNode(id=step_name, label=step_name))
             added_nodes.add(step_name)
 
         # Add event nodes for accepted events
@@ -152,24 +135,11 @@ def extract_workflow_structure(
             if event_type == StopEvent and event_type != current_stop_event:
                 continue
 
-            event_label = (
-                _truncate_label(event_type.__name__, max_label_length)
-                if max_label_length
-                else event_type.__name__
-            )
-            event_title = (
-                event_type.__name__
-                if max_label_length and len(event_type.__name__) > max_label_length
-                else None
-            )
-
             if event_type.__name__ not in added_nodes:
                 nodes.append(
-                    WorkflowGraphNode(
+                    WorkflowEventNode(
                         id=event_type.__name__,
-                        label=event_label,
-                        node_type="event",
-                        title=event_title,
+                        label=event_type.__name__,
                         event_type=event_type.__name__,
                         event_types=_get_event_type_chain(event_type),
                     )
@@ -181,24 +151,11 @@ def extract_workflow_structure(
             if return_type is type(None):
                 continue
 
-            return_label = (
-                _truncate_label(return_type.__name__, max_label_length)
-                if max_label_length
-                else return_type.__name__
-            )
-            return_title = (
-                return_type.__name__
-                if max_label_length and len(return_type.__name__) > max_label_length
-                else None
-            )
-
             if return_type.__name__ not in added_nodes:
                 nodes.append(
-                    WorkflowGraphNode(
+                    WorkflowEventNode(
                         id=return_type.__name__,
-                        label=return_label,
-                        node_type="event",
-                        title=return_title,
+                        label=return_type.__name__,
                         event_type=return_type.__name__,
                         event_types=_get_event_type_chain(return_type),
                     )
@@ -211,11 +168,7 @@ def extract_workflow_structure(
                 and "external_step" not in added_nodes
             ):
                 nodes.append(
-                    WorkflowGraphNode(
-                        id="external_step",
-                        label="external_step",
-                        node_type="external",
-                    )
+                    WorkflowExternalNode(id="external_step", label="external_step")
                 )
                 added_nodes.add("external_step")
 

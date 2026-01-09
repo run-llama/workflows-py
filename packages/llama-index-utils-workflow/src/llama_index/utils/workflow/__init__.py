@@ -19,18 +19,22 @@ from workflows.events import (
 )
 from workflows.handler import WorkflowHandler
 from workflows.protocol import (
+    WorkflowGenericNode,
     WorkflowGraphEdge,
     WorkflowGraphNode,
     WorkflowGraphNodeEdges,
-)
-from workflows.representation_utils import (
-    _truncate_label,
+    WorkflowResourceNode,
 )
 from workflows.representation_utils import (
     extract_workflow_structure as _extract_workflow_structure,
 )
 from workflows.runtime.types.results import AddCollectedEvent, StepWorkerResult
 from workflows.runtime.types.ticks import TickAddEvent, TickStepResult, WorkflowTick
+
+
+def _truncate_label(label: str, max_length: int) -> str:
+    """Truncate long labels for visualization."""
+    return label if len(label) <= max_length else f"{label[: max_length - 1]}*"
 
 
 def _get_node_color(node: WorkflowGraphNode) -> str:
@@ -86,7 +90,10 @@ def _get_node_shape(node: WorkflowGraphNode) -> str:
 
 
 def _render_pyvis(
-    graph: WorkflowGraphNodeEdges, filename: str, notebook: bool = False
+    graph: WorkflowGraphNodeEdges,
+    filename: str,
+    notebook: bool = False,
+    max_label_length: int | None = None,
 ) -> None:
     """Render workflow graph using Pyvis."""
 
@@ -97,9 +104,16 @@ def _render_pyvis(
         color = _get_node_color(node)
         shape = _get_node_shape(node)
 
-        # Build title - for resources include metadata
-        title = node.title
-        if node.node_type == "resource":
+        # Compute display label (with optional truncation)
+        display_label = node.label
+        if max_label_length:
+            display_label = _truncate_label(node.label, max_label_length)
+
+        # Build title - show full label if truncated, plus resource metadata
+        title: str | None = None
+        if max_label_length and len(node.label) > max_label_length:
+            title = node.label  # Show full label on hover
+        if isinstance(node, WorkflowResourceNode):
             title_parts = [f"Type: {node.type_name or 'Unknown'}"]
             if node.getter_name:
                 title_parts.append(f"Getter: {node.getter_name}")
@@ -114,7 +128,7 @@ def _render_pyvis(
 
         net.add_node(
             node.id,
-            label=node.label,
+            label=display_label,
             title=title,
             color=color,
             shape=shape,
@@ -202,7 +216,9 @@ def _get_mermaid_shape(shape: str) -> tuple[str, str]:
         return "[", "]"
 
 
-def _render_mermaid(graph: WorkflowGraphNodeEdges, filename: str) -> str:
+def _render_mermaid(
+    graph: WorkflowGraphNodeEdges, filename: str, max_label_length: int | None = None
+) -> str:
     """Render workflow graph using Mermaid."""
     mermaid_lines = ["flowchart TD"]
     added_nodes: set[str] = set()
@@ -218,12 +234,17 @@ def _render_mermaid(graph: WorkflowGraphNodeEdges, filename: str) -> str:
         if clean_id not in added_nodes:
             added_nodes.add(clean_id)
 
+            # Compute display label (with optional truncation)
+            display_label = node.label
+            if max_label_length:
+                display_label = _truncate_label(node.label, max_label_length)
+
             shape = _get_node_shape(node)
             shape_start, shape_end = _get_mermaid_shape(shape)
 
             css_class = _get_mermaid_css_class(node)
             mermaid_lines.append(
-                f'    {clean_id}{shape_start}"{node.label}"{shape_end}:::{css_class}'
+                f'    {clean_id}{shape_start}"{display_label}"{shape_end}:::{css_class}'
             )
 
     # Add edges
@@ -289,12 +310,12 @@ def _get_type_chain(cls: type, base: type) -> list[str]:
 
 def _extract_single_agent_structure(agent: BaseWorkflowAgent) -> WorkflowGraphNodeEdges:
     """Extract the structure of a single agent."""
-    nodes = []
-    edges = []
+    nodes: List[WorkflowGraphNode] = []
+    edges: List[WorkflowGraphEdge] = []
 
     # Add agent node
     agent_type = type(agent)
-    agent_node = WorkflowGraphNode(
+    agent_node = WorkflowGenericNode(
         id="agent",
         label=agent.name,
         node_type="agent",
@@ -308,7 +329,7 @@ def _extract_single_agent_structure(agent: BaseWorkflowAgent) -> WorkflowGraphNo
     if tools is not None and len(tools) > 0:
         for i, tool in enumerate(tools):
             tool_id = f"tool_{i}"
-            tool_node = WorkflowGraphNode(
+            tool_node = WorkflowGenericNode(
                 id=tool_id,
                 label=f"Tool {i + 1}: {tool.metadata.get_name()}",
                 node_type="tool",
@@ -331,7 +352,7 @@ def _process_tools_and_handoffs(
 ) -> Tuple[List[WorkflowGraphNode], List[WorkflowGraphEdge], List[str]]:
     if agent.name not in processed_agents:
         nodes.append(
-            WorkflowGraphNode(
+            WorkflowGenericNode(
                 id=agent.name, label=agent.name, node_type="workflow_agent"
             )
         )
@@ -345,7 +366,7 @@ def _process_tools_and_handoffs(
                 fn_name = getattr(t, "__name__", type(t).__name__)
             node_id = f"{agent.name}_{fn_name}"
             nodes.append(
-                WorkflowGraphNode(
+                WorkflowGenericNode(
                     id=node_id,
                     label=fn_name,
                     node_type="workflow_tool",
@@ -382,12 +403,12 @@ def _extract_agent_workflow_structure(
     edges: List[WorkflowGraphEdge] = []
 
     # Add base workflow node
-    user_node = WorkflowGraphNode(
+    user_node = WorkflowGenericNode(
         id="user",
         label="User",
         node_type="workflow_base",
     )
-    output_node = WorkflowGraphNode(
+    output_node = WorkflowGenericNode(
         id="output", label="Output", node_type="workflow_base"
     )
     nodes.extend([user_node, output_node])
@@ -490,8 +511,8 @@ def draw_all_possible_flows(
         max_label_length: Maximum label length before truncation (None = no limit)
 
     """
-    graph = _extract_workflow_structure(workflow, max_label_length)
-    _render_pyvis(graph, filename, notebook)
+    graph = _extract_workflow_structure(workflow)
+    _render_pyvis(graph, filename, notebook, max_label_length)
 
 
 def draw_all_possible_flows_mermaid(
@@ -511,8 +532,8 @@ def draw_all_possible_flows_mermaid(
         The Mermaid diagram as a string
 
     """
-    graph = _extract_workflow_structure(workflow, max_label_length)
-    return _render_mermaid(graph, filename)
+    graph = _extract_workflow_structure(workflow)
+    return _render_mermaid(graph, filename, max_label_length)
 
 
 def draw_agent_with_tools(

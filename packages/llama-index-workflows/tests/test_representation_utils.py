@@ -4,9 +4,12 @@ import pytest
 from workflows.decorators import step
 from workflows.events import Event, StartEvent, StopEvent
 from workflows.protocol import (
+    WorkflowEventNode,
+    WorkflowExternalNode,
     WorkflowGraphEdge,
-    WorkflowGraphNode,
     WorkflowGraphNodeEdges,
+    WorkflowResourceNode,
+    WorkflowStepNode,
 )
 from workflows.representation_utils import extract_workflow_structure
 from workflows.resource import Resource
@@ -19,53 +22,39 @@ from .conftest import DummyWorkflow  # type: ignore[import]
 def ground_truth_repr() -> WorkflowGraphNodeEdges:
     return WorkflowGraphNodeEdges(
         nodes=[
-            WorkflowGraphNode(
+            WorkflowStepNode(
                 id="end_step",
                 label="end_step",
-                node_type="step",
-                title=None,
             ),
-            WorkflowGraphNode(
+            WorkflowEventNode(
                 id="LastEvent",
                 label="LastEvent",
-                node_type="event",
-                title=None,
                 event_type="LastEvent",
                 event_types=["LastEvent"],
             ),
-            WorkflowGraphNode(
+            WorkflowEventNode(
                 id="StopEvent",
                 label="StopEvent",
-                node_type="event",
-                title=None,
                 event_type="StopEvent",
                 event_types=["StopEvent"],
             ),
-            WorkflowGraphNode(
+            WorkflowStepNode(
                 id="middle_step",
                 label="middle_step",
-                node_type="step",
-                title=None,
             ),
-            WorkflowGraphNode(
+            WorkflowEventNode(
                 id="OneTestEvent",
                 label="OneTestEvent",
-                node_type="event",
-                title=None,
                 event_type="OneTestEvent",
                 event_types=["OneTestEvent"],
             ),
-            WorkflowGraphNode(
+            WorkflowStepNode(
                 id="start_step",
                 label="start_step",
-                node_type="step",
-                title=None,
             ),
-            WorkflowGraphNode(
+            WorkflowEventNode(
                 id="StartEvent",
                 label="StartEvent",
-                node_type="event",
-                title=None,
                 event_type="StartEvent",
                 event_types=["StartEvent"],
             ),
@@ -96,27 +85,22 @@ def test_extract_workflow_structure(ground_truth_repr: WorkflowGraphNodeEdges) -
         assert edge in graph.edges
 
 
-def test_extract_workflow_structure_trim_label() -> None:
-    wf = DummyWorkflow()
-    graph = extract_workflow_structure(workflow=wf, max_label_length=2)
-    assert sorted(["e*", "m*", "s*"]) == sorted(
-        [node.label for node in graph.nodes if node.node_type == "step"]
-    )
-    assert sorted(["S*", "S*", "O*", "L*"]) == sorted(
-        [node.label for node in graph.nodes if node.node_type == "event"]
-    )
+def test_truncated_label() -> None:
+    """Test that truncated_label method works correctly."""
+    node = WorkflowStepNode(id="my_step", label="my_long_step_name")
+    assert node.truncated_label(5) == "my_l*"
+    assert node.truncated_label(20) == "my_long_step_name"
+    assert node.truncated_label(17) == "my_long_step_name"
 
 
 def test_graph_serialization() -> None:
     """Test that WorkflowGraphNodeEdges serializes correctly to JSON."""
     graph = WorkflowGraphNodeEdges(
         nodes=[
-            WorkflowGraphNode(id="test", label="test", node_type="step", title=None),
-            WorkflowGraphNode(
+            WorkflowStepNode(id="test", label="test"),
+            WorkflowEventNode(
                 id="OneTestEvent",
                 label="OneTestEvent",
-                node_type="event",
-                title=None,
                 event_type="OneTestEvent",
                 event_types=["OneTestEvent"],
             ),
@@ -125,31 +109,34 @@ def test_graph_serialization() -> None:
     )
     # Test direct access
     assert len(graph.nodes) == 2
-    assert graph.nodes[0].event_type is None
-    assert graph.nodes[0].title is None
-    assert graph.nodes[0].node_type == "step"
-    assert graph.nodes[0].label == "test"
-    assert graph.nodes[0].id == "test"
-    assert graph.nodes[1].event_type == "OneTestEvent"
-    assert graph.nodes[1].event_types == ["OneTestEvent"]
-    assert graph.nodes[1].title is None
-    assert graph.nodes[1].node_type == "event"
-    assert graph.nodes[1].label == "OneTestEvent"
-    assert graph.nodes[1].id == "OneTestEvent"
+    step_node = graph.nodes[0]
+    assert isinstance(step_node, WorkflowStepNode)
+    assert step_node.node_type == "step"
+    assert step_node.label == "test"
+    assert step_node.id == "test"
+    event_node = graph.nodes[1]
+    assert isinstance(event_node, WorkflowEventNode)
+    assert event_node.event_type == "OneTestEvent"
+    assert event_node.event_types == ["OneTestEvent"]
+    assert event_node.node_type == "event"
+    assert event_node.label == "OneTestEvent"
+    assert event_node.id == "OneTestEvent"
     assert len(graph.edges) == 1
     assert graph.edges[0].source == "test"
     assert graph.edges[0].target == "OneTestEvent"
 
     # Test JSON serialization (round-trip works)
     data = graph.model_dump()
-    assert data["nodes"][0]["event_type"] is None
+    assert "event_type" not in data["nodes"][0]  # Step nodes don't have event_type
     assert data["nodes"][1]["event_type"] == "OneTestEvent"
     assert data["nodes"][1]["event_types"] == ["OneTestEvent"]
 
     # Test deserialization
     restored = WorkflowGraphNodeEdges.model_validate(data)
-    assert restored.nodes[1].event_type == "OneTestEvent"
-    assert restored.nodes[1].is_subclass_of("OneTestEvent")
+    restored_event = restored.nodes[1]
+    assert isinstance(restored_event, WorkflowEventNode)
+    assert restored_event.event_type == "OneTestEvent"
+    assert restored_event.is_subclass_of("OneTestEvent")
 
 
 # --- Resource node tests ---
@@ -193,7 +180,7 @@ def test_extract_workflow_structure_with_resources() -> None:
     graph = extract_workflow_structure(workflow=wf)
 
     # Should have resource nodes
-    resource_nodes = [n for n in graph.nodes if n.node_type == "resource"]
+    resource_nodes = [n for n in graph.nodes if isinstance(n, WorkflowResourceNode)]
     assert len(resource_nodes) == 1
 
     resource_node = resource_nodes[0]
@@ -252,7 +239,7 @@ def test_resource_nodes_are_deduplicated() -> None:
     graph = extract_workflow_structure(workflow=wf)
 
     # Should have only one resource node (deduplicated)
-    resource_nodes = [n for n in graph.nodes if n.node_type == "resource"]
+    resource_nodes = [n for n in graph.nodes if isinstance(n, WorkflowResourceNode)]
     assert len(resource_nodes) == 1
 
     # But should have two edges (one from each step)
@@ -287,7 +274,7 @@ def test_multiple_different_resources() -> None:
     graph = extract_workflow_structure(workflow=wf)
 
     # Should have two different resource nodes
-    resource_nodes = [n for n in graph.nodes if n.node_type == "resource"]
+    resource_nodes = [n for n in graph.nodes if isinstance(n, WorkflowResourceNode)]
     assert len(resource_nodes) == 2
 
     type_names = {rn.type_name for rn in resource_nodes}
@@ -302,11 +289,10 @@ def test_multiple_different_resources() -> None:
 
 
 def test_resource_node_serialization() -> None:
-    """Test that WorkflowGraphNode resource serializes correctly."""
-    resource_node = WorkflowGraphNode(
+    """Test that WorkflowResourceNode serializes correctly."""
+    resource_node = WorkflowResourceNode(
         id="resource_abc123",
         label="TestType",
-        node_type="resource",
         type_name="TestType",
         getter_name="get_test_type",
         source_file="/path/to/file.py",
@@ -328,7 +314,16 @@ def test_resource_node_serialization() -> None:
     # Test serialization
     data = resource_node.model_dump()
     assert data["id"] == "resource_abc123"
+    assert data["label"] == "TestType"
     assert data["type_name"] == "TestType"
+    assert data["node_type"] == "resource"
+
+    # Test deserialization
+    restored = WorkflowResourceNode.model_validate(data)
+    assert restored.id == "resource_abc123"
+    assert restored.label == "TestType"
+    assert restored.type_name == "TestType"
+    assert restored.node_type == "resource"
 
 
 def test_graph_with_resources() -> None:
@@ -337,7 +332,7 @@ def test_graph_with_resources() -> None:
     graph = extract_workflow_structure(workflow=wf)
 
     # Check resource nodes are in the nodes list
-    resource_nodes = [n for n in graph.nodes if n.node_type == "resource"]
+    resource_nodes = [n for n in graph.nodes if isinstance(n, WorkflowResourceNode)]
     assert len(resource_nodes) == 1
     rn = resource_nodes[0]
     assert rn.type_name == "DatabaseClient"
@@ -365,3 +360,184 @@ def test_edge_without_label() -> None:
     assert edge.source == "event_A"
     assert edge.target == "step_B"
     assert edge.label is None
+
+
+# --- Serialization/Deserialization tests for all node types ---
+
+
+def test_step_node_serialization_roundtrip() -> None:
+    """Test WorkflowStepNode serialization and deserialization."""
+    node = WorkflowStepNode(id="my_step", label="My Step")
+
+    data = node.model_dump()
+    assert data["id"] == "my_step"
+    assert data["label"] == "My Step"
+    assert data["node_type"] == "step"
+
+    restored = WorkflowStepNode.model_validate(data)
+    assert restored.id == "my_step"
+    assert restored.label == "My Step"
+    assert restored.node_type == "step"
+
+
+def test_event_node_serialization_roundtrip() -> None:
+    """Test WorkflowEventNode serialization and deserialization."""
+    node = WorkflowEventNode(
+        id="MyEvent",
+        label="My Event",
+        event_type="MyEvent",
+        event_types=["MyEvent", "ParentEvent"],
+    )
+
+    data = node.model_dump()
+    assert data["id"] == "MyEvent"
+    assert data["label"] == "My Event"
+    assert data["node_type"] == "event"
+    assert data["event_type"] == "MyEvent"
+    assert data["event_types"] == ["MyEvent", "ParentEvent"]
+
+    restored = WorkflowEventNode.model_validate(data)
+    assert restored.id == "MyEvent"
+    assert restored.label == "My Event"
+    assert restored.node_type == "event"
+    assert restored.event_type == "MyEvent"
+    assert restored.event_types == ["MyEvent", "ParentEvent"]
+    assert restored.is_subclass_of("ParentEvent")
+    assert not restored.is_subclass_of("UnrelatedEvent")
+
+
+def test_external_node_serialization_roundtrip() -> None:
+    """Test WorkflowExternalNode serialization and deserialization."""
+    node = WorkflowExternalNode(id="external_step", label="External Step")
+
+    data = node.model_dump()
+    assert data["id"] == "external_step"
+    assert data["label"] == "External Step"
+    assert data["node_type"] == "external"
+
+    restored = WorkflowExternalNode.model_validate(data)
+    assert restored.id == "external_step"
+    assert restored.label == "External Step"
+    assert restored.node_type == "external"
+
+
+def test_resource_node_serialization_roundtrip() -> None:
+    """Test WorkflowResourceNode serialization and deserialization."""
+    node = WorkflowResourceNode(
+        id="resource_abc123",
+        label="MyResourceType",
+        type_name="MyResourceType",
+        getter_name="get_my_resource",
+        source_file="/path/to/source.py",
+        source_line=100,
+        docstring="Resource docstring",
+        unique_hash="abc123",
+    )
+
+    data = node.model_dump()
+    assert data["id"] == "resource_abc123"
+    assert data["label"] == "MyResourceType"
+    assert data["node_type"] == "resource"
+    assert data["type_name"] == "MyResourceType"
+    assert data["getter_name"] == "get_my_resource"
+    assert data["source_file"] == "/path/to/source.py"
+    assert data["source_line"] == 100
+    assert data["docstring"] == "Resource docstring"
+    assert data["unique_hash"] == "abc123"
+
+    restored = WorkflowResourceNode.model_validate(data)
+    assert restored.id == "resource_abc123"
+    assert restored.label == "MyResourceType"
+    assert restored.type_name == "MyResourceType"
+    assert restored.getter_name == "get_my_resource"
+    assert restored.node_type == "resource"
+
+
+def test_graph_with_all_node_types_serialization() -> None:
+    """Test full graph serialization/deserialization with all node types."""
+    graph = WorkflowGraphNodeEdges(
+        nodes=[
+            WorkflowStepNode(id="step1", label="Step 1"),
+            WorkflowEventNode(
+                id="StartEvent",
+                label="StartEvent",
+                event_type="StartEvent",
+                event_types=["StartEvent"],
+            ),
+            WorkflowExternalNode(id="external", label="External"),
+            WorkflowResourceNode(
+                id="resource_123",
+                label="DB",
+                type_name="DatabaseClient",
+                getter_name="get_db",
+            ),
+        ],
+        edges=[
+            WorkflowGraphEdge(source="StartEvent", target="step1"),
+            WorkflowGraphEdge(source="step1", target="resource_123", label="db"),
+        ],
+    )
+
+    # Serialize
+    data = graph.model_dump()
+    assert len(data["nodes"]) == 4
+    assert len(data["edges"]) == 2
+
+    # Check discriminator values are present
+    node_types = {n["node_type"] for n in data["nodes"]}
+    assert node_types == {"step", "event", "external", "resource"}
+
+    # Deserialize
+    restored = WorkflowGraphNodeEdges.model_validate(data)
+    assert len(restored.nodes) == 4
+    assert len(restored.edges) == 2
+
+    # Check correct types restored
+    step_nodes = [n for n in restored.nodes if isinstance(n, WorkflowStepNode)]
+    event_nodes = [n for n in restored.nodes if isinstance(n, WorkflowEventNode)]
+    external_nodes = [n for n in restored.nodes if isinstance(n, WorkflowExternalNode)]
+    resource_nodes = [n for n in restored.nodes if isinstance(n, WorkflowResourceNode)]
+
+    assert len(step_nodes) == 1
+    assert len(event_nodes) == 1
+    assert len(external_nodes) == 1
+    assert len(resource_nodes) == 1
+
+    # Verify event node has its method
+    assert event_nodes[0].is_subclass_of("StartEvent")
+
+    # Verify resource node has its fields
+    assert resource_nodes[0].type_name == "DatabaseClient"
+    assert resource_nodes[0].getter_name == "get_db"
+
+
+def test_graph_deserialization_from_raw_json() -> None:
+    """Test that graph can be deserialized from raw JSON dict."""
+    raw_data = {
+        "nodes": [
+            {"id": "step1", "label": "Step 1", "node_type": "step"},
+            {
+                "id": "MyEvent",
+                "label": "MyEvent",
+                "node_type": "event",
+                "event_type": "MyEvent",
+                "event_types": ["MyEvent"],
+            },
+            {"id": "external", "label": "External", "node_type": "external"},
+            {
+                "id": "resource_xyz",
+                "label": "Resource",
+                "node_type": "resource",
+                "type_name": "SomeType",
+            },
+        ],
+        "edges": [{"source": "MyEvent", "target": "step1"}],
+    }
+
+    graph = WorkflowGraphNodeEdges.model_validate(raw_data)
+
+    assert len(graph.nodes) == 4
+    assert isinstance(graph.nodes[0], WorkflowStepNode)
+    assert isinstance(graph.nodes[1], WorkflowEventNode)
+    assert isinstance(graph.nodes[2], WorkflowExternalNode)
+    assert isinstance(graph.nodes[3], WorkflowResourceNode)

@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any, Literal, Union
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from workflows.protocol.serializable_events import EventEnvelopeWithMetadata
 
@@ -61,27 +61,103 @@ class WorkflowGraphResponse(BaseModel):
     graph: WorkflowGraphNodeEdges
 
 
-class WorkflowGraphNode(BaseModel):
-    """Node in the workflow graph.
+class WorkflowNodeBase(BaseModel):
+    """Base class for all workflow graph nodes."""
 
-    Represents steps, events, external nodes, or resources.
-    Resource-specific fields are optional and only populated for resource nodes.
+    id: str = Field(description="Unique identifier for the node")
+    label: str = Field(description="Display text for the node")
+
+    def truncated_label(self, max_length: int) -> str:
+        """Get truncated label for visualization (adds * suffix if truncated)."""
+        if len(self.label) <= max_length:
+            return self.label
+        return f"{self.label[: max_length - 1]}*"
+
+
+class WorkflowStepNode(WorkflowNodeBase):
+    """A workflow step node representing a function decorated with @step."""
+
+    node_type: Literal["step"] = Field(
+        default="step", description="Discriminator field for node type"
+    )
+
+
+class WorkflowEventNode(WorkflowNodeBase):
+    """An event node representing an Event class that flows between steps."""
+
+    node_type: Literal["event"] = Field(
+        default="event", description="Discriminator field for node type"
+    )
+    event_type: str = Field(
+        description="The event class name (e.g., 'StartEvent', 'MyCustomEvent')"
+    )
+    event_types: list[str] = Field(
+        description="Event class inheritance chain for subclass checking. "
+        "First element is the class itself, followed by parent Event subclasses."
+    )
+
+    def is_subclass_of(self, *type_names: str) -> bool:
+        """Check if this node's event_type is a subclass of any of the given types."""
+        return any(name in self.event_types for name in type_names)
+
+
+class WorkflowExternalNode(WorkflowNodeBase):
+    """An external node representing human-in-the-loop or external system interaction."""
+
+    node_type: Literal["external"] = Field(
+        default="external", description="Discriminator field for node type"
+    )
+
+
+class WorkflowResourceNode(WorkflowNodeBase):
+    """A resource node representing an injected dependency (e.g., database client, API client)."""
+
+    node_type: Literal["resource"] = Field(
+        default="resource", description="Discriminator field for node type"
+    )
+    type_name: str | None = Field(
+        default=None,
+        description="The type annotation of the resource (e.g., 'DatabaseClient', 'AsyncLlamaCloud')",
+    )
+    getter_name: str | None = Field(
+        default=None,
+        description="Name of the factory function that creates the resource",
+    )
+    source_file: str | None = Field(
+        default=None,
+        description="Absolute path to the source file containing the getter function",
+    )
+    source_line: int | None = Field(
+        default=None, description="Line number where the getter function is defined"
+    )
+    docstring: str | None = Field(
+        default=None,
+        description="Documentation string extracted from the getter function",
+    )
+    unique_hash: str | None = Field(
+        default=None,
+        description="Hash used for deduplication when the same resource is used in multiple steps",
+    )
+
+
+class WorkflowGenericNode(WorkflowNodeBase):
+    """A generic node for custom visualization types not covered by standard node types.
+
+    Used for agent visualization (node_type='agent', 'tool', 'workflow_agent', etc.)
+    and other custom extensions. Supports optional event_type fields for type checking.
     """
 
-    id: str
-    label: str
-    node_type: str  # 'step', 'event', 'external', 'resource'
-    title: str | None = None
-    # Event metadata (only populated when node_type == "event")
-    event_type: str | None = None  # The event class name
-    event_types: list[str] | None = None  # Inheritance chain for subclass checks
-    # Resource-specific fields (only populated when node_type == "resource")
-    type_name: str | None = None  # The type annotation, e.g., "AsyncLlamaCloud"
-    getter_name: str | None = None  # The factory function name
-    source_file: str | None = None  # Path to the source file containing the getter
-    source_line: int | None = None  # Line number where the getter is defined
-    docstring: str | None = None  # Documentation string of the getter function
-    unique_hash: str | None = None  # Unique identifier for deduplication
+    node_type: str = Field(
+        description="Custom node type string (e.g., 'agent', 'tool', 'workflow_base')"
+    )
+    event_type: str | None = Field(
+        default=None,
+        description="Optional type name for nodes that support inheritance checking (e.g., agent types)",
+    )
+    event_types: list[str] | None = Field(
+        default=None,
+        description="Optional inheritance chain for subclass checking, similar to WorkflowEventNode",
+    )
 
     def is_subclass_of(self, *type_names: str) -> bool:
         """Check if this node's event_type is a subclass of any of the given types."""
@@ -90,15 +166,37 @@ class WorkflowGraphNode(BaseModel):
         return any(name in self.event_types for name in type_names)
 
 
+# Union type for workflow graph nodes
+# Pydantic will try to match against types in order; WorkflowGenericNode is last as catch-all
+WorkflowGraphNode = Union[
+    WorkflowStepNode,
+    WorkflowEventNode,
+    WorkflowExternalNode,
+    WorkflowResourceNode,
+    WorkflowGenericNode,
+]
+
+
 class WorkflowGraphEdge(BaseModel):
-    source: str
-    target: str
-    label: str | None = None  # Optional edge label (e.g., variable name for resources)
+    """A directed edge connecting two nodes in the workflow graph."""
+
+    source: str = Field(description="ID of the source node (where the edge originates)")
+    target: str = Field(description="ID of the target node (where the edge points to)")
+    label: str | None = Field(
+        default=None,
+        description="Optional edge label, used for resource edges to show the variable name",
+    )
 
 
 class WorkflowGraphNodeEdges(BaseModel):
-    nodes: list[WorkflowGraphNode]
-    edges: list[WorkflowGraphEdge]
+    """Complete workflow graph structure containing all nodes and edges."""
+
+    nodes: list[WorkflowGraphNode] = Field(
+        description="All nodes in the workflow graph"
+    )
+    edges: list[WorkflowGraphEdge] = Field(
+        description="All directed edges connecting the nodes"
+    )
 
 
 __all__ = [
@@ -112,6 +210,12 @@ __all__ = [
     "WorkflowSchemaResponse",
     "WorkflowEventsListResponse",
     "WorkflowGraphResponse",
+    "WorkflowNodeBase",
+    "WorkflowStepNode",
+    "WorkflowEventNode",
+    "WorkflowExternalNode",
+    "WorkflowResourceNode",
+    "WorkflowGenericNode",
     "WorkflowGraphNode",
     "WorkflowGraphEdge",
     "WorkflowGraphNodeEdges",
