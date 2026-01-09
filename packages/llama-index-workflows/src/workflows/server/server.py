@@ -943,13 +943,10 @@ class WorkflowServer:
         handler = self._handlers.get(handler_id)
         if handler is None:
             # Try to reload from persistence (for released idle workflows)
-            handler = await self._try_reload_handler(handler_id)
+            handler, persisted = await self._try_reload_handler(handler_id)
             if handler is None:
-                persisted = await self._workflow_store.query(
-                    HandlerQuery(handler_id_in=[handler_id])
-                )
                 if persisted:
-                    status = persisted[0].status
+                    status = persisted.status
                     if status in {"completed", "failed", "cancelled"}:
                         raise HTTPException(
                             detail="Handler is completed", status_code=204
@@ -1146,16 +1143,21 @@ class WorkflowServer:
             raise HTTPException(detail="Workflow already completed", status_code=409)
         if wrapper is None:
             # Try to reload from persistence (for released idle workflows)
-            wrapper = await self._try_reload_handler(handler_id)
+            wrapper, persisted = await self._try_reload_handler(handler_id)
             if wrapper is None:
                 # Check if it exists but is completed
-                handler_data = await self._load_handler(handler_id)
-                if is_status_completed(handler_data.status):
+                if persisted and is_status_completed(persisted.status):
                     raise HTTPException(
                         detail="Workflow already completed", status_code=409
                     )
-                # Handler exists in store but couldn't be reloaded
-                raise HTTPException(detail="Handler not found", status_code=404)
+                elif persisted is None:
+                    raise HTTPException(detail="Handler not found", status_code=404)
+                else:
+                    # Shouldn't really happen
+                    raise HTTPException(
+                        detail=f"Failed to resume incomplete handler with status {persisted.status}",
+                        status_code=500,
+                    )
 
         handler = wrapper.run_handler
 
@@ -1410,18 +1412,7 @@ class WorkflowServer:
     async def _close_handler(self, handler: _WorkflowHandler) -> None:
         """Close and cleanup a handler."""
         # Cancel the run_handler if not done
-        if not handler.run_handler.done():
-            try:
-                handler.run_handler.cancel()
-            except Exception:
-                pass
-            try:
-                await handler.run_handler.cancel_run()
-            except Exception:
-                pass
-
-        if handler.task is not None:
-            await handler.task
+        await handler.cancel_handlers_and_tasks()
 
         self._handlers.pop(handler.handler_id, None)
         self._results.pop(handler.handler_id, None)
@@ -1444,24 +1435,9 @@ class WorkflowServer:
                 )
                 # Mark to skip any further checkpoints (including auto-checkpoint
                 # in _stream_events when we cancel the task)
-                wrapper._skip_checkpoint = True
                 # Still need to cancel the old runtime
-                wrapper._cancel_idle_release_timer()
-                if not wrapper.run_handler.done():
-                    try:
-                        wrapper.run_handler.cancel()
-                    except Exception:
-                        pass
-                    try:
-                        await wrapper.run_handler.cancel_run()
-                    except Exception:
-                        pass
-                if wrapper.task and not wrapper.task.done():
-                    wrapper.task.cancel()
-                    try:
-                        await wrapper.task
-                    except asyncio.CancelledError:
-                        pass
+                wrapper._cancel_idle_release_timer(skip_checkpoint=True)
+                await wrapper.cancel_handlers_and_tasks()
                 return
 
             # Remove from memory FIRST to prevent race conditions where cancelling
@@ -1479,54 +1455,42 @@ class WorkflowServer:
             finally:
                 # Always stop the workflow runtime to prevent memory leaks,
                 # even if checkpoint fails
-                if not wrapper.run_handler.done():
-                    try:
-                        wrapper.run_handler.cancel()
-                    except Exception:
-                        pass
-                    try:
-                        await wrapper.run_handler.cancel_run()
-                    except Exception:
-                        pass
-
-                # Cancel the streaming task
-                if wrapper.task and not wrapper.task.done():
-                    wrapper.task.cancel()
-                    try:
-                        await wrapper.task
-                    except asyncio.CancelledError:
-                        pass
+                await wrapper.cancel_handlers_and_tasks()
 
         logger.info(f"Released idle workflow {handler_id} from memory")
 
-    async def _try_reload_handler(self, handler_id: str) -> _WorkflowHandler | None:
+    async def _try_reload_handler(
+        self, handler_id: str
+    ) -> tuple[_WorkflowHandler | None, PersistentHandler | None]:
         """Attempt to reload a released handler from persistence.
 
         Uses per-handler locking to prevent concurrent reloads from creating
         duplicate workflow instances.
+
+        Returns the persistent handler data if it was fetched from the store, so callers can avoid fetching it again if needed.
         """
         async with self._reload_lock(handler_id):
             # Check if handler was already reloaded by another concurrent request
             if handler_id in self._handlers:
-                return self._handlers[handler_id]
+                return self._handlers[handler_id], None
 
             found = await self._workflow_store.query(
                 HandlerQuery(handler_id_in=[handler_id])
             )
             if not found:
-                return None
+                return None, None
 
             handler_data = found[0]
 
             if handler_data.status != "running":
-                return None  # Can't reload completed/failed/cancelled
+                return None, handler_data  # Can't reload completed/failed/cancelled
 
             workflow = self._workflows.get(handler_data.workflow_name)
             if workflow is None:
                 logger.warning(
                     f"Cannot reload {handler_id}: workflow {handler_data.workflow_name} not registered"
                 )
-                return None
+                return None, handler_data
 
             try:
                 context = Context.from_dict(workflow=workflow, data=handler_data.ctx)
@@ -1545,7 +1509,7 @@ class WorkflowServer:
                     wrapper._start_idle_release_timer()
 
                 logger.info(f"Reloaded workflow {handler_id} from persistence")
-                return wrapper
+                return wrapper, handler_data
             except Exception as e:
                 logger.error(f"Failed to reload handler {handler_id}: {e}")
                 raise HTTPException(
@@ -1753,8 +1717,10 @@ class _WorkflowHandler:
 
         self._idle_release_timer = asyncio.create_task(release_after_timeout())
 
-    def _cancel_idle_release_timer(self) -> None:
+    def _cancel_idle_release_timer(self, skip_checkpoint: bool = False) -> None:
         """Cancel any pending idle release timer."""
+        if skip_checkpoint:
+            self._skip_checkpoint = True
         if self._idle_release_timer is not None:
             self._idle_release_timer.cancel()
             self._idle_release_timer = None
@@ -1870,6 +1836,24 @@ class _WorkflowHandler:
                 # clean up the resources if the stream has been consumed
                 await self._on_finish()
             self.consumer_mutex.release()
+
+    async def cancel_handlers_and_tasks(self) -> None:
+        """Cancel the handler and release it from the store."""
+        if not self.run_handler.done():
+            try:
+                self.run_handler.cancel()
+            except Exception:
+                pass
+            try:
+                await self.run_handler.cancel_run()
+            except Exception:
+                pass
+        if self.task and not self.task.done():
+            self.task.cancel()
+            try:
+                await self.task
+            except asyncio.CancelledError:
+                pass
 
 
 class NoLockAvailable(Exception):

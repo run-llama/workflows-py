@@ -195,9 +195,12 @@ async def test_released_workflow_is_reloaded_on_event(
             assert handler_id not in server._handlers
 
             # Now reload by using _try_reload_handler
-            reloaded = await server._try_reload_handler(handler_id)
+            reloaded, persisted = await server._try_reload_handler(handler_id)
             assert reloaded is not None
             assert handler_id in server._handlers
+
+            assert persisted is not None
+            assert persisted.status == "running"
 
             # Send the event to complete the workflow
             ctx = reloaded.run_handler.ctx
@@ -239,9 +242,11 @@ async def test_idle_release_restores_idle_since_on_reload(
         assert "idle-restore-1" not in server._handlers
 
         # Reload it (simulating an event arriving)
-        wrapper = await server._try_reload_handler("idle-restore-1")
+        wrapper, persisted = await server._try_reload_handler("idle-restore-1")
         assert wrapper is not None
         assert wrapper.idle_since == idle_time
+        assert persisted is not None
+        assert persisted.status == "running"
 
 
 @pytest.mark.asyncio
@@ -318,9 +323,12 @@ async def test_reloaded_idle_workflow_is_released_again(
         assert handler_id not in server._handlers
 
         # Reload the workflow (simulating an event arriving)
-        reloaded = await server._try_reload_handler(handler_id)
+        reloaded, persisted = await server._try_reload_handler(handler_id)
         assert reloaded is not None
         assert handler_id in server._handlers
+
+        assert persisted is not None
+        assert persisted.status == "running"
 
         # The reloaded handler should have idle_since restored
         assert reloaded.idle_since is not None
@@ -526,7 +534,7 @@ async def test_bug_consumer_mutex_blocks_release_without_reschedule(
             traveller.shift(timedelta(milliseconds=100))
             await async_yield(10)
 
-            # After fix: Handler should be released because timer was rescheduled
+            # Handler should be released because timer was rescheduled
             assert handler_id not in server._handlers, (
                 "BUG: Handler was never released after mutex was unlocked - "
                 "timer should have been rescheduled but wasn't"
@@ -596,7 +604,7 @@ async def test_bug_race_between_event_post_and_idle_timer(
             traveller.shift(timedelta(milliseconds=100))
             await async_yield(10)
 
-            # After the fix: Handler should NOT be released because mark_active()
+            # Handler should NOT be released because mark_active()
             # cleared idle_since and cancelled the timer before the event was sent
             assert handler_id in server._handlers, (
                 "BUG: Handler was released even though mark_active() was called. "
@@ -647,7 +655,7 @@ async def test_bug_concurrent_reloads_create_duplicate_handlers(
         instances_created: list[object] = []
 
         async def reload_and_track() -> None:
-            wrapper = await server._try_reload_handler(handler_id)
+            wrapper, _ = await server._try_reload_handler(handler_id)
             if wrapper is not None:
                 # Track the actual run_handler object identity
                 instances_created.append(id(wrapper.run_handler))
@@ -815,7 +823,7 @@ async def test_failed_send_event_preserves_idle_state(
                 # The endpoint returns 400 for bad step
                 assert response.status_code == 400
 
-                # FIX: mark_active() is now called AFTER send_event() succeeds.
+                # mark_active() is called AFTER send_event() succeeds.
                 # Since send_event() failed, idle state should be preserved.
                 assert wrapper.idle_since == original_idle_since, (
                     "idle_since should be preserved when send_event() fails"
@@ -887,9 +895,11 @@ async def test_release_skips_checkpoint_if_handler_was_reloaded(
             server._handlers.pop(handler_id, None)
 
             # Reload the handler (this gets the persisted state)
-            reloaded = await server._try_reload_handler(handler_id)
+            reloaded, persisted = await server._try_reload_handler(handler_id)
             assert reloaded is not None
             assert reloaded is not old_wrapper  # Different instance
+            assert persisted is not None
+            assert persisted.status == "running"
 
             # The reloaded handler receives an event and becomes active
             reloaded.mark_active()
@@ -899,27 +909,23 @@ async def test_release_skips_checkpoint_if_handler_was_reloaded(
             await reloaded.checkpoint()
 
             # Verify store has the new state (idle_since=None)
-            persisted = await memory_store.query(
-                HandlerQuery(handler_id_in=[handler_id])
-            )
-            assert persisted[0].idle_since is None, "Store should have new state"
+            stored = await memory_store.query(HandlerQuery(handler_id_in=[handler_id]))
+            assert stored[0].idle_since is None, "Store should have new state"
 
             # NOW call _release_handler with the OLD wrapper
             # This simulates a delayed release that happens after reload
-            # The fix should detect that a different handler is in _handlers
+            # _release_handler should detect that a different handler is in _handlers
             # and skip the checkpoint
             await server._release_handler(old_wrapper)
 
             # Verify the store still has the correct (new) state
-            persisted = await memory_store.query(
-                HandlerQuery(handler_id_in=[handler_id])
-            )
-            assert len(persisted) == 1
+            stored = await memory_store.query(HandlerQuery(handler_id_in=[handler_id]))
+            assert len(stored) == 1
 
-            # With the fix, the old release should have skipped the checkpoint
+            # The old release should have skipped the checkpoint
             # because it detected a different handler instance in _handlers
-            assert persisted[0].idle_since is None, (
+            assert stored[0].idle_since is None, (
                 f"Release should have skipped checkpoint since handler was reloaded. "
                 f"Expected idle_since=None (from reload), "
-                f"but got idle_since={persisted[0].idle_since}."
+                f"but got idle_since={stored[0].idle_since}."
             )

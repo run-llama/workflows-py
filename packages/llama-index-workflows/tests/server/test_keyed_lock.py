@@ -291,8 +291,8 @@ async def test_parallel_access_no_interleaving(locks: KeyedLock) -> None:
 
 
 @pytest.mark.skipif(
-    sys.version_info <= (3, 10),
-    reason="asyncio.Barrier is not available in Python <= 3.10",
+    sys.version_info < (3, 11),
+    reason="asyncio.Barrier is not available in Python < 3.11",
 )
 async def test_parallel_access_simultaneous_start(locks: KeyedLock) -> None:
     """Test mutual exclusion when tasks start at exactly the same time.
