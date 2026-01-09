@@ -22,10 +22,12 @@ from workflows.events import (
     StepState,
     StepStateChanged,
     StopEvent,
+    WorkflowIdleEvent,
 )
 from workflows.retry_policy import ConstantDelayRetryPolicy
 from workflows.runtime.control_loop import (
     _add_or_enqueue_event,
+    _check_idle_state,
     _process_add_event_tick,
     _process_cancel_run_tick,
     _process_publish_event_tick,
@@ -613,3 +615,220 @@ def test_step_worker_failed_retry_preserves_first_attempt_at(
     assert len(queue_cmds) == 1
     assert queue_cmds[0].attempts == 3  # incremented from 2
     assert queue_cmds[0].first_attempt_at == original_first_attempt_at  # preserved!
+
+
+# =============================================================================
+# Idle Workflow Tracking Tests
+# =============================================================================
+
+
+def test_check_idle_state_not_running(base_state: BrokerState) -> None:
+    """A workflow that is not running is not idle."""
+    base_state.is_running = False
+    assert _check_idle_state(base_state) is False
+
+
+def test_check_idle_state_has_queued_events(base_state: BrokerState) -> None:
+    """A workflow with queued events is not idle."""
+    base_state.workers["test_step"].queue.append(
+        EventAttempt(event=MyTestEvent(value=1))
+    )
+    assert _check_idle_state(base_state) is False
+
+
+def test_check_idle_state_has_in_progress(base_state: BrokerState) -> None:
+    """A workflow with in-progress workers is not idle."""
+    add_worker(base_state, MyTestEvent(value=1))
+    assert _check_idle_state(base_state) is False
+
+
+def test_check_idle_state_no_waiters(base_state: BrokerState) -> None:
+    """A workflow with no waiters is not idle (even with empty queues)."""
+    # State is running, no queue, no in_progress, but no waiters either
+    assert _check_idle_state(base_state) is False
+
+
+def test_check_idle_state_is_idle_with_waiter(base_state: BrokerState) -> None:
+    """A running workflow with only waiters and no work is idle."""
+    waiter = StepWorkerWaiter(
+        waiter_id="w1",
+        event=MyTestEvent(value=1),
+        waiting_for_event=OtherEvent,
+        requirements={},
+        has_requirements=False,
+        resolved_event=None,
+    )
+    base_state.workers["test_step"].collected_waiters.append(waiter)
+    assert _check_idle_state(base_state) is True
+
+
+def test_idle_event_emitted_on_transition_to_idle(base_state: BrokerState) -> None:
+    """WorkflowIdleEvent is emitted when workflow transitions to idle."""
+    event = MyTestEvent(value=42)
+    add_worker(base_state, event)
+
+    # Add a waiter so the workflow can become idle
+    waiter = StepWorkerWaiter(
+        waiter_id="w1",
+        event=event,
+        waiting_for_event=OtherEvent,
+        requirements={},
+        has_requirements=False,
+        resolved_event=None,
+    )
+    base_state.workers["test_step"].collected_waiters.append(waiter)
+
+    # Process result that completes the worker but leaves waiter active
+    tick: TickStepResult[Any] = TickStepResult(
+        step_name="test_step",
+        worker_id=0,
+        event=event,
+        result=[
+            AddWaiter(
+                waiter_id="w1",
+                waiter_event=None,
+                requirements={},
+                timeout=None,
+                event_type=OtherEvent,
+            )
+        ],
+    )
+
+    new_state, commands = _process_step_result_tick(tick, base_state, now_seconds=110.0)
+
+    # Should have WorkflowIdleEvent as the last command
+    idle_commands = [
+        c
+        for c in commands
+        if isinstance(c, CommandPublishEvent) and isinstance(c.event, WorkflowIdleEvent)
+    ]
+    assert len(idle_commands) == 1
+    assert _check_idle_state(new_state) is True
+
+
+def test_check_idle_state_multi_step_not_idle_if_one_has_work(
+    base_state: BrokerState,
+) -> None:
+    """With multiple steps, not idle if any step has work."""
+    # Add a second step
+    other_step_cfg = StepConfig(
+        accepted_events=[OtherEvent],
+        event_name="ev",
+        return_types=[StopEvent, type(None)],
+        context_parameter="ctx",
+        retry_policy=None,
+        num_workers=1,
+        resources=[],
+    )
+    base_state.config.steps["other_step"] = InternalStepConfig(
+        accepted_events=[OtherEvent], retry_policy=None, num_workers=1
+    )
+    base_state.workers["other_step"] = InternalStepWorkerState(
+        queue=[],
+        config=other_step_cfg,
+        in_progress=[],
+        collected_events={},
+        collected_waiters=[],
+    )
+
+    # Add waiter to test_step (which alone would make it idle)
+    waiter = StepWorkerWaiter(
+        waiter_id="w1",
+        event=MyTestEvent(value=1),
+        waiting_for_event=OtherEvent,
+        requirements={},
+        has_requirements=False,
+        resolved_event=None,
+    )
+    base_state.workers["test_step"].collected_waiters.append(waiter)
+
+    # Without work in other_step, workflow is idle
+    assert _check_idle_state(base_state) is True
+
+    # Add in_progress work to other_step - now not idle
+    base_state.workers["other_step"].in_progress.append(
+        InProgressState(
+            event=OtherEvent(data="test"),
+            worker_id=0,
+            shared_state=StepWorkerState(
+                step_name="other_step",
+                collected_events={},
+                collected_waiters=[],
+            ),
+            attempts=0,
+            first_attempt_at=100.0,
+        )
+    )
+    assert _check_idle_state(base_state) is False
+
+    # Or with queued work
+    base_state.workers["other_step"].in_progress = []
+    base_state.workers["other_step"].queue.append(
+        EventAttempt(event=OtherEvent(data="queued"))
+    )
+    assert _check_idle_state(base_state) is False
+
+
+def test_no_idle_event_when_work_remains(base_state: BrokerState) -> None:
+    """WorkflowIdleEvent is not emitted if there's still work to do."""
+    event = MyTestEvent(value=42)
+    add_worker(base_state, event)
+
+    # Queue another event so work remains after processing
+    base_state.workers["test_step"].queue.append(
+        EventAttempt(event=MyTestEvent(value=99))
+    )
+
+    tick: TickStepResult[Any] = TickStepResult(
+        step_name="test_step",
+        worker_id=0,
+        event=event,
+        result=[StepWorkerResult(result=None)],  # Completes but queue has more
+    )
+
+    _, commands = _process_step_result_tick(tick, base_state, now_seconds=110.0)
+
+    idle_commands = [
+        c
+        for c in commands
+        if isinstance(c, CommandPublishEvent) and isinstance(c.event, WorkflowIdleEvent)
+    ]
+    assert len(idle_commands) == 0
+
+
+def test_no_idle_event_when_workflow_completes(base_state: BrokerState) -> None:
+    """WorkflowIdleEvent is not emitted when workflow completes (StopEvent)."""
+    event = MyTestEvent(value=42)
+    add_worker(base_state, event)
+
+    # Add a waiter
+    waiter = StepWorkerWaiter(
+        waiter_id="w1",
+        event=event,
+        waiting_for_event=OtherEvent,
+        requirements={},
+        has_requirements=False,
+        resolved_event=None,
+    )
+    base_state.workers["test_step"].collected_waiters.append(waiter)
+
+    # Complete the workflow with StopEvent
+    tick: TickStepResult[Any] = TickStepResult(
+        step_name="test_step",
+        worker_id=0,
+        event=event,
+        result=[StepWorkerResult(result=StopEvent(result="done"))],
+    )
+
+    new_state, commands = _process_step_result_tick(tick, base_state, now_seconds=110.0)
+
+    # Workflow is no longer running
+    assert new_state.is_running is False
+
+    # No idle event should be emitted
+    idle_commands = [
+        c
+        for c in commands
+        if isinstance(c, CommandPublishEvent) and isinstance(c.event, WorkflowIdleEvent)
+    ]
+    assert len(idle_commands) == 0

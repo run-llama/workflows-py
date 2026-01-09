@@ -28,6 +28,7 @@ from workflows.events import (
     StartEvent,
     StepStateChanged,
     StopEvent,
+    WorkflowIdleEvent,
 )
 from workflows.retry_policy import ConstantDelayRetryPolicy, RetryPolicy
 from workflows.runtime.control_loop import control_loop
@@ -796,3 +797,98 @@ async def test_control_loop_retry_exhaustion_respects_total_time(
     # Attempts should increment: 1, 2, 3, 4
     expected_attempts = list(range(1, len(policy.observed_attempts) + 1))
     assert policy.observed_attempts == expected_attempts
+
+
+@pytest.mark.asyncio
+async def test_control_loop_emits_idle_event_when_waiting(
+    test_plugin: MockRuntimePlugin,
+) -> None:
+    """
+    Test that WorkflowIdleEvent is emitted when workflow becomes idle waiting for event.
+
+    A workflow is idle when it has active waiters but no pending work. This test
+    validates that the idle event is published to the stream when this state is reached.
+    """
+
+    class AwaitedEvent(Event):
+        value: str
+
+    class IdleTrackingWorkflow(Workflow):
+        @step
+        async def waiter(self, ev: StartEvent, ctx: Context) -> StopEvent:
+            awaited = await ctx.wait_for_event(
+                AwaitedEvent,
+                waiter_event=InputRequiredEvent(),
+            )
+            return StopEvent(result=f"received_{awaited.value}")
+
+    wf = IdleTrackingWorkflow(timeout=2.0)
+    task = asyncio.create_task(
+        run_control_loop(
+            workflow=wf,
+            start_event=StartEvent(),
+            plugin=test_plugin,
+        )
+    )
+
+    # Collect events until we see the WorkflowIdleEvent
+    idle_event_found = False
+    input_required_found = False
+    events_before_idle: list[Event] = []
+
+    while True:
+        ev = await test_plugin.get_stream_event(timeout=1.0)
+        if isinstance(ev, WorkflowIdleEvent):
+            idle_event_found = True
+            break
+        if isinstance(ev, InputRequiredEvent):
+            input_required_found = True
+        events_before_idle.append(ev)
+        if isinstance(ev, StopEvent):
+            break
+
+    # WorkflowIdleEvent should be emitted after the workflow enters wait state
+    assert idle_event_found, (
+        "WorkflowIdleEvent should be emitted when workflow is waiting for external event"
+    )
+    assert input_required_found, "InputRequiredEvent should be emitted before idle"
+
+    # Now send the awaited event to complete the workflow
+    await test_plugin.send_event(TickAddEvent(event=AwaitedEvent(value="test")))
+
+    result = await asyncio.wait_for(task, timeout=1.0)
+    assert isinstance(result, StopEvent)
+    assert result.result == "received_test"
+
+
+@pytest.mark.asyncio
+async def test_control_loop_idle_event_not_emitted_on_completion(
+    test_plugin: MockRuntimePlugin,
+) -> None:
+    """
+    Test that WorkflowIdleEvent is NOT emitted when workflow completes normally.
+
+    Even if a workflow has waiters, if it completes (StopEvent), it should not
+    emit an idle event because the workflow is no longer running.
+    """
+
+    result = await run_control_loop(
+        workflow=SimpleWorkflow(timeout=1.0),
+        start_event=StartEvent(),
+        plugin=test_plugin,
+    )
+
+    # Verify the workflow completed
+    assert isinstance(result, StopEvent)
+    assert result.result == "processed_42"
+
+    # Drain and verify no WorkflowIdleEvent was emitted
+    all_events: list[Event] = []
+    while test_plugin.has_stream_events():
+        ev = await test_plugin.get_stream_event(timeout=0.1)
+        all_events.append(ev)
+
+    idle_events = [e for e in all_events if isinstance(e, WorkflowIdleEvent)]
+    assert len(idle_events) == 0, (
+        "WorkflowIdleEvent should not be emitted when workflow completes normally"
+    )

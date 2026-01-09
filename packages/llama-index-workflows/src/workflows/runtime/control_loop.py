@@ -22,6 +22,7 @@ from workflows.events import (
     StepState,
     StepStateChanged,
     StopEvent,
+    WorkflowIdleEvent,
 )
 from workflows.runtime.types.commands import (
     CommandCompleteRun,
@@ -367,6 +368,25 @@ def rewind_in_progress(
     return state, commands
 
 
+def _check_idle_state(state: BrokerState) -> bool:
+    """Returns True if workflow is idle (waiting only on external events).
+
+    A workflow is idle when:
+    1. The workflow is running (hasn't completed/failed/cancelled)
+    2. All steps have no pending events in their queues
+    3. All steps have no workers currently executing
+    4. At least one step has an active waiter (from ctx.wait_for_event())
+    """
+    if not state.is_running:
+        return False
+
+    for worker_state in state.workers.values():
+        if worker_state.queue or worker_state.in_progress:
+            return False
+
+    return any(ws.collected_waiters for ws in state.workers.values())
+
+
 def _process_step_result_tick(
     tick: TickStepResult[R], init: BrokerState, now_seconds: float
 ) -> tuple[BrokerState, list[WorkflowCommand]]:
@@ -542,6 +562,14 @@ def _process_step_result_tick(
                 event, tick.step_name, worker_state, now_seconds
             )
             commands.extend(subcommands)
+
+    # Check for idle transition at end of processing
+    was_idle = _check_idle_state(init)
+    now_idle = _check_idle_state(state)
+
+    if now_idle and not was_idle:
+        commands.append(CommandPublishEvent(WorkflowIdleEvent()))
+
     return state, commands
 
 
