@@ -89,7 +89,6 @@ def _create_resource_node(resource_def: ResourceDefinition) -> WorkflowResourceN
         source_file=source_file,
         source_line=source_line,
         description=resource_description,
-        unique_hash=unique_hash,
     )
 
 

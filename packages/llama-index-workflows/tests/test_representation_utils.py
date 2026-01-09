@@ -191,7 +191,6 @@ def test_extract_workflow_structure_with_resources() -> None:
     assert "Factory function" in resource_node.description
     assert resource_node.source_file is not None
     assert resource_node.source_line is not None
-    assert resource_node.unique_hash is not None
 
 
 def test_resource_node_edges_have_variable_names() -> None:
@@ -298,7 +297,6 @@ def test_resource_node_serialization() -> None:
         source_file="/path/to/file.py",
         source_line=42,
         description="Test docstring",
-        unique_hash="abc123",
     )
 
     assert resource_node.id == "resource_abc123"
@@ -309,7 +307,6 @@ def test_resource_node_serialization() -> None:
     assert resource_node.source_file == "/path/to/file.py"
     assert resource_node.source_line == 42
     assert resource_node.description == "Test docstring"
-    assert resource_node.unique_hash == "abc123"
 
     # Test serialization
     data = resource_node.model_dump()
@@ -431,7 +428,6 @@ def test_resource_node_serialization_roundtrip() -> None:
         source_file="/path/to/source.py",
         source_line=100,
         description="Resource docstring",
-        unique_hash="abc123",
     )
 
     data = node.model_dump()
@@ -443,7 +439,6 @@ def test_resource_node_serialization_roundtrip() -> None:
     assert data["source_file"] == "/path/to/source.py"
     assert data["source_line"] == 100
     assert data["description"] == "Resource docstring"
-    assert data["unique_hash"] == "abc123"
 
     restored = WorkflowResourceNode.model_validate(data)
     assert restored.id == "resource_abc123"

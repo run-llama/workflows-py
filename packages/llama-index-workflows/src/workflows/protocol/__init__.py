@@ -142,10 +142,6 @@ class WorkflowResourceNode(WorkflowNodeBase):
         default=None,
         description="Documentation string extracted from the getter function",
     )
-    unique_hash: str | None = Field(
-        default=None,
-        description="Hash used for deduplication when the same resource is used in multiple steps",
-    )
 
 
 class WorkflowGenericNode(WorkflowNodeBase):
