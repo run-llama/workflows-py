@@ -58,7 +58,7 @@ class WorkflowEventsListResponse(BaseModel):
 
 
 class WorkflowGraphResponse(BaseModel):
-    graph: WorkflowGraphNodeEdges
+    graph: WorkflowGraph
 
 
 class WorkflowNodeBase(BaseModel):
@@ -80,6 +80,10 @@ class WorkflowStepNode(WorkflowNodeBase):
     node_type: Literal["step"] = Field(
         default="step", description="Discriminator field for node type"
     )
+    description: str | None = Field(
+        default=None,
+        description="Documentation string extracted from the step function",
+    )
 
 
 class WorkflowEventNode(WorkflowNodeBase):
@@ -94,6 +98,10 @@ class WorkflowEventNode(WorkflowNodeBase):
     event_types: list[str] = Field(
         description="Event class inheritance chain for subclass checking. "
         "First element is the class itself, followed by parent Event subclasses."
+    )
+    event_schema: dict[str, Any] | None = Field(
+        default=None,
+        description="Pydantic JSON schema for the event type",
     )
 
     def is_subclass_of(self, *type_names: str) -> bool:
@@ -130,7 +138,7 @@ class WorkflowResourceNode(WorkflowNodeBase):
     source_line: int | None = Field(
         default=None, description="Line number where the getter function is defined"
     )
-    docstring: str | None = Field(
+    description: str | None = Field(
         default=None,
         description="Documentation string extracted from the getter function",
     )
@@ -188,7 +196,7 @@ class WorkflowGraphEdge(BaseModel):
     )
 
 
-class WorkflowGraphNodeEdges(BaseModel):
+class WorkflowGraph(BaseModel):
     """Complete workflow graph structure containing all nodes and edges."""
 
     nodes: list[WorkflowGraphNode] = Field(
@@ -196,6 +204,10 @@ class WorkflowGraphNodeEdges(BaseModel):
     )
     edges: list[WorkflowGraphEdge] = Field(
         description="All directed edges connecting the nodes"
+    )
+    description: str | None = Field(
+        default=None,
+        description="Documentation string extracted from the workflow class",
     )
 
 
@@ -218,5 +230,5 @@ __all__ = [
     "WorkflowGenericNode",
     "WorkflowGraphNode",
     "WorkflowGraphEdge",
-    "WorkflowGraphNodeEdges",
+    "WorkflowGraph",
 ]

@@ -14,9 +14,9 @@ from workflows.events import (
 from workflows.protocol import (
     WorkflowEventNode,
     WorkflowExternalNode,
+    WorkflowGraph,
     WorkflowGraphEdge,
     WorkflowGraphNode,
-    WorkflowGraphNodeEdges,
     WorkflowResourceNode,
     WorkflowStepNode,
 )
@@ -71,7 +71,7 @@ def _create_resource_node(resource_def: ResourceDefinition) -> WorkflowResourceN
         _, source_line = inspect.getsourcelines(factory)
     except (TypeError, OSError):
         pass
-    docstring = inspect.getdoc(factory)
+    resource_description = inspect.getdoc(factory)
 
     # Compute unique hash for deduplication
     hash_input = f"{resource.name}:{source_file or 'unknown'}"
@@ -88,12 +88,12 @@ def _create_resource_node(resource_def: ResourceDefinition) -> WorkflowResourceN
         getter_name=resource.name,
         source_file=source_file,
         source_line=source_line,
-        docstring=docstring,
+        description=resource_description,
         unique_hash=unique_hash,
     )
 
 
-def extract_workflow_structure(workflow: Workflow) -> WorkflowGraphNodeEdges:
+def extract_workflow_structure(workflow: Workflow) -> WorkflowGraph:
     """Extract workflow structure into a graph representation."""
     # Get workflow steps
     steps: dict[str, StepFunction] = get_steps_from_class(workflow)
@@ -127,7 +127,12 @@ def extract_workflow_structure(workflow: Workflow) -> WorkflowGraphNodeEdges:
 
         # Add step node
         if step_name not in added_nodes:
-            nodes.append(WorkflowStepNode(id=step_name, label=step_name))
+            step_description = inspect.getdoc(step_func)
+            nodes.append(
+                WorkflowStepNode(
+                    id=step_name, label=step_name, description=step_description
+                )
+            )
             added_nodes.add(step_name)
 
         # Add event nodes for accepted events
@@ -142,6 +147,7 @@ def extract_workflow_structure(workflow: Workflow) -> WorkflowGraphNodeEdges:
                         label=event_type.__name__,
                         event_type=event_type.__name__,
                         event_types=_get_event_type_chain(event_type),
+                        event_schema=event_type.model_json_schema(),
                     )
                 )
                 added_nodes.add(event_type.__name__)
@@ -158,6 +164,7 @@ def extract_workflow_structure(workflow: Workflow) -> WorkflowGraphNodeEdges:
                         label=return_type.__name__,
                         event_type=return_type.__name__,
                         event_types=_get_event_type_chain(return_type),
+                        event_schema=return_type.model_json_schema(),
                     )
                 )
                 added_nodes.add(return_type.__name__)
@@ -231,4 +238,5 @@ def extract_workflow_structure(workflow: Workflow) -> WorkflowGraphNodeEdges:
                 )
             )
 
-    return WorkflowGraphNodeEdges(nodes=nodes, edges=edges)
+    workflow_description = inspect.getdoc(workflow)
+    return WorkflowGraph(nodes=nodes, edges=edges, description=workflow_description)

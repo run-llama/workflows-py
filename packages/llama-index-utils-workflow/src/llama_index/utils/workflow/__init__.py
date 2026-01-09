@@ -20,9 +20,9 @@ from workflows.events import (
 from workflows.handler import WorkflowHandler
 from workflows.protocol import (
     WorkflowGenericNode,
+    WorkflowGraph,
     WorkflowGraphEdge,
     WorkflowGraphNode,
-    WorkflowGraphNodeEdges,
     WorkflowResourceNode,
 )
 from workflows.representation_utils import (
@@ -90,7 +90,7 @@ def _get_node_shape(node: WorkflowGraphNode) -> str:
 
 
 def _render_pyvis(
-    graph: WorkflowGraphNodeEdges,
+    graph: WorkflowGraph,
     filename: str,
     notebook: bool = False,
     max_label_length: int | None = None,
@@ -122,8 +122,8 @@ def _render_pyvis(
                 if node.source_line:
                     location += f":{node.source_line}"
                 title_parts.append(f"Source: {location}")
-            if node.docstring:
-                title_parts.append(f"Doc: {node.docstring[:100]}...")
+            if node.description:
+                title_parts.append(f"Doc: {node.description[:100]}...")
             title = "\n".join(title_parts)
 
         net.add_node(
@@ -217,7 +217,7 @@ def _get_mermaid_shape(shape: str) -> tuple[str, str]:
 
 
 def _render_mermaid(
-    graph: WorkflowGraphNodeEdges, filename: str, max_label_length: int | None = None
+    graph: WorkflowGraph, filename: str, max_label_length: int | None = None
 ) -> str:
     """Render workflow graph using Mermaid."""
     mermaid_lines = ["flowchart TD"]
@@ -308,7 +308,7 @@ def _get_type_chain(cls: type, base: type) -> list[str]:
     return names
 
 
-def _extract_single_agent_structure(agent: BaseWorkflowAgent) -> WorkflowGraphNodeEdges:
+def _extract_single_agent_structure(agent: BaseWorkflowAgent) -> WorkflowGraph:
     """Extract the structure of a single agent."""
     nodes: List[WorkflowGraphNode] = []
     edges: List[WorkflowGraphEdge] = []
@@ -339,7 +339,7 @@ def _extract_single_agent_structure(agent: BaseWorkflowAgent) -> WorkflowGraphNo
             # Add edge from agent to tool
             edges.append(WorkflowGraphEdge(source="agent", target=tool_id))
 
-    return WorkflowGraphNodeEdges(nodes=nodes, edges=edges)
+    return WorkflowGraph(nodes=nodes, edges=edges)
 
 
 def _process_tools_and_handoffs(
@@ -397,7 +397,7 @@ def _process_tools_and_handoffs(
 
 def _extract_agent_workflow_structure(
     agent_workflow: AgentWorkflow,
-) -> WorkflowGraphNodeEdges:
+) -> WorkflowGraph:
     """Extract the structure of an agent workflow."""
     nodes: List[WorkflowGraphNode] = []
     edges: List[WorkflowGraphEdge] = []
@@ -428,7 +428,7 @@ def _extract_agent_workflow_structure(
         agent_nodes = [n for n in nodes if n.node_type == "workflow_agent"]
         edges.append(WorkflowGraphEdge(source=agent_nodes[-1].id, target="output"))
 
-    return WorkflowGraphNodeEdges(nodes=nodes, edges=edges)
+    return WorkflowGraph(nodes=nodes, edges=edges)
 
 
 def _extract_execution_graph(
