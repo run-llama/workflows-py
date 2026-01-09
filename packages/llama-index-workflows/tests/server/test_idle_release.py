@@ -4,18 +4,22 @@
 
 import asyncio
 from datetime import datetime, timedelta, timezone
-from typing import AsyncGenerator
+from typing import Any, Optional
 
 import pytest
 import time_machine
 from httpx import ASGITransport, AsyncClient
 from workflows import Context, Workflow, step
 from workflows.events import HumanResponseEvent, StartEvent, StopEvent
-from workflows.server.abstract_workflow_store import HandlerQuery, PersistentHandler
+from workflows.server.abstract_workflow_store import (
+    HandlerQuery,
+    PersistentHandler,
+    Status,
+)
 from workflows.server.memory_workflow_store import MemoryWorkflowStore
 from workflows.server.server import WorkflowServer, _WorkflowHandler
 
-from tests.server.util import wait_for_passing
+from tests.server.util import async_yield, wait_for_passing
 
 
 class WaitableExternalEvent(HumanResponseEvent):
@@ -34,6 +38,79 @@ class WaitingWorkflow(Workflow):
         return StopEvent(result=f"received: {external.response}")
 
 
+def get_handler_in_memory(server: WorkflowServer, handler_id: str) -> _WorkflowHandler:
+    wrapper = server._handlers.get(handler_id)
+    assert wrapper is not None, f"Handler {handler_id} not found in memory"
+    return wrapper
+
+
+def assert_handler_in_memory(server: WorkflowServer, handler_id: str) -> None:
+    get_handler_in_memory(server, handler_id)
+
+
+def assert_handler_not_in_memory(server: WorkflowServer, handler_id: str) -> None:
+    assert handler_id not in server._handlers, f"Handler {handler_id} still in memory"
+
+
+def make_server(
+    memory_store: MemoryWorkflowStore,
+    waiting_workflow: Workflow,
+    idle_release_timeout: Optional[timedelta],
+    *,
+    persistence_backoff: Optional[list[float]] = None,
+) -> WorkflowServer:
+    if persistence_backoff is None:
+        server = WorkflowServer(
+            workflow_store=memory_store,
+            idle_release_timeout=idle_release_timeout,
+        )
+    else:
+        server = WorkflowServer(
+            workflow_store=memory_store,
+            idle_release_timeout=idle_release_timeout,
+            persistence_backoff=persistence_backoff,
+        )
+    server.add_workflow(
+        "test", waiting_workflow, additional_events=[WaitableExternalEvent]
+    )
+    return server
+
+
+async def start_waiting_handler(
+    server: WorkflowServer, handler_id: str
+) -> _WorkflowHandler:
+    handler = server._workflows["test"].run()
+    await server._run_workflow_handler(handler_id, "test", handler)
+    await async_yield(20)
+    wrapper = get_handler_in_memory(server, handler_id)
+    assert wrapper.idle_since is not None
+    return wrapper
+
+
+async def advance_time(traveller: Any, delta: timedelta, iterations: int = 10) -> None:
+    traveller.shift(delta)
+    await async_yield(iterations)
+
+
+async def seed_persistent_handler(
+    store: MemoryWorkflowStore,
+    handler_id: str,
+    *,
+    idle_since: Optional[datetime],
+    ctx: dict[str, object],
+    status: Status = "running",
+) -> None:
+    await store.update(
+        PersistentHandler(
+            handler_id=handler_id,
+            workflow_name="test",
+            status=status,
+            idle_since=idle_since,
+            ctx=ctx,
+        )
+    )
+
+
 @pytest.fixture
 def memory_store() -> MemoryWorkflowStore:
     return MemoryWorkflowStore()
@@ -44,22 +121,6 @@ def waiting_workflow() -> Workflow:
     return WaitingWorkflow()
 
 
-@pytest.fixture
-async def server_with_idle_release(
-    memory_store: MemoryWorkflowStore, waiting_workflow: Workflow
-) -> AsyncGenerator[WorkflowServer, None]:
-    """Server with a short idle release timeout for testing."""
-    server = WorkflowServer(
-        workflow_store=memory_store,
-        idle_release_timeout=timedelta(milliseconds=50),
-    )
-    server.add_workflow(
-        "test", waiting_workflow, additional_events=[WaitableExternalEvent]
-    )
-    async with server.contextmanager():
-        yield server
-
-
 @pytest.mark.asyncio
 async def test_is_idle_query_filter_memory_store() -> None:
     """Test that is_idle filter works in MemoryWorkflowStore."""
@@ -68,36 +129,22 @@ async def test_is_idle_query_filter_memory_store() -> None:
     now = datetime.now(timezone.utc)
 
     # Handler that is idle (has idle_since set)
-    await store.update(
-        PersistentHandler(
-            handler_id="idle-1",
-            workflow_name="test",
-            status="running",
-            idle_since=now - timedelta(minutes=5),
-            ctx={},
-        )
+    await seed_persistent_handler(
+        store,
+        "idle-1",
+        idle_since=now - timedelta(minutes=5),
+        ctx={},
     )
 
     # Handler that is not idle (no idle_since)
-    await store.update(
-        PersistentHandler(
-            handler_id="active-1",
-            workflow_name="test",
-            status="running",
-            idle_since=None,
-            ctx={},
-        )
-    )
+    await seed_persistent_handler(store, "active-1", idle_since=None, ctx={})
 
     # Another idle handler
-    await store.update(
-        PersistentHandler(
-            handler_id="idle-2",
-            workflow_name="test",
-            status="running",
-            idle_since=now - timedelta(seconds=10),
-            ctx={},
-        )
+    await seed_persistent_handler(
+        store,
+        "idle-2",
+        idle_since=now - timedelta(seconds=10),
+        ctx={},
     )
 
     # Query for idle handlers
@@ -120,36 +167,21 @@ async def test_workflow_becomes_idle_and_is_released(
     memory_store: MemoryWorkflowStore, waiting_workflow: Workflow
 ) -> None:
     """Test that a workflow becomes idle after a step and can be released."""
-    from .util import async_yield
-
     idle_timeout = timedelta(milliseconds=50)
 
     with time_machine.travel("2026-01-07T12:00:00Z", tick=False) as traveller:
-        server = WorkflowServer(
-            workflow_store=memory_store,
-            idle_release_timeout=idle_timeout,
-        )
-        server.add_workflow(
-            "test", waiting_workflow, additional_events=[WaitableExternalEvent]
-        )
+        server = make_server(memory_store, waiting_workflow, idle_timeout)
 
         async with server.contextmanager():
             # Start a workflow
             handler_id = "release-test-1"
-            handler = server._workflows["test"].run()
-            await server._run_workflow_handler(handler_id, "test", handler)
-
-            # Wait for workflow to become idle (just needs event loop iterations)
-            await async_yield(20)
-            wrapper = server._handlers.get(handler_id)
-            assert wrapper is not None and wrapper.idle_since is not None
+            await start_waiting_handler(server, handler_id)
 
             # Advance time past the idle timeout to trigger the timer
-            traveller.shift(timedelta(milliseconds=100))
-            await async_yield(10)
+            await advance_time(traveller, timedelta(milliseconds=100))
 
             # The handler should be released from memory
-            assert handler_id not in server._handlers
+            assert_handler_not_in_memory(server, handler_id)
 
             # But should still exist in the store with status "running"
             persisted = await memory_store.query(
@@ -165,41 +197,26 @@ async def test_released_workflow_is_reloaded_on_event(
     memory_store: MemoryWorkflowStore, waiting_workflow: Workflow
 ) -> None:
     """Test that a released workflow is reloaded when an event is sent."""
-    from .util import async_yield
-
     idle_timeout = timedelta(milliseconds=50)
 
     with time_machine.travel("2026-01-07T12:00:00Z", tick=False) as traveller:
-        server = WorkflowServer(
-            workflow_store=memory_store,
-            idle_release_timeout=idle_timeout,
-        )
-        server.add_workflow(
-            "test", waiting_workflow, additional_events=[WaitableExternalEvent]
-        )
+        server = make_server(memory_store, waiting_workflow, idle_timeout)
 
         async with server.contextmanager():
             # Start a workflow
             handler_id = "reload-test-1"
-            handler = server._workflows["test"].run()
-            await server._run_workflow_handler(handler_id, "test", handler)
-
-            # Wait for workflow to become idle (just needs event loop iterations)
-            await async_yield(20)
-            wrapper = server._handlers.get(handler_id)
-            assert wrapper is not None and wrapper.idle_since is not None
+            await start_waiting_handler(server, handler_id)
 
             # Advance time past the idle timeout to trigger the timer
-            traveller.shift(timedelta(milliseconds=100))
-            await async_yield(10)
+            await advance_time(traveller, timedelta(milliseconds=100))
 
             # Handler should be released
-            assert handler_id not in server._handlers
+            assert_handler_not_in_memory(server, handler_id)
 
             # Now reload by using _try_reload_handler
             reloaded, persisted = await server._try_reload_handler(handler_id)
             assert reloaded is not None
-            assert handler_id in server._handlers
+            assert_handler_in_memory(server, handler_id)
 
             assert persisted is not None
             assert persisted.status == "running"
@@ -218,30 +235,25 @@ async def test_idle_release_restores_idle_since_on_reload(
     memory_store: MemoryWorkflowStore, waiting_workflow: Workflow
 ) -> None:
     """Test that idle_since is preserved when reloading via _try_reload_handler."""
-    server = WorkflowServer(
-        workflow_store=memory_store,
-        idle_release_timeout=timedelta(minutes=5),  # Long timeout
-    )
-    server.add_workflow(
-        "test", waiting_workflow, additional_events=[WaitableExternalEvent]
+    server = make_server(
+        memory_store,
+        waiting_workflow,
+        timedelta(minutes=5),  # Long timeout
     )
 
     # Seed a persisted handler with idle_since
     idle_time = datetime.now(timezone.utc) - timedelta(minutes=2)
     ctx = Context(waiting_workflow).to_dict()
-    await memory_store.update(
-        PersistentHandler(
-            handler_id="idle-restore-1",
-            workflow_name="test",
-            status="running",
-            idle_since=idle_time,
-            ctx=ctx,
-        )
+    await seed_persistent_handler(
+        memory_store,
+        "idle-restore-1",
+        idle_since=idle_time,
+        ctx=ctx,
     )
 
     async with server.contextmanager():
         # Idle handler should NOT be in memory on startup
-        assert "idle-restore-1" not in server._handlers
+        assert_handler_not_in_memory(server, "idle-restore-1")
 
         # Reload it (simulating an event arriving)
         wrapper, persisted = await server._try_reload_handler("idle-restore-1")
@@ -252,46 +264,6 @@ async def test_idle_release_restores_idle_since_on_reload(
 
 
 @pytest.mark.asyncio
-async def test_active_stream_consumer_prevents_release(
-    memory_store: MemoryWorkflowStore, waiting_workflow: Workflow
-) -> None:
-    """Test that a workflow with an active stream consumer is not released."""
-    from .util import async_yield
-
-    idle_timeout = timedelta(milliseconds=10)
-
-    with time_machine.travel("2026-01-07T12:00:00Z", tick=False) as traveller:
-        server = WorkflowServer(
-            workflow_store=memory_store,
-            idle_release_timeout=idle_timeout,
-        )
-        server.add_workflow(
-            "test", waiting_workflow, additional_events=[WaitableExternalEvent]
-        )
-
-        async with server.contextmanager():
-            # Start workflow
-            handler_id = "consumer-test-1"
-            handler = server._workflows["test"].run()
-            await server._run_workflow_handler(handler_id, "test", handler)
-
-            wrapper = server._handlers[handler_id]
-
-            # Simulate an active consumer by locking the mutex
-            async with wrapper.consumer_mutex:
-                # Force idle state and trigger timer
-                wrapper.idle_since = datetime.now(timezone.utc)
-                wrapper._start_idle_release_timer()
-
-                # Advance time past the timeout (timer should be blocked by mutex)
-                traveller.shift(timedelta(milliseconds=50))
-                await async_yield(10)
-
-                # Should NOT be released because consumer_mutex is locked
-                assert handler_id in server._handlers
-
-
-@pytest.mark.asyncio
 async def test_reloaded_idle_workflow_is_released_again(
     memory_store: MemoryWorkflowStore, waiting_workflow: Workflow
 ) -> None:
@@ -299,13 +271,7 @@ async def test_reloaded_idle_workflow_is_released_again(
     # Use very short timeout - this test needs real time for timers
     idle_timeout = timedelta(milliseconds=1)
 
-    server = WorkflowServer(
-        workflow_store=memory_store,
-        idle_release_timeout=idle_timeout,
-    )
-    server.add_workflow(
-        "test", waiting_workflow, additional_events=[WaitableExternalEvent]
-    )
+    server = make_server(memory_store, waiting_workflow, idle_timeout)
 
     async with server.contextmanager():
         # Start a workflow
@@ -362,41 +328,33 @@ async def test_idle_handlers_not_resumed_on_server_start(
     # Seed the store with an idle handler
     idle_time = datetime.now(timezone.utc) - timedelta(minutes=2)
     ctx = Context(waiting_workflow).to_dict()
-    await memory_store.update(
-        PersistentHandler(
-            handler_id="idle-on-start-1",
-            workflow_name="test",
-            status="running",
-            idle_since=idle_time,
-            ctx=ctx,
-        )
+    await seed_persistent_handler(
+        memory_store,
+        "idle-on-start-1",
+        idle_since=idle_time,
+        ctx=ctx,
     )
 
     # Also seed an active (non-idle) handler
-    await memory_store.update(
-        PersistentHandler(
-            handler_id="active-on-start-1",
-            workflow_name="test",
-            status="running",
-            idle_since=None,  # Not idle
-            ctx=ctx,
-        )
+    await seed_persistent_handler(
+        memory_store,
+        "active-on-start-1",
+        idle_since=None,  # Not idle
+        ctx=ctx,
     )
 
-    server = WorkflowServer(
-        workflow_store=memory_store,
-        idle_release_timeout=timedelta(minutes=5),
-    )
-    server.add_workflow(
-        "test", waiting_workflow, additional_events=[WaitableExternalEvent]
+    server = make_server(
+        memory_store,
+        waiting_workflow,
+        timedelta(minutes=5),
     )
 
     async with server.contextmanager():
         # The idle handler should NOT be in memory
-        assert "idle-on-start-1" not in server._handlers
+        assert_handler_not_in_memory(server, "idle-on-start-1")
 
         # The active handler SHOULD be in memory
-        assert "active-on-start-1" in server._handlers
+        assert_handler_in_memory(server, "active-on-start-1")
 
         # The idle handler should still exist in the store
         persisted = await memory_store.query(
@@ -411,36 +369,26 @@ async def test_idle_release_disabled_when_timeout_none(
     memory_store: MemoryWorkflowStore, waiting_workflow: Workflow
 ) -> None:
     """Test that no timer is started when idle_release_timeout is None."""
-    from .util import async_yield
-
-    server = WorkflowServer(
-        workflow_store=memory_store,
-        idle_release_timeout=None,  # Disabled
-    )
-    server.add_workflow(
-        "test", waiting_workflow, additional_events=[WaitableExternalEvent]
+    server = make_server(
+        memory_store,
+        waiting_workflow,
+        None,  # Disabled
     )
 
     async with server.contextmanager():
         # Start a workflow
         handler_id = "no-release-test"
-        handler = server._workflows["test"].run()
-        await server._run_workflow_handler(handler_id, "test", handler)
-
-        # Wait for workflow to become idle (just needs event loop iterations)
-        await async_yield(20)
-        wrapper = server._handlers.get(handler_id)
-        assert wrapper is not None and wrapper.idle_since is not None
+        wrapper = await start_waiting_handler(server, handler_id)
 
         # Timer should not be set since idle_release_timeout is None
         assert wrapper._idle_release_timer is None
 
 
 @pytest.mark.asyncio
-async def test_bug_idle_release_leaves_workflow_runtime_alive(
+async def test_idle_release_cancels_runtime(
     memory_store: MemoryWorkflowStore, waiting_workflow: Workflow
 ) -> None:
-    """BUG: Idle release should stop the workflow runtime, but it doesn't.
+    """Idle release should stop the workflow runtime.
 
     When a workflow is released from memory, the underlying WorkflowHandler
     and its context/broker should be cancelled. Currently, _release_handler
@@ -450,53 +398,36 @@ async def test_bug_idle_release_leaves_workflow_runtime_alive(
     This test captures a reference to the run_handler before release, then
     verifies it should be done/cancelled after release.
     """
-    from .util import async_yield
-
     idle_timeout = timedelta(milliseconds=50)
 
     with time_machine.travel("2026-01-07T12:00:00Z", tick=False) as traveller:
-        server = WorkflowServer(
-            workflow_store=memory_store,
-            idle_release_timeout=idle_timeout,
-        )
-        server.add_workflow(
-            "test", waiting_workflow, additional_events=[WaitableExternalEvent]
-        )
+        server = make_server(memory_store, waiting_workflow, idle_timeout)
 
         async with server.contextmanager():
             # Start a workflow
             handler_id = "runtime-leak-test"
-            handler = server._workflows["test"].run()
-            await server._run_workflow_handler(handler_id, "test", handler)
-
-            # Wait for workflow to become idle (just needs event loop iterations)
-            await async_yield(20)
-            wrapper = server._handlers.get(handler_id)
-            assert wrapper is not None and wrapper.idle_since is not None
+            wrapper = await start_waiting_handler(server, handler_id)
 
             # Capture reference to the run_handler before release
             run_handler = wrapper.run_handler
 
             # Advance time past the idle timeout to trigger the timer
-            traveller.shift(timedelta(milliseconds=100))
-            await async_yield(10)
+            await advance_time(traveller, timedelta(milliseconds=100))
 
             # Handler should be released
-            assert handler_id not in server._handlers, "Handler should be released"
 
-            # BUG: The run_handler should be done/cancelled after release,
-            # but it's still running because _release_handler doesn't stop it
+            assert_handler_not_in_memory(server, handler_id)
+
             assert run_handler.done(), (
-                "BUG: run_handler is still running after release - "
-                "workflow runtime was not stopped, causing memory leak"
+                "run_handler is still running after release workflow runtime was not stopped, causing memory leak"
             )
 
 
 @pytest.mark.asyncio
-async def test_bug_consumer_mutex_blocks_release_without_reschedule(
+async def test_idle_release_waits_for_stream_consumer_then_releases(
     memory_store: MemoryWorkflowStore, waiting_workflow: Workflow
 ) -> None:
-    """BUG: If consumer_mutex is locked when timer fires, release is skipped forever.
+    """Idle release should wait for active consumers and then reschedule.
 
     The idle release timer checks if consumer_mutex is locked and skips release
     if so. However, it does NOT reschedule another timer attempt. This means
@@ -504,60 +435,39 @@ async def test_bug_consumer_mutex_blocks_release_without_reschedule(
     disconnects, the handler will never be released.
 
     This test holds the mutex during the timer, releases it, then verifies
-    the handler should eventually be released (but won't be due to the bug).
+    the handler should eventually be released (but won't be due to the issue).
     """
-    from .util import async_yield
-
     idle_timeout = timedelta(milliseconds=50)
 
     with time_machine.travel("2026-01-07T12:00:00Z", tick=False) as traveller:
-        server = WorkflowServer(
-            workflow_store=memory_store,
-            idle_release_timeout=idle_timeout,
-        )
-        server.add_workflow(
-            "test", waiting_workflow, additional_events=[WaitableExternalEvent]
-        )
+        server = make_server(memory_store, waiting_workflow, idle_timeout)
 
         async with server.contextmanager():
             # Start workflow
             handler_id = "mutex-reschedule-test"
-            handler = server._workflows["test"].run()
-            await server._run_workflow_handler(handler_id, "test", handler)
-
-            # Wait for workflow to become idle (just needs event loop iterations)
-            await async_yield(20)
-            wrapper = server._handlers.get(handler_id)
-            assert wrapper is not None and wrapper.idle_since is not None
+            wrapper = await start_waiting_handler(server, handler_id)
 
             # Grab the mutex before timer fires, then hold it past the timeout
             async with wrapper.consumer_mutex:
                 # Advance time past the timeout to trigger the timer
-                traveller.shift(timedelta(milliseconds=100))
-                await async_yield(10)
+                await advance_time(traveller, timedelta(milliseconds=100))
                 # Handler should still be present (timer was blocked by mutex)
-                assert handler_id in server._handlers, (
-                    "Handler released while mutex held"
-                )
+                assert_handler_in_memory(server, handler_id)
 
             # Now mutex is released - handler should eventually be released
             # because the timer reschedules when mutex was locked.
             # Advance time to let the rescheduled timer fire.
-            traveller.shift(timedelta(milliseconds=100))
-            await async_yield(10)
+            await advance_time(traveller, timedelta(milliseconds=100))
 
             # Handler should be released because timer was rescheduled
-            assert handler_id not in server._handlers, (
-                "BUG: Handler was never released after mutex was unlocked - "
-                "timer should have been rescheduled but wasn't"
-            )
+            assert_handler_not_in_memory(server, handler_id)
 
 
 @pytest.mark.asyncio
-async def test_bug_race_between_event_post_and_idle_timer(
+async def test_mark_active_prevents_release_during_event_post(
     memory_store: MemoryWorkflowStore, waiting_workflow: Workflow
 ) -> None:
-    """BUG: Race condition where event is posted but timer releases handler.
+    """Marking active should protect from release during event post.
 
     When an event is posted to wake a workflow, the idle_since is only cleared
     when StepStateChanged(RUNNING) is observed in _stream_events. However,
@@ -579,28 +489,14 @@ async def test_bug_race_between_event_post_and_idle_timer(
     before sending an event, which clears idle_since and cancels the timer.
     This test verifies that mark_active() properly protects the handler.
     """
-    from .util import async_yield
-
     idle_timeout = timedelta(milliseconds=50)
 
     with time_machine.travel("2026-01-07T12:00:00Z", tick=False) as traveller:
-        server = WorkflowServer(
-            workflow_store=memory_store,
-            idle_release_timeout=idle_timeout,
-        )
-        server.add_workflow(
-            "test", waiting_workflow, additional_events=[WaitableExternalEvent]
-        )
+        server = make_server(memory_store, waiting_workflow, idle_timeout)
 
         async with server.contextmanager():
             handler_id = "race-test"
-            handler = server._workflows["test"].run()
-            await server._run_workflow_handler(handler_id, "test", handler)
-
-            # Wait for workflow to become idle (just needs event loop iterations)
-            await async_yield(20)
-            wrapper = server._handlers.get(handler_id)
-            assert wrapper is not None and wrapper.idle_since is not None
+            wrapper = await start_waiting_handler(server, handler_id)
 
             # Mark active before sending event (this is what _post_event does)
             # This clears idle_since and cancels the timer
@@ -613,23 +509,18 @@ async def test_bug_race_between_event_post_and_idle_timer(
 
             # Advance time past the original idle timeout
             # The workflow should be protected from release because mark_active was called
-            traveller.shift(timedelta(milliseconds=100))
-            await async_yield(10)
+            await advance_time(traveller, timedelta(milliseconds=100))
 
             # Handler should NOT be released because mark_active()
             # cleared idle_since and cancelled the timer before the event was sent
-            assert handler_id in server._handlers, (
-                "BUG: Handler was released even though mark_active() was called. "
-                "mark_active() should clear idle_since and cancel the timer to "
-                "protect the handler from release."
-            )
+            assert_handler_in_memory(server, handler_id)
 
 
 @pytest.mark.asyncio
-async def test_bug_concurrent_reloads_create_duplicate_handlers(
+async def test_try_reload_is_singleton_under_concurrency(
     memory_store: MemoryWorkflowStore, waiting_workflow: Workflow
 ) -> None:
-    """BUG: Concurrent reload requests can create multiple handlers.
+    """Concurrent reload requests should only create one handler.
 
     _try_reload_handler has no locking mechanism, so two parallel requests
     can both reload and start the same workflow. This creates split-brain
@@ -638,30 +529,25 @@ async def test_bug_concurrent_reloads_create_duplicate_handlers(
     This test fires multiple reload requests in parallel and checks that
     only one succeeds in creating a handler.
     """
-    server = WorkflowServer(
-        workflow_store=memory_store,
-        idle_release_timeout=timedelta(minutes=5),
-    )
-    server.add_workflow(
-        "test", waiting_workflow, additional_events=[WaitableExternalEvent]
+    server = make_server(
+        memory_store,
+        waiting_workflow,
+        timedelta(minutes=5),
     )
 
     # Seed a persisted idle handler
     idle_time = datetime.now(timezone.utc) - timedelta(minutes=2)
     ctx = Context(waiting_workflow).to_dict()
     handler_id = "concurrent-reload-test"
-    await memory_store.update(
-        PersistentHandler(
-            handler_id=handler_id,
-            workflow_name="test",
-            status="running",
-            idle_since=idle_time,
-            ctx=ctx,
-        )
+    await seed_persistent_handler(
+        memory_store,
+        handler_id,
+        idle_since=idle_time,
+        ctx=ctx,
     )
 
     async with server.contextmanager():
-        assert handler_id not in server._handlers
+        assert_handler_not_in_memory(server, handler_id)
 
         # Track how many workflow instances were created
         instances_created: list[object] = []
@@ -676,29 +562,24 @@ async def test_bug_concurrent_reloads_create_duplicate_handlers(
         await asyncio.gather(*[reload_and_track() for _ in range(5)])
 
         # We should have exactly one handler in memory
-        assert handler_id in server._handlers
+        assert_handler_in_memory(server, handler_id)
 
-        # BUG: Multiple unique workflow instances may have been created
+        # Multiple unique workflow instances may have been created
         # (even though only one ends up in _handlers, the others are leaked)
         unique_instances = set(instances_created)
         assert len(unique_instances) == 1, (
-            f"BUG: {len(unique_instances)} different workflow instances were created "
+            f"{len(unique_instances)} different workflow instances were created "
             f"by concurrent reloads. Only one should be created. "
             f"The extra instances are leaked and may process events independently."
         )
 
 
-# =============================================================================
-# REVIEWER-FLAGGED BUG TESTS
-# =============================================================================
-
-
 @pytest.mark.asyncio
-async def test_bug_release_handler_leaks_runtime_if_checkpoint_fails(
+async def test_release_handler_cancels_runtime_on_checkpoint_failure(
     memory_store: MemoryWorkflowStore,
     waiting_workflow: Workflow,
 ) -> None:
-    """BUG: _release_handler removes handler from _handlers before checkpoint().
+    """Release should cancel runtime even if checkpoint fails.
 
     If checkpoint() raises after the handler is already removed from _handlers,
     the runtime cancel path never runs, leaking a live workflow with no
@@ -716,31 +597,21 @@ async def test_bug_release_handler_leaks_runtime_if_checkpoint_fails(
     The fix should ensure that if ANY part of release fails, the workflow
     runtime is still properly cancelled (e.g., use try/finally).
     """
-    from .util import async_yield
-
     idle_timeout = timedelta(milliseconds=100)
 
     with time_machine.travel("2026-01-07T12:00:00Z", tick=False) as traveller:
-        server = WorkflowServer(
-            workflow_store=memory_store,
-            idle_release_timeout=idle_timeout,
+        server = make_server(
+            memory_store,
+            waiting_workflow,
+            idle_timeout,
             persistence_backoff=[],  # No retries - fail immediately
-        )
-        server.add_workflow(
-            "test", waiting_workflow, additional_events=[WaitableExternalEvent]
         )
 
         await server.start()
         run_handler = None
         try:
             handler_id = "checkpoint-fail-test"
-            handler = waiting_workflow.run()
-            await server._run_workflow_handler(handler_id, "test", handler)
-
-            # Wait for workflow to become idle (just needs event loop iterations)
-            await async_yield(20)
-            wrapper = server._handlers.get(handler_id)
-            assert wrapper is not None and wrapper.idle_since is not None
+            wrapper = await start_waiting_handler(server, handler_id)
 
             # Capture reference to verify runtime is stopped
             run_handler = wrapper.run_handler
@@ -752,22 +623,21 @@ async def test_bug_release_handler_leaks_runtime_if_checkpoint_fails(
             await ctx.store.set("bad_data", lambda x: x)  # lambdas can't be serialized
 
             # Advance time past the idle timeout to trigger the timer
-            traveller.shift(timedelta(milliseconds=200))
-            await async_yield(20)
+            await advance_time(traveller, timedelta(milliseconds=200), iterations=20)
 
             # Verify handler was removed from _handlers (release started)
-            assert handler_id not in server._handlers, "Handler should be removed"
+            assert_handler_not_in_memory(server, handler_id)
 
-            # BUG: The run_handler should be done/cancelled even if checkpoint failed
+            # The run_handler should be done/cancelled even if checkpoint failed
             # but it's still running because the cancel code was never reached
             assert run_handler.done(), (
-                "BUG: run_handler is still running after release attempt failed. "
+                "run_handler is still running after release attempt failed. "
                 "_release_handler pops from _handlers before checkpoint(), so if "
                 "checkpoint() raises (e.g., due to non-serializable state), the "
                 "cancel path is never reached and the workflow runtime leaks."
             )
         finally:
-            # Clean up the leaked runtime manually (since the bug prevents normal cleanup)
+            # Clean up the leaked runtime manually (since the issue prevents normal cleanup)
             if run_handler is not None and not run_handler.done():
                 run_handler.cancel()
                 try:
@@ -786,23 +656,15 @@ async def test_failed_send_event_preserves_idle_state(
     When send_event() fails (bad step name, runtime errors, etc.), the idle
     state should be preserved so the idle release timer can still fire.
 
-    This test verifies the fix for the bug where mark_active() was called
+    This test verifies the fix for the issue where mark_active() was called
     BEFORE send_event(), causing idle state to be cleared even on failure.
 
     The fix: mark_active() is now called AFTER send_event() succeeds.
     """
-    from .util import async_yield
-
     idle_timeout = timedelta(milliseconds=100)
 
     with time_machine.travel("2026-01-07T12:00:00Z", tick=False) as traveller:
-        server = WorkflowServer(
-            workflow_store=memory_store,
-            idle_release_timeout=idle_timeout,
-        )
-        server.add_workflow(
-            "test", waiting_workflow, additional_events=[WaitableExternalEvent]
-        )
+        server = make_server(memory_store, waiting_workflow, idle_timeout)
 
         async with server.contextmanager():
             transport = ASGITransport(app=server.app)
@@ -816,7 +678,7 @@ async def test_failed_send_event_preserves_idle_state(
 
                 # Wait for workflow to become idle (just needs event loop iterations)
                 await async_yield(20)
-                wrapper = server._handlers.get(handler_id)
+                wrapper = get_handler_in_memory(server, handler_id)
                 assert wrapper is not None and wrapper.idle_since is not None
 
                 original_idle_since = wrapper.idle_since
@@ -845,13 +707,10 @@ async def test_failed_send_event_preserves_idle_state(
                 )
 
                 # Advance time past the idle timeout to trigger the timer
-                traveller.shift(timedelta(milliseconds=200))
-                await async_yield(10)
+                await advance_time(traveller, timedelta(milliseconds=200))
 
                 # Handler should be released by the timer since idle state was preserved
-                assert handler_id not in server._handlers, (
-                    "Handler should be released after idle timeout"
-                )
+                assert_handler_not_in_memory(server, handler_id)
 
 
 @pytest.mark.asyncio
@@ -872,8 +731,6 @@ async def test_release_skips_checkpoint_if_handler_was_reloaded(
     4. Call _release_handler with the OLD wrapper
     5. Verify the old release doesn't overwrite the new state
     """
-    from .util import async_yield
-
     # time_machine with tick=False for fast test execution
     with time_machine.travel("2026-01-07T12:27:00.000-08:00", tick=False):
         server = WorkflowServer(
@@ -886,16 +743,10 @@ async def test_release_skips_checkpoint_if_handler_was_reloaded(
 
         async with server.contextmanager():
             # Start workflow and wait for it to become idle
-            handler = waiting_workflow.run()
             handler_id = "race-test-handler"
-            await server._run_workflow_handler(handler_id, "test", handler)
+            await start_waiting_handler(server, handler_id)
 
-            # Wait for workflow to become idle (just needs event loop iterations)
-            await async_yield(20)
-            wrapper = server._handlers.get(handler_id)
-            assert wrapper is not None and wrapper.idle_since is not None
-
-            old_wrapper = server._handlers[handler_id]
+            old_wrapper = get_handler_in_memory(server, handler_id)
             original_idle_since = old_wrapper.idle_since
             assert original_idle_since is not None
 
