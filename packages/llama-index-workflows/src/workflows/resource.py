@@ -4,11 +4,15 @@
 from __future__ import annotations
 
 import inspect
+import json
+from pathlib import Path
 from typing import (
     Any,
     Awaitable,
     Callable,
     Generic,
+    Literal,
+    Type,
     TypeVar,
     cast,
 )
@@ -19,6 +23,7 @@ from pydantic import (
 )
 
 T = TypeVar("T")
+B = TypeVar("B", bound=BaseModel)
 
 
 class _Resource(Generic[T]):
@@ -31,6 +36,7 @@ class _Resource(Generic[T]):
     def __init__(self, factory: Callable[..., T | Awaitable[T]], cache: bool) -> None:
         self._factory = factory
         self._is_async = inspect.iscoroutinefunction(factory)
+        self.type: Literal["function"] = "function"
         self.name = getattr(factory, "__qualname__", type(factory).__name__)
         self.cache = cache
 
@@ -43,6 +49,38 @@ class _Resource(Generic[T]):
         return result
 
 
+class _ConfiguredResource(Generic[B]):
+    """
+    Internal wrapper for a pydantic-based resource whose configuration can be read from a JSON file.
+    """
+
+    def __init__(
+        self, config_file: str, cache: bool, cls_factory: Type[B] | None = None
+    ) -> None:
+        if not Path(config_file).is_file():
+            raise FileNotFoundError(f"No such file: {config_file}")
+        if Path(config_file).suffix != ".json":
+            raise ValueError(
+                "Only JSON files can be used to load Pydantic-based resources."
+            )
+        self.config_file = config_file
+        self.cls_factory = cls_factory
+        self.type: Literal["configured"] = "configured"
+        self.cache = cache
+        self.name = config_file  # for caching purposes
+
+    # make async for compatibility with _Resource
+    async def call(self) -> B:
+        with open(self.config_file, "r") as f:
+            data = json.load(f)
+        # let validation error bubble up
+        if self.cls_factory is not None:
+            return self.cls_factory.model_validate(data)
+        raise ValueError(
+            "Class factory should be set to a BaseModel subclass before calling"
+        )
+
+
 class ResourceDefinition(BaseModel):
     """Definition for a resource injection requested by a step signature.
 
@@ -53,20 +91,29 @@ class ResourceDefinition(BaseModel):
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
     name: str
-    resource: _Resource
+    resource: _ConfiguredResource | _Resource
+    type_annotation: Any = None
 
 
-def Resource(factory: Callable[..., T], cache: bool = True) -> _Resource[T]:
+def Resource(
+    factory: Callable[..., T] | None = None,
+    config_file: str | None = None,
+    cache: bool = True,
+) -> _ConfiguredResource | _Resource:
     """Declare a resource to inject into step functions.
 
     Args:
-        factory (Callable[..., T]): Function returning the resource instance. May be async.
+        factory (Callable[..., T] | None): Function returning the resource instance. May be async.
+        config_file (str | None): Configuration file where to load the resource from. Only applicable to resources associated with a Pydantic class.
         cache (bool): If True, reuse the produced resource across steps. Defaults to True.
 
     Returns:
-        _Resource[T]: A resource descriptor to be used in `typing.Annotated`.
+        _Resource[T] | _ConfiguredResource[BaseModel]: A resource descriptor to be used in `typing.Annotated`.
 
     Examples:
+
+        With function factories:
+
         ```python
         from typing import Annotated
         from workflows.resource import Resource
@@ -84,8 +131,40 @@ def Resource(factory: Callable[..., T], cache: bool = True) -> _Resource[T]:
                 await memory.aput(...)
                 return StopEvent(result="ok")
         ```
+
+        With Pydantic models:
+
+        ```python
+        import json
+
+        from typing import Annotated
+        from pydantic import BaseModel
+        from workflows.resource import Resource
+
+        class Memory(BaseModel):
+            messages: list[str]
+
+        memory = {"messages": ["hello", "how are you?"]}
+        with open("config.json", "w") as f:
+            json.dump(memory, f, indent=2)
+
+        class MyWorkflow(Workflow):
+            @step
+            async def step_with_memory(self,
+                ev: StartEvent,
+                memory: Annotated[Memory, Resource(config_file="config.json")]
+            ) -> StopEvent:
+                ...
+        ```
     """
-    return _Resource(factory, cache)
+    if factory is not None:
+        return _Resource(factory, cache)
+    elif config_file is not None:
+        return _ConfiguredResource(config_file=config_file, cache=cache)
+    else:
+        raise ValueError(
+            "At least one between `factory` and `config_file` has to be provided"
+        )
 
 
 class ResourceManager:
@@ -104,7 +183,7 @@ class ResourceManager:
         """Register a resource instance under a name."""
         self.resources.update({name: val})
 
-    async def get(self, resource: _Resource) -> Any:
+    async def get(self, resource: _Resource | _ConfiguredResource) -> Any:
         """Return a resource instance, honoring cache settings."""
         if not resource.cache:
             val = await resource.call()
