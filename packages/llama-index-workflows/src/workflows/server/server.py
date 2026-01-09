@@ -60,7 +60,6 @@ from workflows.server.abstract_workflow_store import (
 )
 from workflows.server.keyed_lock import KeyedLock
 from workflows.server.memory_workflow_store import MemoryWorkflowStore
-from workflows.types import RunResultT
 
 # Protocol models are used on the client side; server responds with plain dicts
 from workflows.utils import _nanoid as nanoid
@@ -79,11 +78,11 @@ class WorkflowServer:
         # Release idle workflows from memory after this timeout (None = disabled)
         idle_release_timeout: timedelta | None = timedelta(seconds=10),
     ):
+        # Workflows that this server will run
         self._workflows: dict[str, Workflow] = {}
+        # Additional event schemas supported. Used for serdes lookups. Should be used sparingly if ever.
         self._additional_events: dict[str, list[type[Event]] | None] = {}
-        self._contexts: dict[str, Context] = {}
         self._handlers: dict[str, _WorkflowHandler] = {}
-        self._results: dict[str, RunResultT] = {}
         self._workflow_store = (
             workflow_store if workflow_store is not None else MemoryWorkflowStore()
         )
@@ -265,7 +264,6 @@ class WorkflowServer:
             *[self._close_handler(handler) for handler in list(self._handlers.values())]
         )
         self._handlers.clear()
-        self._results.clear()
 
     async def serve(
         self,
@@ -446,16 +444,15 @@ class WorkflowServer:
         if name not in self._workflows:
             raise HTTPException(status_code=404, detail=f"Workflow '{name}' not found")
 
-        events = self._workflows[name].events
-        additional_events = self._additional_events.get(name, [])
-        if additional_events:
-            events.extend(additional_events)
+        events = self._workflows[name].events + (
+            self._additional_events.get(name, []) or []
+        )
 
-        event_objs = []
-        for event in events:
-            event_objs.append(event.model_json_schema())
-
-        return JSONResponse(WorkflowEventsListResponse(events=event_objs).model_dump())
+        return JSONResponse(
+            WorkflowEventsListResponse(
+                events=[event.model_json_schema() for event in events]
+            ).model_dump()
+        )
 
     async def _run_workflow(self, request: Request) -> JSONResponse:
         """
@@ -1403,7 +1400,6 @@ class WorkflowServer:
 
         async def on_finish() -> None:
             self._handlers.pop(handler_id, None)
-            self._results.pop(handler_id, None)
 
         wrapper.start_streaming(on_finish=on_finish)
 
@@ -1415,7 +1411,6 @@ class WorkflowServer:
         await handler.cancel_handlers_and_tasks()
 
         self._handlers.pop(handler.handler_id, None)
-        self._results.pop(handler.handler_id, None)
 
     async def _release_handler(self, wrapper: _WorkflowHandler) -> None:
         """Release an idle handler from memory, keeping it in persistence."""
@@ -1444,7 +1439,6 @@ class WorkflowServer:
             # the handler triggers _stream_events to cancel the timer, which would
             # interrupt this method before the pop happens.
             self._handlers.pop(handler_id, None)
-            self._results.pop(handler_id, None)
 
             # Cancel the idle release timer to prevent re-entry
             wrapper._cancel_idle_release_timer()
