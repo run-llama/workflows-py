@@ -29,8 +29,7 @@ async def test_workflow_draw_methods(workflow: Workflow) -> None:
         )
 
 
-@pytest.mark.asyncio
-async def test_draw_all_possible_flows_with_max_label_length(
+def test_draw_all_possible_flows_with_max_label_length(
     workflow: Workflow,
 ) -> None:
     """Test the max_label_length parameter."""
@@ -80,8 +79,7 @@ async def test_draw_all_possible_flows_with_max_label_length(
                 )
 
 
-@pytest.mark.asyncio
-async def test_draw_all_possible_flows_mermaid_basic(workflow: Workflow) -> None:
+def test_draw_all_possible_flows_mermaid_basic(workflow: Workflow) -> None:
     """Test basic Mermaid diagram generation."""
     with patch("builtins.open", mock_open()) as mock_file:
         result = draw_all_possible_flows_mermaid(
@@ -103,8 +101,7 @@ async def test_draw_all_possible_flows_mermaid_basic(workflow: Workflow) -> None
         assert "classDef externalStyle fill:#BEDAE4" in result
 
 
-@pytest.mark.asyncio
-async def test_draw_all_possible_flows_mermaid_no_file(workflow: Workflow) -> None:
+def test_draw_all_possible_flows_mermaid_no_file(workflow: Workflow) -> None:
     """Test Mermaid diagram generation without file output."""
     result = draw_all_possible_flows_mermaid(workflow)
 
@@ -113,8 +110,7 @@ async def test_draw_all_possible_flows_mermaid_no_file(workflow: Workflow) -> No
     assert result.startswith("flowchart TD")
 
 
-@pytest.mark.asyncio
-async def test_mermaid_node_shapes_and_styles(workflow: Workflow) -> None:
+def test_mermaid_node_shapes_and_styles(workflow: Workflow) -> None:
     """Test that Mermaid nodes have correct shapes and styles."""
     result = draw_all_possible_flows_mermaid(workflow)
 
@@ -147,8 +143,7 @@ async def test_mermaid_node_shapes_and_styles(workflow: Workflow) -> None:
         )
 
 
-@pytest.mark.asyncio
-async def test_mermaid_edges_generation(workflow: Workflow) -> None:
+def test_mermaid_edges_generation(workflow: Workflow) -> None:
     """Test that Mermaid edges are properly generated."""
     result = draw_all_possible_flows_mermaid(workflow)
 
@@ -168,8 +163,7 @@ async def test_mermaid_edges_generation(workflow: Workflow) -> None:
         assert target.strip(), f"Edge target should not be empty: {edge_line}"
 
 
-@pytest.mark.asyncio
-async def test_mermaid_id_cleaning(workflow: Workflow) -> None:
+def test_mermaid_id_cleaning(workflow: Workflow) -> None:
     """Test that Mermaid IDs are properly cleaned for validity."""
     result = draw_all_possible_flows_mermaid(workflow)
 
@@ -190,8 +184,7 @@ async def test_mermaid_id_cleaning(workflow: Workflow) -> None:
                 # Note: We allow underscores as they're valid in Mermaid
 
 
-@pytest.mark.asyncio
-async def test_mermaid_vs_pyvis_consistency(workflow: Workflow) -> None:
+def test_mermaid_vs_pyvis_consistency(workflow: Workflow) -> None:
     """Test that Mermaid and Pyvis generate consistent node/edge counts."""
     # Generate Pyvis version
     with patch("llama_index.utils.workflow.Network") as mock_network:
@@ -237,8 +230,7 @@ async def test_mermaid_vs_pyvis_consistency(workflow: Workflow) -> None:
     )
 
 
-@pytest.mark.asyncio
-async def test_mermaid_file_writing(workflow: Workflow) -> None:
+def test_mermaid_file_writing(workflow: Workflow) -> None:
     """Test that Mermaid diagram is correctly written to file."""
     mock_file_handle = mock_open()
 
@@ -261,8 +253,7 @@ async def test_mermaid_file_writing(workflow: Workflow) -> None:
         )
 
 
-@pytest.mark.asyncio
-async def test_mermaid_empty_filename(workflow: Workflow) -> None:
+def test_mermaid_empty_filename(workflow: Workflow) -> None:
     """Test that Mermaid works with empty/None filename."""
     # Test without filename (defaults internally)
     result1 = draw_all_possible_flows_mermaid(workflow)
@@ -314,8 +305,7 @@ async def test_draw_most_recent_execution_mermaid(workflow: Workflow) -> None:
 # --- Resource node rendering tests ---
 
 
-@pytest.mark.asyncio
-async def test_mermaid_resource_nodes_rendered(
+def test_mermaid_resource_nodes_rendered(
     workflow_with_resources: Workflow,
 ) -> None:
     """Test that resource nodes are rendered in Mermaid output."""
@@ -339,8 +329,7 @@ async def test_mermaid_resource_nodes_rendered(
         )
 
 
-@pytest.mark.asyncio
-async def test_mermaid_resource_edges_have_labels(
+def test_mermaid_resource_edges_have_labels(
     workflow_with_resources: Workflow,
 ) -> None:
     """Test that edges from resources to steps have labels (variable names)."""
@@ -369,8 +358,7 @@ async def test_mermaid_resource_edges_have_labels(
     )
 
 
-@pytest.mark.asyncio
-async def test_pyvis_resource_nodes_rendered(workflow_with_resources: Workflow) -> None:
+def test_pyvis_resource_nodes_rendered(workflow_with_resources: Workflow) -> None:
     """Test that resource nodes are rendered in Pyvis output."""
     with patch("llama_index.utils.workflow.Network") as mock_network:
         mock_net_instance = MagicMock()
@@ -404,8 +392,7 @@ async def test_pyvis_resource_nodes_rendered(workflow_with_resources: Workflow) 
             )
 
 
-@pytest.mark.asyncio
-async def test_pyvis_resource_edges_have_labels(
+def test_pyvis_resource_edges_have_labels(
     workflow_with_resources: Workflow,
 ) -> None:
     """Test that Pyvis edges from resources have labels."""
@@ -435,8 +422,7 @@ async def test_pyvis_resource_edges_have_labels(
         )
 
 
-@pytest.mark.asyncio
-async def test_mermaid_resource_style_always_defined(workflow: Workflow) -> None:
+def test_mermaid_resource_style_always_defined(workflow: Workflow) -> None:
     """Test that resourceStyle is always defined even for workflows without resources."""
     result = draw_all_possible_flows_mermaid(workflow)
 
@@ -444,8 +430,7 @@ async def test_mermaid_resource_style_always_defined(workflow: Workflow) -> None
     assert "classDef resourceStyle fill:#DDA0DD" in result
 
 
-@pytest.mark.asyncio
-async def test_resource_node_deduplication_in_rendering(
+def test_resource_node_deduplication_in_rendering(
     workflow_with_resources: Workflow,
 ) -> None:
     """Test that deduplicated resource nodes render correctly."""
