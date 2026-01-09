@@ -210,6 +210,94 @@ class WorkflowGraph(BaseModel):
         description="Documentation string extracted from the workflow class",
     )
 
+    def filter_by_node_type(self, *node_types: str) -> WorkflowGraph:
+        """Create a simplified graph by removing nodes of specified types.
+
+        Edges passing through filtered nodes are resolved:
+        Node1 -> FilteredNode -> Node2 becomes Node1 -> Node2
+
+        Args:
+            *node_types: One or more node type strings to filter out
+                        (e.g., "event", "resource", "step", "external")
+
+        Returns:
+            A new WorkflowGraph with the specified node types removed
+            and edges resolved through them.
+        """
+        filter_types = set(node_types)
+
+        # Identify nodes to filter out
+        filtered_node_ids: set[str] = set()
+        for node in self.nodes:
+            if node.node_type in filter_types:
+                filtered_node_ids.add(node.id)
+
+        # Keep remaining nodes
+        remaining_nodes = [n for n in self.nodes if n.id not in filtered_node_ids]
+        remaining_node_ids = {n.id for n in remaining_nodes}
+
+        # Build outgoing edge map and node lookup
+        outgoing_map: dict[str, list[WorkflowGraphEdge]] = {}
+        for edge in self.edges:
+            outgoing_map.setdefault(edge.source, []).append(edge)
+
+        node_by_id: dict[str, WorkflowGraphNode] = {n.id: n for n in self.nodes}
+
+        def resolve_targets(
+            from_id: str,
+            first_filtered_label: str | None,
+            visited: set[str],
+        ) -> list[tuple[str, str | None]]:
+            """Find remaining nodes reachable from from_id, through filtered nodes."""
+            results: list[tuple[str, str | None]] = []
+            for edge in outgoing_map.get(from_id, []):
+                target = edge.target
+                if target in visited:
+                    continue
+
+                if target in remaining_node_ids:
+                    # Use the first filtered node's label, or the edge label if direct
+                    label = (
+                        first_filtered_label
+                        if first_filtered_label is not None
+                        else edge.label
+                    )
+                    results.append((target, label))
+                elif target in filtered_node_ids:
+                    # Follow through filtered node, capturing its label if first
+                    visited.add(target)
+                    filtered_node = node_by_id[target]
+                    label = (
+                        first_filtered_label
+                        if first_filtered_label is not None
+                        else filtered_node.label
+                    )
+                    results.extend(resolve_targets(target, label, visited))
+            return results
+
+        # Build new edges
+        new_edges: list[WorkflowGraphEdge] = []
+        seen_edges: set[tuple[str, str]] = set()
+
+        for source_id in remaining_node_ids:
+            for target_id, label in resolve_targets(source_id, None, set()):
+                edge_key = (source_id, target_id)
+                if edge_key not in seen_edges:
+                    seen_edges.add(edge_key)
+                    new_edges.append(
+                        WorkflowGraphEdge(
+                            source=source_id,
+                            target=target_id,
+                            label=label,
+                        )
+                    )
+
+        return WorkflowGraph(
+            nodes=remaining_nodes,
+            edges=new_edges,
+            description=self.description,
+        )
+
 
 __all__ = [
     "Status",

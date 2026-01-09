@@ -541,3 +541,274 @@ def test_graph_deserialization_from_raw_json() -> None:
     assert isinstance(graph.nodes[1], WorkflowEventNode)
     assert isinstance(graph.nodes[2], WorkflowExternalNode)
     assert isinstance(graph.nodes[3], WorkflowResourceNode)
+
+
+# --- filter_by_node_type tests ---
+
+
+def test_filter_by_node_type_removes_nodes() -> None:
+    """Test that filter_by_node_type removes specified node types."""
+    graph = WorkflowGraph(
+        nodes=[
+            WorkflowStepNode(id="step1", label="Step 1"),
+            WorkflowEventNode(
+                id="EventA",
+                label="EventA",
+                event_type="EventA",
+                event_types=["EventA"],
+            ),
+            WorkflowStepNode(id="step2", label="Step 2"),
+        ],
+        edges=[
+            WorkflowGraphEdge(source="step1", target="EventA"),
+            WorkflowGraphEdge(source="EventA", target="step2"),
+        ],
+    )
+
+    filtered = graph.filter_by_node_type("event")
+
+    # Event nodes should be removed
+    assert len(filtered.nodes) == 2
+    assert all(n.node_type == "step" for n in filtered.nodes)
+    node_ids = {n.id for n in filtered.nodes}
+    assert node_ids == {"step1", "step2"}
+
+
+def test_filter_by_node_type_resolves_edges() -> None:
+    """Test that edges through filtered nodes are resolved."""
+    graph = WorkflowGraph(
+        nodes=[
+            WorkflowStepNode(id="step1", label="Step 1"),
+            WorkflowEventNode(
+                id="EventA",
+                label="EventA",
+                event_type="EventA",
+                event_types=["EventA"],
+            ),
+            WorkflowStepNode(id="step2", label="Step 2"),
+        ],
+        edges=[
+            WorkflowGraphEdge(source="step1", target="EventA"),
+            WorkflowGraphEdge(source="EventA", target="step2"),
+        ],
+    )
+
+    filtered = graph.filter_by_node_type("event")
+
+    # Edge should be resolved: step1 -> step2
+    assert len(filtered.edges) == 1
+    assert filtered.edges[0].source == "step1"
+    assert filtered.edges[0].target == "step2"
+
+
+def test_filter_by_node_type_chain_of_filtered_nodes() -> None:
+    """Test filtering handles chains of filtered nodes."""
+    graph = WorkflowGraph(
+        nodes=[
+            WorkflowStepNode(id="step1", label="Step 1"),
+            WorkflowEventNode(
+                id="EventA",
+                label="First Filtered Node",
+                event_type="EventA",
+                event_types=["EventA"],
+            ),
+            WorkflowEventNode(
+                id="EventB",
+                label="Second Filtered Node",
+                event_type="EventB",
+                event_types=["EventB"],
+            ),
+            WorkflowStepNode(id="step2", label="Step 2"),
+        ],
+        edges=[
+            WorkflowGraphEdge(source="step1", target="EventA"),
+            WorkflowGraphEdge(source="EventA", target="EventB"),
+            WorkflowGraphEdge(source="EventB", target="step2"),
+        ],
+    )
+
+    filtered = graph.filter_by_node_type("event")
+
+    # Chain resolved: step1 -> step2, with first filtered node's label
+    assert len(filtered.nodes) == 2
+    assert len(filtered.edges) == 1
+    assert filtered.edges[0].source == "step1"
+    assert filtered.edges[0].target == "step2"
+    assert filtered.edges[0].label == "First Filtered Node"
+
+
+def test_filter_by_node_type_multiple_types() -> None:
+    """Test filtering multiple node types at once."""
+    graph = WorkflowGraph(
+        nodes=[
+            WorkflowStepNode(id="step1", label="Step 1"),
+            WorkflowEventNode(
+                id="EventA",
+                label="EventA",
+                event_type="EventA",
+                event_types=["EventA"],
+            ),
+            WorkflowResourceNode(id="resource1", label="Resource"),
+            WorkflowStepNode(id="step2", label="Step 2"),
+        ],
+        edges=[
+            WorkflowGraphEdge(source="step1", target="EventA"),
+            WorkflowGraphEdge(source="step1", target="resource1", label="db"),
+            WorkflowGraphEdge(source="EventA", target="step2"),
+        ],
+    )
+
+    filtered = graph.filter_by_node_type("event", "resource")
+
+    # Only step nodes remain
+    assert len(filtered.nodes) == 2
+    assert all(n.node_type == "step" for n in filtered.nodes)
+    # step1 -> step2 edge remains (resolved through EventA)
+    assert len(filtered.edges) == 1
+    assert filtered.edges[0].source == "step1"
+    assert filtered.edges[0].target == "step2"
+
+
+def test_filter_by_node_type_preserves_direct_edges() -> None:
+    """Test that direct edges between remaining nodes are preserved."""
+    graph = WorkflowGraph(
+        nodes=[
+            WorkflowStepNode(id="step1", label="Step 1"),
+            WorkflowStepNode(id="step2", label="Step 2"),
+            WorkflowEventNode(
+                id="EventA",
+                label="EventA",
+                event_type="EventA",
+                event_types=["EventA"],
+            ),
+        ],
+        edges=[
+            WorkflowGraphEdge(source="step1", target="step2"),  # Direct edge
+            WorkflowGraphEdge(source="step2", target="EventA"),
+        ],
+    )
+
+    filtered = graph.filter_by_node_type("event")
+
+    # Direct edge should be preserved
+    assert len(filtered.edges) == 1
+    assert filtered.edges[0].source == "step1"
+    assert filtered.edges[0].target == "step2"
+
+
+def test_filter_by_node_type_uses_filtered_node_label() -> None:
+    """Test that the first filtered node's label becomes the new edge label."""
+    graph = WorkflowGraph(
+        nodes=[
+            WorkflowStepNode(id="step1", label="Step 1"),
+            WorkflowEventNode(
+                id="EventA",
+                label="My Event Label",
+                event_type="EventA",
+                event_types=["EventA"],
+            ),
+            WorkflowStepNode(id="step2", label="Step 2"),
+        ],
+        edges=[
+            WorkflowGraphEdge(source="step1", target="EventA"),
+            WorkflowGraphEdge(source="EventA", target="step2"),
+        ],
+    )
+
+    filtered = graph.filter_by_node_type("event")
+
+    # Label from filtered node should be on the new edge
+    assert len(filtered.edges) == 1
+    assert filtered.edges[0].label == "My Event Label"
+
+
+def test_filter_by_node_type_preserves_direct_edge_labels() -> None:
+    """Test that labels on direct edges are preserved."""
+    graph = WorkflowGraph(
+        nodes=[
+            WorkflowStepNode(id="step1", label="Step 1"),
+            WorkflowResourceNode(id="resource1", label="Resource"),
+            WorkflowEventNode(
+                id="EventA",
+                label="EventA",
+                event_type="EventA",
+                event_types=["EventA"],
+            ),
+        ],
+        edges=[
+            WorkflowGraphEdge(source="step1", target="resource1", label="db"),
+            WorkflowGraphEdge(source="step1", target="EventA"),
+        ],
+    )
+
+    filtered = graph.filter_by_node_type("event")
+
+    # Resource edge label should be preserved (it's a direct edge)
+    resource_edge = next(e for e in filtered.edges if e.target == "resource1")
+    assert resource_edge.label == "db"
+
+
+def test_filter_by_node_type_no_matching_types() -> None:
+    """Test filtering with types that don't exist in graph."""
+    graph = WorkflowGraph(
+        nodes=[
+            WorkflowStepNode(id="step1", label="Step 1"),
+            WorkflowStepNode(id="step2", label="Step 2"),
+        ],
+        edges=[WorkflowGraphEdge(source="step1", target="step2")],
+    )
+
+    filtered = graph.filter_by_node_type("nonexistent")
+
+    # Graph should be unchanged
+    assert len(filtered.nodes) == 2
+    assert len(filtered.edges) == 1
+
+
+def test_filter_by_node_type_preserves_description() -> None:
+    """Test that the workflow description is preserved."""
+    graph = WorkflowGraph(
+        nodes=[WorkflowStepNode(id="step1", label="Step 1")],
+        edges=[],
+        description="My workflow description",
+    )
+
+    filtered = graph.filter_by_node_type("event")
+
+    assert filtered.description == "My workflow description"
+
+
+def test_filter_by_node_type_deduplicates_edges() -> None:
+    """Test that duplicate edges are not created."""
+    graph = WorkflowGraph(
+        nodes=[
+            WorkflowStepNode(id="step1", label="Step 1"),
+            WorkflowEventNode(
+                id="EventA",
+                label="EventA",
+                event_type="EventA",
+                event_types=["EventA"],
+            ),
+            WorkflowEventNode(
+                id="EventB",
+                label="EventB",
+                event_type="EventB",
+                event_types=["EventB"],
+            ),
+            WorkflowStepNode(id="step2", label="Step 2"),
+        ],
+        edges=[
+            # Both events lead to step2 from step1
+            WorkflowGraphEdge(source="step1", target="EventA"),
+            WorkflowGraphEdge(source="step1", target="EventB"),
+            WorkflowGraphEdge(source="EventA", target="step2"),
+            WorkflowGraphEdge(source="EventB", target="step2"),
+        ],
+    )
+
+    filtered = graph.filter_by_node_type("event")
+
+    # Should only have one edge: step1 -> step2 (deduplicated)
+    assert len(filtered.edges) == 1
+    assert filtered.edges[0].source == "step1"
+    assert filtered.edges[0].target == "step2"
