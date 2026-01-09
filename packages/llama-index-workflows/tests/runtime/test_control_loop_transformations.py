@@ -22,6 +22,7 @@ from workflows.events import (
     StepState,
     StepStateChanged,
     StopEvent,
+    UnhandledEvent,
     WorkflowIdleEvent,
 )
 from workflows.retry_policy import ConstantDelayRetryPolicy
@@ -130,6 +131,41 @@ def add_worker(state: BrokerState, event: Event, worker_id: int = 0) -> None:
             first_attempt_at=100.0,
         )
     )
+
+
+def test_add_event_unhandled_emits_internal_event(base_state: BrokerState) -> None:
+    """Unhandled events should emit UnhandledEvent with idle status."""
+    tick = TickAddEvent(event=OtherEvent(data="unused"), step_name=None)
+    state, commands = _process_add_event_tick(tick, base_state, now_seconds=0.0)
+
+    publish_events = [c.event for c in commands if isinstance(c, CommandPublishEvent)]
+    unhandled = [e for e in publish_events if isinstance(e, UnhandledEvent)]
+    assert len(unhandled) == 1
+    assert unhandled[0].event_type == "OtherEvent"
+    assert unhandled[0].qualified_name.endswith(".OtherEvent")
+    assert unhandled[0].step_name is None
+    assert unhandled[0].idle == _check_idle_state(state)
+
+
+def test_add_event_matches_waiter_does_not_emit_unhandled(
+    base_state: BrokerState,
+) -> None:
+    """Events that satisfy a waiter should not emit UnhandledEvent."""
+    base_state.workers["test_step"].collected_waiters.append(
+        StepWorkerWaiter(
+            waiter_id="waiter-1",
+            event=StartEvent(),
+            waiting_for_event=OtherEvent,
+            requirements={},
+            has_requirements=False,
+            resolved_event=None,
+        )
+    )
+    tick = TickAddEvent(event=OtherEvent(data="hit"), step_name=None)
+    _, commands = _process_add_event_tick(tick, base_state, now_seconds=0.0)
+
+    publish_events = [c.event for c in commands if isinstance(c, CommandPublishEvent)]
+    assert not any(isinstance(e, UnhandledEvent) for e in publish_events)
 
 
 @pytest.mark.parametrize(

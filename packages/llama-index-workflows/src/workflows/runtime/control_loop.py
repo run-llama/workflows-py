@@ -23,6 +23,7 @@ from workflows.events import (
     StepState,
     StepStateChanged,
     StopEvent,
+    UnhandledEvent,
     WorkflowCancelledEvent,
     WorkflowFailedEvent,
     WorkflowIdleEvent,
@@ -662,11 +663,13 @@ def _process_add_event_tick(
     state = init.deepcopy()
     # iterate through the steps, and add to steps work queue if it's accepted.
     commands: list[WorkflowCommand] = []
+    handled = False
     if isinstance(tick.event, StartEvent):
         state.is_running = True
     for step_name, step_config in state.config.steps.items():
         is_accepted = type(tick.event) in step_config.accepted_events
         if is_accepted and (tick.step_name is None or tick.step_name == step_name):
+            handled = True
             subcommands = _add_or_enqueue_event(
                 EventAttempt(
                     event=tick.event,
@@ -690,6 +693,7 @@ def _process_add_event_tick(
                 for k, v in wait_condition.requirements.items()
             )
             if is_match:
+                handled = True
                 wait_condition.resolved_event = tick.event
                 subcommands = _add_or_enqueue_event(
                     EventAttempt(event=wait_condition.event),
@@ -698,6 +702,18 @@ def _process_add_event_tick(
                     now_seconds,
                 )
                 commands.extend(subcommands)
+    if not handled:
+        event_cls = type(tick.event)
+        commands.append(
+            CommandPublishEvent(
+                UnhandledEvent(
+                    event_type=event_cls.__name__,
+                    qualified_name=f"{event_cls.__module__}.{event_cls.__name__}",
+                    step_name=tick.step_name,
+                    idle=_check_idle_state(state),
+                )
+            )
+        )
     return state, commands
 
 
