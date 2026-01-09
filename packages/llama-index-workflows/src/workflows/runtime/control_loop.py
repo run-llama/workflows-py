@@ -25,8 +25,8 @@ from workflows.events import (
     StopEvent,
     WorkflowCancelledEvent,
     WorkflowFailedEvent,
-    WorkflowTimedOutEvent,
     WorkflowIdleEvent,
+    WorkflowTimedOutEvent,
 )
 from workflows.runtime.types.commands import (
     CommandCompleteRun,
