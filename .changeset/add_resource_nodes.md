@@ -3,4 +3,4 @@
 "llama-index-utils-workflow": minor
 ---
 
-Add resource nodes to workflow graph visualization
+Add further detail to workflow graph, mainly adding `Resource` nodes to workflow graph and visualizations
