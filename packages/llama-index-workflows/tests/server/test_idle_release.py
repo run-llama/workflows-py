@@ -11,9 +11,11 @@ import time_machine
 from httpx import ASGITransport, AsyncClient
 from workflows import Context, Workflow, step
 from workflows.events import HumanResponseEvent, StartEvent, StopEvent
-from workflows.server import WorkflowServer
 from workflows.server.abstract_workflow_store import HandlerQuery, PersistentHandler
 from workflows.server.memory_workflow_store import MemoryWorkflowStore
+from workflows.server.server import WorkflowServer, _WorkflowHandler
+
+from tests.server.util import wait_for_passing
 
 
 class WaitableExternalEvent(HumanResponseEvent):
@@ -294,8 +296,6 @@ async def test_reloaded_idle_workflow_is_released_again(
     memory_store: MemoryWorkflowStore, waiting_workflow: Workflow
 ) -> None:
     """Test that a reloaded workflow that stays idle gets released again."""
-    from .util import async_yield
-
     # Use very short timeout - this test needs real time for timers
     idle_timeout = timedelta(milliseconds=1)
 
@@ -311,21 +311,25 @@ async def test_reloaded_idle_workflow_is_released_again(
         # Start a workflow
         handler_id = "reload-idle-test-1"
         handler = server._workflows["test"].run()
-        await server._run_workflow_handler(handler_id, "test", handler)
+        wrapper = await server._run_workflow_handler(handler_id, "test", handler)
 
-        # Wait for workflow to become idle
-        await async_yield(20)
-        wrapper = server._handlers.get(handler_id)
-        assert wrapper is not None and wrapper.idle_since is not None
+        async def wrapper_is_idle() -> None:
+            assert wrapper.idle_since is not None
 
-        # Wait for the idle release timer to fire
-        await asyncio.sleep(0.005)
-        assert handler_id not in server._handlers
+        await wait_for_passing(wrapper_is_idle, interval=0.01, max_duration=1.5)
 
-        # Reload the workflow (simulating an event arriving)
-        reloaded, persisted = await server._try_reload_handler(handler_id)
-        assert reloaded is not None
-        assert handler_id in server._handlers
+        # Reload the workflow (simulating an event arriving) once the handler
+        # is released from memory.
+        async def reload_from_store() -> tuple[_WorkflowHandler, PersistentHandler]:
+            reloaded, persisted = await server._try_reload_handler(handler_id)
+            assert reloaded is not None
+            assert persisted is not None
+            assert reloaded is not wrapper
+            return reloaded, persisted
+
+        reloaded, persisted = await wait_for_passing(
+            reload_from_store, interval=0.01, max_duration=1.5
+        )
 
         assert persisted is not None
         assert persisted.status == "running"
@@ -333,13 +337,21 @@ async def test_reloaded_idle_workflow_is_released_again(
         # The reloaded handler should have idle_since restored
         assert reloaded.idle_since is not None
 
-        # Since the workflow is still idle (no event woke it up),
-        # it should have a release timer running
-        assert reloaded._idle_release_timer is not None
+        # Wait for the reloaded handler to be released again by observing
+        # that a subsequent reload returns a new handler instance.
+        async def reload_after_release() -> _WorkflowHandler:
+            reloaded_again, persisted_again = await server._try_reload_handler(
+                handler_id
+            )
+            assert reloaded_again is not None
+            assert persisted_again is not None
+            assert reloaded_again is not reloaded
+            return reloaded_again
 
-        # Wait for it to be released again
-        await asyncio.sleep(0.005)
-        assert handler_id not in server._handlers
+        reloaded_again = await wait_for_passing(
+            reload_after_release, interval=0.01, max_duration=1.5
+        )
+        await server._close_handler(reloaded_again)
 
 
 @pytest.mark.asyncio
