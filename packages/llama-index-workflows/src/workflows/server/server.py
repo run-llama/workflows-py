@@ -32,6 +32,7 @@ from workflows.events import (
     StepState,
     StepStateChanged,
     StopEvent,
+    UnhandledEvent,
     WorkflowIdleEvent,
 )
 from workflows.handler import WorkflowHandler
@@ -1188,6 +1189,9 @@ class WorkflowServer:
             # Send the event to the context
             try:
                 ctx.send_event(event, step=step)
+                # if accepted, prevent releasing before the event is acknowledged by the control loop.
+                # If this is an unhandled event type, wrapper will detect via internal event, and the wrapper will be remarked as idle
+                wrapper.mark_active()
             except Exception as e:
                 raise HTTPException(
                     detail=f"Failed to send event: {e}", status_code=400
@@ -1719,13 +1723,18 @@ class _WorkflowHandler:
             self._idle_release_timer.cancel()
             self._idle_release_timer = None
 
+    def mark_idle(self, idle_since: datetime | None = None) -> None:
+        self.idle_since = idle_since or datetime.now(timezone.utc)
+        self._start_idle_release_timer()
+
     def mark_active(self) -> None:
         """Mark this handler as active (not idle).
 
         Call this when an event is being sent to prevent premature release.
         """
-        self.idle_since = None
-        self._cancel_idle_release_timer()
+        if self.idle_since is not None:
+            self.idle_since = None
+            self._cancel_idle_release_timer()
 
     def start_streaming(self, on_finish: Callable[[], Awaitable[None]]) -> None:
         """Start streaming events from the handler and managing state."""
@@ -1739,14 +1748,14 @@ class _WorkflowHandler:
             async for event in self.run_handler.stream_events(expose_internal=True):
                 # Track idle state transitions and manage release timer
                 if isinstance(event, WorkflowIdleEvent):
-                    self.idle_since = datetime.now(timezone.utc)
-                    self._start_idle_release_timer()
+                    self.mark_idle()
+                elif isinstance(event, UnhandledEvent):
+                    self.mark_idle()
                 elif (
                     isinstance(event, StepStateChanged)
                     and event.step_state == StepState.RUNNING
                 ):
-                    self.idle_since = None  # Resumed from idle
-                    self._cancel_idle_release_timer()
+                    self.mark_active()
 
                 if (  # Watch for a specific internal event that signals the step is complete
                     isinstance(event, StepStateChanged)
