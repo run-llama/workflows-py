@@ -49,11 +49,13 @@ class ResourceDefinition(BaseModel):
     Attributes:
         name (str): Parameter name in the step function.
         resource (_Resource): Factory wrapper used by the manager to produce the dependency.
+        type_annotation (type | None): The type annotation from Annotated[T, Resource(...)].
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
     name: str
     resource: _Resource
+    type_annotation: Any = None
 
 
 def Resource(factory: Callable[..., T], cache: bool = True) -> _Resource[T]:

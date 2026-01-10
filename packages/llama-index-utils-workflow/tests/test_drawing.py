@@ -29,8 +29,7 @@ async def test_workflow_draw_methods(workflow: Workflow) -> None:
         )
 
 
-@pytest.mark.asyncio
-async def test_draw_all_possible_flows_with_max_label_length(
+def test_draw_all_possible_flows_with_max_label_length(
     workflow: Workflow,
 ) -> None:
     """Test the max_label_length parameter."""
@@ -80,8 +79,7 @@ async def test_draw_all_possible_flows_with_max_label_length(
                 )
 
 
-@pytest.mark.asyncio
-async def test_draw_all_possible_flows_mermaid_basic(workflow: Workflow) -> None:
+def test_draw_all_possible_flows_mermaid_basic(workflow: Workflow) -> None:
     """Test basic Mermaid diagram generation."""
     with patch("builtins.open", mock_open()) as mock_file:
         result = draw_all_possible_flows_mermaid(
@@ -103,8 +101,7 @@ async def test_draw_all_possible_flows_mermaid_basic(workflow: Workflow) -> None
         assert "classDef externalStyle fill:#BEDAE4" in result
 
 
-@pytest.mark.asyncio
-async def test_draw_all_possible_flows_mermaid_no_file(workflow: Workflow) -> None:
+def test_draw_all_possible_flows_mermaid_no_file(workflow: Workflow) -> None:
     """Test Mermaid diagram generation without file output."""
     result = draw_all_possible_flows_mermaid(workflow)
 
@@ -113,8 +110,7 @@ async def test_draw_all_possible_flows_mermaid_no_file(workflow: Workflow) -> No
     assert result.startswith("flowchart TD")
 
 
-@pytest.mark.asyncio
-async def test_mermaid_node_shapes_and_styles(workflow: Workflow) -> None:
+def test_mermaid_node_shapes_and_styles(workflow: Workflow) -> None:
     """Test that Mermaid nodes have correct shapes and styles."""
     result = draw_all_possible_flows_mermaid(workflow)
 
@@ -147,8 +143,7 @@ async def test_mermaid_node_shapes_and_styles(workflow: Workflow) -> None:
         )
 
 
-@pytest.mark.asyncio
-async def test_mermaid_edges_generation(workflow: Workflow) -> None:
+def test_mermaid_edges_generation(workflow: Workflow) -> None:
     """Test that Mermaid edges are properly generated."""
     result = draw_all_possible_flows_mermaid(workflow)
 
@@ -168,8 +163,7 @@ async def test_mermaid_edges_generation(workflow: Workflow) -> None:
         assert target.strip(), f"Edge target should not be empty: {edge_line}"
 
 
-@pytest.mark.asyncio
-async def test_mermaid_id_cleaning(workflow: Workflow) -> None:
+def test_mermaid_id_cleaning(workflow: Workflow) -> None:
     """Test that Mermaid IDs are properly cleaned for validity."""
     result = draw_all_possible_flows_mermaid(workflow)
 
@@ -190,8 +184,7 @@ async def test_mermaid_id_cleaning(workflow: Workflow) -> None:
                 # Note: We allow underscores as they're valid in Mermaid
 
 
-@pytest.mark.asyncio
-async def test_mermaid_vs_pyvis_consistency(workflow: Workflow) -> None:
+def test_mermaid_vs_pyvis_consistency(workflow: Workflow) -> None:
     """Test that Mermaid and Pyvis generate consistent node/edge counts."""
     # Generate Pyvis version
     with patch("llama_index.utils.workflow.Network") as mock_network:
@@ -237,8 +230,7 @@ async def test_mermaid_vs_pyvis_consistency(workflow: Workflow) -> None:
     )
 
 
-@pytest.mark.asyncio
-async def test_mermaid_file_writing(workflow: Workflow) -> None:
+def test_mermaid_file_writing(workflow: Workflow) -> None:
     """Test that Mermaid diagram is correctly written to file."""
     mock_file_handle = mock_open()
 
@@ -261,8 +253,7 @@ async def test_mermaid_file_writing(workflow: Workflow) -> None:
         )
 
 
-@pytest.mark.asyncio
-async def test_mermaid_empty_filename(workflow: Workflow) -> None:
+def test_mermaid_empty_filename(workflow: Workflow) -> None:
     """Test that Mermaid works with empty/None filename."""
     # Test without filename (defaults internally)
     result1 = draw_all_possible_flows_mermaid(workflow)
@@ -309,3 +300,156 @@ async def test_draw_most_recent_execution_mermaid(workflow: Workflow) -> None:
         edge_lines = [line for line in lines if " --> " in line]
         assert len(node_lines) > 0
         assert len(edge_lines) > 0
+
+
+# --- Resource node rendering tests ---
+
+
+def test_mermaid_resource_nodes_rendered(
+    workflow_with_resources: Workflow,
+) -> None:
+    """Test that resource nodes are rendered in Mermaid output."""
+    result = draw_all_possible_flows_mermaid(workflow_with_resources)
+
+    # Verify resource style is defined
+    assert "classDef resourceStyle fill:#DDA0DD" in result
+
+    # Verify resource nodes are present (hexagon shape with {{}})
+    lines = result.split("\n")
+    resource_lines = [line for line in lines if "resource_" in line and ":::" in line]
+    assert len(resource_lines) > 0
+
+    # Check resource nodes use hexagon shape
+    for line in resource_lines:
+        assert "{{" in line and "}}" in line, (
+            f"Resource node should use hexagon shape: {line}"
+        )
+        assert ":::resourceStyle" in line, (
+            f"Resource node should use resourceStyle: {line}"
+        )
+
+
+def test_mermaid_resource_edges_have_labels(
+    workflow_with_resources: Workflow,
+) -> None:
+    """Test that edges from resources to steps have labels (variable names)."""
+    result = draw_all_possible_flows_mermaid(workflow_with_resources)
+
+    lines = result.split("\n")
+    # Look for edges with labels: resource_xxx -->|"var_name"| step_yyy
+    labeled_edge_lines = [line for line in lines if '-->|"' in line]
+
+    # Should have labeled edges for resource connections
+    assert len(labeled_edge_lines) > 0
+
+    # Check that the labels are variable names
+    expected_labels = {"db_client", "db", "cache"}
+    found_labels = set()
+    for line in labeled_edge_lines:
+        # Extract label from -->|"label"|
+        if '-->|"' in line:
+            start = line.index('-->|"') + 5
+            end = line.index('"|', start)
+            label = line[start:end]
+            found_labels.add(label)
+
+    assert found_labels.intersection(expected_labels), (
+        f"Expected some of {expected_labels}, found {found_labels}"
+    )
+
+
+def test_pyvis_resource_nodes_rendered(workflow_with_resources: Workflow) -> None:
+    """Test that resource nodes are rendered in Pyvis output."""
+    with patch("llama_index.utils.workflow.Network") as mock_network:
+        mock_net_instance = MagicMock()
+        mock_network.return_value = mock_net_instance
+
+        draw_all_possible_flows(workflow_with_resources, filename="test.html")
+
+        # Extract all add_node calls
+        node_calls = mock_net_instance.add_node.call_args_list
+
+        # Find resource nodes (should have hexagon shape and plum color)
+        resource_nodes = []
+        for call in node_calls:
+            args, kwargs = call
+            node_id = args[0]
+            if "resource_" in node_id:
+                resource_nodes.append((node_id, kwargs))
+
+        assert len(resource_nodes) > 0, "Should have resource nodes"
+
+        for node_id, kwargs in resource_nodes:
+            assert kwargs.get("shape") == "hexagon", (
+                f"Resource node {node_id} should be hexagon"
+            )
+            assert kwargs.get("color") == "#DDA0DD", (
+                f"Resource node {node_id} should be plum color"
+            )
+            # Should have a title with metadata
+            assert kwargs.get("title") is not None, (
+                f"Resource node {node_id} should have title"
+            )
+
+
+def test_pyvis_resource_edges_have_labels(
+    workflow_with_resources: Workflow,
+) -> None:
+    """Test that Pyvis edges from resources have labels."""
+    with patch("llama_index.utils.workflow.Network") as mock_network:
+        mock_net_instance = MagicMock()
+        mock_network.return_value = mock_net_instance
+
+        draw_all_possible_flows(workflow_with_resources, filename="test.html")
+
+        # Extract all add_edge calls
+        edge_calls = mock_net_instance.add_edge.call_args_list
+
+        # Find edges with labels
+        labeled_edges = []
+        for call in edge_calls:
+            args, kwargs = call
+            if "label" in kwargs:
+                labeled_edges.append((args, kwargs["label"]))
+
+        assert len(labeled_edges) > 0, "Should have labeled edges"
+
+        # Check that labels are variable names
+        labels = {label for _, label in labeled_edges}
+        expected_labels = {"db_client", "db", "cache"}
+        assert labels.intersection(expected_labels), (
+            f"Expected some of {expected_labels}, found {labels}"
+        )
+
+
+def test_mermaid_resource_style_always_defined(workflow: Workflow) -> None:
+    """Test that resourceStyle is always defined even for workflows without resources."""
+    result = draw_all_possible_flows_mermaid(workflow)
+
+    # resourceStyle should be defined even if not used
+    assert "classDef resourceStyle fill:#DDA0DD" in result
+
+
+def test_resource_node_deduplication_in_rendering(
+    workflow_with_resources: Workflow,
+) -> None:
+    """Test that deduplicated resource nodes render correctly."""
+    result = draw_all_possible_flows_mermaid(workflow_with_resources)
+
+    lines = result.split("\n")
+
+    # Count unique resource node definitions (not edges)
+    resource_node_defs = [
+        line
+        for line in lines
+        if "resource_" in line
+        and ":::" in line
+        and " --> " not in line
+        and "-->|" not in line
+    ]
+
+    # The workflow has 2 unique resources (DatabaseClient used twice, CacheClient once)
+    # So we should see exactly 2 resource node definitions
+    assert len(resource_node_defs) == 2, (
+        f"Expected 2 unique resource nodes, found {len(resource_node_defs)}: {resource_node_defs}"
+    )

@@ -102,8 +102,15 @@ def inspect_signature(fn: Callable) -> StepSignatureSpec:
 
         # Handle Annotated types for resources
         if get_origin(annotation) is Annotated:
-            _, resource = get_args(annotation)
-            resources.append(ResourceDefinition(name=name, resource=resource))
+            args = get_args(annotation)
+            type_annotation = args[0] if args else None
+            resource = args[1] if len(args) > 1 else None
+            if resource is not None:
+                resources.append(
+                    ResourceDefinition(
+                        name=name, resource=resource, type_annotation=type_annotation
+                    )
+                )
             continue
 
         # Get name and type of the Context param (without state type)
