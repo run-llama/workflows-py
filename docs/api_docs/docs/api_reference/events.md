@@ -6,3 +6,6 @@
         - HumanResponseEvent
         - StartEvent
         - StopEvent
+        - WorkflowTimedOutEvent
+        - WorkflowCancelledEvent
+        - WorkflowFailedEvent
