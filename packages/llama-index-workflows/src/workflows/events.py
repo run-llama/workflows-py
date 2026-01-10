@@ -209,6 +209,79 @@ class StopEvent(Event):
         return str(self._result)
 
 
+class WorkflowTimedOutEvent(StopEvent):
+    """Published when a workflow exceeds its configured timeout.
+
+    This event is published to the event stream when a workflow times out,
+    allowing consumers to understand why the workflow ended before the
+    WorkflowTimeoutError exception is raised.
+
+    Attributes:
+        timeout: The timeout duration in seconds that was exceeded.
+        active_steps: List of step names that were still active when the timeout occurred.
+
+    Examples:
+        ```python
+        async for event in handler.stream_events():
+            if isinstance(event, WorkflowTimedOutEvent):
+                print(f"Workflow timed out after {event.timeout}s")
+                print(f"Active steps: {event.active_steps}")
+        ```
+    """
+
+    timeout: float
+    active_steps: list[str]
+
+
+class WorkflowCancelledEvent(StopEvent):
+    """Published when a workflow is cancelled by the user.
+
+    This event is published to the event stream when a workflow is cancelled
+    via the handler or programmatically, allowing consumers to understand why
+    the workflow ended before the WorkflowCancelledByUser exception is raised.
+
+    Examples:
+        ```python
+        async for event in handler.stream_events():
+            if isinstance(event, WorkflowCancelledEvent):
+                print("Workflow was cancelled by user")
+        ```
+    """
+
+
+class WorkflowFailedEvent(StopEvent):
+    """Published when a workflow step fails permanently.
+
+    This event is published to the event stream when a step fails and all
+    retries are exhausted, allowing consumers to understand why the workflow
+    ended before the exception is raised.
+
+    Attributes:
+        step_name: The name of the step that failed.
+        exception_type: The fully qualified type name of the exception that caused the failure.
+        exception_message: The string representation of the exception message.
+        traceback: The formatted stack trace of the exception.
+        attempts: The total number of attempts made before giving up.
+        elapsed_seconds: Time in seconds from first attempt to final failure.
+
+    Examples:
+        ```python
+        async for event in handler.stream_events():
+            if isinstance(event, WorkflowFailedEvent):
+                print(f"Step '{event.step_name}' failed after {event.attempts} attempts")
+                print(f"Total time: {event.elapsed_seconds:.2f}s")
+                print(event.traceback)
+        ```
+    """
+
+    step_name: str
+    exception_type: str
+    exception_message: str
+    traceback: str
+    attempts: int
+    elapsed_seconds: float
+
+
 class InputRequiredEvent(Event):
     """Emitted when human input is required to proceed.
 

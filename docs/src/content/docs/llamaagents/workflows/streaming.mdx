@@ -99,3 +99,27 @@ if __name__ == "__main__":
 ```
 
 `run` runs the workflow in the background, while `stream_events` will provide any event that gets written to the stream. It stops when the stream delivers a `StopEvent`, after which you can get the final result of the workflow as you normally would.
+
+## Handling workflow termination
+
+When a workflow ends abnormally (timeout, cancellation, or step failure), a specific `StopEvent` subclass is published to the stream before the exception is raised:
+
+- **`WorkflowTimedOutEvent`** - Published when the workflow exceeds its timeout. Contains `timeout` (seconds) and `active_steps` (list of step names that were running).
+- **`WorkflowCancelledEvent`** - Published when the workflow is cancelled by the user.
+- **`WorkflowFailedEvent`** - Published when a step fails permanently after exhausting retries. Contains `step_name`, `exception_type`, `exception_message`, `traceback`, `attempts`, and `elapsed_seconds`.
+
+```python
+from workflows.events import (
+    WorkflowTimedOutEvent,
+    WorkflowCancelledEvent,
+    WorkflowFailedEvent,
+)
+
+async for ev in handler.stream_events():
+    if isinstance(ev, WorkflowTimedOutEvent):
+        print(f"Workflow timed out after {ev.timeout}s")
+    elif isinstance(ev, WorkflowCancelledEvent):
+        print("Workflow was cancelled")
+    elif isinstance(ev, WorkflowFailedEvent):
+        print(f"Step '{ev.step_name}' failed after {ev.attempts} attempts: {ev.exception_message}")
+```
