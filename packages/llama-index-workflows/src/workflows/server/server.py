@@ -7,7 +7,7 @@ import json
 import logging
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from importlib.metadata import version
 from pathlib import Path
 from typing import Any, AsyncGenerator, Awaitable, Callable, cast
@@ -32,6 +32,7 @@ from workflows.events import (
     StepState,
     StepStateChanged,
     StopEvent,
+    UnhandledEvent,
     WorkflowIdleEvent,
 )
 from workflows.handler import WorkflowHandler
@@ -58,8 +59,8 @@ from workflows.server.abstract_workflow_store import (
     PersistentHandler,
     Status,
 )
+from workflows.server.keyed_lock import KeyedLock
 from workflows.server.memory_workflow_store import MemoryWorkflowStore
-from workflows.types import RunResultT
 
 # Protocol models are used on the client side; server responds with plain dicts
 from workflows.utils import _nanoid as nanoid
@@ -75,17 +76,20 @@ class WorkflowServer:
         workflow_store: AbstractWorkflowStore | None = None,
         # retry/backoff seconds for persisting the handler state in the store after failures. Configurable mainly for testing.
         persistence_backoff: list[float] = [0.5, 3],
+        # Release idle workflows from memory after this timeout (None = disabled)
+        idle_release_timeout: timedelta | None = timedelta(seconds=10),
     ):
+        # Workflows that this server will run
         self._workflows: dict[str, Workflow] = {}
+        # Additional event schemas supported. Used for serdes lookups. Should be used sparingly if ever.
         self._additional_events: dict[str, list[type[Event]] | None] = {}
-        self._contexts: dict[str, Context] = {}
         self._handlers: dict[str, _WorkflowHandler] = {}
-        self._results: dict[str, RunResultT] = {}
         self._workflow_store = (
             workflow_store if workflow_store is not None else MemoryWorkflowStore()
         )
         self._assets_path = Path(__file__).parent / "static"
         self._persistence_backoff = list(persistence_backoff)
+        self._idle_release_timeout = idle_release_timeout
 
         self._middleware = middleware or [
             Middleware(
@@ -97,6 +101,9 @@ class WorkflowServer:
                 allow_credentials=True,
             )
         ]
+
+        # Lock to prevent concurrent reloads of the same handler
+        self._reload_lock = KeyedLock()
 
         self._routes = [
             Route(
@@ -192,10 +199,16 @@ class WorkflowServer:
             self._additional_events[name] = additional_events
 
     async def start(self) -> "WorkflowServer":
-        """Resumes previously running workflows, if they were not complete at last shutdown"""
+        """Resumes previously running workflows, if they were not complete at last shutdown.
+
+        Idle workflows are not resumed - they remain released and will be
+        loaded on-demand when events arrive for them.
+        """
         handlers = await self._workflow_store.query(
             HandlerQuery(
-                status_in=["running"], workflow_name_in=list(self._workflows.keys())
+                status_in=["running"],
+                workflow_name_in=list(self._workflows.keys()),
+                is_idle=False,
             )
         )
         for persistent in handlers:
@@ -252,7 +265,6 @@ class WorkflowServer:
             *[self._close_handler(handler) for handler in list(self._handlers.values())]
         )
         self._handlers.clear()
-        self._results.clear()
 
     async def serve(
         self,
@@ -361,7 +373,7 @@ class WorkflowServer:
         """
         ---
         summary: Health check
-        description: Returns the server health status.
+        description: Returns the server health status and workflow counts.
         responses:
           200:
             description: Successful health check
@@ -373,9 +385,28 @@ class WorkflowServer:
                     status:
                       type: string
                       example: healthy
-                  required: [status]
+                    loaded_workflows:
+                      type: integer
+                      description: Number of workflow handlers currently loaded in memory
+                    active_workflows:
+                      type: integer
+                      description: Number of workflow handlers that are active (not idle)
+                    idle_workflows:
+                      type: integer
+                      description: Number of workflow handlers that are idle
+                  required: [status, loaded_workflows, active_workflows, idle_workflows]
         """
-        return JSONResponse(HealthResponse(status="healthy").model_dump())
+        loaded = len(self._handlers)
+        idle = sum(1 for h in self._handlers.values() if h.idle_since is not None)
+        active = loaded - idle
+        return JSONResponse(
+            HealthResponse(
+                status="healthy",
+                loaded_workflows=loaded,
+                active_workflows=active,
+                idle_workflows=idle,
+            ).model_dump()
+        )
 
     async def _list_workflows(self, request: Request) -> JSONResponse:
         """
@@ -433,16 +464,15 @@ class WorkflowServer:
         if name not in self._workflows:
             raise HTTPException(status_code=404, detail=f"Workflow '{name}' not found")
 
-        events = self._workflows[name].events
-        additional_events = self._additional_events.get(name, [])
-        if additional_events:
-            events.extend(additional_events)
+        events = self._workflows[name].events + (
+            self._additional_events.get(name, []) or []
+        )
 
-        event_objs = []
-        for event in events:
-            event_objs.append(event.model_json_schema())
-
-        return JSONResponse(WorkflowEventsListResponse(events=event_objs).model_dump())
+        return JSONResponse(
+            WorkflowEventsListResponse(
+                events=[event.model_json_schema() for event in events]
+            ).model_dump()
+        )
 
     async def _run_workflow(self, request: Request) -> JSONResponse:
         """
@@ -929,14 +959,16 @@ class WorkflowServer:
 
         handler = self._handlers.get(handler_id)
         if handler is None:
-            persisted = await self._workflow_store.query(
-                HandlerQuery(handler_id_in=[handler_id])
-            )
-            if persisted:
-                status = persisted[0].status
-                if status in {"completed", "failed", "cancelled"}:
-                    raise HTTPException(detail="Handler is completed", status_code=204)
-            raise HTTPException(detail="Handler not found", status_code=404)
+            # Try to reload from persistence (for released idle workflows)
+            handler, persisted = await self._try_reload_handler(handler_id)
+            if handler is None:
+                if persisted:
+                    status = persisted.status
+                    if status in {"completed", "failed", "cancelled"}:
+                        raise HTTPException(
+                            detail="Handler is completed", status_code=204
+                        )
+                raise HTTPException(detail="Handler not found", status_code=404)
         if handler.queue.empty() and handler.task is not None and handler.task.done():
             # https://html.spec.whatwg.org/multipage/server-sent-events.html
             # Clients will reconnect if the connection is closed; a client can
@@ -1127,16 +1159,27 @@ class WorkflowServer:
         if wrapper is not None and is_status_completed(wrapper.status):
             raise HTTPException(detail="Workflow already completed", status_code=409)
         if wrapper is None:
-            handler_data = await self._load_handler(handler_id)
-            if is_status_completed(handler_data.status):
-                raise HTTPException(
-                    detail="Workflow already completed", status_code=409
-                )
-            else:
-                # this branch is for cases where handler status is running but somehow not in memory
-                # Ideally, this should never happen. We probably need to revisit when we add pause/expire functionality.
-                logger.warning(f"Handler {handler_id} is running but not in memory.")
-                raise HTTPException(detail="Handler expired", status_code=409)
+            # Try to reload from persistence (for released idle workflows)
+            wrapper, persisted = await self._try_reload_handler(handler_id)
+            if wrapper is None:
+                # Check if it exists but is completed
+                if persisted and is_status_completed(persisted.status):
+                    raise HTTPException(
+                        detail="Workflow already completed", status_code=409
+                    )
+                elif persisted is None:
+                    raise HTTPException(detail="Handler not found", status_code=404)
+                else:
+                    # Shouldn't really happen
+                    raise HTTPException(
+                        detail=f"Failed to resume incomplete handler with status {persisted.status}",
+                        status_code=500,
+                    )
+
+        # Immediately mark active to cancel the idle timer before it can fire.
+        # This prevents a race where the timer releases the handler before we
+        # finish processing the event.
+        wrapper.mark_active()
 
         handler = wrapper.run_handler
 
@@ -1329,6 +1372,7 @@ class WorkflowServer:
         handler_id: str,
         start_event: StartEvent | None = None,
         context: Context | None = None,
+        idle_since: datetime | None = None,
     ) -> _WorkflowHandler:
         """Start a workflow and return a wrapper for the handler."""
         with instrument_tags({"handler_id": handler_id}):
@@ -1337,12 +1381,16 @@ class WorkflowServer:
                 start_event=start_event,
             )
             wrapper = await self._run_workflow_handler(
-                handler_id, workflow.name, handler
+                handler_id, workflow.name, handler, idle_since=idle_since
             )
             return wrapper
 
     async def _run_workflow_handler(
-        self, handler_id: str, workflow_name: str, handler: WorkflowHandler
+        self,
+        handler_id: str,
+        workflow_name: str,
+        handler: WorkflowHandler,
+        idle_since: datetime | None = None,
     ) -> _WorkflowHandler:
         """
         Creates a wrapper for the handler and starts streaming events.
@@ -1362,7 +1410,10 @@ class WorkflowServer:
             completed_at=None,
             _workflow_store=self._workflow_store,
             _persistence_backoff=self._persistence_backoff,
+            _idle_release_timeout=self._idle_release_timeout,
+            _on_idle_release=self._release_handler,
         )
+        wrapper.idle_since = idle_since
         # Initial checkpoint before registration; fail fast if persistence is unavailable
         await wrapper.checkpoint()
         # Now register and start streaming
@@ -1370,7 +1421,6 @@ class WorkflowServer:
 
         async def on_finish() -> None:
             self._handlers.pop(handler_id, None)
-            self._results.pop(handler_id, None)
 
         wrapper.start_streaming(on_finish=on_finish)
 
@@ -1379,21 +1429,107 @@ class WorkflowServer:
     async def _close_handler(self, handler: _WorkflowHandler) -> None:
         """Close and cleanup a handler."""
         # Cancel the run_handler if not done
-        if not handler.run_handler.done():
-            try:
-                handler.run_handler.cancel()
-            except Exception:
-                pass
-            try:
-                await handler.run_handler.cancel_run()
-            except Exception:
-                pass
-
-        if handler.task is not None:
-            await handler.task
+        await handler.cancel_handlers_and_tasks()
 
         self._handlers.pop(handler.handler_id, None)
-        self._results.pop(handler.handler_id, None)
+
+    async def _release_handler(self, wrapper: _WorkflowHandler) -> None:
+        """Release an idle handler from memory, keeping it in persistence."""
+        handler_id = wrapper.handler_id
+
+        # Use lock to coordinate with _try_reload_handler and prevent race
+        # where release checkpoint overwrites newer state from reload
+        async with self._reload_lock(handler_id):
+            # Check if this handler was already replaced by a reload.
+            # If a different handler instance is now in _handlers, skip
+            # checkpointing to avoid overwriting newer state.
+            current = self._handlers.get(handler_id)
+            if current is not None and current is not wrapper:
+                logger.debug(
+                    f"Skipping release checkpoint for {handler_id}: "
+                    "handler was already reloaded"
+                )
+                # Mark to skip any further checkpoints (including auto-checkpoint
+                # in _stream_events when we cancel the task)
+                # Still need to cancel the old runtime
+                wrapper._cancel_idle_release_timer(skip_checkpoint=True)
+                await wrapper.cancel_handlers_and_tasks()
+                return
+
+            # Remove from memory FIRST to prevent race conditions where cancelling
+            # the handler triggers _stream_events to cancel the timer, which would
+            # interrupt this method before the pop happens.
+            self._handlers.pop(handler_id, None)
+
+            # Cancel the idle release timer to prevent re-entry
+            wrapper._cancel_idle_release_timer()
+
+            try:
+                # Final checkpoint to ensure latest state is persisted
+                await wrapper.checkpoint()
+            finally:
+                # Always stop the workflow runtime to prevent memory leaks,
+                # even if checkpoint fails
+                await wrapper.cancel_handlers_and_tasks()
+
+        logger.info(f"Released idle workflow {handler_id} from memory")
+
+    async def _try_reload_handler(
+        self, handler_id: str
+    ) -> tuple[_WorkflowHandler | None, PersistentHandler | None]:
+        """Attempt to reload a released handler from persistence.
+
+        Uses per-handler locking to prevent concurrent reloads from creating
+        duplicate workflow instances.
+
+        Returns the persistent handler data if it was fetched from the store, so callers can avoid fetching it again if needed.
+        """
+        async with self._reload_lock(handler_id):
+            # Check if handler was already reloaded by another concurrent request
+            if handler_id in self._handlers:
+                return self._handlers[handler_id], None
+
+            found = await self._workflow_store.query(
+                HandlerQuery(handler_id_in=[handler_id])
+            )
+            if not found:
+                return None, None
+
+            handler_data = found[0]
+
+            if handler_data.status != "running":
+                return None, handler_data  # Can't reload completed/failed/cancelled
+
+            workflow = self._workflows.get(handler_data.workflow_name)
+            if workflow is None:
+                logger.warning(
+                    f"Cannot reload {handler_id}: workflow {handler_data.workflow_name} not registered"
+                )
+                return None, handler_data
+
+            try:
+                context = Context.from_dict(workflow=workflow, data=handler_data.ctx)
+                wrapper = await self._start_workflow(
+                    workflow=_NamedWorkflow(
+                        name=handler_data.workflow_name, workflow=workflow
+                    ),
+                    handler_id=handler_id,
+                    context=context,
+                    idle_since=handler_data.idle_since,
+                )
+
+                # If workflow was idle when released, start the release timer
+                # (it will be cancelled if an event wakes the workflow)
+                if wrapper.idle_since is not None:
+                    wrapper._start_idle_release_timer()
+
+                logger.info(f"Reloaded workflow {handler_id} from persistence")
+                return wrapper, handler_data
+            except Exception as e:
+                logger.error(f"Failed to reload handler {handler_id}: {e}")
+                raise HTTPException(
+                    detail=f"Failed to reload handler: {e}", status_code=500
+                )
 
     def _event_registry(self, workflow_name: str) -> dict[str, type[Event]]:
         items = {e.__name__: e for e in self._workflows[workflow_name].events}
@@ -1429,6 +1565,12 @@ class _WorkflowHandler:
     _on_finish: Callable[[], Awaitable[None]] | None = None
     idle_since: datetime | None = None
 
+    # Idle release support
+    _idle_release_timeout: timedelta | None = None
+    _on_idle_release: Callable[["_WorkflowHandler"], Awaitable[None]] | None = None
+    _idle_release_timer: asyncio.Task[None] | None = None
+    _skip_checkpoint: bool = False  # Set to prevent checkpointing stale handlers
+
     def _as_persistent(self) -> PersistentHandler:
         """Persist the current handler state immediately to the workflow store."""
         self.updated_at = datetime.now(timezone.utc)
@@ -1455,6 +1597,9 @@ class _WorkflowHandler:
 
     async def checkpoint(self) -> None:
         """Persist with retry/backoff; cancel handler when retries exhausted."""
+        if self._skip_checkpoint:
+            logger.debug(f"Skipping checkpoint for handler {self.handler_id}")
+            return
         backoffs = list(self._persistence_backoff)
         try:
             persistent = self._as_persistent()
@@ -1561,6 +1706,53 @@ class _WorkflowHandler:
         except Exception:
             return None
 
+    def _start_idle_release_timer(self) -> None:
+        """Start a timer to release this handler after the idle timeout."""
+        if self._idle_release_timeout is None or self._on_idle_release is None:
+            return
+
+        # Cancel any existing timer first
+        self._cancel_idle_release_timer()
+
+        timeout_seconds = self._idle_release_timeout.total_seconds()
+
+        async def release_after_timeout() -> None:
+            try:
+                await asyncio.sleep(timeout_seconds)
+                # Only release if still idle and no active stream consumers
+                if self.idle_since is not None:
+                    if self.consumer_mutex.locked():
+                        # Mutex is locked - reschedule to try again later
+                        self._start_idle_release_timer()
+                        return
+                    if self._on_idle_release is not None:
+                        await self._on_idle_release(self)
+            except asyncio.CancelledError:
+                pass  # Timer was cancelled, nothing to do
+
+        self._idle_release_timer = asyncio.create_task(release_after_timeout())
+
+    def _cancel_idle_release_timer(self, skip_checkpoint: bool = False) -> None:
+        """Cancel any pending idle release timer."""
+        if skip_checkpoint:
+            self._skip_checkpoint = True
+        if self._idle_release_timer is not None:
+            self._idle_release_timer.cancel()
+            self._idle_release_timer = None
+
+    def mark_idle(self, idle_since: datetime | None = None) -> None:
+        self.idle_since = idle_since or datetime.now(timezone.utc)
+        self._start_idle_release_timer()
+
+    def mark_active(self) -> None:
+        """Mark this handler as active (not idle).
+
+        Call this when an event is being sent to prevent premature release.
+        """
+        if self.idle_since is not None:
+            self.idle_since = None
+            self._cancel_idle_release_timer()
+
     def start_streaming(self, on_finish: Callable[[], Awaitable[None]]) -> None:
         """Start streaming events from the handler and managing state."""
         self.task = asyncio.create_task(self._stream_events(on_finish=on_finish))
@@ -1571,14 +1763,16 @@ class _WorkflowHandler:
             await self.checkpoint()
             self._on_finish = on_finish
             async for event in self.run_handler.stream_events(expose_internal=True):
-                # Track idle state transitions
+                # Track idle state transitions and manage release timer
                 if isinstance(event, WorkflowIdleEvent):
-                    self.idle_since = datetime.now(timezone.utc)
+                    self.mark_idle()
+                elif isinstance(event, UnhandledEvent):
+                    self.mark_idle()
                 elif (
                     isinstance(event, StepStateChanged)
                     and event.step_state == StepState.RUNNING
                 ):
-                    self.idle_since = None  # Resumed from idle
+                    self.mark_active()
 
                 if (  # Watch for a specific internal event that signals the step is complete
                     isinstance(event, StepStateChanged)
@@ -1595,6 +1789,10 @@ class _WorkflowHandler:
                     await self.checkpoint()
 
                 self.queue.put_nowait(event)
+
+            # Workflow is completing - cancel any pending release timer
+            self._cancel_idle_release_timer()
+
             # done when stream events are complete
             try:
                 await self.run_handler
@@ -1658,6 +1856,24 @@ class _WorkflowHandler:
                 # clean up the resources if the stream has been consumed
                 await self._on_finish()
             self.consumer_mutex.release()
+
+    async def cancel_handlers_and_tasks(self) -> None:
+        """Cancel the handler and release it from the store."""
+        if not self.run_handler.done():
+            try:
+                self.run_handler.cancel()
+            except Exception:
+                pass
+            try:
+                await self.run_handler.cancel_run()
+            except Exception:
+                pass
+        if self.task and not self.task.done():
+            self.task.cancel()
+            try:
+                await self.task
+            except asyncio.CancelledError:
+                pass
 
 
 class NoLockAvailable(Exception):

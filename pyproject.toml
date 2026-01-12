@@ -6,7 +6,7 @@ build-backend = "uv_build"
 dev = [
   "pytest-xdist>=3.8.0",
   "ruff>=0.14.5",
-  "ty>=0.0.1a26"
+  "ty>=0.0.1,<0.0.9"
 ]
 
 [project]
@@ -72,6 +72,9 @@ select = [
 ]
 "*.ipynb" = ["T201", "ANN001", "ANN002", "ANN003"]
 "__main__.py" = ["T201"]
+
+[tool.ty.src]
+exclude = ["**/uv.lock", "**/.gitignore"]
 
 [tool.uv.sources]
 llama-index-workflows = {workspace = true}

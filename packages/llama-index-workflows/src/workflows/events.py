@@ -366,6 +366,22 @@ class WorkflowIdleEvent(InternalDispatchEvent):
     pass
 
 
+class UnhandledEvent(InternalDispatchEvent):
+    """Emitted when an incoming event is not handled by any step or waiter.
+
+    This helps callers understand when an external event is ignored and whether
+    the workflow is idle after processing the event.
+    """
+
+    event_type: str = Field(description="Class name of the unhandled event.")
+    qualified_name: str = Field(description="Fully qualified name of the event type.")
+    step_name: str | None = Field(
+        default=None,
+        description="Target step name if the event was addressed to a step.",
+    )
+    idle: bool = Field(description="Whether the workflow is idle after processing.")
+
+
 class StepState(Enum):
     # is enqueued, but no capacity yet available to run
     PREPARING = "preparing"

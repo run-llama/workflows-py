@@ -9,7 +9,13 @@ from typing import AsyncGenerator, Callable
 
 from workflows.decorators import P, R
 from workflows.events import Event, StopEvent
-from workflows.runtime.types.plugin import Plugin, SnapshottableRuntime, WorkflowRuntime
+from workflows.runtime.types.plugin import (
+    ControlLoopFunction,
+    Plugin,
+    RegisteredWorkflow,
+    SnapshottableRuntime,
+    WorkflowRuntime,
+)
 from workflows.runtime.types.step_function import StepWorkerFunction
 from workflows.runtime.types.ticks import WorkflowTick
 from workflows.workflow import Workflow
@@ -19,10 +25,10 @@ class BasicRuntime:
     def register(
         self,
         workflow: Workflow,
-        workflow_function: Callable[P, R],
-        steps: dict[str, StepWorkerFunction[R]],
-    ) -> None:
-        return
+        workflow_function: ControlLoopFunction,
+        steps: dict[str, StepWorkerFunction],
+    ) -> None | RegisteredWorkflow:
+        return None
 
     def new_runtime(self, run_id: str) -> WorkflowRuntime:
         snapshottable: SnapshottableRuntime = AsyncioWorkflowRuntime(run_id)

@@ -34,6 +34,13 @@ class HandlersListResponse(BaseModel):
 
 class HealthResponse(BaseModel):
     status: Literal["healthy"]
+    loaded_workflows: int = Field(
+        description="Number of workflow handlers currently loaded in memory"
+    )
+    active_workflows: int = Field(
+        description="Number of workflow handlers that are active (not idle)"
+    )
+    idle_workflows: int = Field(description="Number of workflow handlers that are idle")
 
 
 class WorkflowsListResponse(BaseModel):

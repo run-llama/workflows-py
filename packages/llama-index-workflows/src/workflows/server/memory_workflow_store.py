@@ -27,6 +27,11 @@ def _matches_query(handler: PersistentHandler, query: HandlerQuery) -> bool:
         if handler.status not in query.status_in:
             return False
 
+    if query.is_idle is not None:
+        handler_is_idle = handler.idle_since is not None
+        if query.is_idle != handler_is_idle:
+            return False
+
     return True
 
 

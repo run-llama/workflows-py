@@ -14,7 +14,6 @@ def test_init() -> None:
     server = WorkflowServer()
     assert len(server._middleware) == 1
     assert server._workflows == {}
-    assert server._contexts == {}
     assert server._handlers == {}
 
 

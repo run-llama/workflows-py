@@ -104,5 +104,5 @@ async def test_plugin_with_time_machine() -> AsyncGenerator[
     tuple[MockRuntimePlugin, time_machine.Coordinates], None
 ]:
     """Plugin with time-machine at epoch 1000.0, tick=True."""
-    with time_machine.travel(1000.0, tick=True) as traveller:
+    with time_machine.travel("2026-01-07T12:27:00.000-08:00", tick=True) as traveller:
         yield MockRuntimePlugin(run_id="test", traveller=traveller), traveller

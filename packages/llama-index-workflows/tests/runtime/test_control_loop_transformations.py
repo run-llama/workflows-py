@@ -10,7 +10,7 @@ testing them in isolation without running the full async control loop.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from workflows.decorators import StepConfig
@@ -22,6 +22,7 @@ from workflows.events import (
     StepState,
     StepStateChanged,
     StopEvent,
+    UnhandledEvent,
     WorkflowIdleEvent,
 )
 from workflows.retry_policy import ConstantDelayRetryPolicy
@@ -56,6 +57,7 @@ from workflows.runtime.types.results import (
     AddWaiter,
     DeleteCollectedEvent,
     DeleteWaiter,
+    StepFunctionResult,
     StepWorkerFailed,
     StepWorkerResult,
     StepWorkerState,
@@ -129,6 +131,75 @@ def add_worker(state: BrokerState, event: Event, worker_id: int = 0) -> None:
             first_attempt_at=100.0,
         )
     )
+
+
+def test_add_event_unhandled_emits_internal_event(base_state: BrokerState) -> None:
+    """Unhandled events should emit UnhandledEvent with idle status."""
+    tick = TickAddEvent(event=OtherEvent(data="unused"), step_name=None)
+    state, commands = _process_add_event_tick(tick, base_state, now_seconds=0.0)
+
+    publish_events = [c.event for c in commands if isinstance(c, CommandPublishEvent)]
+    unhandled = [e for e in publish_events if isinstance(e, UnhandledEvent)]
+    assert len(unhandled) == 1
+    assert unhandled[0].event_type == "OtherEvent"
+    assert unhandled[0].qualified_name.endswith(".OtherEvent")
+    assert unhandled[0].step_name is None
+    assert unhandled[0].idle == _check_idle_state(state)
+
+
+class CustomInputRequired(InputRequiredEvent):
+    """Custom InputRequiredEvent subclass for testing."""
+
+    prompt: str
+
+
+def test_add_event_input_required_does_not_emit_unhandled(
+    base_state: BrokerState,
+) -> None:
+    """InputRequiredEvent subclasses should NOT emit UnhandledEvent.
+
+    InputRequiredEvent events are designed to be handled externally by human
+    consumers, not by workflow steps. They should not trigger UnhandledEvent.
+    """
+    tick = TickAddEvent(event=CustomInputRequired(prompt="test"), step_name=None)
+    _, commands = _process_add_event_tick(tick, base_state, now_seconds=0.0)
+
+    publish_events = [c.event for c in commands if isinstance(c, CommandPublishEvent)]
+    unhandled = [e for e in publish_events if isinstance(e, UnhandledEvent)]
+    assert len(unhandled) == 0
+
+
+def test_add_event_base_input_required_does_not_emit_unhandled(
+    base_state: BrokerState,
+) -> None:
+    """Base InputRequiredEvent should also NOT emit UnhandledEvent."""
+    tick = TickAddEvent(event=InputRequiredEvent(), step_name=None)
+    _, commands = _process_add_event_tick(tick, base_state, now_seconds=0.0)
+
+    publish_events = [c.event for c in commands if isinstance(c, CommandPublishEvent)]
+    unhandled = [e for e in publish_events if isinstance(e, UnhandledEvent)]
+    assert len(unhandled) == 0
+
+
+def test_add_event_matches_waiter_does_not_emit_unhandled(
+    base_state: BrokerState,
+) -> None:
+    """Events that satisfy a waiter should not emit UnhandledEvent."""
+    base_state.workers["test_step"].collected_waiters.append(
+        StepWorkerWaiter(
+            waiter_id="waiter-1",
+            event=StartEvent(),
+            waiting_for_event=OtherEvent,
+            requirements={},
+            has_requirements=False,
+            resolved_event=None,
+        )
+    )
+    tick = TickAddEvent(event=OtherEvent(data="hit"), step_name=None)
+    _, commands = _process_add_event_tick(tick, base_state, now_seconds=0.0)
+
+    publish_events = [c.event for c in commands if isinstance(c, CommandPublishEvent)]
+    assert not any(isinstance(e, UnhandledEvent) for e in publish_events)
 
 
 @pytest.mark.parametrize(
@@ -253,19 +324,20 @@ def test_waiters(base_state: BrokerState) -> None:
     event = MyTestEvent(value=42)
     add_worker(base_state, event)
 
+    result = AddWaiter(
+        waiter_id="w1",
+        waiter_event=InputRequiredEvent(),
+        requirements={},
+        timeout=None,
+        event_type=OtherEvent,
+    )
     # Add waiter
     tick: TickStepResult[Any] = TickStepResult(
         step_name="test_step",
         worker_id=0,
         event=event,
         result=[
-            AddWaiter(
-                waiter_id="w1",
-                waiter_event=InputRequiredEvent(),
-                requirements={},
-                timeout=None,
-                event_type=OtherEvent,
-            )
+            cast(StepFunctionResult[Any], result),
         ],
     )
     new_state, _ = _process_step_result_tick(tick, base_state, now_seconds=110.0)
@@ -679,19 +751,19 @@ def test_idle_event_emitted_on_transition_to_idle(base_state: BrokerState) -> No
     base_state.workers["test_step"].collected_waiters.append(waiter)
 
     # Process result that completes the worker but leaves waiter active
-    tick: TickStepResult[Any] = TickStepResult(
+    result = AddWaiter(
+        waiter_id="w1",
+        waiter_event=None,
+        requirements={},
+        timeout=None,
+        event_type=OtherEvent,
+    )
+
+    tick: TickStepResult[Any] = TickStepResult[Any](
         step_name="test_step",
         worker_id=0,
         event=event,
-        result=[
-            AddWaiter(
-                waiter_id="w1",
-                waiter_event=None,
-                requirements={},
-                timeout=None,
-                event_type=OtherEvent,
-            )
-        ],
+        result=[cast(StepFunctionResult[Any], result)],
     )
 
     new_state, commands = _process_step_result_tick(tick, base_state, now_seconds=110.0)

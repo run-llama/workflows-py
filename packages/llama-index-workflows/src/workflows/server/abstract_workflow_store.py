@@ -25,6 +25,8 @@ class HandlerQuery:
     workflow_name_in: List[str] | None = None
     # Matches if the status flag matches
     status_in: List[Status] | None = None
+    # True = only idle handlers, False = only non-idle handlers, None = all
+    is_idle: bool | None = None
 
 
 class PersistentHandler(BaseModel):

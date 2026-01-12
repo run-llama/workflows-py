@@ -5,13 +5,9 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import socket
-from contextlib import closing
 from typing import AsyncGenerator
 
-import httpx
 import pytest
-import uvicorn
 from workflows import Workflow
 from workflows.client.client import WorkflowClient
 from workflows.events import StopEvent
@@ -21,14 +17,8 @@ from .conftest import (  # type: ignore[import]
     ExternalEvent,
     RequestedExternalEvent,
 )
+from .util import live_server as live_server_ctx  # type: ignore[import]
 from .util import wait_for_passing  # type: ignore[import]
-
-
-def _get_free_port() -> int:
-    with closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as s:
-        s.bind(("127.0.0.1", 0))
-        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        return int(s.getsockname()[1])
 
 
 @pytest.fixture
@@ -38,50 +28,16 @@ async def live_server(
     interactive_workflow: Workflow,
     error_workflow: Workflow,
 ) -> AsyncGenerator[tuple[str, WorkflowServer], None]:
-    port = _get_free_port()
-    server = WorkflowServer()
-    server.add_workflow("test", simple_test_workflow)
-    server.add_workflow("streaming", streaming_workflow)
-    server.add_workflow("interactive", interactive_workflow)
-    server.add_workflow("error", error_workflow)
+    def make_server() -> WorkflowServer:
+        server = WorkflowServer()
+        server.add_workflow("test", simple_test_workflow)
+        server.add_workflow("streaming", streaming_workflow)
+        server.add_workflow("interactive", interactive_workflow)
+        server.add_workflow("error", error_workflow)
+        return server
 
-    config = uvicorn.Config(
-        server.app,
-        host="127.0.0.1",
-        port=port,
-        log_level="error",
-        loop="asyncio",
-    )
-    uv_server = uvicorn.Server(config)
-
-    # Start server in background task (lifespan will start workflows)
-    task = asyncio.create_task(uv_server.serve())
-
-    # Wait until server responds on /health or timeout
-    base_url = f"http://127.0.0.1:{port}"
-    async with httpx.AsyncClient(base_url=base_url, timeout=1.0) as client:
-        for _ in range(50):  # ~0.5s max wait
-            try:
-                resp = await client.get("/health")
-                if resp.status_code == 200:
-                    break
-            except Exception:
-                pass
-            await asyncio.sleep(0.01)
-        else:
-            uv_server.should_exit = True
-            await task
-            raise RuntimeError("Live server did not start in time")
-
-    try:
+    async with live_server_ctx(make_server) as (base_url, server):
         yield base_url, server
-    finally:
-        uv_server.should_exit = True
-        try:
-            await task
-        finally:
-            # Ensure graceful shutdown of workflow server
-            await server.stop()
 
 
 @pytest.mark.asyncio
