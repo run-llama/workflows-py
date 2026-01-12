@@ -12,6 +12,7 @@ from typing import (
     Awaitable,
     Callable,
     Generic,
+    Optional,
     Type,
     TypeVar,
     cast,
@@ -116,13 +117,13 @@ class _ResourceConfig(Generic[B]):
             return self.config_file + "." + self.path_selector
         return self.config_file
 
-    def _get_data(self, data: dict[str, Any]) -> dict[str, Any] | None:
+    def _get_data(self, data: dict[str, Any]) -> Optional[dict[str, Any]]:
         if self.path_selector is not None:
             keys = self.path_selector.split(".")
-            val: dict[str, Any] | None = data
+            val: Optional[dict[str, Any]] = data
             for key in keys:
                 if isinstance(val, dict):
-                    val = cast(dict[str, Any] | None, val.get(key))
+                    val = cast(Optional[dict[str, Any]], val.get(key))
                     if val is None:
                         return None
                 else:
