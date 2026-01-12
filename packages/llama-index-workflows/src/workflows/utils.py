@@ -106,9 +106,6 @@ def inspect_signature(fn: Callable) -> StepSignatureSpec:
             type_annotation = args[0] if args else None
             resource = args[1] if len(args) > 1 else None
             if resource is not None:
-                # assumes type annotation is not none
-                if resource.type == "configured":
-                    resource.cls_factory = type_annotation
                 resources.append(
                     ResourceDefinition(
                         name=name, resource=resource, type_annotation=type_annotation

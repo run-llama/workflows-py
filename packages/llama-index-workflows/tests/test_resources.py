@@ -10,7 +10,13 @@ import pytest
 from pydantic import BaseModel, Field
 from workflows.decorators import step
 from workflows.events import Event, StartEvent, StopEvent
-from workflows.resource import Resource, ResourceManager, _ConfiguredResource, _Resource
+from workflows.resource import (
+    Resource,
+    ResourceConfig,
+    ResourceManager,
+    _Resource,
+    _ResourceConfig,
+)
 from workflows.workflow import Workflow
 
 # Global counters used in resource workflow tests
@@ -43,6 +49,37 @@ class MessageStopEvent(StopEvent):
     llm_response: Optional[str] = Field(default=None)
 
 
+class FileData(BaseModel):
+    file: str
+    permission_mode: str
+
+
+class FileOperator:
+    def __init__(self, data: FileData) -> None:
+        self.file = data.file
+        self.permission_mode = data.permission_mode
+
+    def operate(self) -> str:
+        if self.permission_mode == "r":
+            with open(self.file, self.permission_mode) as f:
+                return f.read()
+        elif self.permission_mode == "w":
+            with open(self.file, self.permission_mode) as f:
+                f.write("hello world!")
+                return "hello world!"
+        else:
+            raise ValueError(f"Unsupported operation: {self.permission_mode}")
+
+
+class ChatMessages(BaseModel):
+    messages: list[str]
+
+
+class Fs(BaseModel):
+    files: list[str]
+    dirs: list[str]
+
+
 @pytest.mark.asyncio
 async def test_function_resource_init() -> None:
     def get_string() -> str:
@@ -50,7 +87,6 @@ async def test_function_resource_init() -> None:
 
     retval = Resource(get_string)
     assert isinstance(retval, _Resource)
-    assert retval.type == "function"
     assert "get_string" in retval.name
     assert retval.cache
     assert not retval._is_async
@@ -59,8 +95,7 @@ async def test_function_resource_init() -> None:
     assert result == "string"
 
 
-@pytest.mark.asyncio
-async def test_pydantic_resource_init(
+def test_resource_config_init(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -68,56 +103,63 @@ async def test_pydantic_resource_init(
 
     data = {"messages": ["hello"]}
 
-    class Memory(BaseModel):
-        messages: list[str]
-
     with open("config.json", "w") as f:
         json.dump(data, f)
 
-    retval = Resource(config_file="config.json")
-    assert isinstance(retval, _ConfiguredResource)
-    assert retval.type == "configured"
+    retval = ResourceConfig(config_file="config.json")
+    assert isinstance(retval, _ResourceConfig)
+    assert retval.path_selector is None
     assert retval.config_file == "config.json"
     assert retval.cls_factory is None
     assert retval.cache
     assert retval.name == "config.json"
 
+    # modify path selector, modify name
+    retval.path_selector = "hello.world"
+    assert retval.name == "config.json.hello.world"
+
+    retval.path_selector = None
+
     with pytest.raises(
         ValueError,
         match="Class factory should be set to a BaseModel subclass before calling",
     ):
-        await retval.call()
+        retval.call()
 
     # define a cls_factory for the resource to be called
-    retval.cls_factory = Memory
+    retval.cls_factory = ChatMessages
 
-    result = await retval.call()
-    assert isinstance(result, Memory)
+    result = retval.call()
+    assert isinstance(result, ChatMessages)
     assert result.messages == ["hello"]
 
 
-def test_resource_init_error(
+def test_resource_config_path_selector(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.chdir(tmp_path)
-    with pytest.raises(
-        ValueError,
-        match="At least one between `factory` and `config_file` has to be provided",
-    ):
-        Resource()
+    data = {
+        "memory": {"messages": ["hello"]},
+        "core": {"fs": {"files": ["hello.py"], "dirs": ["hello/"]}},
+    }
 
-    with open("config.md", "w") as f:
-        f.write("# Hello")
+    with open("config.json", "w") as f:
+        json.dump(data, f)
 
-    with pytest.raises(
-        ValueError,
-        match="Only JSON files can be used to load Pydantic-based resources.",
-    ):
-        Resource(config_file="config.md")
-
-    with pytest.raises(FileNotFoundError, match="No such file: config.json"):
-        Resource(config_file="config.json")
+    resource = ResourceConfig(config_file="config.json", path_selector="memory")
+    assert resource.name == "config.json.memory"
+    resource.cls_factory = ChatMessages
+    value = resource.call()
+    assert isinstance(value, ChatMessages)
+    assert value.messages == ["hello"]
+    resource.path_selector = "core.fs"
+    assert resource.name == "config.json.core.fs"
+    resource.cls_factory = Fs
+    value = resource.call()
+    assert isinstance(value, Fs)
+    assert value.files == ["hello.py"]
+    assert value.dirs == ["hello/"]
 
 
 @pytest.mark.asyncio
@@ -173,15 +215,11 @@ async def test_resource_async() -> None:
 
 
 @pytest.mark.asyncio
-async def test_resource_pydantic(
+async def test_resource_config(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.chdir(tmp_path)
-
-    class FileData(BaseModel):
-        file: str
-        permission_mode: str
 
     data = {"file": "hello.py", "permission_mode": "r"}
 
@@ -190,6 +228,11 @@ async def test_resource_pydantic(
 
     with open("hello.py", "w") as f:
         f.write("print('hello')")
+
+    def get_file_operator(
+        config: Annotated[FileData, ResourceConfig(config_file="config.json")],
+    ) -> FileOperator:
+        return FileOperator(data=config)
 
     class TestWorkflow(Workflow):
         @step
@@ -201,60 +244,124 @@ async def test_resource_pydantic(
         def f1(
             self,
             ev: SecondEvent,
-            file: Annotated[FileData, Resource(config_file="config.json")],
+            file_operator: Annotated[FileOperator, Resource(get_file_operator)],
         ) -> StopEvent:
-            with open(file.file, file.permission_mode) as f:
-                assert f.readable()
-                content = f.read()
-            assert content == "print('hello')"
-            return StopEvent()
+            assert file_operator.file == "hello.py"
+            assert file_operator.permission_mode == "r"
+            assert file_operator.operate() == "print('hello')"
+            return StopEvent(result=None)
 
     wf = TestWorkflow(disable_validation=True)
     await wf.run()
 
 
 @pytest.mark.asyncio
-async def test_resource_manager_pydantic_resources(
+async def test_resource_manager_resource_configs_caching(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.chdir(tmp_path)
-
-    class FileData(BaseModel):
-        file: str
-        permission_mode: str
 
     data = {"file": "hello.py", "permission_mode": "r"}
 
     with open("config.json", "w") as f:
         json.dump(data, f)
 
+    def get_file_operator(
+        config: Annotated[FileData, ResourceConfig(config_file="config.json")],
+    ) -> FileOperator:
+        return FileOperator(data=config)
+
     manager = ResourceManager()
 
-    resource = Resource(config_file="config.json")
-    assert isinstance(resource, _ConfiguredResource)
+    resource = Resource(get_file_operator)
 
-    with pytest.raises(
-        ValueError,
-        match="Class factory should be set to a BaseModel subclass before calling",
-    ):
-        await manager.get(resource)
+    val = await manager.get(resource)
+    assert isinstance(val, FileOperator)
+    assert val.file == data["file"]
+    assert val.permission_mode == data["permission_mode"]
 
-    resource.cls_factory = FileData
-    result = await manager.get(resource)
-    assert isinstance(result, FileData)
-    assert result.file == "hello.py"
-    assert result.permission_mode == "r"
+    cached_resource_config = manager.get_resource_config(
+        resource_name=resource.name,
+        resource_config=ResourceConfig(config_file="config.json"),
+    )
+    assert cached_resource_config is not None
+    assert isinstance(cached_resource_config, FileData)
+    assert cached_resource_config.file == data["file"]
+    assert cached_resource_config.permission_mode == data["permission_mode"]
 
-    # this resource has been cached now, so we can create a second one
-    # with the same config_file and retrieve a FileData result
-    # even without passing a cls_factory, under the assumption:
-    # same config_file -> same resource that needs to be accessed
-    resource_1 = Resource(config_file="config.json")
-    result_1 = await manager.get(resource_1)
-    assert isinstance(result_1, FileData)
-    assert result_1.file == "hello.py"
-    assert result_1.permission_mode == "r"
+    all_cached_configs = manager.get_all_resource_configs(resource.name)
+    assert isinstance(all_cached_configs, dict)
+    assert len(all_cached_configs) == 1
+    assert "config.json" in all_cached_configs
+    assert isinstance(all_cached_configs["config.json"], FileData)
+
+
+@pytest.mark.asyncio
+async def test_resource_manager_resource_configs_not_caching(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    data = {"file": "hello.py", "permission_mode": "r"}
+
+    with open("config.json", "w") as f:
+        json.dump(data, f)
+
+    def get_file_operator(
+        config: Annotated[
+            FileData, ResourceConfig(config_file="config.json", cache=False)
+        ],
+    ) -> FileOperator:
+        return FileOperator(data=config)
+
+    manager = ResourceManager()
+
+    resource = Resource(get_file_operator)
+    await manager.get(resource)
+    cached_resource_config = manager.get_resource_config(
+        resource_name=resource.name,
+        resource_config=ResourceConfig(config_file="config.json"),
+    )
+    assert cached_resource_config is None  # check that it was not cached
+
+
+@pytest.mark.asyncio
+async def test_resource_manager_resource_configs_mixed_caching(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    data = {"file": "hello.py", "permission_mode": "r"}
+    with open("config.json", "w") as f:
+        json.dump(data, f)
+
+    # cache only the resource config, do not cache the resource itself
+    def get_file_operator(
+        config: Annotated[FileData, ResourceConfig(config_file="config.json")],
+    ) -> FileOperator:
+        return FileOperator(data=config)
+
+    manager = ResourceManager()
+    resource = Resource(get_file_operator, cache=False)
+
+    await manager.get(resource)
+    cached_resource_config = manager.get_resource_config(
+        resource_name=resource.name,
+        resource_config=ResourceConfig(config_file="config.json"),
+    )
+    assert cached_resource_config is not None
+    assert isinstance(cached_resource_config, FileData)
+    assert cached_resource_config.file == data["file"]
+    assert cached_resource_config.permission_mode == data["permission_mode"]
+
+    all_cached_configs = manager.get_all_resource_configs(resource.name)
+    assert isinstance(all_cached_configs, dict)
+    assert len(all_cached_configs) == 1
+    assert "config.json" in all_cached_configs
+    assert isinstance(all_cached_configs["config.json"], FileData)
 
 
 @pytest.mark.asyncio
@@ -305,15 +412,11 @@ async def test_caching_behavior() -> None:
     )  # the cache is workflow-specific, so since wf_2 is different from wf_1, we expect no interference between the two
 
 
-async def test_caching_behavior_pydantic_resources(
+async def test_caching_behavior_resource_configs(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.chdir(tmp_path)
-
-    class FileData(BaseModel):
-        file: str
-        permission_mode: str
 
     data = {"file": "hello.py", "permission_mode": "r"}
     data_1 = {"file": "bye.py", "permission_mode": "w"}
@@ -321,19 +424,21 @@ async def test_caching_behavior_pydantic_resources(
     with open("config.json", "w") as f:
         json.dump(data, f)
 
-    with open("config_1.json", "w") as f:
-        json.dump(data_1, f)
+    def get_file_operator(
+        config: Annotated[FileData, ResourceConfig(config_file="config.json")],
+    ) -> FileOperator:
+        return FileOperator(data=config)
 
     class TestWorkflow(Workflow):
         @step
         def start_step(
             self,
             ev: StartEvent,
-            file: Annotated[FileData, Resource(config_file="config.json")],
+            file: Annotated[FileOperator, Resource(get_file_operator)],
         ) -> SecondEvent:
             assert file.file == "hello.py"
             assert file.permission_mode == "r"
-            # change config.json, file has been cached, so will be unaffected
+            # change config.json: the underlying resource has been cached, so will be unaffected
             with open("config.json", "w") as f:
                 json.dump(data_1, f)
             return SecondEvent(msg="Hello")
@@ -342,19 +447,13 @@ async def test_caching_behavior_pydantic_resources(
         def f1(
             self,
             ev: SecondEvent,
-            file: Annotated[FileData, Resource(config_file="config_1.json")],
-            other_file: Annotated[FileData, Resource(config_file="config.json")],
+            file: Annotated[FileOperator, Resource(get_file_operator)],
         ) -> StopEvent:
-            # even if the resource requested is of the same _type_
-            # the config is different
-            # so caching here has no effect
-            assert file.file == "bye.py"
-            assert file.permission_mode == "w"
             # this resource has been cached,
             # so even if config.json has changed,
             # the resource remains the same
-            assert other_file.file == "hello.py"
-            assert other_file.permission_mode == "r"
+            assert file.file == "hello.py"
+            assert file.permission_mode == "r"
             return StopEvent()
 
     wf = TestWorkflow(disable_validation=True)
@@ -406,15 +505,11 @@ async def test_non_caching_behavior() -> None:
     assert cc2 == 1  # type: ignore
 
 
-async def test_non_caching_behavior_pydantic_resources(
+async def test_non_caching_behavior_resource_configs(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.chdir(tmp_path)
-
-    class FileData(BaseModel):
-        file: str
-        permission_mode: str
 
     data = {"file": "hello.py", "permission_mode": "r"}
     data_1 = {"file": "bye.py", "permission_mode": "w"}
@@ -422,16 +517,23 @@ async def test_non_caching_behavior_pydantic_resources(
     with open("config.json", "w") as f:
         json.dump(data, f)
 
+    def get_file_operator(
+        config: Annotated[
+            FileData, ResourceConfig(config_file="config.json", cache=False)
+        ],
+    ) -> FileOperator:
+        return FileOperator(data=config)
+
     class TestWorkflow(Workflow):
         @step
         def start_step(
             self,
             ev: StartEvent,
-            file: Annotated[FileData, Resource(config_file="config.json", cache=False)],
+            file: Annotated[FileOperator, Resource(get_file_operator, cache=False)],
         ) -> SecondEvent:
             assert file.file == "hello.py"
             assert file.permission_mode == "r"
-            # change config.json: file has not been cached, so it will be affected in the next step
+            # change config.json: the underlying resource has not been cached, so it will be affected by the change
             with open("config.json", "w") as f:
                 json.dump(data_1, f)
             return SecondEvent(msg="Hello")
@@ -440,11 +542,11 @@ async def test_non_caching_behavior_pydantic_resources(
         def f1(
             self,
             ev: SecondEvent,
-            file: Annotated[FileData, Resource(config_file="config.json", cache=False)],
+            file: Annotated[FileOperator, Resource(get_file_operator, cache=False)],
         ) -> StopEvent:
-            # This resource was not cached at first
-            # so it has been affected by the change in
-            # the first step
+            # this resource has not been cached,
+            # so, since config.json has changed,
+            # the resource changed too
             assert file.file == "bye.py"
             assert file.permission_mode == "w"
             return StopEvent()
