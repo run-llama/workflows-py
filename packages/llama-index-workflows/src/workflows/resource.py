@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import functools
 import inspect
 import json
 from pathlib import Path
@@ -70,6 +71,27 @@ class _Resource(Generic[T]):
         return result
 
 
+@functools.lru_cache(maxsize=1)
+def _get_resource_config_data(
+    config_file: str,
+    path_selector: str | None,
+) -> dict[str, Any] | None:
+    with open(config_file, "r") as f:
+        data = json.load(f)
+    if path_selector is not None:
+        keys = path_selector.split(".")
+        val: Optional[dict[str, Any]] = data  # noqa: UP045
+        for key in keys:
+            if isinstance(val, dict):
+                val = cast(Optional[dict[str, Any]], val.get(key))  # noqa: UP045
+                if val is None:
+                    return None
+            else:
+                return None
+        return val
+    return data
+
+
 class _ResourceConfig(Generic[B]):
     """
     Internal wrapper for a pydantic-based resource whose configuration can be read from a JSON file.
@@ -97,25 +119,13 @@ class _ResourceConfig(Generic[B]):
             return self.config_file + "." + self.path_selector
         return self.config_file
 
-    def _get_data(self, data: dict[str, Any]) -> Optional[dict[str, Any]]:  # noqa: UP045
-        if self.path_selector is not None:
-            keys = self.path_selector.split(".")
-            val: Optional[dict[str, Any]] = data  # noqa: UP045
-            for key in keys:
-                if isinstance(val, dict):
-                    val = cast(Optional[dict[str, Any]], val.get(key))  # noqa: UP045
-                    if val is None:
-                        return None
-                else:
-                    return None
-            return val
-        return data
-
     # make async for compatibility with _Resource
     def call(self) -> B:
-        with open(self.config_file, "r") as f:
-            data = json.load(f)
-        if (sel_data := self._get_data(data)) is not None:
+        if (
+            sel_data := _get_resource_config_data(
+                config_file=self.config_file, path_selector=self.path_selector
+            )
+        ) is not None:
             # let validation error bubble up
             if self.cls_factory is not None:
                 return self.cls_factory.model_validate(sel_data)
