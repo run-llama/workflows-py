@@ -373,7 +373,7 @@ class WorkflowServer:
         """
         ---
         summary: Health check
-        description: Returns the server health status.
+        description: Returns the server health status and workflow counts.
         responses:
           200:
             description: Successful health check
@@ -385,9 +385,28 @@ class WorkflowServer:
                     status:
                       type: string
                       example: healthy
-                  required: [status]
+                    loaded_workflows:
+                      type: integer
+                      description: Number of workflow handlers currently loaded in memory
+                    active_workflows:
+                      type: integer
+                      description: Number of workflow handlers that are active (not idle)
+                    idle_workflows:
+                      type: integer
+                      description: Number of workflow handlers that are idle
+                  required: [status, loaded_workflows, active_workflows, idle_workflows]
         """
-        return JSONResponse(HealthResponse(status="healthy").model_dump())
+        loaded = len(self._handlers)
+        idle = sum(1 for h in self._handlers.values() if h.idle_since is not None)
+        active = loaded - idle
+        return JSONResponse(
+            HealthResponse(
+                status="healthy",
+                loaded_workflows=loaded,
+                active_workflows=active,
+                idle_workflows=idle,
+            ).model_dump()
+        )
 
     async def _list_workflows(self, request: Request) -> JSONResponse:
         """
@@ -1157,6 +1176,11 @@ class WorkflowServer:
                         status_code=500,
                     )
 
+        # Immediately mark active to cancel the idle timer before it can fire.
+        # This prevents a race where the timer releases the handler before we
+        # finish processing the event.
+        wrapper.mark_active()
+
         handler = wrapper.run_handler
 
         # Get the context
@@ -1189,17 +1213,10 @@ class WorkflowServer:
             # Send the event to the context
             try:
                 ctx.send_event(event, step=step)
-                # if accepted, prevent releasing before the event is acknowledged by the control loop.
-                # If this is an unhandled event type, wrapper will detect via internal event, and the wrapper will be remarked as idle
-                wrapper.mark_active()
             except Exception as e:
                 raise HTTPException(
                     detail=f"Failed to send event: {e}", status_code=400
                 )
-
-            # Mark handler as active AFTER send_event succeeds to ensure
-            # idle state isn't cleared if event delivery fails
-            wrapper.mark_active()
 
             return JSONResponse(SendEventResponse(status="sent").model_dump())
 

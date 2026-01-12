@@ -147,6 +147,40 @@ def test_add_event_unhandled_emits_internal_event(base_state: BrokerState) -> No
     assert unhandled[0].idle == _check_idle_state(state)
 
 
+class CustomInputRequired(InputRequiredEvent):
+    """Custom InputRequiredEvent subclass for testing."""
+
+    prompt: str
+
+
+def test_add_event_input_required_does_not_emit_unhandled(
+    base_state: BrokerState,
+) -> None:
+    """InputRequiredEvent subclasses should NOT emit UnhandledEvent.
+
+    InputRequiredEvent events are designed to be handled externally by human
+    consumers, not by workflow steps. They should not trigger UnhandledEvent.
+    """
+    tick = TickAddEvent(event=CustomInputRequired(prompt="test"), step_name=None)
+    _, commands = _process_add_event_tick(tick, base_state, now_seconds=0.0)
+
+    publish_events = [c.event for c in commands if isinstance(c, CommandPublishEvent)]
+    unhandled = [e for e in publish_events if isinstance(e, UnhandledEvent)]
+    assert len(unhandled) == 0
+
+
+def test_add_event_base_input_required_does_not_emit_unhandled(
+    base_state: BrokerState,
+) -> None:
+    """Base InputRequiredEvent should also NOT emit UnhandledEvent."""
+    tick = TickAddEvent(event=InputRequiredEvent(), step_name=None)
+    _, commands = _process_add_event_tick(tick, base_state, now_seconds=0.0)
+
+    publish_events = [c.event for c in commands if isinstance(c, CommandPublishEvent)]
+    unhandled = [e for e in publish_events if isinstance(e, UnhandledEvent)]
+    assert len(unhandled) == 0
+
+
 def test_add_event_matches_waiter_does_not_emit_unhandled(
     base_state: BrokerState,
 ) -> None:

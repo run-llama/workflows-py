@@ -153,7 +153,11 @@ async def test_run_workflow_with_nonconforming_start_event_type(
 async def test_health_check(client: AsyncClient) -> None:
     response = await client.get("/health")
     assert response.status_code == 200
-    assert response.json() == {"status": "healthy"}
+    data = response.json()
+    assert data["status"] == "healthy"
+    assert data["loaded_workflows"] == 0
+    assert data["active_workflows"] == 0
+    assert data["idle_workflows"] == 0
 
 
 @pytest.mark.asyncio
@@ -975,6 +979,7 @@ async def test_post_event_context_not_available(
         run_handler=SimpleNamespace(done=lambda: False, ctx=None),
         workflow_name="test",
         status="running",
+        mark_active=lambda: None,
     )
 
     handler_id = "noctx-1"

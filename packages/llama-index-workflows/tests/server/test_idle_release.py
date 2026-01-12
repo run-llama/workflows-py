@@ -648,22 +648,18 @@ async def test_release_handler_cancels_runtime_on_checkpoint_failure(
 
 
 @pytest.mark.asyncio
-async def test_failed_send_event_preserves_idle_state(
+async def test_send_event_clears_idle_state_before_processing(
     memory_store: MemoryWorkflowStore, waiting_workflow: Workflow
 ) -> None:
-    """Verify that failed send_event() doesn't clear idle state.
+    """Verify that send_event() clears idle state immediately to prevent race conditions.
 
-    When send_event() fails (bad step name, runtime errors, etc.), the idle
-    state should be preserved so the idle release timer can still fire.
-
-    This test verifies the fix for the issue where mark_active() was called
-    BEFORE send_event(), causing idle state to be cleared even on failure.
-
-    The fix: mark_active() is now called AFTER send_event() succeeds.
+    mark_active() is called BEFORE processing the event to prevent a race where
+    the idle release timer fires while we're still handling the request. This means
+    idle_since is cleared even if send_event() subsequently fails.
     """
     idle_timeout = timedelta(milliseconds=100)
 
-    with time_machine.travel("2026-01-07T12:00:00Z", tick=False) as traveller:
+    with time_machine.travel("2026-01-07T12:00:00Z", tick=False):
         server = make_server(memory_store, waiting_workflow, idle_timeout)
 
         async with server.contextmanager():
@@ -681,8 +677,6 @@ async def test_failed_send_event_preserves_idle_state(
                 wrapper = get_handler_in_memory(server, handler_id)
                 assert wrapper is not None and wrapper.idle_since is not None
 
-                original_idle_since = wrapper.idle_since
-
                 # Post an event with a bad step name via HTTP - this will fail
                 response = await client.post(
                     f"/events/{handler_id}",
@@ -697,20 +691,12 @@ async def test_failed_send_event_preserves_idle_state(
                 # The endpoint returns 400 for bad step
                 assert response.status_code == 400
 
-                # mark_active() is called AFTER send_event() succeeds.
-                # Since send_event() failed, idle state should be preserved.
-                assert wrapper.idle_since == original_idle_since, (
-                    "idle_since should be preserved when send_event() fails"
+                # mark_active() is called BEFORE send_event() to prevent race conditions.
+                # Even though send_event() failed, idle state is cleared.
+                assert wrapper.idle_since is None, (
+                    "idle_since should be cleared before send_event() is attempted"
                 )
-                assert wrapper._idle_release_timer is not None, (
-                    "timer should still be running"
-                )
-
-                # Advance time past the idle timeout to trigger the timer
-                await advance_time(traveller, timedelta(milliseconds=200))
-
-                # Handler should be released by the timer since idle state was preserved
-                assert_handler_not_in_memory(server, handler_id)
+                assert wrapper._idle_release_timer is None, "timer should be cancelled"
 
 
 @pytest.mark.asyncio

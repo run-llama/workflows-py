@@ -703,17 +703,21 @@ def _process_add_event_tick(
                 )
                 commands.extend(subcommands)
     if not handled:
-        event_cls = type(tick.event)
-        commands.append(
-            CommandPublishEvent(
-                UnhandledEvent(
-                    event_type=event_cls.__name__,
-                    qualified_name=f"{event_cls.__module__}.{event_cls.__name__}",
-                    step_name=tick.step_name,
-                    idle=_check_idle_state(state),
+        # InputRequiredEvent subclasses are intentionally designed to be handled
+        # externally by human consumers, not by workflow steps. Don't emit
+        # UnhandledEvent for these since they're working as intended.
+        if not isinstance(tick.event, InputRequiredEvent):
+            event_cls = type(tick.event)
+            commands.append(
+                CommandPublishEvent(
+                    UnhandledEvent(
+                        event_type=event_cls.__name__,
+                        qualified_name=f"{event_cls.__module__}.{event_cls.__name__}",
+                        step_name=tick.step_name,
+                        idle=_check_idle_state(state),
+                    )
                 )
             )
-        )
     return state, commands
 
 
