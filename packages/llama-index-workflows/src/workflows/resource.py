@@ -117,13 +117,13 @@ class _ResourceConfig(Generic[B]):
             return self.config_file + "." + self.path_selector
         return self.config_file
 
-    def _get_data(self, data: dict[str, Any]) -> Optional[dict[str, Any]]:
+    def _get_data(self, data: dict[str, Any]) -> Optional[dict[str, Any]]:  # noqa: UP045
         if self.path_selector is not None:
             keys = self.path_selector.split(".")
-            val: Optional[dict[str, Any]] = data
+            val: Optional[dict[str, Any]] = data  # noqa: UP045
             for key in keys:
                 if isinstance(val, dict):
-                    val = cast(Optional[dict[str, Any]], val.get(key))
+                    val = cast(Optional[dict[str, Any]], val.get(key))  # noqa: UP045
                     if val is None:
                         return None
                 else:
