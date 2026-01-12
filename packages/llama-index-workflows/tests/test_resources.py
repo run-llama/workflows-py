@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 LlamaIndex Inc.
 
+import json
+from pathlib import Path
 from typing import Annotated, Optional
 from unittest import mock
 
@@ -8,7 +10,13 @@ import pytest
 from pydantic import BaseModel, Field
 from workflows.decorators import step
 from workflows.events import Event, StartEvent, StopEvent
-from workflows.resource import Resource, ResourceManager
+from workflows.resource import (
+    Resource,
+    ResourceConfig,
+    ResourceManager,
+    _Resource,
+    _ResourceConfig,
+)
 from workflows.workflow import Workflow
 
 # Global counters used in resource workflow tests
@@ -39,6 +47,157 @@ class Memory(mock.MagicMock):
 
 class MessageStopEvent(StopEvent):
     llm_response: Optional[str] = Field(default=None)
+
+
+class FileData(BaseModel):
+    file: str
+    permission_mode: str
+
+
+class FileOperator:
+    def __init__(self, data: FileData) -> None:
+        self.file = data.file
+        self.permission_mode = data.permission_mode
+
+    def operate(self) -> str:
+        if self.permission_mode == "r":
+            with open(self.file, self.permission_mode) as f:
+                return f.read()
+        elif self.permission_mode == "w":
+            with open(self.file, self.permission_mode) as f:
+                f.write("hello world!")
+                return "hello world!"
+        else:
+            raise ValueError(f"Unsupported operation: {self.permission_mode}")
+
+
+class ChatMessages(BaseModel):
+    messages: list[str]
+
+
+class Fs(BaseModel):
+    files: list[str]
+    dirs: list[str]
+
+
+@pytest.mark.asyncio
+async def test_function_resource_init() -> None:
+    def get_string() -> str:
+        return "string"
+
+    retval = Resource(get_string)
+    assert isinstance(retval, _Resource)
+    assert "get_string" in retval.name
+    assert retval.cache
+    assert not retval._is_async
+
+    result = await retval.call()
+    assert result == "string"
+
+
+def test_resource_config_init(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    data = {"messages": ["hello"]}
+
+    with open("config.json", "w") as f:
+        json.dump(data, f)
+
+    retval = ResourceConfig(config_file="config.json")
+    assert isinstance(retval, _ResourceConfig)
+    assert retval.path_selector is None
+    assert retval.config_file == "config.json"
+    assert retval.cls_factory is None
+    assert retval.name == "config.json"
+
+    # modify path selector, modify name
+    retval.path_selector = "hello.world"
+    assert retval.name == "config.json.hello.world"
+
+    retval.path_selector = None
+
+    with pytest.raises(
+        ValueError,
+        match="Class factory should be set to a BaseModel subclass before calling",
+    ):
+        retval.call()
+
+    # define a cls_factory for the resource to be called
+    retval.cls_factory = ChatMessages
+
+    result = retval.call()
+    assert isinstance(result, ChatMessages)
+    assert result.messages == ["hello"]
+
+
+def test_resource_config_path_selector(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    data = {
+        "memory": {"messages": ["hello"]},
+        "core": {"fs": {"files": ["hello.py"], "dirs": ["hello/"]}},
+    }
+
+    with open("config.json", "w") as f:
+        json.dump(data, f)
+
+    resource = ResourceConfig(config_file="config.json", path_selector="memory")
+    assert resource.name == "config.json.memory"
+    resource.cls_factory = ChatMessages
+    value = resource.call()
+    assert isinstance(value, ChatMessages)
+    assert value.messages == ["hello"]
+    resource.path_selector = "core.fs"
+    assert resource.name == "config.json.core.fs"
+    resource.cls_factory = Fs
+    value = resource.call()
+    assert isinstance(value, Fs)
+    assert value.files == ["hello.py"]
+    assert value.dirs == ["hello/"]
+
+
+def test_resource_config_path_selector_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    data = {
+        "core": {"fs": {"files": ["hello.py"], "dirs": ["hello/"]}},
+    }
+
+    with open("config.json", "w") as f:
+        json.dump(data, f)
+
+    # path selector does not return a dict
+    resource = ResourceConfig(config_file="config.json", path_selector="core.fs.files")
+    resource.cls_factory = Fs
+    with pytest.raises(
+        ValueError,
+        match=r"Expected dictionary for configuration from config.json at path core.fs.files, got: .*",
+    ):
+        resource.call()
+
+    # path selector does not exist
+    resource.path_selector = "core.filesystem"
+    with pytest.raises(
+        ValueError,
+        match=r"Expected dictionary for configuration from config.json at path core.filesystem, got: .*",
+    ):
+        resource.call()
+
+    # error occurs before reaching the end of the path_selector
+    # (tests the not the full path_selector is shown, but only up to the item with the error)
+    resource.path_selector = "core.filesystem.fs"
+    with pytest.raises(
+        ValueError,
+        match=r"Expected dictionary for configuration from config.json at path core.filesystem, got: .*",
+    ):
+        resource.call()
 
 
 @pytest.mark.asyncio
@@ -94,6 +253,47 @@ async def test_resource_async() -> None:
 
 
 @pytest.mark.asyncio
+async def test_resource_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    data = {"file": "hello.py", "permission_mode": "r"}
+
+    with open("config.json", "w") as f:
+        json.dump(data, f)
+
+    with open("hello.py", "w") as f:
+        f.write("print('hello')")
+
+    def get_file_operator(
+        config: Annotated[FileData, ResourceConfig(config_file="config.json")],
+    ) -> FileOperator:
+        return FileOperator(data=config)
+
+    class TestWorkflow(Workflow):
+        @step
+        def start_step(self, ev: StartEvent) -> SecondEvent:
+            print("Start step is done", flush=True)
+            return SecondEvent(msg="Hello")
+
+        @step
+        def f1(
+            self,
+            ev: SecondEvent,
+            file_operator: Annotated[FileOperator, Resource(get_file_operator)],
+        ) -> StopEvent:
+            assert file_operator.file == "hello.py"
+            assert file_operator.permission_mode == "r"
+            assert file_operator.operate() == "print('hello')"
+            return StopEvent(result=None)
+
+    wf = TestWorkflow(disable_validation=True)
+    await wf.run()
+
+
+@pytest.mark.asyncio
 async def test_caching_behavior() -> None:
     class CounterThing:
         counter = 0
@@ -132,13 +332,64 @@ async def test_caching_behavior() -> None:
     await wf_1.run()
     assert (
         cc == 2  # type: ignore
-    )  # this is expected to be 2, as it is a cached resource shared by test_step and test_step_2, which means at test_step it counter_thing.counter goes from 0 to 1 and at test_step_2 goes from 1 to 2
+    )  # this is expected to be 2, as it is a cached resource shared by test_step and test_step_2, which means at test_step counter_thing.counter goes from 0 to 1 and at test_step_2 goes from 1 to 2
 
     wf_2 = TestWorkflow(disable_validation=True)
     await wf_2.run()
     assert (
         cc == 2  # type: ignore
     )  # the cache is workflow-specific, so since wf_2 is different from wf_1, we expect no interference between the two
+
+
+@pytest.mark.asyncio
+async def test_caching_behavior_resource_configs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+
+    data = {"file": "hello.py", "permission_mode": "r"}
+    data_1 = {"file": "bye.py", "permission_mode": "w"}
+
+    with open("config.json", "w") as f:
+        json.dump(data, f)
+
+    def get_file_operator(
+        config: Annotated[FileData, ResourceConfig(config_file="config.json")],
+    ) -> FileOperator:
+        return FileOperator(data=config)
+
+    class TestWorkflow(Workflow):
+        @step
+        def start_step(
+            self,
+            ev: StartEvent,
+            file: Annotated[FileOperator, Resource(get_file_operator)],
+        ) -> SecondEvent:
+            print("first step")
+            assert file.file == "hello.py"
+            assert file.permission_mode == "r"
+            # change config.json: the underlying resource has been cached, so will be unaffected
+            with open("config.json", "w") as f:
+                json.dump(data_1, f)
+            return SecondEvent(msg="Hello")
+
+        @step
+        def f1(
+            self,
+            ev: SecondEvent,
+            file: Annotated[FileOperator, Resource(get_file_operator)],
+        ) -> StopEvent:
+            print("second step")
+            # this resource has been cached,
+            # so even if config.json has changed,
+            # the resource remains the same
+            assert file.file == "hello.py"
+            assert file.permission_mode == "r"
+            return StopEvent()
+
+    wf = TestWorkflow()
+    await wf.run()
 
 
 @pytest.mark.asyncio
