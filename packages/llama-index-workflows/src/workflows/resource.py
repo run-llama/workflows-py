@@ -75,19 +75,21 @@ class _Resource(Generic[T]):
 def _get_resource_config_data(
     config_file: str,
     path_selector: str | None,
-) -> dict[str, Any] | None:
+) -> dict[str, Any]:
     with open(config_file, "r") as f:
         data = json.load(f)
     if path_selector is not None:
         keys = path_selector.split(".")
-        val: Optional[dict[str, Any]] = data  # noqa: UP045
+        val: dict[str, Any] = data
+        cumulative_path = ""
         for key in keys:
-            if isinstance(val, dict):
-                val = cast(Optional[dict[str, Any]], val.get(key))  # noqa: UP045
-                if val is None:
-                    return None
-            else:
-                return None
+            cumulative_path += key + "."
+            got = cast(Optional[dict[str, Any]], val.get(key))  # noqa: UP045
+            if not isinstance(got, dict):
+                raise ValueError(
+                    f"Expected dictionary for configuration from {config_file} at path {cumulative_path.strip('.')}, got: {type(got)}"
+                )
+            val = got
         return val
     return data
 
@@ -121,20 +123,16 @@ class _ResourceConfig(Generic[B]):
 
     # make async for compatibility with _Resource
     def call(self) -> B:
-        if (
-            sel_data := _get_resource_config_data(
-                config_file=self.config_file, path_selector=self.path_selector
-            )
-        ) is not None:
-            # let validation error bubble up
-            if self.cls_factory is not None:
-                return self.cls_factory.model_validate(sel_data)
+        sel_data = _get_resource_config_data(
+            config_file=self.config_file, path_selector=self.path_selector
+        )
+        # let validation error bubble up
+        if self.cls_factory is not None:
+            return self.cls_factory.model_validate(sel_data)
+        else:
             raise ValueError(
                 "Class factory should be set to a BaseModel subclass before calling"
             )
-        raise ValueError(
-            f"Invalid path selector for {self.config_file}: {self.path_selector}"
-        )
 
 
 def ResourceConfig(

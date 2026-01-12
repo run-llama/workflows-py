@@ -161,6 +161,45 @@ def test_resource_config_path_selector(
     assert value.dirs == ["hello/"]
 
 
+def test_resource_config_path_selector_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    data = {
+        "core": {"fs": {"files": ["hello.py"], "dirs": ["hello/"]}},
+    }
+
+    with open("config.json", "w") as f:
+        json.dump(data, f)
+
+    # path selector does not return a dict
+    resource = ResourceConfig(config_file="config.json", path_selector="core.fs.files")
+    resource.cls_factory = Fs
+    with pytest.raises(
+        ValueError,
+        match=r"Expected dictionary for configuration from config.json at path core.fs.files, got: .*",
+    ):
+        resource.call()
+
+    # path selector does not exist
+    resource.path_selector = "core.filesystem"
+    with pytest.raises(
+        ValueError,
+        match=r"Expected dictionary for configuration from config.json at path core.filesystem, got: .*",
+    ):
+        resource.call()
+
+    # error occurs before reaching the end of the path_selector
+    # (tests the not the full path_selector is shown, but only up to the item with the error)
+    resource.path_selector = "core.filesystem.fs"
+    with pytest.raises(
+        ValueError,
+        match=r"Expected dictionary for configuration from config.json at path core.filesystem, got: .*",
+    ):
+        resource.call()
+
+
 @pytest.mark.asyncio
 async def test_resource() -> None:
     m = Memory.from_defaults("user_id_123", token_limit=60000)
