@@ -41,46 +41,28 @@ class _Resource(Generic[T]):
         self._is_async = inspect.iscoroutinefunction(factory)
         self.name = getattr(factory, "__qualname__", type(factory).__name__)
         self.cache = cache
+        self.resource_configs: Optional[dict[str, BaseModel]] = None  # noqa: UP045
 
-    def get_resource_configs(
-        self, resource_configs_cache: dict[str, dict[str, BaseModel]]
-    ) -> dict[str, BaseModel]:
-        params = inspect.signature(self._factory).parameters
-        resource_configs: dict[str, BaseModel] = {}
-        if len(params) > 0:
-            for param in params.values():
-                if get_origin(param.annotation) is Annotated:
-                    args = get_args(param.annotation)
-                    if len(args) == 2 and isinstance(args[1], _ResourceConfig):
-                        resource_config = args[1]
-                        if (
-                            resource_config.cache
-                            and (
-                                cached := resource_configs_cache.get(self.name, {}).get(
-                                    resource_config.name
-                                )
-                            )
-                            is not None
-                        ):
-                            value = cached
-                        else:
+    def prepare_resource_configs(self) -> None:
+        if self.resource_configs is None:
+            params = inspect.signature(self._factory).parameters
+            resource_configs: dict[str, BaseModel] = {}
+            if len(params) > 0:
+                for param in params.values():
+                    if get_origin(param.annotation) is Annotated:
+                        args = get_args(param.annotation)
+                        if len(args) == 2 and isinstance(args[1], _ResourceConfig):
+                            resource_config = args[1]
                             resource_config.cls_factory = args[0]
                             value = resource_config.call()
-                            if resource_config.cache:
-                                if self.name not in resource_configs_cache:
-                                    resource_configs_cache[self.name] = {
-                                        resource_config.name: value
-                                    }
-                                else:
-                                    resource_configs_cache[self.name][
-                                        resource_config.name
-                                    ] = value
-                        resource_configs.update({param.name: value})
-        return resource_configs
+                            resource_configs.update({param.name: value})
+            self.resource_configs = resource_configs
+        return None
 
-    async def call(self, resources_config: dict[str, BaseModel] | None = None) -> T:
+    async def call(self) -> T:
         """Invoke the underlying factory, awaiting if necessary."""
-        args = resources_config or {}
+        self.prepare_resource_configs()
+        args = cast(dict[str, BaseModel], self.resource_configs)
         if self._is_async:
             result = await cast(Callable[..., Awaitable[T]], self._factory)(**args)
         else:
@@ -97,7 +79,6 @@ class _ResourceConfig(Generic[B]):
         self,
         config_file: str,
         path_selector: str | None,
-        cache: bool,
         cls_factory: Type[B] | None = None,
     ) -> None:
         if not Path(config_file).is_file():
@@ -109,7 +90,6 @@ class _ResourceConfig(Generic[B]):
         self.config_file = config_file
         self.path_selector = path_selector
         self.cls_factory = cls_factory
-        self.cache = cache
 
     @property
     def name(self) -> str:
@@ -150,7 +130,6 @@ class _ResourceConfig(Generic[B]):
 def ResourceConfig(
     config_file: str,
     path_selector: str | None = None,
-    cache: bool = True,
 ) -> _ResourceConfig:
     """
     Wrapper for a _ResourceConfig.
@@ -164,9 +143,7 @@ def ResourceConfig(
         _ResourceConfig: A configured resource representation
     """
 
-    return _ResourceConfig(
-        config_file=config_file, path_selector=path_selector, cache=cache
-    )
+    return _ResourceConfig(config_file=config_file, path_selector=path_selector)
 
 
 class ResourceDefinition(BaseModel):
@@ -230,7 +207,6 @@ class ResourceManager:
 
     def __init__(self) -> None:
         self.resources: dict[str, Any] = {}
-        self.resources_config: dict[str, dict[str, BaseModel]] = {}
 
     async def set(self, name: str, val: Any) -> None:
         """Register a resource instance under a name."""
@@ -238,30 +214,14 @@ class ResourceManager:
 
     async def get(self, resource: _Resource) -> Any:
         """Return a resource instance, honoring cache settings."""
-        resources_config = resource.get_resource_configs(
-            resource_configs_cache=self.resources_config
-        )
-        config = resources_config if len(resources_config) > 0 else None
         if not resource.cache:
-            val = await resource.call(config)
+            val = await resource.call()
         elif resource.cache and not self.resources.get(resource.name, None):
-            val = await resource.call(config)
+            val = await resource.call()
             await self.set(resource.name, val)
         else:
             val = self.resources.get(resource.name)
         return val
-
-    def get_resource_config(
-        self, resource_name: str, resource_config: _ResourceConfig
-    ) -> BaseModel | None:
-        """Return a specific cached resource config"""
-        return self.resources_config.get(resource_name, {}).get(resource_config.name)
-
-    def get_all_resource_configs(
-        self, resource_name: str
-    ) -> dict[str, BaseModel] | None:
-        """Get all the cached configurations for a given resource"""
-        return self.resources_config.get(resource_name)
 
     def get_all(self) -> dict[str, Any]:
         """Return all materialized resources."""

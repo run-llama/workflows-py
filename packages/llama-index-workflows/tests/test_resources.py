@@ -111,7 +111,6 @@ def test_resource_config_init(
     assert retval.path_selector is None
     assert retval.config_file == "config.json"
     assert retval.cls_factory is None
-    assert retval.cache
     assert retval.name == "config.json"
 
     # modify path selector, modify name
@@ -256,115 +255,6 @@ async def test_resource_config(
 
 
 @pytest.mark.asyncio
-async def test_resource_manager_resource_configs_caching(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.chdir(tmp_path)
-
-    data = {"file": "hello.py", "permission_mode": "r"}
-
-    with open("config.json", "w") as f:
-        json.dump(data, f)
-
-    def get_file_operator(
-        config: Annotated[FileData, ResourceConfig(config_file="config.json")],
-    ) -> FileOperator:
-        return FileOperator(data=config)
-
-    manager = ResourceManager()
-
-    resource = Resource(get_file_operator)
-
-    val = await manager.get(resource)
-    assert isinstance(val, FileOperator)
-    assert val.file == data["file"]
-    assert val.permission_mode == data["permission_mode"]
-
-    cached_resource_config = manager.get_resource_config(
-        resource_name=resource.name,
-        resource_config=ResourceConfig(config_file="config.json"),
-    )
-    assert cached_resource_config is not None
-    assert isinstance(cached_resource_config, FileData)
-    assert cached_resource_config.file == data["file"]
-    assert cached_resource_config.permission_mode == data["permission_mode"]
-
-    all_cached_configs = manager.get_all_resource_configs(resource.name)
-    assert isinstance(all_cached_configs, dict)
-    assert len(all_cached_configs) == 1
-    assert "config.json" in all_cached_configs
-    assert isinstance(all_cached_configs["config.json"], FileData)
-
-
-@pytest.mark.asyncio
-async def test_resource_manager_resource_configs_not_caching(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.chdir(tmp_path)
-
-    data = {"file": "hello.py", "permission_mode": "r"}
-
-    with open("config.json", "w") as f:
-        json.dump(data, f)
-
-    def get_file_operator(
-        config: Annotated[
-            FileData, ResourceConfig(config_file="config.json", cache=False)
-        ],
-    ) -> FileOperator:
-        return FileOperator(data=config)
-
-    manager = ResourceManager()
-
-    resource = Resource(get_file_operator)
-    await manager.get(resource)
-    cached_resource_config = manager.get_resource_config(
-        resource_name=resource.name,
-        resource_config=ResourceConfig(config_file="config.json"),
-    )
-    assert cached_resource_config is None  # check that it was not cached
-
-
-@pytest.mark.asyncio
-async def test_resource_manager_resource_configs_mixed_caching(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.chdir(tmp_path)
-
-    data = {"file": "hello.py", "permission_mode": "r"}
-    with open("config.json", "w") as f:
-        json.dump(data, f)
-
-    # cache only the resource config, do not cache the resource itself
-    def get_file_operator(
-        config: Annotated[FileData, ResourceConfig(config_file="config.json")],
-    ) -> FileOperator:
-        return FileOperator(data=config)
-
-    manager = ResourceManager()
-    resource = Resource(get_file_operator, cache=False)
-
-    await manager.get(resource)
-    cached_resource_config = manager.get_resource_config(
-        resource_name=resource.name,
-        resource_config=ResourceConfig(config_file="config.json"),
-    )
-    assert cached_resource_config is not None
-    assert isinstance(cached_resource_config, FileData)
-    assert cached_resource_config.file == data["file"]
-    assert cached_resource_config.permission_mode == data["permission_mode"]
-
-    all_cached_configs = manager.get_all_resource_configs(resource.name)
-    assert isinstance(all_cached_configs, dict)
-    assert len(all_cached_configs) == 1
-    assert "config.json" in all_cached_configs
-    assert isinstance(all_cached_configs["config.json"], FileData)
-
-
-@pytest.mark.asyncio
 async def test_caching_behavior() -> None:
     class CounterThing:
         counter = 0
@@ -412,6 +302,7 @@ async def test_caching_behavior() -> None:
     )  # the cache is workflow-specific, so since wf_2 is different from wf_1, we expect no interference between the two
 
 
+@pytest.mark.asyncio
 async def test_caching_behavior_resource_configs(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -436,6 +327,7 @@ async def test_caching_behavior_resource_configs(
             ev: StartEvent,
             file: Annotated[FileOperator, Resource(get_file_operator)],
         ) -> SecondEvent:
+            print("first step")
             assert file.file == "hello.py"
             assert file.permission_mode == "r"
             # change config.json: the underlying resource has been cached, so will be unaffected
@@ -449,6 +341,7 @@ async def test_caching_behavior_resource_configs(
             ev: SecondEvent,
             file: Annotated[FileOperator, Resource(get_file_operator)],
         ) -> StopEvent:
+            print("second step")
             # this resource has been cached,
             # so even if config.json has changed,
             # the resource remains the same
@@ -456,7 +349,7 @@ async def test_caching_behavior_resource_configs(
             assert file.permission_mode == "r"
             return StopEvent()
 
-    wf = TestWorkflow(disable_validation=True)
+    wf = TestWorkflow()
     await wf.run()
 
 
@@ -503,56 +396,6 @@ async def test_non_caching_behavior() -> None:
     await wf_1.run()
     assert cc1 == 1  # type: ignore
     assert cc2 == 1  # type: ignore
-
-
-async def test_non_caching_behavior_resource_configs(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.chdir(tmp_path)
-
-    data = {"file": "hello.py", "permission_mode": "r"}
-    data_1 = {"file": "bye.py", "permission_mode": "w"}
-
-    with open("config.json", "w") as f:
-        json.dump(data, f)
-
-    def get_file_operator(
-        config: Annotated[
-            FileData, ResourceConfig(config_file="config.json", cache=False)
-        ],
-    ) -> FileOperator:
-        return FileOperator(data=config)
-
-    class TestWorkflow(Workflow):
-        @step
-        def start_step(
-            self,
-            ev: StartEvent,
-            file: Annotated[FileOperator, Resource(get_file_operator, cache=False)],
-        ) -> SecondEvent:
-            assert file.file == "hello.py"
-            assert file.permission_mode == "r"
-            # change config.json: the underlying resource has not been cached, so it will be affected by the change
-            with open("config.json", "w") as f:
-                json.dump(data_1, f)
-            return SecondEvent(msg="Hello")
-
-        @step
-        def f1(
-            self,
-            ev: SecondEvent,
-            file: Annotated[FileOperator, Resource(get_file_operator, cache=False)],
-        ) -> StopEvent:
-            # this resource has not been cached,
-            # so, since config.json has changed,
-            # the resource changed too
-            assert file.file == "bye.py"
-            assert file.permission_mode == "w"
-            return StopEvent()
-
-    wf = TestWorkflow(disable_validation=True)
-    await wf.run()
 
 
 @pytest.mark.asyncio
