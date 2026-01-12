@@ -28,6 +28,10 @@ from workflows.events import (
     StartEvent,
     StepStateChanged,
     StopEvent,
+    WorkflowCancelledEvent,
+    WorkflowFailedEvent,
+    WorkflowIdleEvent,
+    WorkflowTimedOutEvent,
 )
 from workflows.retry_policy import ConstantDelayRetryPolicy, RetryPolicy
 from workflows.runtime.control_loop import control_loop
@@ -266,10 +270,10 @@ async def test_control_loop_with_external_event(test_plugin: MockRuntimePlugin) 
 @pytest.mark.asyncio
 async def test_control_loop_timeout(test_plugin: MockRuntimePlugin) -> None:
     """
-    Test that workflow timeout raises WorkflowTimeoutError and publishes StopEvent.
+    Test that workflow timeout raises WorkflowTimeoutError and publishes WorkflowTimedOutEvent.
 
-    When a workflow times out, an empty StopEvent should be published to the stream
-    to signal stream closure before the exception is raised.
+    When a workflow times out, a WorkflowTimedOutEvent should be published to the stream
+    to inform consumers about the timeout before the exception is raised.
     """
 
     class SlowWorkflow(Workflow):
@@ -295,11 +299,15 @@ async def test_control_loop_timeout(test_plugin: MockRuntimePlugin) -> None:
     with pytest.raises(WorkflowTimeoutError):
         await asyncio.wait_for(task, timeout=1.0)
 
-    # Verify an empty StopEvent was published to the stream
+    # Verify a WorkflowTimedOutEvent was published to the stream
     assert stop_event is not None, (
-        "Timeout should publish empty StopEvent to stream before raising exception"
+        "Timeout should publish WorkflowTimedOutEvent to stream before raising exception"
     )
-    assert stop_event.result is None, "Timeout StopEvent should have None result"
+    assert isinstance(stop_event, WorkflowTimedOutEvent), (
+        f"Expected WorkflowTimedOutEvent, got {type(stop_event).__name__}"
+    )
+    assert stop_event.timeout == 0.01, "Timeout event should contain the timeout value"
+    assert stop_event.active_steps == ["slow"], "Timeout event should list active steps"
 
 
 @pytest.mark.asyncio
@@ -336,9 +344,9 @@ async def test_control_loop_step_failure_publishes_stop_event(
 ) -> None:
     """
     Test that when a step fails permanently (retries exhausted),
-    an empty StopEvent is published to the stream before raising the exception.
+    a WorkflowFailedEvent is published to the stream before raising the exception.
 
-    This allows external consumers to know the workflow stream has ended.
+    This allows external consumers to know why the workflow stream has ended.
     """
 
     class FailingWorkflow(Workflow):
@@ -362,11 +370,27 @@ async def test_control_loop_step_failure_publishes_stop_event(
     with pytest.raises(ValueError, match="intentional failure"):
         await asyncio.wait_for(task, timeout=1.0)
 
-    # Verify that an empty StopEvent was published before the exception
+    # Verify that a WorkflowFailedEvent was published before the exception
     assert stop_event is not None, (
-        "Empty StopEvent should be published to stream when step fails permanently"
+        "WorkflowFailedEvent should be published to stream when step fails permanently"
     )
-    assert stop_event.result is None, "Failure StopEvent should have None result"
+    assert isinstance(stop_event, WorkflowFailedEvent), (
+        f"Expected WorkflowFailedEvent, got {type(stop_event).__name__}"
+    )
+    assert stop_event.step_name == "always_fails", (
+        "Failed event should contain the step name"
+    )
+    assert stop_event.exception_type == "builtins.ValueError", (
+        "Failed event should contain the fully qualified exception type"
+    )
+    assert stop_event.exception_message == "intentional failure", (
+        "Failed event should contain the exception message"
+    )
+    assert "ValueError: intentional failure" in stop_event.traceback, (
+        "Failed event should contain the traceback"
+    )
+    assert stop_event.attempts == 1, "Failed event should contain the attempt count"
+    assert stop_event.elapsed_seconds >= 0, "Failed event should contain elapsed time"
 
 
 @pytest.mark.asyncio
@@ -614,10 +638,10 @@ async def test_control_loop_concurrency_queueing(
 @pytest.mark.asyncio
 async def test_control_loop_user_cancellation(test_plugin: MockRuntimePlugin) -> None:
     """
-    Test that user cancellation raises WorkflowCancelledByUser and publishes StopEvent.
+    Test that user cancellation raises WorkflowCancelledByUser and publishes WorkflowCancelledEvent.
 
-    When a workflow is cancelled, an empty StopEvent should be published to the stream
-    to signal stream closure before the exception is raised.
+    When a workflow is cancelled, a WorkflowCancelledEvent should be published to the stream
+    to inform consumers about the cancellation before the exception is raised.
     """
 
     class CancelWorkflow(Workflow):
@@ -647,11 +671,13 @@ async def test_control_loop_user_cancellation(test_plugin: MockRuntimePlugin) ->
     with pytest.raises(WorkflowCancelledByUser):
         await asyncio.wait_for(task, timeout=1.0)
 
-    # Verify an empty StopEvent was published to the stream
+    # Verify a WorkflowCancelledEvent was published to the stream
     assert stop_event is not None, (
-        "Cancellation should publish empty StopEvent to stream before raising exception"
+        "Cancellation should publish WorkflowCancelledEvent to stream before raising exception"
     )
-    assert stop_event.result is None, "Cancellation StopEvent should have None result"
+    assert isinstance(stop_event, WorkflowCancelledEvent), (
+        f"Expected WorkflowCancelledEvent, got {type(stop_event).__name__}"
+    )
 
 
 @pytest.mark.asyncio
@@ -796,3 +822,98 @@ async def test_control_loop_retry_exhaustion_respects_total_time(
     # Attempts should increment: 1, 2, 3, 4
     expected_attempts = list(range(1, len(policy.observed_attempts) + 1))
     assert policy.observed_attempts == expected_attempts
+
+
+@pytest.mark.asyncio
+async def test_control_loop_emits_idle_event_when_waiting(
+    test_plugin: MockRuntimePlugin,
+) -> None:
+    """
+    Test that WorkflowIdleEvent is emitted when workflow becomes idle waiting for event.
+
+    A workflow is idle when it has active waiters but no pending work. This test
+    validates that the idle event is published to the stream when this state is reached.
+    """
+
+    class AwaitedEvent(Event):
+        value: str
+
+    class IdleTrackingWorkflow(Workflow):
+        @step
+        async def waiter(self, ev: StartEvent, ctx: Context) -> StopEvent:
+            awaited = await ctx.wait_for_event(
+                AwaitedEvent,
+                waiter_event=InputRequiredEvent(),
+            )
+            return StopEvent(result=f"received_{awaited.value}")
+
+    wf = IdleTrackingWorkflow(timeout=2.0)
+    task = asyncio.create_task(
+        run_control_loop(
+            workflow=wf,
+            start_event=StartEvent(),
+            plugin=test_plugin,
+        )
+    )
+
+    # Collect events until we see the WorkflowIdleEvent
+    idle_event_found = False
+    input_required_found = False
+    events_before_idle: list[Event] = []
+
+    while True:
+        ev = await test_plugin.get_stream_event(timeout=1.0)
+        if isinstance(ev, WorkflowIdleEvent):
+            idle_event_found = True
+            break
+        if isinstance(ev, InputRequiredEvent):
+            input_required_found = True
+        events_before_idle.append(ev)
+        if isinstance(ev, StopEvent):
+            break
+
+    # WorkflowIdleEvent should be emitted after the workflow enters wait state
+    assert idle_event_found, (
+        "WorkflowIdleEvent should be emitted when workflow is waiting for external event"
+    )
+    assert input_required_found, "InputRequiredEvent should be emitted before idle"
+
+    # Now send the awaited event to complete the workflow
+    await test_plugin.send_event(TickAddEvent(event=AwaitedEvent(value="test")))
+
+    result = await asyncio.wait_for(task, timeout=1.0)
+    assert isinstance(result, StopEvent)
+    assert result.result == "received_test"
+
+
+@pytest.mark.asyncio
+async def test_control_loop_idle_event_not_emitted_on_completion(
+    test_plugin: MockRuntimePlugin,
+) -> None:
+    """
+    Test that WorkflowIdleEvent is NOT emitted when workflow completes normally.
+
+    Even if a workflow has waiters, if it completes (StopEvent), it should not
+    emit an idle event because the workflow is no longer running.
+    """
+
+    result = await run_control_loop(
+        workflow=SimpleWorkflow(timeout=1.0),
+        start_event=StartEvent(),
+        plugin=test_plugin,
+    )
+
+    # Verify the workflow completed
+    assert isinstance(result, StopEvent)
+    assert result.result == "processed_42"
+
+    # Drain and verify no WorkflowIdleEvent was emitted
+    all_events: list[Event] = []
+    while test_plugin.has_stream_events():
+        ev = await test_plugin.get_stream_event(timeout=0.1)
+        all_events.append(ev)
+
+    idle_events = [e for e in all_events if isinstance(e, WorkflowIdleEvent)]
+    assert len(idle_events) == 0, (
+        "WorkflowIdleEvent should not be emitted when workflow completes normally"
+    )

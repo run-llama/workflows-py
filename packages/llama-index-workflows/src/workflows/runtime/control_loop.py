@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+import traceback
 from dataclasses import replace
 from typing import TYPE_CHECKING
 
@@ -22,6 +23,10 @@ from workflows.events import (
     StepState,
     StepStateChanged,
     StopEvent,
+    WorkflowCancelledEvent,
+    WorkflowFailedEvent,
+    WorkflowIdleEvent,
+    WorkflowTimedOutEvent,
 )
 from workflows.runtime.types.commands import (
     CommandCompleteRun,
@@ -367,6 +372,25 @@ def rewind_in_progress(
     return state, commands
 
 
+def _check_idle_state(state: BrokerState) -> bool:
+    """Returns True if workflow is idle (waiting only on external events).
+
+    A workflow is idle when:
+    1. The workflow is running (hasn't completed/failed/cancelled)
+    2. All steps have no pending events in their queues
+    3. All steps have no workers currently executing
+    4. At least one step has an active waiter (from ctx.wait_for_event())
+    """
+    if not state.is_running:
+        return False
+
+    for worker_state in state.workers.values():
+        if worker_state.queue or worker_state.in_progress:
+            return False
+
+    return any(ws.collected_waiters for ws in state.workers.values())
+
+
 def _process_step_result_tick(
     tick: TickStepResult[R], init: BrokerState, now_seconds: float
 ) -> tuple[BrokerState, list[WorkflowCommand]]:
@@ -434,13 +458,33 @@ def _process_step_result_tick(
                     )
                 )
             else:
-                # used as a sentinel to end the stream. Perhaps reconsider this and have an alternate failure stop event
+                # Publish a WorkflowFailedEvent to inform stream consumers about the failure
                 state.is_running = False
-                commands.append(CommandPublishEvent(event=StopEvent()))
-                commands.append(
-                    CommandFailWorkflow(
-                        step_name=tick.step_name, exception=result.exception
+                exception = result.exception
+                exc_type = type(exception)
+                exc_module = exc_type.__module__
+                exc_qualname = f"{exc_module}.{exc_type.__qualname__}"
+                exc_traceback = "".join(
+                    traceback.format_exception(
+                        exc_type, exception, exception.__traceback__
                     )
+                )
+                total_attempts = this_execution.attempts + 1
+                elapsed = result.failed_at - this_execution.first_attempt_at
+                commands.append(
+                    CommandPublishEvent(
+                        event=WorkflowFailedEvent(
+                            step_name=tick.step_name,
+                            exception_type=exc_qualname,
+                            exception_message=str(exception),
+                            traceback=exc_traceback,
+                            attempts=total_attempts,
+                            elapsed_seconds=elapsed,
+                        )
+                    )
+                )
+                commands.append(
+                    CommandFailWorkflow(step_name=tick.step_name, exception=exception)
                 )
         elif isinstance(result, AddCollectedEvent):
             # The current state of collected events.
@@ -542,6 +586,14 @@ def _process_step_result_tick(
                 event, tick.step_name, worker_state, now_seconds
             )
             commands.extend(subcommands)
+
+    # Check for idle transition at end of processing
+    was_idle = _check_idle_state(init)
+    now_idle = _check_idle_state(state)
+
+    if now_idle and not was_idle:
+        commands.append(CommandPublishEvent(WorkflowIdleEvent()))
+
     return state, commands
 
 
@@ -653,11 +705,9 @@ def _process_cancel_run_tick(
     tick: TickCancelRun, init: BrokerState
 ) -> tuple[BrokerState, list[WorkflowCommand]]:
     state = init.deepcopy()
-    # retain running state, for resumption.
-    # TODO - when/if we persist stream events, this StopEvent should be reconsidered, as there should only ever be one stop event.
-    # Perhaps on resumption, if the workflow is running, then any existing stop events of a "cancellation" type should be omitted from the stream.
+    # Retain running state for resumption.
     return state, [
-        CommandPublishEvent(event=StopEvent()),
+        CommandPublishEvent(event=WorkflowCancelledEvent()),
         CommandHalt(exception=WorkflowCancelledByUser()),
     ]
 
@@ -685,7 +735,12 @@ def _process_timeout_tick(
         else "No steps active"
     )
     return state, [
-        CommandPublishEvent(event=StopEvent()),
+        CommandPublishEvent(
+            event=WorkflowTimedOutEvent(
+                timeout=tick.timeout,
+                active_steps=active_steps,
+            )
+        ),
         CommandHalt(
             exception=WorkflowTimeoutError(
                 f"Operation timed out after {tick.timeout} seconds. {steps_info}"

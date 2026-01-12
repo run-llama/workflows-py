@@ -66,8 +66,7 @@ class EventEnvelopeWithMetadata(BaseModel):
 
 class EventEnvelope(BaseModel):
     """
-    Client write representation of an Event. Includes class metadata in order to support
-    matching event types semantically in an extendable manner (e.g. "StartEvent", "StopEvent", etc.).
+    Client write representation of an Event. Simpler than the server provided EventEnvelopeWithMetadata, as the metadata can be inferred based on looking up the runtime type
     """
 
     value: Any | None

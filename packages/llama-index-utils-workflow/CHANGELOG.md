@@ -1,5 +1,13 @@
 # llama-index-utils-workflow
 
+## 0.6.0
+
+### Minor Changes
+
+- 96fd9c9: Added new function draw_most_recent_execution_mermaid
+
+  To draw the most recent workflow run in a mermaid format
+
 ## 0.5.2
 
 ### Patch Changes

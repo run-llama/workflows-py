@@ -111,6 +111,8 @@ def inspect_signature(fn: Callable) -> StepSignatureSpec:
                         name=name, resource=resource, type_annotation=type_annotation
                     )
                 )
+            continue
+
         # Get name and type of the Context param (without state type)
         if hasattr(annotation, "__name__") and annotation.__name__ == "Context":
             context_parameter = name
