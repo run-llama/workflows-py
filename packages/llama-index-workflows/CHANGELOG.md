@@ -1,5 +1,19 @@
 # llama-index-workflows
 
+## 2.12.0
+
+### Minor Changes
+
+- e53c654: Add further detail to workflow graph, mainly adding `Resource` nodes to workflow graph and visualizations
+- 2ff316d: Updates workflow server with functionality to drop and restore idle workflow handlers that are waiting on external input.
+- 0d72b4d: reorganize workflow graph representation types
+- f96faa2: Add dedicated StopEvent subclasses for workflow termination (timeout, cancellation, failure)
+
+### Patch Changes
+
+- 3b043b8: Track when workflows are idle (waiting on external input)
+- 7a85c96: Add ResourceConfig for resource-level configuration injection
+
 ## 2.11.7
 
 ### Patch Changes
