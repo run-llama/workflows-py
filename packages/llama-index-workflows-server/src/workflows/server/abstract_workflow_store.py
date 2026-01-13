@@ -10,7 +10,6 @@ from pydantic import (
     field_serializer,
     field_validator,
 )
-
 from workflows.context import JsonSerializer
 from workflows.events import StopEvent
 

@@ -8,10 +8,10 @@ from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
 import pytest
+from workflows.client.protocol import HandlerData
 from workflows.context import Context
 from workflows.events import Event, StopEvent
 from workflows.handler import WorkflowHandler
-from workflows.protocol import HandlerData
 from workflows.server.memory_workflow_store import MemoryWorkflowStore
 from workflows.server.server import _WorkflowHandler
 

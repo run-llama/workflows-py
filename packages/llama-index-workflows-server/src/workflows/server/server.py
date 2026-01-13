@@ -23,8 +23,23 @@ from starlette.responses import JSONResponse, StreamingResponse
 from starlette.routing import Route
 from starlette.schemas import SchemaGenerator
 from starlette.staticfiles import StaticFiles
-
 from workflows import Context, Workflow
+from workflows.client.protocol import (
+    CancelHandlerResponse,
+    HandlerData,
+    HandlersListResponse,
+    HealthResponse,
+    SendEventResponse,
+    WorkflowEventsListResponse,
+    WorkflowGraphResponse,
+    WorkflowSchemaResponse,
+    is_status_completed,
+)
+from workflows.client.protocol.serializable_events import (
+    EventEnvelope,
+    EventEnvelopeWithMetadata,
+    EventValidationError,
+)
 from workflows.events import (
     Event,
     InternalDispatchEvent,
@@ -36,34 +51,19 @@ from workflows.events import (
     WorkflowIdleEvent,
 )
 from workflows.handler import WorkflowHandler
-from workflows.protocol import (
-    CancelHandlerResponse,
-    HandlerData,
-    HandlersListResponse,
-    HealthResponse,
-    SendEventResponse,
-    WorkflowEventsListResponse,
-    WorkflowGraphResponse,
-    WorkflowSchemaResponse,
-    is_status_completed,
-)
-from workflows.protocol.serializable_events import (
-    EventEnvelope,
-    EventEnvelopeWithMetadata,
-    EventValidationError,
-)
 from workflows.representation import get_workflow_representation
-from workflows.server.abstract_workflow_store import (
+
+# Protocol models are used on the client side; server responds with plain dicts
+from workflows.utils import _nanoid as nanoid
+
+from .abstract_workflow_store import (
     AbstractWorkflowStore,
     HandlerQuery,
     PersistentHandler,
     Status,
 )
-from workflows.server.keyed_lock import KeyedLock
-from workflows.server.memory_workflow_store import MemoryWorkflowStore
-
-# Protocol models are used on the client side; server responds with plain dicts
-from workflows.utils import _nanoid as nanoid
+from .keyed_lock import KeyedLock
+from .memory_workflow_store import MemoryWorkflowStore
 
 logger = logging.getLogger()
 

@@ -4,16 +4,16 @@
 import json
 
 import pytest
+from workflows.client.protocol.serializable_events import (
+    EventEnvelope,
+    EventEnvelopeWithMetadata,
+    EventValidationError,
+)
 from workflows.events import (
     Event,
     StepState,
     StepStateChanged,
     StopEvent,
-)
-from workflows.protocol.serializable_events import (
-    EventEnvelope,
-    EventEnvelopeWithMetadata,
-    EventValidationError,
 )
 
 

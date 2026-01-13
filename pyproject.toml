@@ -25,6 +25,14 @@ root = "packages/llama-index-workflows"
 pythonVersion = "3.9"
 
 [[tool.basedpyright.executionEnvironments]]
+root = "packages/llama-index-workflows-client"
+pythonVersion = "3.9"
+
+[[tool.basedpyright.executionEnvironments]]
+root = "packages/llama-index-workflows-server"
+pythonVersion = "3.9"
+
+[[tool.basedpyright.executionEnvironments]]
 root = "packages/llama-index-utils-workflow"
 pythonVersion = "3.9"
 

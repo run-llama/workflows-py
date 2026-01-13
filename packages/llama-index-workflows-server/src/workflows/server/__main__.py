@@ -6,7 +6,7 @@ from pathlib import Path
 
 import uvicorn
 
-from workflows.server.server import WorkflowServer
+from .server import WorkflowServer
 
 
 def run_server() -> None:

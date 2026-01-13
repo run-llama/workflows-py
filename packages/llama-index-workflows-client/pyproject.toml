@@ -16,8 +16,8 @@ dependencies = [
   "llama-index-workflows>=2.12.0,<3.0.0"
 ]
 
-[project.scripts]
-llama-index-workflows-client = "llama_index_workflows_client:main"
-
 [tool.uv.build-backend]
 module-name = "workflows.client"
+
+[tool.uv.sources]
+llama-index-workflows = {workspace = true}

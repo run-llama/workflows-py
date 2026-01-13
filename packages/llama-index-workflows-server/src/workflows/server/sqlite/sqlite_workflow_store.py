@@ -4,12 +4,13 @@ from datetime import datetime
 from typing import List, Optional, Sequence, Tuple
 
 from workflows.context import JsonSerializer
-from workflows.server.abstract_workflow_store import (
+
+from ..abstract_workflow_store import (
     AbstractWorkflowStore,
     HandlerQuery,
     PersistentHandler,
 )
-from workflows.server.sqlite.migrate import run_migrations
+from .migrate import run_migrations
 
 
 class SqliteWorkflowStore(AbstractWorkflowStore):

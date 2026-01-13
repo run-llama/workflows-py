@@ -2,7 +2,7 @@ import httpx
 import pytest
 from httpx import ASGITransport, AsyncClient
 from workflows.client import WorkflowClient
-from workflows.protocol.serializable_events import EventEnvelopeWithMetadata
+from workflows.client.protocol.serializable_events import EventEnvelopeWithMetadata
 from workflows.server.memory_workflow_store import MemoryWorkflowStore
 from workflows.server.server import WorkflowServer
 

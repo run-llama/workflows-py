@@ -1,2 +1,3 @@
-def main() -> None:
-    pass
+from .client import WorkflowClient
+
+__all__ = ["WorkflowClient"]

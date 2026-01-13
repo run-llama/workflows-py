@@ -1,6 +1,6 @@
 from typing import Dict, List
 
-from workflows.server.abstract_workflow_store import (
+from .abstract_workflow_store import (
     AbstractWorkflowStore,
     HandlerQuery,
     PersistentHandler,

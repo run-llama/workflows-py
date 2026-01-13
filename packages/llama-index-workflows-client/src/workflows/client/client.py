@@ -12,10 +12,10 @@ from typing import (
 )
 
 import httpx
-
 from workflows import Context
 from workflows.events import Event, StartEvent
-from workflows.protocol import (
+
+from .protocol import (
     CancelHandlerResponse,
     HandlerData,
     HandlersListResponse,
@@ -24,7 +24,7 @@ from workflows.protocol import (
     Status,
     WorkflowsListResponse,
 )
-from workflows.protocol.serializable_events import (
+from .protocol.serializable_events import (
     EventEnvelope,
     EventEnvelopeWithMetadata,
 )

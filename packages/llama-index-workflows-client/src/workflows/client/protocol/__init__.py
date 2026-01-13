@@ -3,9 +3,9 @@ from __future__ import annotations
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
-
-from workflows.protocol.serializable_events import EventEnvelopeWithMetadata
 from workflows.representation import WorkflowGraph
+
+from .serializable_events import EventEnvelopeWithMetadata
 
 # Shared protocol types between client and server
 

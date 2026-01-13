@@ -19,7 +19,7 @@ from workflows.server.abstract_workflow_store import (
 from workflows.server.memory_workflow_store import MemoryWorkflowStore
 from workflows.server.server import WorkflowServer, _WorkflowHandler
 
-from tests.server.util import async_yield, wait_for_passing
+from .util import async_yield, wait_for_passing
 
 
 class WaitableExternalEvent(HumanResponseEvent):
