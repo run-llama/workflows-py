@@ -80,14 +80,18 @@ exclude = ["**/uv.lock", "**/.gitignore"]
 [tool.uv.sources]
 llama-index-workflows = {workspace = true}
 llama-index-utils-workflow = {workspace = true}
-workflows-dev = {workspace = true}
 llama-index-integration-tests = {workspace = true}
+llama-index-workflows-client = {workspace = true}
+llama-index-workflows-server = {workspace = true}
+workflows-dev = {workspace = true}
 
 [tool.uv.workspace]
 members = [
+  "docs/api_docs",
   "packages/llama-index-workflows",
   "packages/llama-index-utils-workflow",
   "packages/workflows-dev",
   "packages/llama-index-integration-tests",
-  "docs/api_docs"
+  "packages/llama-index-workflows-client",
+  "packages/llama-index-workflows-server"
 ]
