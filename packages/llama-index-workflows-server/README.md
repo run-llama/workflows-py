@@ -1,39 +1,30 @@
 # LlamaIndex Workflows Server
 
-Server, client and protocol components for [LlamaIndex Workflows](https://pypi.org/project/llama-index-workflows/).
+HTTP server for serving [LlamaIndex Workflows](https://pypi.org/project/llama-index-workflows/) as web services.
 
 This package provides:
 
 - **WorkflowServer**: HTTP server for serving workflows as web services
-- **WorkflowClient**: Async HTTP client for interacting with workflow servers
-- **Protocol**: Shared data models for client-server communication
+- **AbstractWorkflowStore**: Interface for workflow handler persistence
+- **SqliteWorkflowStore**: SQLite-based persistence implementation
 
 ## Installation
 
 ```bash
-# Install with server dependencies
-pip install llama-index-workflows-server[server]
-
-# Install with client dependencies
-pip install llama-index-workflows-server[client]
-
-# Install both
-pip install llama-index-workflows-server[server,client]
+pip install llama-index-workflows-server
 ```
 
 Or via the main workflows package:
 
 ```bash
 pip install llama-index-workflows[server]
-pip install llama-index-workflows[client]
 ```
 
 ## Usage
 
-### Server
-
 ```python
 from workflows import Workflow, Context, step
+from workflows.events import StartEvent, StopEvent
 from workflows.server import WorkflowServer
 
 class MyWorkflow(Workflow):
@@ -46,7 +37,13 @@ server.add(MyWorkflow, name="my-workflow")
 server.run()
 ```
 
-### Client
+## Client
+
+The workflow client is included in the main `llama-index-workflows` package:
+
+```bash
+pip install llama-index-workflows[client]
+```
 
 ```python
 from workflows.client import WorkflowClient

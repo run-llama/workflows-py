@@ -23,20 +23,17 @@ dev = [
 [project]
 name = "llama-index-workflows-server"
 version = "0.1.0"
-description = "Server, client and protocol components for LlamaIndex Workflows - HTTP server for serving workflows as web services."
+description = "HTTP server for serving LlamaIndex Workflows as web services."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.9"
 dependencies = [
   "llama-index-workflows>=2.11.7",
+  "starlette>=0.39.0",
+  "uvicorn>=0.32.0",
 ]
 
-[project.optional-dependencies]
-server = ["starlette>=0.39.0", "uvicorn>=0.32.0"]
-client = ["httpx>=0.28.1,<1"]
-
 [tool.hatch.envs.server]
-features = ["server"]
 dependencies = ["pyyaml>=6.0.2"]
 
 [tool.hatch.envs.server.scripts]

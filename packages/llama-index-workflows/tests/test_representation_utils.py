@@ -15,9 +15,6 @@ from workflows.representation_utils import extract_workflow_structure
 from workflows.resource import Resource
 from workflows.workflow import Workflow
 
-from conftest import DummyWorkflow  # type: ignore[import]
-
-
 @pytest.fixture()
 def ground_truth_repr() -> WorkflowGraph:
     return WorkflowGraph(
@@ -70,9 +67,10 @@ def ground_truth_repr() -> WorkflowGraph:
     )
 
 
-def test_extract_workflow_structure(ground_truth_repr: WorkflowGraph) -> None:
-    wf = DummyWorkflow()
-    graph = extract_workflow_structure(workflow=wf)
+def test_extract_workflow_structure(
+    workflow: Workflow, ground_truth_repr: WorkflowGraph
+) -> None:
+    graph = extract_workflow_structure(workflow=workflow)
     assert isinstance(graph, WorkflowGraph)
     assert sorted(
         [node.id for node in ground_truth_repr.nodes if node.node_type == "step"]
