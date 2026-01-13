@@ -52,7 +52,7 @@ from workflows.protocol.serializable_events import (
     EventEnvelopeWithMetadata,
     EventValidationError,
 )
-from workflows.representation_utils import extract_workflow_structure
+from workflows.representation import get_workflow_representation
 from workflows.server.abstract_workflow_store import (
     AbstractWorkflowStore,
     HandlerQuery,
@@ -653,7 +653,7 @@ class WorkflowServer:
         """
         workflow = self._extract_workflow(request)
         try:
-            workflow_graph = extract_workflow_structure(workflow.workflow)
+            workflow_graph = get_workflow_representation(workflow.workflow)
         except Exception as e:
             raise HTTPException(
                 detail=f"Error while getting JSON workflow representation: {e}",

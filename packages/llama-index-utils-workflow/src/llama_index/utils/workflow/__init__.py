@@ -18,15 +18,15 @@ from workflows.events import (
     StopEvent,
 )
 from workflows.handler import WorkflowHandler
-from workflows.protocol import (
+from workflows.representation import (
     WorkflowGenericNode,
     WorkflowGraph,
     WorkflowGraphEdge,
     WorkflowGraphNode,
     WorkflowResourceNode,
 )
-from workflows.representation_utils import (
-    extract_workflow_structure as _extract_workflow_structure,
+from workflows.representation import (
+    get_workflow_representation as _get_workflow_representation,
 )
 from workflows.runtime.types.results import AddCollectedEvent, StepWorkerResult
 from workflows.runtime.types.ticks import TickAddEvent, TickStepResult, WorkflowTick
@@ -511,7 +511,7 @@ def draw_all_possible_flows(
         max_label_length: Maximum label length before truncation (None = no limit)
 
     """
-    graph = _extract_workflow_structure(workflow)
+    graph = _get_workflow_representation(workflow)
     _render_pyvis(graph, filename, notebook, max_label_length)
 
 
@@ -532,7 +532,7 @@ def draw_all_possible_flows_mermaid(
         The Mermaid diagram as a string
 
     """
-    graph = _extract_workflow_structure(workflow)
+    graph = _get_workflow_representation(workflow)
     return _render_mermaid(graph, filename, max_label_length)
 
 

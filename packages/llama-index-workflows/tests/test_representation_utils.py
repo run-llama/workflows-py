@@ -3,15 +3,15 @@ from typing import Annotated
 import pytest
 from workflows.decorators import step
 from workflows.events import Event, StartEvent, StopEvent
-from workflows.protocol import (
+from workflows.representation import (
     WorkflowEventNode,
     WorkflowExternalNode,
     WorkflowGraph,
     WorkflowGraphEdge,
     WorkflowResourceNode,
     WorkflowStepNode,
+    get_workflow_representation,
 )
-from workflows.representation_utils import extract_workflow_structure
 from workflows.resource import Resource
 from workflows.workflow import Workflow
 
@@ -70,9 +70,9 @@ def ground_truth_repr() -> WorkflowGraph:
     )
 
 
-def test_extract_workflow_structure(ground_truth_repr: WorkflowGraph) -> None:
+def test_get_workflow_representation(ground_truth_repr: WorkflowGraph) -> None:
     wf = DummyWorkflow()
-    graph = extract_workflow_structure(workflow=wf)
+    graph = get_workflow_representation(workflow=wf)
     assert isinstance(graph, WorkflowGraph)
     assert sorted(
         [node.id for node in ground_truth_repr.nodes if node.node_type == "step"]
@@ -174,10 +174,10 @@ class WorkflowWithResources(Workflow):
         return StopEvent(result="done")
 
 
-def test_extract_workflow_structure_with_resources() -> None:
+def test_get_workflow_representation_with_resources() -> None:
     """Test that resource nodes are extracted from workflow with resources."""
     wf = WorkflowWithResources()
-    graph = extract_workflow_structure(workflow=wf)
+    graph = get_workflow_representation(workflow=wf)
 
     # Should have resource nodes
     resource_nodes = [n for n in graph.nodes if isinstance(n, WorkflowResourceNode)]
@@ -196,7 +196,7 @@ def test_extract_workflow_structure_with_resources() -> None:
 def test_resource_node_edges_have_variable_names() -> None:
     """Test that edges from steps to resources have the variable name as label."""
     wf = WorkflowWithResources()
-    graph = extract_workflow_structure(workflow=wf)
+    graph = get_workflow_representation(workflow=wf)
 
     # Find edges to resource nodes
     resource_edges = [e for e in graph.edges if e.target.startswith("resource_")]
@@ -235,7 +235,7 @@ def test_resource_nodes_are_deduplicated() -> None:
             return StopEvent(result="done")
 
     wf = WorkflowWithSharedResource()
-    graph = extract_workflow_structure(workflow=wf)
+    graph = get_workflow_representation(workflow=wf)
 
     # Should have only one resource node (deduplicated)
     resource_nodes = [n for n in graph.nodes if isinstance(n, WorkflowResourceNode)]
@@ -270,7 +270,7 @@ def test_multiple_different_resources() -> None:
             return StopEvent(result="done")
 
     wf = WorkflowWithMultipleResources()
-    graph = extract_workflow_structure(workflow=wf)
+    graph = get_workflow_representation(workflow=wf)
 
     # Should have two different resource nodes
     resource_nodes = [n for n in graph.nodes if isinstance(n, WorkflowResourceNode)]
@@ -326,7 +326,7 @@ def test_resource_node_serialization() -> None:
 def test_graph_with_resources() -> None:
     """Test that workflow graph with resources is correct."""
     wf = WorkflowWithResources()
-    graph = extract_workflow_structure(workflow=wf)
+    graph = get_workflow_representation(workflow=wf)
 
     # Check resource nodes are in the nodes list
     resource_nodes = [n for n in graph.nodes if isinstance(n, WorkflowResourceNode)]
