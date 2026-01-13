@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import inspect
+import os
 
 from workflows import Workflow
 from workflows.decorators import StepConfig, StepFunction
@@ -25,6 +26,21 @@ from workflows.utils import (
     get_steps_from_class,
     get_steps_from_instance,
 )
+
+
+def _make_relative_path(absolute_path: str | None) -> str | None:
+    """Convert an absolute path to a relative path from cwd.
+
+    Falls back to the original path if it cannot be made relative
+    (e.g., on different drives on Windows).
+    """
+    if absolute_path is None:
+        return None
+    try:
+        return os.path.relpath(absolute_path)
+    except ValueError:
+        # On Windows, relpath raises ValueError if paths are on different drives
+        return absolute_path
 
 
 def _get_event_type_chain(cls: type) -> list[str]:
@@ -64,7 +80,7 @@ def _create_resource_node(resource_def: ResourceDefinition) -> WorkflowResourceN
     source_file: str | None = None
     source_line: int | None = None
     try:
-        source_file = inspect.getfile(factory)
+        source_file = _make_relative_path(inspect.getfile(factory))
     except (TypeError, OSError):
         pass
     try:
@@ -249,7 +265,22 @@ def get_workflow_representation(workflow: Workflow) -> WorkflowGraph:
             )
 
     workflow_description = inspect.getdoc(workflow)
-    return WorkflowGraph(nodes=nodes, edges=edges, description=workflow_description)
+
+    # Extract workflow metadata
+    workflow_name = workflow.__class__.__name__
+    workflow_path: str | None = None
+    try:
+        workflow_path = _make_relative_path(inspect.getfile(workflow.__class__))
+    except (TypeError, OSError):
+        pass
+
+    return WorkflowGraph(
+        nodes=nodes,
+        edges=edges,
+        description=workflow_description,
+        workflow_name=workflow_name,
+        workflow_path=workflow_path,
+    )
 
 
 __all__ = ["get_workflow_representation"]

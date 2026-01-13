@@ -85,6 +85,35 @@ def test_get_workflow_representation(ground_truth_repr: WorkflowGraph) -> None:
         assert edge in graph.edges
 
 
+def test_get_workflow_representation_includes_workflow_metadata() -> None:
+    """Test that workflow_name and workflow_path are populated."""
+    wf = DummyWorkflow()
+    graph = get_workflow_representation(workflow=wf)
+
+    # workflow_name should be the class name
+    assert graph.workflow_name == "DummyWorkflow"
+
+    # workflow_path should be a relative path to the source file
+    assert graph.workflow_path is not None
+    assert "conftest.py" in graph.workflow_path
+    # Should be relative (not start with / on Unix)
+    assert not graph.workflow_path.startswith("/")
+
+
+def test_resource_source_file_is_relative() -> None:
+    """Test that resource source_file is a relative path."""
+    wf = WorkflowWithResources()
+    graph = get_workflow_representation(workflow=wf)
+
+    resource_nodes = [n for n in graph.nodes if isinstance(n, WorkflowResourceNode)]
+    assert len(resource_nodes) == 1
+
+    resource_node = resource_nodes[0]
+    assert resource_node.source_file is not None
+    # Should be relative (not start with / on Unix)
+    assert not resource_node.source_file.startswith("/")
+
+
 def test_truncated_label() -> None:
     """Test that truncated_label method works correctly."""
     node = WorkflowStepNode(id="my_step", label="my_long_step_name")
@@ -760,17 +789,21 @@ def test_filter_by_node_type_no_matching_types() -> None:
     assert len(filtered.edges) == 1
 
 
-def test_filter_by_node_type_preserves_description() -> None:
-    """Test that the workflow description is preserved."""
+def test_filter_by_node_type_preserves_metadata() -> None:
+    """Test that the workflow metadata (description, name, path) is preserved."""
     graph = WorkflowGraph(
         nodes=[WorkflowStepNode(id="step1", label="Step 1")],
         edges=[],
         description="My workflow description",
+        workflow_name="MyWorkflow",
+        workflow_path="path/to/workflow.py",
     )
 
     filtered = graph.filter_by_node_type("event")
 
     assert filtered.description == "My workflow description"
+    assert filtered.workflow_name == "MyWorkflow"
+    assert filtered.workflow_path == "path/to/workflow.py"
 
 
 def test_filter_by_node_type_deduplicates_edges() -> None:

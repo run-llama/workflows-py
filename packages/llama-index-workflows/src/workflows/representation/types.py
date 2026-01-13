@@ -77,7 +77,7 @@ class WorkflowResourceNode(WorkflowNodeBase):
     )
     source_file: str | None = Field(
         default=None,
-        description="Absolute path to the source file containing the getter function",
+        description="Relative path to the source file containing the getter function",
     )
     source_line: int | None = Field(
         default=None, description="Line number where the getter function is defined"
@@ -148,6 +148,14 @@ class WorkflowGraph(BaseModel):
     description: str | None = Field(
         default=None,
         description="Documentation string extracted from the workflow class",
+    )
+    workflow_name: str | None = Field(
+        default=None,
+        description="Name of the workflow class",
+    )
+    workflow_path: str | None = Field(
+        default=None,
+        description="Relative path to the source file containing the workflow class",
     )
 
     def filter_by_node_type(self, *node_types: str) -> WorkflowGraph:
@@ -236,6 +244,8 @@ class WorkflowGraph(BaseModel):
             nodes=remaining_nodes,
             edges=new_edges,
             description=self.description,
+            workflow_name=self.workflow_name,
+            workflow_path=self.workflow_path,
         )
 
 
