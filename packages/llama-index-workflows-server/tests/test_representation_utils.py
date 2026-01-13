@@ -15,7 +15,7 @@ from workflows.representation_utils import extract_workflow_structure
 from workflows.resource import Resource
 from workflows.workflow import Workflow
 
-from .conftest import DummyWorkflow  # type: ignore[import]
+from conftest import DummyWorkflow  # type: ignore[import]
 
 
 @pytest.fixture()

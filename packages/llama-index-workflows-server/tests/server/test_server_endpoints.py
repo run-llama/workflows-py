@@ -430,9 +430,7 @@ async def test_stream_events_success(client: AsyncClient) -> None:
             if event_data:
                 events.append(event_data)
 
-    stream_events = [
-        e for e in events if e["qualified_name"] == "tests.server.conftest.StreamEvent"
-    ]
+    stream_events = [e for e in events if e.get("type") == "StreamEvent"]
     assert len(stream_events) == 3
     for i, event in enumerate(stream_events):
         assert "qualified_name" in event
@@ -477,9 +475,7 @@ async def test_stream_events_sse(client: AsyncClient) -> None:
     # Verify we got event values (not full event objects)
     # SSE format returns event data with event_type field
     stream_events = [
-        e
-        for e in events
-        if e["data"]["qualified_name"] == "tests.server.conftest.StreamEvent"
+        e for e in events if e["data"].get("type") == "StreamEvent"
     ]
     assert len(stream_events) == 2
 

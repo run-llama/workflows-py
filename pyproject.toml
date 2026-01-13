@@ -25,6 +25,10 @@ root = "packages/llama-index-workflows"
 pythonVersion = "3.9"
 
 [[tool.basedpyright.executionEnvironments]]
+root = "packages/llama-index-workflows-server"
+pythonVersion = "3.9"
+
+[[tool.basedpyright.executionEnvironments]]
 root = "packages/llama-index-utils-workflow"
 pythonVersion = "3.9"
 
@@ -78,12 +82,14 @@ exclude = ["**/uv.lock", "**/.gitignore"]
 
 [tool.uv.sources]
 llama-index-workflows = {workspace = true}
+llama-index-workflows-server = {workspace = true}
 llama-index-utils-workflow = {workspace = true}
 workflows-dev = {workspace = true}
 
 [tool.uv.workspace]
 members = [
   "packages/llama-index-workflows",
+  "packages/llama-index-workflows-server",
   "packages/llama-index-utils-workflow",
   "packages/workflows-dev",
   "docs/api_docs"

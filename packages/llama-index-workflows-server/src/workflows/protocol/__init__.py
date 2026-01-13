@@ -304,6 +304,7 @@ class WorkflowGraph(BaseModel):
 
 __all__ = [
     "Status",
+    "is_status_completed",
     "HandlerData",
     "HandlersListResponse",
     "HealthResponse",
