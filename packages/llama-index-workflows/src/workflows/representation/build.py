@@ -28,14 +28,76 @@ from workflows.utils import (
 )
 
 
-def _make_relative_path(absolute_path: str | None) -> str | None:
-    """Convert an absolute path to a relative path from cwd.
+def _is_installed_package(path: str) -> bool:
+    """Check if a path is in site-packages (i.e., a non-editable install)."""
+    # Normalize path separators for cross-platform comparison
+    normalized = path.replace("\\", "/")
+    return "site-packages" in normalized or "dist-packages" in normalized
 
-    Falls back to the original path if it cannot be made relative
-    (e.g., on different drives on Windows).
+
+def _get_package_relative_path(absolute_path: str, module_name: str | None) -> str | None:
+    """Get a package-relative path like 'package/subpackage/module.py'.
+
+    Returns None if the package path cannot be determined.
+    """
+    if not module_name:
+        return None
+
+    try:
+        # Get the top-level package name
+        top_package = module_name.split(".")[0]
+
+        # Try to find the package location
+        import importlib.util
+
+        spec = importlib.util.find_spec(top_package)
+        if spec is None or spec.origin is None:
+            return None
+
+        # Get package root directory
+        package_init = spec.origin
+        if package_init.endswith("__init__.py"):
+            package_root = os.path.dirname(package_init)
+        else:
+            # Single-file module
+            package_root = os.path.dirname(package_init)
+
+        # Make path relative to package root's parent (so it includes the package name)
+        package_parent = os.path.dirname(package_root)
+        abs_path = os.path.abspath(absolute_path)
+
+        if os.path.commonpath([package_parent, abs_path]) == package_parent:
+            rel_path = os.path.relpath(abs_path, package_parent)
+            return rel_path
+
+    except (ImportError, ValueError, OSError, AttributeError):
+        pass
+
+    return None
+
+
+def _make_relative_path(
+    absolute_path: str | None, module_name: str | None = None
+) -> str | None:
+    """Convert an absolute path to a relative or package-qualified path.
+
+    Returns:
+        - Relative path from cwd for local/editable packages
+        - Package-relative path (e.g., 'package/module.py') for installed packages
+        - The original absolute path as fallback
     """
     if absolute_path is None:
         return None
+
+    # For installed packages, return package-relative path
+    if _is_installed_package(absolute_path):
+        package_path = _get_package_relative_path(absolute_path, module_name)
+        if package_path is not None:
+            return package_path
+        # Fall back to absolute for installed packages we can't resolve
+        return absolute_path
+
+    # For local/editable packages, return relative path from cwd
     try:
         return os.path.relpath(absolute_path)
     except ValueError:
@@ -80,7 +142,9 @@ def _create_resource_node(resource_def: ResourceDefinition) -> WorkflowResourceN
     source_file: str | None = None
     source_line: int | None = None
     try:
-        source_file = _make_relative_path(inspect.getfile(factory))
+        source_file = _make_relative_path(
+            inspect.getfile(factory), getattr(factory, "__module__", None)
+        )
     except (TypeError, OSError):
         pass
     try:
@@ -270,7 +334,10 @@ def get_workflow_representation(workflow: Workflow) -> WorkflowGraph:
     workflow_name = workflow.__class__.__name__
     workflow_path: str | None = None
     try:
-        workflow_path = _make_relative_path(inspect.getfile(workflow.__class__))
+        workflow_path = _make_relative_path(
+            inspect.getfile(workflow.__class__),
+            getattr(workflow.__class__, "__module__", None),
+        )
     except (TypeError, OSError):
         pass
 
