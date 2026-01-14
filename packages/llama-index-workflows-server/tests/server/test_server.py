@@ -5,7 +5,7 @@ from typing import Any
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
-from llama_index.workflows.server import WorkflowServer
+from llama_agents.server import WorkflowServer
 from starlette.middleware import Middleware
 from workflows.workflow import Workflow
 
@@ -31,8 +31,8 @@ def test_add_workflow(simple_test_workflow: Workflow) -> None:
 
 
 @pytest.mark.asyncio
-@patch("llama_index.workflows.server.server.uvicorn.Server")
-@patch("llama_index.workflows.server.server.uvicorn.Config")
+@patch("llama_agents.server.server.uvicorn.Server")
+@patch("llama_agents.server.server.uvicorn.Config")
 async def test_serve(mock_config: Any, mock_server: Any) -> None:
     server = WorkflowServer()
     mock_server_instance = AsyncMock()
@@ -45,8 +45,8 @@ async def test_serve(mock_config: Any, mock_server: Any) -> None:
 
 
 @pytest.mark.asyncio
-@patch("llama_index.workflows.server.server.uvicorn.Server")
-@patch("llama_index.workflows.server.server.uvicorn.Config")
+@patch("llama_agents.server.server.uvicorn.Server")
+@patch("llama_agents.server.server.uvicorn.Config")
 async def test_serve_with_uvicorn_config(mock_config: Any, mock_server: Any) -> None:
     server = WorkflowServer()
     mock_server_instance = AsyncMock()

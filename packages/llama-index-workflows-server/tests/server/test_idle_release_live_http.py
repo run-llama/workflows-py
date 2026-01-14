@@ -7,9 +7,9 @@ from __future__ import annotations
 from datetime import timedelta
 
 import pytest
-from llama_index.workflows.client.client import WorkflowClient
-from llama_index.workflows.server import WorkflowServer
-from llama_index.workflows.server.memory_workflow_store import MemoryWorkflowStore
+from llama_agents.client.client import WorkflowClient
+from llama_agents.server import WorkflowServer
+from llama_agents.server.memory_workflow_store import MemoryWorkflowStore
 from server_test_fixtures import (
     live_server,  # type: ignore[import]
     wait_for_passing,  # type: ignore[import]

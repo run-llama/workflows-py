@@ -21,7 +21,7 @@ import asyncio
 from workflows import Workflow, step
 from workflows.context import Context
 from workflows.events import Event, StartEvent, StopEvent
-from llama_index.workflows.server import WorkflowServer
+from llama_agents.server import WorkflowServer
 
 
 class StreamEvent(Event):
@@ -290,7 +290,7 @@ In order to interact with a deployed `WorkflowServer` programmatically, beyond t
 Assuming you are running the server example from above, we can use `WorkflowClient` in the following way:
 
 ```python
-from llama_index.workflows.client import WorkflowClient
+from llama_agents.client import WorkflowClient
 
 async def main():
     client = WorkflowClient(base_url="http://0.0.0.0:8080")
@@ -330,7 +330,7 @@ from workflows.events import (
     InputRequiredEvent,
     HumanResponseEvent,
 )
-from llama_index.workflows.server import WorkflowServer
+from llama_agents.server import WorkflowServer
 
 class RequestEvent(InputRequiredEvent):
     prompt: str
@@ -358,7 +358,7 @@ await server.serve("0.0.0.0", "8080")
 You can now run the workflow and, when the human interaction is required, send the human response back:
 
 ```python
-from llama_index.workflows.client import WorkflowClient
+from llama_agents.client import WorkflowClient
 
 client = WorkflowClient(base_url="http://0.0.0.0:8080")
 handler = await client.run_workflow_nowait("human")

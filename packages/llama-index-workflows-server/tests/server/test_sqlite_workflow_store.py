@@ -1,11 +1,11 @@
 from pathlib import Path
 
 import pytest
-from llama_index.workflows.server.abstract_workflow_store import (
+from llama_agents.server.abstract_workflow_store import (
     HandlerQuery,
     PersistentHandler,
 )
-from llama_index.workflows.server.sqlite.sqlite_workflow_store import (
+from llama_agents.server.sqlite.sqlite_workflow_store import (
     SqliteWorkflowStore,
 )
 from workflows.events import StopEvent

@@ -5,12 +5,12 @@ from typing import AsyncGenerator
 
 import pytest
 from httpx import ASGITransport, AsyncClient
-from llama_index.workflows.server import WorkflowServer
-from llama_index.workflows.server.abstract_workflow_store import (
+from llama_agents.server import WorkflowServer
+from llama_agents.server.abstract_workflow_store import (
     HandlerQuery,
     PersistentHandler,
 )
-from llama_index.workflows.server.memory_workflow_store import MemoryWorkflowStore
+from llama_agents.server.memory_workflow_store import MemoryWorkflowStore
 from server_test_fixtures import (  # type: ignore[import]
     ExternalEvent,
     RequestedExternalEvent,

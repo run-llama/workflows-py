@@ -1,6 +1,6 @@
 import asyncio
 
-from llama_index.workflows.client import WorkflowClient
+from llama_agents.client import WorkflowClient
 from workflows.events import (
     HumanResponseEvent,
     StopEvent,

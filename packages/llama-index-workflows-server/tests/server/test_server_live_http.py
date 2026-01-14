@@ -8,8 +8,8 @@ import contextlib
 from typing import AsyncGenerator
 
 import pytest
-from llama_index.workflows.client.client import WorkflowClient
-from llama_index.workflows.server import WorkflowServer
+from llama_agents.client.client import WorkflowClient
+from llama_agents.server import WorkflowServer
 from server_test_fixtures import (  # type: ignore[import]
     ExternalEvent,
     RequestedExternalEvent,

@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, AsyncGenerator, Awaitable, Callable, cast
 
 import uvicorn
-from llama_index.workflows.client.protocol import (
+from llama_agents.client.protocol import (
     CancelHandlerResponse,
     HandlerData,
     HandlersListResponse,
@@ -24,7 +24,7 @@ from llama_index.workflows.client.protocol import (
     WorkflowSchemaResponse,
     is_status_completed,
 )
-from llama_index.workflows.client.protocol.serializable_events import (
+from llama_agents.client.protocol.serializable_events import (
     EventEnvelope,
     EventEnvelopeWithMetadata,
     EventValidationError,

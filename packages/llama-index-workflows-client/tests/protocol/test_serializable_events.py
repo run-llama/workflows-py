@@ -4,7 +4,7 @@
 import json
 
 import pytest
-from llama_index.workflows.client.protocol.serializable_events import (
+from llama_agents.client.protocol.serializable_events import (
     EventEnvelope,
     EventEnvelopeWithMetadata,
     EventValidationError,

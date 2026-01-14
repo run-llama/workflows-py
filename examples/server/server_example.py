@@ -1,6 +1,6 @@
 import asyncio
 
-from llama_index.workflows.server import WorkflowServer
+from llama_agents.server import WorkflowServer
 from workflows import Workflow, step
 from workflows.context import Context
 from workflows.events import (

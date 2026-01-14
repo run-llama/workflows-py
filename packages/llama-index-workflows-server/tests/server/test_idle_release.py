@@ -9,13 +9,13 @@ from typing import Any, Optional
 import pytest
 import time_machine
 from httpx import ASGITransport, AsyncClient
-from llama_index.workflows.server.abstract_workflow_store import (
+from llama_agents.server.abstract_workflow_store import (
     HandlerQuery,
     PersistentHandler,
     Status,
 )
-from llama_index.workflows.server.memory_workflow_store import MemoryWorkflowStore
-from llama_index.workflows.server.server import WorkflowServer, _WorkflowHandler
+from llama_agents.server.memory_workflow_store import MemoryWorkflowStore
+from llama_agents.server.server import WorkflowServer, _WorkflowHandler
 from server_test_fixtures import async_yield, wait_for_passing
 from workflows import Context, Workflow, step
 from workflows.events import HumanResponseEvent, StartEvent, StopEvent

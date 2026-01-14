@@ -8,12 +8,12 @@ from client_test_workflows import (
     greeting_wf,
 )
 from httpx import ASGITransport, AsyncClient
-from llama_index.workflows.client import WorkflowClient
-from llama_index.workflows.client.protocol.serializable_events import (
+from llama_agents.client import WorkflowClient
+from llama_agents.client.protocol.serializable_events import (
     EventEnvelopeWithMetadata,
 )
-from llama_index.workflows.server.memory_workflow_store import MemoryWorkflowStore
-from llama_index.workflows.server.server import WorkflowServer
+from llama_agents.server.memory_workflow_store import MemoryWorkflowStore
+from llama_agents.server.server import WorkflowServer
 
 
 @pytest.fixture()

@@ -7,7 +7,7 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-from llama_index.workflows.server.keyed_lock import KeyedLock
+from llama_agents.server.keyed_lock import KeyedLock
 
 
 @pytest.fixture
