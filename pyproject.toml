@@ -51,6 +51,15 @@ pythonVersion = "3.14"
 [tool.coverage.run]
 omit = ["**/tests/*"]
 
+[tool.mypy]
+explicit_package_bases = true
+exclude = [
+  "packages/llama-index-workflows-server/tests/",
+  "packages/llama-index-workflows-client/tests/",
+  "packages/llama-index-utils-workflow/tests/",
+  "packages/workflows-dev/tests/"
+]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 

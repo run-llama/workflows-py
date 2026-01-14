@@ -1,18 +1,19 @@
 import httpx
 import pytest
-from httpx import ASGITransport, AsyncClient
-from workflows.client import WorkflowClient
-from workflows.client.protocol.serializable_events import EventEnvelopeWithMetadata
-from workflows.server.memory_workflow_store import MemoryWorkflowStore
-from workflows.server.server import WorkflowServer
-
-from .client_workflows import (  # type: ignore[import]
+from client_test_workflows import (
     GreetEvent,
     InputEvent,
     OutputEvent,
     crashing_wf,
     greeting_wf,
 )
+from httpx import ASGITransport, AsyncClient
+from llama_index.workflows.client import WorkflowClient
+from llama_index.workflows.client.protocol.serializable_events import (
+    EventEnvelopeWithMetadata,
+)
+from llama_index.workflows.server.memory_workflow_store import MemoryWorkflowStore
+from llama_index.workflows.server.server import WorkflowServer
 
 
 @pytest.fixture()

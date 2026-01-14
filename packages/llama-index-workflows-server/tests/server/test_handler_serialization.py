@@ -8,12 +8,12 @@ from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
 import pytest
-from workflows.client.protocol import HandlerData
+from llama_index.workflows.client.protocol import HandlerData
+from llama_index.workflows.server.memory_workflow_store import MemoryWorkflowStore
+from llama_index.workflows.server.server import _WorkflowHandler
 from workflows.context import Context
 from workflows.events import Event, StopEvent
 from workflows.handler import WorkflowHandler
-from workflows.server.memory_workflow_store import MemoryWorkflowStore
-from workflows.server.server import _WorkflowHandler
 
 
 class MyStopEvent(StopEvent):

@@ -8,17 +8,16 @@ import contextlib
 from typing import AsyncGenerator
 
 import pytest
-from workflows import Workflow
-from workflows.client.client import WorkflowClient
-from workflows.events import StopEvent
-from workflows.server import WorkflowServer
-
-from .conftest import (  # type: ignore[import]
+from llama_index.workflows.client.client import WorkflowClient
+from llama_index.workflows.server import WorkflowServer
+from server_test_fixtures import (  # type: ignore[import]
     ExternalEvent,
     RequestedExternalEvent,
+    wait_for_passing,  # type: ignore[import]
 )
-from .util import live_server as live_server_ctx  # type: ignore[import]
-from .util import wait_for_passing  # type: ignore[import]
+from server_test_fixtures import live_server as live_server_ctx  # type: ignore[import]
+from workflows import Workflow
+from workflows.events import StopEvent
 
 
 @pytest.fixture

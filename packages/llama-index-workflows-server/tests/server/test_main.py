@@ -7,7 +7,7 @@ from typing import Any
 from unittest.mock import patch
 
 import pytest
-from workflows.server.__main__ import run_server
+from llama_index.workflows.server.__main__ import run_server
 
 
 def test_no_file_path_argument(capsys: Any) -> None:
@@ -78,7 +78,7 @@ def test_workflow_server_with_custom_name(tmp_path: Path) -> None:
     # Create a test Python file with WorkflowServer instance named differently
     test_file = tmp_path / "custom_server.py"
     test_file.write_text("""
-from workflows.server.server import WorkflowServer
+from llama_index.workflows.server.server import WorkflowServer
 
 # WorkflowServer with custom name
 my_app = WorkflowServer()
@@ -100,7 +100,7 @@ def test_multiple_workflow_servers_uses_first(tmp_path: Path) -> None:
     """Test that when multiple WorkflowServer instances exist, the first one is used."""
     test_file = tmp_path / "multiple_servers.py"
     test_file.write_text("""
-from workflows.server.server import WorkflowServer
+from llama_index.workflows.server.server import WorkflowServer
 
 # Multiple WorkflowServer instances
 first_server = WorkflowServer()
@@ -119,7 +119,7 @@ def test_environment_variables(tmp_path: Path) -> None:
     """Test that environment variables are used for host and port."""
     test_file = tmp_path / "env_test.py"
     test_file.write_text("""
-from workflows.server.server import WorkflowServer
+from llama_index.workflows.server.server import WorkflowServer
 
 server = WorkflowServer()
 """)
@@ -149,7 +149,7 @@ def test_module_loading_error(capsys: Any, tmp_path: Path) -> None:
     # Create a file with syntax error
     test_file = tmp_path / "syntax_error.py"
     test_file.write_text("""
-from workflows.server.server import WorkflowServer
+from llama_index.workflows.server.server import WorkflowServer
 
 # Syntax error
 def invalid_syntax(
@@ -186,7 +186,7 @@ def test_non_workflow_server_objects_ignored(tmp_path: Path) -> None:
     """Test that objects that aren't WorkflowServer instances are ignored."""
     test_file = tmp_path / "mixed_objects.py"
     test_file.write_text("""
-from workflows.server.server import WorkflowServer
+from llama_index.workflows.server.server import WorkflowServer
 
 # Various non-WorkflowServer objects
 string_var = "not a server"

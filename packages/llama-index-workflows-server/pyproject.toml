@@ -17,10 +17,10 @@ dependencies = [
 ]
 
 [project.scripts]
-llama-index-workflows-server = "workflows.server.__main__:run_server"
+llama-index-workflows-server = "llama_index.workflows.server.__main__:run_server"
 
 [tool.uv.build-backend]
-module-name = "workflows.server"
+module-name = "llama_index.workflows.server"
 
 [tool.uv.sources]
 llama-index-workflows = {workspace = true}

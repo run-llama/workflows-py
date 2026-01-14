@@ -1,9 +1,9 @@
 from typing import Literal
 
+from llama_index.workflows.server import WorkflowServer
 from pydantic import Field
 from workflows import Context, Workflow, step
 from workflows.events import Event, StartEvent, StopEvent
-from workflows.server import WorkflowServer
 
 
 class InputNumbers(StartEvent):

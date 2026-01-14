@@ -1,8 +1,8 @@
 import asyncio
 from typing import Literal
 
+from llama_index.workflows.client import WorkflowClient
 from pydantic import Field
-from workflows.client import WorkflowClient
 from workflows.events import StartEvent
 
 

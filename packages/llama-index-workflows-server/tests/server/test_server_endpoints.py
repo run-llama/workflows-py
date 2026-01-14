@@ -14,19 +14,23 @@ from typing import Any, AsyncGenerator, AsyncIterator
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient, Response
+from llama_index.workflows.server import WorkflowServer
+from llama_index.workflows.server.abstract_workflow_store import (
+    HandlerQuery,
+    PersistentHandler,
+)
+from llama_index.workflows.server.memory_workflow_store import MemoryWorkflowStore
 from llama_index_instrumentation.dispatcher import active_instrument_tags
+from server_test_fixtures import (
+    ExternalEvent,  # type: ignore[import]
+    wait_for_passing,  # type: ignore[import]
+)
 from workflows import Context, step
 
 # Prepare the event to send
 from workflows.context.serializers import JsonSerializer
 from workflows.events import StartEvent, StopEvent
-from workflows.server import WorkflowServer
-from workflows.server.abstract_workflow_store import HandlerQuery, PersistentHandler
-from workflows.server.memory_workflow_store import MemoryWorkflowStore
 from workflows.workflow import Workflow
-
-from .conftest import ExternalEvent  # type: ignore[import]
-from .util import wait_for_passing  # type: ignore[import]
 
 
 class CustomStopEvent(StopEvent):
@@ -431,7 +435,7 @@ async def test_stream_events_success(client: AsyncClient) -> None:
                 events.append(event_data)
 
     stream_events = [
-        e for e in events if e["qualified_name"] == "tests.server.conftest.StreamEvent"
+        e for e in events if e["qualified_name"] == "server_test_fixtures.StreamEvent"
     ]
     assert len(stream_events) == 3
     for i, event in enumerate(stream_events):
@@ -479,7 +483,7 @@ async def test_stream_events_sse(client: AsyncClient) -> None:
     stream_events = [
         e
         for e in events
-        if e["data"]["qualified_name"] == "tests.server.conftest.StreamEvent"
+        if e["data"]["qualified_name"] == "server_test_fixtures.StreamEvent"
     ]
     assert len(stream_events) == 2
 

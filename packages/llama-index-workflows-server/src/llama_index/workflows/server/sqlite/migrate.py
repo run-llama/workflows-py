@@ -12,7 +12,7 @@ from importlib import import_module, resources
 logger = logging.getLogger(__name__)
 
 
-_MIGRATIONS_PKG = "workflows.server.sqlite.migrations"
+_MIGRATIONS_PKG = "llama_index.workflows.server.sqlite.migrations"
 _USER_VERSION_PATTERN = re.compile(r"pragma\s+user_version\s*=\s*(\d+)", re.IGNORECASE)
 
 

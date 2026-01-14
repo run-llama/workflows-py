@@ -7,16 +7,15 @@ from __future__ import annotations
 from datetime import timedelta
 
 import pytest
-from workflows import Context, Workflow, step
-from workflows.client.client import WorkflowClient
-from workflows.events import Event, StartEvent, StopEvent, WorkflowIdleEvent
-from workflows.server import WorkflowServer
-from workflows.server.memory_workflow_store import MemoryWorkflowStore
-
-from .util import (
+from llama_index.workflows.client.client import WorkflowClient
+from llama_index.workflows.server import WorkflowServer
+from llama_index.workflows.server.memory_workflow_store import MemoryWorkflowStore
+from server_test_fixtures import (
     live_server,  # type: ignore[import]
     wait_for_passing,  # type: ignore[import]
 )
+from workflows import Context, Workflow, step
+from workflows.events import Event, StartEvent, StopEvent, WorkflowIdleEvent
 
 
 class WaitableExternalEvent(Event):
