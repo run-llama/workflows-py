@@ -248,8 +248,11 @@ def get_workflow_representation(workflow: Workflow) -> WorkflowGraph:
                 )
             )
 
+    workflow_name = type(workflow).__name__
     workflow_description = inspect.getdoc(workflow)
-    return WorkflowGraph(nodes=nodes, edges=edges, description=workflow_description)
+    return WorkflowGraph(
+        name=workflow_name, nodes=nodes, edges=edges, description=workflow_description
+    )
 
 
 __all__ = ["get_workflow_representation"]

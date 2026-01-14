@@ -339,7 +339,7 @@ def _extract_single_agent_structure(agent: BaseWorkflowAgent) -> WorkflowGraph:
             # Add edge from agent to tool
             edges.append(WorkflowGraphEdge(source="agent", target=tool_id))
 
-    return WorkflowGraph(nodes=nodes, edges=edges)
+    return WorkflowGraph(name=agent.name, nodes=nodes, edges=edges)
 
 
 def _process_tools_and_handoffs(
@@ -428,7 +428,7 @@ def _extract_agent_workflow_structure(
         agent_nodes = [n for n in nodes if n.node_type == "workflow_agent"]
         edges.append(WorkflowGraphEdge(source=agent_nodes[-1].id, target="output"))
 
-    return WorkflowGraph(nodes=nodes, edges=edges)
+    return WorkflowGraph(name=type(agent_workflow).__name__, nodes=nodes, edges=edges)
 
 
 def _extract_execution_graph(
