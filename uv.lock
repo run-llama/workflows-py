@@ -1644,7 +1644,7 @@ wheels = [
 
 [[package]]
 name = "llama-index-utils-workflow"
-version = "0.6.0"
+version = "0.7.0"
 source = { editable = "packages/llama-index-utils-workflow" }
 dependencies = [
     { name = "llama-index-core" },
@@ -1677,7 +1677,7 @@ dev = [
 
 [[package]]
 name = "llama-index-workflows"
-version = "2.11.7"
+version = "2.12.0"
 source = { editable = "packages/llama-index-workflows" }
 dependencies = [
     { name = "eval-type-backport", marker = "python_full_version < '3.10'" },
