@@ -1,5 +1,11 @@
 # llama-index-workflows
 
+## 2.12.1
+
+### Patch Changes
+
+- 40be1c7: add workflow class name to WorkflowGraph representation
+
 ## 2.12.0
 
 ### Minor Changes
