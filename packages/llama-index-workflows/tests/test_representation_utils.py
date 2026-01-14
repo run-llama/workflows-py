@@ -21,6 +21,7 @@ from .conftest import DummyWorkflow  # type: ignore[import]
 @pytest.fixture()
 def ground_truth_repr() -> WorkflowGraph:
     return WorkflowGraph(
+        name="DummyWorkflow",
         nodes=[
             WorkflowStepNode(
                 id="end_step",
@@ -96,6 +97,7 @@ def test_truncated_label() -> None:
 def test_graph_serialization() -> None:
     """Test that WorkflowGraphNodeEdges serializes correctly to JSON."""
     graph = WorkflowGraph(
+        name="TestWorkflow",
         nodes=[
             WorkflowStepNode(id="test", label="test"),
             WorkflowEventNode(
@@ -451,6 +453,7 @@ def test_resource_node_serialization_roundtrip() -> None:
 def test_graph_with_all_node_types_serialization() -> None:
     """Test full graph serialization/deserialization with all node types."""
     graph = WorkflowGraph(
+        name="TestWorkflow",
         nodes=[
             WorkflowStepNode(id="step1", label="Step 1"),
             WorkflowEventNode(
@@ -509,6 +512,7 @@ def test_graph_with_all_node_types_serialization() -> None:
 def test_graph_deserialization_from_raw_json() -> None:
     """Test that graph can be deserialized from raw JSON dict."""
     raw_data = {
+        "name": "TestWorkflow",
         "nodes": [
             {"id": "step1", "label": "Step 1", "node_type": "step"},
             {
@@ -544,6 +548,7 @@ def test_graph_deserialization_from_raw_json() -> None:
 def test_filter_by_node_type_removes_nodes() -> None:
     """Test that filter_by_node_type removes specified node types."""
     graph = WorkflowGraph(
+        name="TestWorkflow",
         nodes=[
             WorkflowStepNode(id="step1", label="Step 1"),
             WorkflowEventNode(
@@ -572,6 +577,7 @@ def test_filter_by_node_type_removes_nodes() -> None:
 def test_filter_by_node_type_resolves_edges() -> None:
     """Test that edges through filtered nodes are resolved."""
     graph = WorkflowGraph(
+        name="TestWorkflow",
         nodes=[
             WorkflowStepNode(id="step1", label="Step 1"),
             WorkflowEventNode(
@@ -599,6 +605,7 @@ def test_filter_by_node_type_resolves_edges() -> None:
 def test_filter_by_node_type_chain_of_filtered_nodes() -> None:
     """Test filtering handles chains of filtered nodes."""
     graph = WorkflowGraph(
+        name="TestWorkflow",
         nodes=[
             WorkflowStepNode(id="step1", label="Step 1"),
             WorkflowEventNode(
@@ -635,6 +642,7 @@ def test_filter_by_node_type_chain_of_filtered_nodes() -> None:
 def test_filter_by_node_type_multiple_types() -> None:
     """Test filtering multiple node types at once."""
     graph = WorkflowGraph(
+        name="TestWorkflow",
         nodes=[
             WorkflowStepNode(id="step1", label="Step 1"),
             WorkflowEventNode(
@@ -667,6 +675,7 @@ def test_filter_by_node_type_multiple_types() -> None:
 def test_filter_by_node_type_preserves_direct_edges() -> None:
     """Test that direct edges between remaining nodes are preserved."""
     graph = WorkflowGraph(
+        name="TestWorkflow",
         nodes=[
             WorkflowStepNode(id="step1", label="Step 1"),
             WorkflowStepNode(id="step2", label="Step 2"),
@@ -694,6 +703,7 @@ def test_filter_by_node_type_preserves_direct_edges() -> None:
 def test_filter_by_node_type_uses_filtered_node_label() -> None:
     """Test that the first filtered node's label becomes the new edge label."""
     graph = WorkflowGraph(
+        name="TestWorkflow",
         nodes=[
             WorkflowStepNode(id="step1", label="Step 1"),
             WorkflowEventNode(
@@ -720,6 +730,7 @@ def test_filter_by_node_type_uses_filtered_node_label() -> None:
 def test_filter_by_node_type_preserves_direct_edge_labels() -> None:
     """Test that labels on direct edges are preserved."""
     graph = WorkflowGraph(
+        name="TestWorkflow",
         nodes=[
             WorkflowStepNode(id="step1", label="Step 1"),
             WorkflowResourceNode(id="resource1", label="Resource"),
@@ -746,6 +757,7 @@ def test_filter_by_node_type_preserves_direct_edge_labels() -> None:
 def test_filter_by_node_type_no_matching_types() -> None:
     """Test filtering with types that don't exist in graph."""
     graph = WorkflowGraph(
+        name="TestWorkflow",
         nodes=[
             WorkflowStepNode(id="step1", label="Step 1"),
             WorkflowStepNode(id="step2", label="Step 2"),
@@ -763,6 +775,7 @@ def test_filter_by_node_type_no_matching_types() -> None:
 def test_filter_by_node_type_preserves_description() -> None:
     """Test that the workflow description is preserved."""
     graph = WorkflowGraph(
+        name="TestWorkflow",
         nodes=[WorkflowStepNode(id="step1", label="Step 1")],
         edges=[],
         description="My workflow description",
@@ -776,6 +789,7 @@ def test_filter_by_node_type_preserves_description() -> None:
 def test_filter_by_node_type_deduplicates_edges() -> None:
     """Test that duplicate edges are not created."""
     graph = WorkflowGraph(
+        name="TestWorkflow",
         nodes=[
             WorkflowStepNode(id="step1", label="Step 1"),
             WorkflowEventNode(

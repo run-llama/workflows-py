@@ -139,6 +139,7 @@ class WorkflowGraphEdge(BaseModel):
 class WorkflowGraph(BaseModel):
     """Complete workflow graph structure containing all nodes and edges."""
 
+    name: str = Field(description="Name of the workflow class")
     nodes: list[WorkflowGraphNode] = Field(
         description="All nodes in the workflow graph"
     )
@@ -233,6 +234,7 @@ class WorkflowGraph(BaseModel):
                     )
 
         return WorkflowGraph(
+            name=self.name,
             nodes=remaining_nodes,
             edges=new_edges,
             description=self.description,
