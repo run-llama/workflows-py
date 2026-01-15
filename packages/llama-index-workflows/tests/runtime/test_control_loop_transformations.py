@@ -70,6 +70,7 @@ from workflows.runtime.types.ticks import (
     TickPublishEvent,
     TickStepResult,
     TickTimeout,
+    WorkflowTick,
 )
 
 
@@ -954,7 +955,7 @@ def test_rebuild_state_from_ticks_clears_in_progress(base_state: BrokerState) ->
 
     # Simulate ticks from a resumed run where rewind_in_progress assigned new IDs
     # These ticks reference worker IDs 0 and 1 (not 1 and 2 from checkpoint)
-    ticks = [
+    ticks: list[WorkflowTick] = [
         # Worker 0 starts (after rewind assigned new ID)
         TickAddEvent(event=event1),
         # Worker 0 completes
@@ -988,8 +989,12 @@ def test_rebuild_state_from_ticks_preserves_queue_order(
     base_state: BrokerState,
 ) -> None:
     """
-    Test that rebuild_state_from_ticks preserves in_progress events by moving them
-    to the front of the queue (like rewind_in_progress does).
+    Test that rebuild_state_from_ticks applies rewind_in_progress which moves
+    in_progress events to the front of the queue and then re-starts them.
+
+    Since the base fixture has num_workers=1, only one event can be in_progress
+    at a time. The originally in_progress event (event1) should be re-started
+    with worker_id=0, and event2 should remain in the queue.
     """
     event1 = MyTestEvent(value=1)
     event2 = MyTestEvent(value=2)
@@ -1014,13 +1019,15 @@ def test_rebuild_state_from_ticks_preserves_queue_order(
         EventAttempt(event=event2, attempts=0, first_attempt_at=None)
     ]
 
-    # No ticks - just test that rebuild clears in_progress properly
+    # No ticks - test that rebuild applies rewind_in_progress
     result = rebuild_state_from_ticks(base_state, [])
 
-    # in_progress should be cleared
-    assert len(result.workers["test_step"].in_progress) == 0
-    # Queue should have in_progress event at front, preserving retry info
-    assert len(result.workers["test_step"].queue) == 2
-    assert result.workers["test_step"].queue[0].event == event1
-    assert result.workers["test_step"].queue[0].attempts == 2
-    assert result.workers["test_step"].queue[1].event == event2
+    # rewind_in_progress re-starts workers, so event1 should be back in in_progress
+    # with worker_id=0 (reassigned) and retry info preserved
+    assert len(result.workers["test_step"].in_progress) == 1
+    assert result.workers["test_step"].in_progress[0].event == event1
+    assert result.workers["test_step"].in_progress[0].worker_id == 0
+    assert result.workers["test_step"].in_progress[0].attempts == 2
+    # Queue should have event2 (since num_workers=1, only 1 can be in_progress)
+    assert len(result.workers["test_step"].queue) == 1
+    assert result.workers["test_step"].queue[0].event == event2
