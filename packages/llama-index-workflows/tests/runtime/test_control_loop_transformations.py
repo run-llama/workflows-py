@@ -34,6 +34,7 @@ from workflows.runtime.control_loop import (
     _process_publish_event_tick,
     _process_step_result_tick,
     _process_timeout_tick,
+    rebuild_state_from_ticks,
     rewind_in_progress,
 )
 from workflows.runtime.types.commands import (
@@ -904,3 +905,120 @@ def test_no_idle_event_when_workflow_completes(base_state: BrokerState) -> None:
         if isinstance(c, CommandPublishEvent) and isinstance(c.event, WorkflowIdleEvent)
     ]
     assert len(idle_commands) == 0
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Tests for rebuild_state_from_ticks
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_rebuild_state_from_ticks_clears_in_progress(base_state: BrokerState) -> None:
+    """
+    Test that rebuild_state_from_ticks clears in_progress before replaying ticks.
+
+    This is critical for checkpointing resumed workflows. When a workflow is resumed:
+    1. The checkpoint has in_progress workers with IDs like [1, 2, 3]
+    2. rewind_in_progress() clears in_progress and assigns new IDs [0, 1, 2]
+    3. New ticks reference the new worker IDs [0, 1, 2]
+    4. When checkpointing again, rebuild_state_from_ticks must also clear in_progress
+       before replaying ticks, otherwise worker IDs won't match.
+
+    Without the fix, this would raise: "Worker 0 not found in in_progress"
+    """
+    event1 = MyTestEvent(value=1)
+    event2 = MyTestEvent(value=2)
+
+    # Simulate checkpoint state with in_progress workers using IDs 1, 2
+    # (as if they were mid-execution when checkpoint was taken)
+    shared_state = StepWorkerState(
+        step_name="test_step",
+        collected_events={},
+        collected_waiters=[],
+    )
+    base_state.workers["test_step"].in_progress = [
+        InProgressState(
+            event=event1,
+            worker_id=1,  # Original worker ID from checkpoint
+            shared_state=shared_state,
+            attempts=0,
+            first_attempt_at=100.0,
+        ),
+        InProgressState(
+            event=event2,
+            worker_id=2,  # Original worker ID from checkpoint
+            shared_state=shared_state,
+            attempts=0,
+            first_attempt_at=100.0,
+        ),
+    ]
+
+    # Simulate ticks from a resumed run where rewind_in_progress assigned new IDs
+    # These ticks reference worker IDs 0 and 1 (not 1 and 2 from checkpoint)
+    ticks = [
+        # Worker 0 starts (after rewind assigned new ID)
+        TickAddEvent(event=event1),
+        # Worker 0 completes
+        TickStepResult(
+            step_name="test_step",
+            worker_id=0,  # New ID assigned after rewind
+            event=event1,
+            result=[StepWorkerResult(result=OtherEvent(data="done1"))],
+        ),
+        # Worker 1 starts (after rewind assigned new ID)
+        TickAddEvent(event=event2),
+        # Worker 1 completes
+        TickStepResult(
+            step_name="test_step",
+            worker_id=0,  # Reuses ID 0 since previous worker completed
+            event=event2,
+            result=[StepWorkerResult(result=StopEvent(result="done2"))],
+        ),
+    ]
+
+    # This should NOT raise "Worker 0 not found in in_progress"
+    # because rebuild_state_from_ticks now clears in_progress before replaying
+    final_state = rebuild_state_from_ticks(base_state, ticks)
+
+    # Verify the workflow completed
+    assert final_state.is_running is False
+    assert len(final_state.workers["test_step"].in_progress) == 0
+
+
+def test_rebuild_state_from_ticks_preserves_queue_order(base_state: BrokerState) -> None:
+    """
+    Test that rebuild_state_from_ticks preserves in_progress events by moving them
+    to the front of the queue (like rewind_in_progress does).
+    """
+    event1 = MyTestEvent(value=1)
+    event2 = MyTestEvent(value=2)
+
+    # State with in_progress worker
+    shared_state = StepWorkerState(
+        step_name="test_step",
+        collected_events={},
+        collected_waiters=[],
+    )
+    base_state.workers["test_step"].in_progress = [
+        InProgressState(
+            event=event1,
+            worker_id=0,
+            shared_state=shared_state,
+            attempts=2,  # Already retried twice
+            first_attempt_at=100.0,
+        ),
+    ]
+    # Also has queued event
+    base_state.workers["test_step"].queue = [
+        EventAttempt(event=event2, attempts=0, first_attempt_at=None)
+    ]
+
+    # No ticks - just test that rebuild clears in_progress properly
+    result = rebuild_state_from_ticks(base_state, [])
+
+    # in_progress should be cleared
+    assert len(result.workers["test_step"].in_progress) == 0
+    # Queue should have in_progress event at front, preserving retry info
+    assert len(result.workers["test_step"].queue) == 2
+    assert result.workers["test_step"].queue[0].event == event1
+    assert result.workers["test_step"].queue[0].attempts == 2
+    assert result.workers["test_step"].queue[1].event == event2
