@@ -9,7 +9,7 @@ import logging
 import pickle
 import threading
 import weakref
-from typing import Any, Callable, Union, cast
+from typing import Any, Callable, Optional, Union, cast
 from unittest import mock
 
 import pytest
@@ -1064,7 +1064,7 @@ async def test_workflow_parallel_resume() -> None:
 
     class ParallelResumeWorkflow(Workflow):
         @step
-        async def step1(self, ev: StartEvent, ctx: Context) -> Par | None:
+        async def step1(self, ev: StartEvent, ctx: Context) -> Optional[Par]:  # noqa - python 3.9 struggles here with | None
             for i in range(4):
                 ctx.send_event(Par(id=i))
             return None
