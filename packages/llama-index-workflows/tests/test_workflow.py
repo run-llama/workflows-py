@@ -1076,7 +1076,7 @@ async def test_workflow_parallel_resume() -> None:
             return ParDone(id=ev.id)
 
         @step
-        async def step3(self, ev: ParDone, ctx: Context) -> StopEvent | None:
+        async def step3(self, ev: ParDone, ctx: Context) -> Optional[StopEvent]:  # noqa - python 3.9 struggles here with | None
             if ev.id == allowed_index:
                 allowed_done.set()
             if ctx.collect_events(ev, [ParDone] * 4) is None:
