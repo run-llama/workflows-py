@@ -237,6 +237,10 @@ class WorkflowBroker(Generic[MODEL_T]):
     ) -> list[Event] | None:
         step_ctx = self._get_step_ctx(fn="collect_events")
 
+        # If no events are expected, return an empty list immediately
+        if not expected:
+            return []
+
         buffer_id = buffer_id or "default"
 
         collected_events = step_ctx.state.collected_events.get(buffer_id, [])
