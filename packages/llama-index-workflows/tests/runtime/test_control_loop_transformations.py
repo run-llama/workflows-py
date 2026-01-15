@@ -984,7 +984,9 @@ def test_rebuild_state_from_ticks_clears_in_progress(base_state: BrokerState) ->
     assert len(final_state.workers["test_step"].in_progress) == 0
 
 
-def test_rebuild_state_from_ticks_preserves_queue_order(base_state: BrokerState) -> None:
+def test_rebuild_state_from_ticks_preserves_queue_order(
+    base_state: BrokerState,
+) -> None:
     """
     Test that rebuild_state_from_ticks preserves in_progress events by moving them
     to the front of the queue (like rewind_in_progress does).

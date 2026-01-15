@@ -1046,3 +1046,61 @@ async def test_inner_step_can_access_run_id_from_instrument_tags() -> None:
     assert handler.run_id is not None
     assert run_id["run_id"] is not None
     assert run_id["run_id"] == handler.run_id
+
+
+class Par(Event):
+    id: int
+
+
+class ParDone(Event):
+    id: int
+
+
+@pytest.mark.asyncio
+async def test_workflow_parallel_resume() -> None:
+    allowed_done = asyncio.Event()
+    resume_event = asyncio.Event()
+    allowed_index = 0
+
+    class ParallelResumeWorkflow(Workflow):
+        @step
+        async def step1(self, ev: StartEvent, ctx: Context) -> Par | None:
+            for i in range(4):
+                ctx.send_event(Par(id=i))
+            return None
+
+        @step(num_workers=4)
+        async def par(self, ev: Par) -> ParDone:
+            if ev.id != allowed_index:
+                await resume_event.wait()
+            return ParDone(id=ev.id)
+
+        @step
+        async def step3(self, ev: ParDone, ctx: Context) -> StopEvent | None:
+            if ev.id == allowed_index:
+                allowed_done.set()
+            if ctx.collect_events(ev, [ParDone] * 4) is None:
+                return None
+            return StopEvent(result="Done")
+
+    wf = ParallelResumeWorkflow(timeout=10)
+    handler = wf.run()
+    await allowed_done.wait()
+    serialized_ctx = handler.ctx.to_dict()
+    try:
+        handler.cancel()
+        await handler.cancel_run()
+    except Exception:
+        pass
+    # immediately resume the workflow
+    allowed_index = 3
+    allowed_done.clear()
+    new_handler = wf.run(ctx=Context.from_dict(wf, serialized_ctx))
+    await allowed_done.wait()
+    # serialize again to detect inconsistencies
+    serialized_ctx = new_handler.ctx.to_dict()
+
+    # finally resume the workflow, and complete
+    new_handler = wf.run(ctx=Context.from_dict(wf, serialized_ctx))
+    resume_event.set()
+    await new_handler
