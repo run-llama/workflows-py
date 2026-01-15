@@ -1,5 +1,14 @@
 # llama-index-workflows
 
+## 2.12.2
+
+### Patch Changes
+
+- bfbfba4: Return an empty list for empty target events, rather than None
+- 85f948e: fix: rebuild_state_from_ticks clears in_progress before replaying
+
+  Fixed ctx.to_dict() failing with "Worker X not found in in_progress" when checkpointing resumed workflows. The function now also rewinds in progress when recreating from ticks, to match the actual behavior when resuming a workflow.
+
 ## 2.12.1
 
 ### Patch Changes
