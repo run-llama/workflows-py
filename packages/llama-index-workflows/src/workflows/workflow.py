@@ -263,6 +263,16 @@ class Workflow(metaclass=WorkflowMeta):
         """Returns all the steps, whether defined as methods or free functions."""
         return {**get_steps_from_instance(self), **self.__class__._step_functions}
 
+    @property
+    def is_modified(self) -> bool:
+        """Whether this workflow has dynamically-added steps.
+
+        Returns True if the workflow class has had steps added via add_step()
+        or @step(workflow=...). Returns False for workflows that only have
+        steps defined as methods on the class.
+        """
+        return bool(self.__class__._step_functions)
+
     def _get_start_event_instance(
         self, start_event: StartEvent | None, **kwargs: Any
     ) -> StartEvent:

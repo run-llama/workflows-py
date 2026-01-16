@@ -27,6 +27,16 @@ uv run --directory packages/llama-index-workflows pytest tests/test_server.py te
 uv run --directory packages/llama-index-workflows pytest -v
 ```
 
+## Testing Patterns
+
+We use **pytest** with idiomatic pytest patterns. Follow these guidelines:
+
+- **No Test Classes**: Do not use test classes to organize tests. Write tests as standalone functions. Achieve organization through descriptive function names (e.g., `test_create_job_with_invalid_input_raises_error`) or by splitting into separate test files.
+- **Pytest Fixtures**: Use fixtures for setup/teardown and shared test dependencies. Prefer fixtures over manual setup code repeated across tests.
+- **DRY Test Setup**: Do not repeat patches or setup code. Create reusable abstractions—fixtures, helper functions, or module-level constants—that can be shared across tests. Tests can easily be overwhelmed with setup; start from a rich suite of testing utilities to enable many small, expressive tests.
+- **Prefer Real Objects Over Mocks**: Use simple dataclasses and real objects directly when available rather than mocking them. Only mock external dependencies or things that are truly difficult to instantiate.
+- **Simple Testing Utilities**: Testing utilities should be basic—just functions, fixtures, and global variables. Avoid over-engineering test infrastructure.
+
 ### Linting & Formatting
 ```bash
 # Run pre-commit hooks

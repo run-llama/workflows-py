@@ -23,6 +23,7 @@ from starlette.responses import JSONResponse, StreamingResponse
 from starlette.routing import Route
 from starlette.schemas import SchemaGenerator
 from starlette.staticfiles import StaticFiles
+from typing_extensions import Self
 
 from workflows import Context, Workflow
 from workflows.events import (
@@ -52,6 +53,7 @@ from workflows.protocol.serializable_events import (
     EventEnvelopeWithMetadata,
     EventValidationError,
 )
+from workflows.registry import WorkflowRegistry
 from workflows.representation import get_workflow_representation
 from workflows.server.abstract_workflow_store import (
     AbstractWorkflowStore,
@@ -188,15 +190,45 @@ class WorkflowServer:
             "/", app=StaticFiles(directory=self._assets_path, html=True), name="ui"
         )
 
+    def add_workflows(self, workflows: dict[str, Workflow]) -> Self:
+        """Adds multiple workflows to the server.
+
+        Args:
+            workflows: A dictionary of workflow names and workflows.
+
+        Returns:
+            Self for chaining.
+        """
+        for name, workflow in workflows.items():
+            self.add_workflow(name, workflow)
+        return self
+
     def add_workflow(
         self,
         name: str,
         workflow: Workflow,
         additional_events: list[type[Event]] | None = None,
-    ) -> None:
+    ) -> Self:
+        """Adds a workflow to the server. Additionally registers modified workflow instances in the internal registry for plugin discovery.
+
+        Args:
+            name: The name of the workflow.
+            workflow: The workflow to add.
+            additional_events: Additional event types to register for serialization/deserialization.
+            Only needed if, for example, the workflow emits events that are not recorded in it's step type signatures.
+            For example a call to send_event or the response to a wait_for event.
+
+        Returns:
+            Self for chaining.
+        """
         self._workflows[name] = workflow
+        # Only register instances that have been modified (have dynamically-added steps).
+        # Unmodified instances can be discovered via their class in the registry.
+        if workflow.is_modified:
+            WorkflowRegistry.register_instance(workflow, name)
         if additional_events is not None:
             self._additional_events[name] = additional_events
+        return self
 
     async def start(self) -> "WorkflowServer":
         """Resumes previously running workflows, if they were not complete at last shutdown.

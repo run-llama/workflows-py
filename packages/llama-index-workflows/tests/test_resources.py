@@ -14,6 +14,7 @@ from workflows.resource import (
     Resource,
     ResourceConfig,
     ResourceManager,
+    _get_resource_config_data,
     _Resource,
     _ResourceConfig,
 )
@@ -23,6 +24,12 @@ from workflows.workflow import Workflow
 cc: int
 cc1: int
 cc2: int
+
+
+@pytest.fixture(autouse=True)
+def clear_resource_config_cache() -> None:
+    """Clear the lru_cache before each test to avoid cross-test pollution."""
+    _get_resource_config_data.cache_clear()
 
 
 class SecondEvent(Event):

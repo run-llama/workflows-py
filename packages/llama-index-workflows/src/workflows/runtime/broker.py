@@ -46,7 +46,7 @@ from workflows.runtime.types.step_function import (
     as_step_worker_function,
 )
 from workflows.runtime.types.ticks import TickAddEvent, TickCancelRun, WorkflowTick
-from workflows.runtime.workflow_registry import workflow_registry
+from workflows.runtime.workflow_plugin_registry import workflow_registry
 from workflows.utils import _nanoid as nanoid
 
 from ..context.state_store import MODEL_T

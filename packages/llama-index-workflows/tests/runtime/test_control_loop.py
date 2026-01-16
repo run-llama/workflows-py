@@ -38,7 +38,7 @@ from workflows.runtime.control_loop import control_loop
 from workflows.runtime.types.internal_state import BrokerState
 from workflows.runtime.types.step_function import as_step_worker_function
 from workflows.runtime.types.ticks import TickAddEvent, TickCancelRun
-from workflows.runtime.workflow_registry import workflow_registry
+from workflows.runtime.workflow_plugin_registry import workflow_registry
 from workflows.workflow import Workflow
 
 from .conftest import MockRuntimePlugin  # type: ignore[import]

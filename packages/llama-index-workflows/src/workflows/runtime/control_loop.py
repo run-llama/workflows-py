@@ -70,7 +70,7 @@ from workflows.runtime.types.ticks import (
     TickTimeout,
     WorkflowTick,
 )
-from workflows.runtime.workflow_registry import workflow_registry
+from workflows.runtime.workflow_plugin_registry import workflow_registry
 from workflows.workflow import Workflow
 
 if TYPE_CHECKING:
