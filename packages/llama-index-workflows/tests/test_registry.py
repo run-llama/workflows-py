@@ -5,8 +5,8 @@
 
 from workflows import Workflow, step
 from workflows.events import StartEvent, StopEvent
-from workflows.registry import WorkflowRegistry
-from workflows.registry._registry import _WorkflowRegistry, compute_workflow_id
+from workflows.plugins import WorkflowRegistry
+from workflows.plugins._registry import _WorkflowRegistry, compute_workflow_id
 
 # --- compute_workflow_id tests ---
 

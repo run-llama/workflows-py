@@ -37,6 +37,7 @@ from workflows.events import (
     WorkflowIdleEvent,
 )
 from workflows.handler import WorkflowHandler
+from workflows.plugins import WorkflowRegistry
 from workflows.protocol import (
     CancelHandlerResponse,
     HandlerData,
@@ -53,7 +54,6 @@ from workflows.protocol.serializable_events import (
     EventEnvelopeWithMetadata,
     EventValidationError,
 )
-from workflows.registry import WorkflowRegistry
 from workflows.representation import get_workflow_representation
 from workflows.server.abstract_workflow_store import (
     AbstractWorkflowStore,
