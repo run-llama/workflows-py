@@ -73,14 +73,14 @@ def get_pnpm_workspace_packages() -> list[PackageJson]:
 
 def sync_package_version_with_pyproject(
     package_dir: Path, packages: dict[str, PackageJson], js_package_name: str
-) -> None:
+) -> bool:
     """Sync version from package.json to pyproject.toml.
 
     Returns True if pyproject was changed, else False.
     """
     pyproject_path = package_dir / "pyproject.toml"
     if not pyproject_path.exists():
-        return
+        return False
 
     package_version = packages[js_package_name].version
     toml_doc, py_doc = PyProjectContainer.parse(pyproject_path.read_text())
@@ -98,6 +98,8 @@ def sync_package_version_with_pyproject(
         click.echo(
             f"Updated {pyproject_path} version to {package_version} and synced dependency specs"
         )
+
+    return changed
 
 
 def _publishable_packages() -> Generator[Path, None, None]:
