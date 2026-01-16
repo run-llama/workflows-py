@@ -87,10 +87,11 @@ def changeset_version() -> None:
     - Discovers all workspace packages via pnpm.
     - For any directory containing both package.json and pyproject.toml, and with
       package.json private: false, set pyproject [project].version to match the JS version.
-    - If a pyproject is updated, run `uv sync` in that directory to update its lock file.
+    - If a pyproject is updated, run `uv sync` in the root directory to update the lock file.
     """
     # Ensure we're at the repo root
-    os.chdir(Path(__file__).parents[4])
+    repo_root = Path(__file__).parents[4]
+    os.chdir(repo_root)
 
     # First, run changeset version to update all package.json files
     changesets.run_command(["npx", "@changesets/cli", "version"])
@@ -98,8 +99,17 @@ def changeset_version() -> None:
     # Enumerate workspace packages and perform syncs
     packages = changesets.get_pnpm_workspace_packages()
     version_map = {pkg.name: pkg for pkg in packages}
+    any_changed = False
     for pkg in packages:
-        changesets.sync_package_version_with_pyproject(pkg.path, version_map, pkg.name)
+        changed = changesets.sync_package_version_with_pyproject(
+            pkg.path, version_map, pkg.name
+        )
+        any_changed = any_changed or changed
+
+    # If any pyproject.toml was updated, run uv sync in the root to update the lock file
+    if any_changed:
+        click.echo("Running uv sync to update lock file...")
+        changesets.run_command(["uv", "sync"], cwd=repo_root)
 
 
 @cli.command("changeset-publish")
