@@ -4,9 +4,9 @@
 from __future__ import annotations
 
 import hashlib
-import weakref
 from typing import Iterator
 
+from workflows.runtime.types._identity_weak_ref import IdentityWeakKeyDict
 from workflows.utils import get_steps_from_class
 from workflows.workflow import Workflow
 
@@ -65,8 +65,8 @@ class _WorkflowRegistry:
     def __init__(self) -> None:
         # Instance registry: maps instance -> (name, computed_id)
         # Uses weak references to allow garbage collection
-        self._instances: weakref.WeakKeyDictionary[Workflow, tuple[str, str]] = (
-            weakref.WeakKeyDictionary()
+        self._instances: IdentityWeakKeyDict[Workflow, tuple[str, str]] = (
+            IdentityWeakKeyDict()
         )
 
     # --- Class Discovery ---

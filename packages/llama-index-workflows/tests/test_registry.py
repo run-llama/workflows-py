@@ -262,3 +262,31 @@ def test_workflow_is_modified_true_after_add_step() -> None:
 
     # After adding a step - modified
     assert DynamicWorkflow().is_modified is True
+
+
+def test_registry_instance_registration_unhashable_workflow() -> None:
+    """Instances with unhashable types (e.g., custom __eq__ without __hash__) can be registered."""
+
+    class UnhashableWorkflow(Workflow):
+        """A workflow that defines __eq__ without __hash__, making instances unhashable."""
+
+        def __eq__(self, other: object) -> bool:
+            return self is other
+
+        @step
+        async def do_work(self, ev: StartEvent) -> StopEvent:
+            return StopEvent()
+
+    instance = UnhashableWorkflow()
+
+    # Verify the instance is actually unhashable
+    try:
+        hash(instance)
+        raise AssertionError("Expected instance to be unhashable")
+    except TypeError:
+        pass  # Expected
+
+    # Registration should still work via identity-based hashing
+    wf_id = WorkflowRegistry.register_instance(instance, name="unhashable-test")
+    assert wf_id == "unhashable-test"
+    assert WorkflowRegistry.get_instance_id(instance) == "unhashable-test"

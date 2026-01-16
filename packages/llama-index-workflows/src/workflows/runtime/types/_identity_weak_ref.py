@@ -62,3 +62,21 @@ class IdentityWeakKeyDict(Generic[K, V]):
 
     def __delitem__(self, obj: K) -> None:
         del self._d[_IdentityWeakRef(obj)]
+
+    def keys(self) -> list[K]:
+        """Return all keys (that haven't been garbage collected)."""
+        result: list[K] = []
+        for ref in self._d.keys():
+            obj = ref()
+            if obj is not None:
+                result.append(obj)
+        return result
+
+    def items(self) -> list[tuple[K, V]]:
+        """Return all (key, value) pairs (for keys that haven't been garbage collected)."""
+        result: list[tuple[K, V]] = []
+        for ref, value in self._d.items():
+            obj = ref()
+            if obj is not None:
+                result.append((obj, value))
+        return result
