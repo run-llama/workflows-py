@@ -143,16 +143,20 @@ class WorkflowBroker(Generic[MODEL_T]):
                     try:
                         exception_raised = None
 
-                        step_workers: dict[str, StepWorkerFunction] = {}
-                        for name, step_func in workflow._get_steps().items():
-                            # Avoid capturing a bound method (which retains the instance).
-                            # If it's a bound method, extract the unbound function from the class.
-                            unbound = getattr(step_func, "__func__", step_func)
-                            step_workers[name] = as_step_worker_function(unbound)
+                        # Check if runtime has pre-registered workflows (from launch())
+                        registered = self._runtime.get_registered(workflow)
+                        if registered is None:
+                            # Fallback to on-the-fly registration
+                            step_workers: dict[str, StepWorkerFunction] = {}
+                            for name, step_func in workflow._get_steps().items():
+                                # Avoid capturing a bound method (which retains the instance).
+                                # If it's a bound method, extract the unbound function from the class.
+                                unbound = getattr(step_func, "__func__", step_func)
+                                step_workers[name] = as_step_worker_function(unbound)
 
-                        registered = workflow_registry.get_registered_workflow(
-                            workflow, self._runtime, control_loop, step_workers
-                        )
+                            registered = workflow_registry.get_registered_workflow(
+                                workflow, self._runtime, control_loop, step_workers
+                            )
 
                         # Register run context prior to invoking control loop
                         workflow_registry.register_run(

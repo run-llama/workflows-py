@@ -170,7 +170,7 @@ class RunAdapter(ABC):
 
     @abstractmethod
     async def sleep(self, seconds: float) -> None:
-        """Called from within the workflow control loop function to sleep for a given number of seconds. This should integrate with the host plugin for cases where an inactive workflow may be paused, and awoken later via memoized replay. Note that other tasks in the control loop may still be running simultaneously."""
+        """Called from within the workflow control loop function to sleep for a given number of seconds. This should integrate with the host runtime for cases where an inactive workflow may be paused, and awoken later via memoized replay. Note that other tasks in the control loop may still be running simultaneously."""
         ...
 
     @abstractmethod
@@ -212,7 +212,7 @@ def as_snapshottable_adapter(adapter: RunAdapter) -> SnapshottableAdapter | None
 class ControlLoopFunction(Protocol):
     """
     Protocol for a function that starts and runs the internal control loop for a workflow run.
-    Plugin decorators to the control loop function must maintain this signature.
+    Runtime decorators to the control loop function must maintain this signature.
     """
 
     def __call__(

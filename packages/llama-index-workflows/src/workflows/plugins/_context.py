@@ -13,7 +13,7 @@ def get_current_runtime() -> Runtime:
 
     Returns the context-scoped runtime if set, otherwise returns basic_runtime.
     """
-    # Inline import to avoid circular dependency (basic -> plugin -> workflow)
+    # Inline import to avoid circular dependency (basic -> runtime -> workflow)
     from workflows.plugins.basic import basic_runtime
 
     runtime = _current_runtime.get()
