@@ -10,7 +10,12 @@ from typing import Any, AsyncGenerator, Optional
 import pytest
 import time_machine
 from workflows.events import Event, StopEvent
-from workflows.runtime.types.plugin import ControlLoopFunction, Runtime, WorkflowRuntime
+from workflows.runtime.types.plugin import (
+    ControlLoopFunction,
+    RunAdapter,
+    Runtime,
+    SnapshottableAdapter,
+)
 from workflows.runtime.types.step_function import StepWorkerFunction
 from workflows.runtime.types.ticks import WorkflowTick
 from workflows.workflow import Workflow
@@ -25,12 +30,12 @@ class MockRuntime(Runtime):
     ) -> None:
         return
 
-    def new_runtime(self, run_id: str) -> WorkflowRuntime:
-        return MockWorkflowRuntime(run_id)
+    def new_adapter(self, run_id: str) -> RunAdapter:
+        return MockRunAdapter(run_id)
 
 
-class MockWorkflowRuntime(WorkflowRuntime):
-    """Mock WorkflowRuntime for testing control loops."""
+class MockRunAdapter(SnapshottableAdapter):
+    """Mock RunAdapter for testing control loops. Supports snapshot/replay."""
 
     def __init__(
         self, run_id: str, traveller: Optional[time_machine.Coordinates] = None
@@ -44,10 +49,20 @@ class MockWorkflowRuntime(WorkflowRuntime):
         self._traveller = traveller
         # Current time in seconds, can be advanced manually for testing
         self._current_time: float = time.time()
+        # Recorded ticks for snapshot/replay
+        self._ticks: list[WorkflowTick] = []
+
+    def on_tick(self, tick: WorkflowTick) -> None:
+        """Record a tick for replay."""
+        self._ticks.append(tick)
+
+    def replay(self) -> list[WorkflowTick]:
+        """Return recorded ticks for replay."""
+        return self._ticks
 
     async def close(self) -> None:
         """
-        Close the plugin.
+        Close the adapter.
         """
         pass
 
@@ -95,14 +110,14 @@ class MockWorkflowRuntime(WorkflowRuntime):
 
 
 @pytest.fixture
-async def test_plugin() -> MockWorkflowRuntime:
-    return MockWorkflowRuntime(run_id="test")
+async def test_plugin() -> MockRunAdapter:
+    return MockRunAdapter(run_id="test")
 
 
 @pytest.fixture
 async def test_plugin_with_time_machine() -> AsyncGenerator[
-    tuple[MockWorkflowRuntime, time_machine.Coordinates], None
+    tuple[MockRunAdapter, time_machine.Coordinates], None
 ]:
-    """Runtime with time-machine at epoch 1000.0, tick=True."""
+    """Adapter with time-machine at epoch 1000.0, tick=True."""
     with time_machine.travel("2026-01-07T12:27:00.000-08:00", tick=True) as traveller:
-        yield MockWorkflowRuntime(run_id="test", traveller=traveller), traveller
+        yield MockRunAdapter(run_id="test", traveller=traveller), traveller

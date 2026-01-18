@@ -22,8 +22,8 @@ from workflows.runtime.types.internal_state import BrokerState
 from workflows.runtime.types.plugin import (
     ControlLoopFunction,
     RegisteredWorkflow,
+    RunAdapter,
     Runtime,
-    WorkflowRuntime,
 )
 from workflows.runtime.types.step_function import (
     StepWorkerFunction,
@@ -97,12 +97,12 @@ class DBOSRuntime(Runtime):
             workflow_function=_dbos_control_loop, steps=wrapped_steps
         )
 
-    def new_runtime(self, run_id: str) -> WorkflowRuntime:
+    def new_adapter(self, run_id: str) -> RunAdapter:
         if not self._dbos_launched:
             raise RuntimeError(
                 "DBOS runtime not launched. Call runtime.launch() before running workflows."
             )
-        return DBOSWorkflowRuntime(run_id)
+        return DBOSRunAdapter(run_id)
 
     def launch(self) -> None:
         """
@@ -141,15 +141,14 @@ class DBOSRuntime(Runtime):
         # Note: DBOS doesn't have a clean shutdown API currently
 
 
-class DBOSWorkflowRuntime:
+class DBOSRunAdapter(RunAdapter):
     """
-    Workflow runtime backed by asyncio mailboxes, with durable timing via DBOS when available.
+    DBOS-backed run adapter for durable workflow execution.
 
     - send_event/wait_receive implement the tick mailbox used by the control loop
     - write_to_event_stream/stream_published_events expose published events to callers
     - get_now returns a stable value on first call within a run (durable if DBOS is installed)
     - sleep uses DBOS durable sleep when available, otherwise asyncio.sleep
-    - on_tick/replay provide a lightweight snapshot for debug/replay via the broker
     """
 
     def __init__(

@@ -31,7 +31,7 @@ from workflows.events import (
 from workflows.handler import WorkflowHandler
 from workflows.runtime.control_loop import control_loop, rebuild_state_from_ticks
 from workflows.runtime.types.internal_state import BrokerState
-from workflows.runtime.types.plugin import Runtime, WorkflowRuntime, as_snapshottable
+from workflows.runtime.types.plugin import RunAdapter, Runtime, as_snapshottable_adapter
 from workflows.runtime.types.results import (
     AddCollectedEvent,
     AddWaiter,
@@ -74,7 +74,7 @@ class WorkflowBroker(Generic[MODEL_T]):
     """
 
     _context: Context[MODEL_T]
-    _workflow_runtime: WorkflowRuntime
+    _run_adapter: RunAdapter
     _runtime: Runtime
     _is_running: bool
     _handler: WorkflowHandler | None
@@ -87,11 +87,11 @@ class WorkflowBroker(Generic[MODEL_T]):
         self,
         workflow: Workflow,
         context: Context[MODEL_T],
-        workflow_runtime: WorkflowRuntime,
+        run_adapter: RunAdapter,
         runtime: Runtime,
     ) -> None:
         self._context = context
-        self._workflow_runtime = workflow_runtime
+        self._run_adapter = run_adapter
         self._runtime = runtime
         self._is_running = False
         self._handler = None
@@ -158,7 +158,7 @@ class WorkflowBroker(Generic[MODEL_T]):
                         workflow_registry.register_run(
                             run_id=run_id,
                             workflow=workflow,
-                            runtime=self._workflow_runtime,
+                            run_adapter=self._run_adapter,
                             context=self._context,  # type: ignore
                             steps=registered.steps,
                         )
@@ -203,7 +203,7 @@ class WorkflowBroker(Generic[MODEL_T]):
 
     # outer handler API to cancel the workflow run
     def cancel_run(self) -> None:
-        self._execute_task(self._workflow_runtime.send_event(TickCancelRun()))
+        self._execute_task(self._run_adapter.send_event(TickCancelRun()))
 
     @property
     def is_running(self) -> bool:
@@ -218,9 +218,9 @@ class WorkflowBroker(Generic[MODEL_T]):
 
     @property
     def _tick_log(self) -> list[WorkflowTick]:
-        snapshottable = as_snapshottable(self._workflow_runtime)
+        snapshottable = as_snapshottable_adapter(self._run_adapter)
         if snapshottable is None:
-            raise WorkflowRuntimeError("Runtime is not snapshottable")
+            raise WorkflowRuntimeError("Adapter is not snapshottable")
         return snapshottable.replay()
 
     # mostly a debug API. May be removed in the future.
@@ -282,9 +282,7 @@ class WorkflowBroker(Generic[MODEL_T]):
                 )
 
         self._execute_task(
-            self._workflow_runtime.send_event(
-                TickAddEvent(event=message, step_name=step)
-            )
+            self._run_adapter.send_event(TickAddEvent(event=message, step_name=step))
         )
 
     def _get_step_ctx(self, fn: str) -> StepWorkerContext:
@@ -334,12 +332,12 @@ class WorkflowBroker(Generic[MODEL_T]):
 
     def stream_published_events(self) -> AsyncGenerator[Event, None]:
         """The internal queue used for streaming events to callers."""
-        return self._workflow_runtime.stream_published_events()
+        return self._run_adapter.stream_published_events()
 
     # step API only
     def write_event_to_stream(self, ev: Event | None) -> None:
         if ev is not None:
-            self._execute_task(self._workflow_runtime.write_to_event_stream(ev))
+            self._execute_task(self._run_adapter.write_to_event_stream(ev))
 
     async def shutdown(self) -> None:
         """Cancels the running workflow loop
@@ -348,8 +346,8 @@ class WorkflowBroker(Generic[MODEL_T]):
         broker as not running. Queues and state remain available so callers can
         inspect or drain leftover events.
         """
-        await self._workflow_runtime.send_event(TickCancelRun())
+        await self._run_adapter.send_event(TickCancelRun())
         for worker in self._workers:
             worker.cancel()
         self._workers.clear()
-        await self._workflow_runtime.close()
+        await self._run_adapter.close()

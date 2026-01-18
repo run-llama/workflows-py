@@ -6,8 +6,8 @@ from workflows.runtime.types._identity_weak_ref import IdentityWeakKeyDict
 from workflows.runtime.types.plugin import (
     ControlLoopFunction,
     RegisteredWorkflow,
+    RunAdapter,
     Runtime,
-    WorkflowRuntime,
 )
 from workflows.runtime.types.step_function import StepWorkerFunction
 from workflows.workflow import Workflow
@@ -62,14 +62,14 @@ class WorkflowRuntimeRegistry:
         self,
         run_id: str,
         workflow: Workflow,
-        runtime: WorkflowRuntime,
+        run_adapter: RunAdapter,
         context: "Context",
         steps: dict[str, StepWorkerFunction],
     ) -> None:
         self.run_contexts[run_id] = RegisteredRunContext(
             run_id=run_id,
             workflow=workflow,
-            runtime=runtime,
+            run_adapter=run_adapter,
             context=context,
             steps=steps,
         )
@@ -88,6 +88,6 @@ workflow_registry = WorkflowRuntimeRegistry()
 class RegisteredRunContext:
     run_id: str
     workflow: Workflow
-    runtime: WorkflowRuntime
+    run_adapter: RunAdapter
     context: "Context"
     steps: dict[str, StepWorkerFunction]

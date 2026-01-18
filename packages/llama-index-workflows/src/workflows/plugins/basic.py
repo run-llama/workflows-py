@@ -12,9 +12,9 @@ from workflows.events import Event, StopEvent
 from workflows.runtime.types.plugin import (
     ControlLoopFunction,
     RegisteredWorkflow,
+    RunAdapter,
     Runtime,
-    SnapshottableRuntime,
-    WorkflowRuntime,
+    SnapshottableAdapter,
 )
 from workflows.runtime.types.step_function import StepWorkerFunction
 from workflows.runtime.types.ticks import WorkflowTick
@@ -33,9 +33,8 @@ class BasicRuntime(Runtime):
         # No wrapping needed for basic runtime
         return None
 
-    def new_runtime(self, run_id: str) -> WorkflowRuntime:
-        snapshottable: SnapshottableRuntime = AsyncioWorkflowRuntime(run_id)
-        return snapshottable
+    def new_adapter(self, run_id: str) -> RunAdapter:
+        return AsyncioRunAdapter(run_id)
 
     # launch() and destroy() use default no-op implementations from Runtime
 
@@ -43,9 +42,12 @@ class BasicRuntime(Runtime):
 basic_runtime = BasicRuntime()
 
 
-class AsyncioWorkflowRuntime:
+class AsyncioRunAdapter(SnapshottableAdapter):
     """
-    A runtime interface to switch out a broker runtime (external library or service that manages durable/distributed step execution)
+    Default asyncio-based run adapter for non-durable workflow execution.
+
+    Provides event mailbox, streaming, and timing facilities using asyncio queues.
+    Also supports snapshot/replay for debugging.
     """
 
     def __init__(

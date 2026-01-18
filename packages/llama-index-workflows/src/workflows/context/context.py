@@ -33,7 +33,7 @@ from workflows.events import (
 from workflows.handler import WorkflowHandler
 from workflows.runtime.broker import WorkflowBroker
 from workflows.runtime.types.internal_state import BrokerState
-from workflows.runtime.types.plugin import Runtime, WorkflowRuntime
+from workflows.runtime.types.plugin import RunAdapter, Runtime
 from workflows.types import RunResultT
 
 from .serializers import BaseSerializer, JsonSerializer
@@ -205,19 +205,19 @@ class Context(Generic[MODEL_T]):
             return self._broker_run.is_running
 
     def _init_broker(
-        self, workflow: Workflow, workflow_runtime: WorkflowRuntime | None = None
+        self, workflow: Workflow, run_adapter: RunAdapter | None = None
     ) -> WorkflowBroker[MODEL_T]:
         if self._broker_run is not None:
             raise WorkflowRuntimeError("Broker already initialized")
-        # Initialize a workflow runtime (asyncio-based by default)
-        wf_runtime: WorkflowRuntime = workflow_runtime or self._runtime.new_runtime(
+        # Initialize a run adapter (asyncio-based by default)
+        adapter: RunAdapter = run_adapter or self._runtime.new_adapter(
             str(uuid.uuid4())
         )
         # Initialize the new broker implementation (broker2)
         broker: WorkflowBroker[MODEL_T] = WorkflowBroker(
             workflow=workflow,
             context=cast("Context[MODEL_T]", self),
-            workflow_runtime=wf_runtime,
+            run_adapter=adapter,
             runtime=self._runtime,
         )
         self._broker_run = broker

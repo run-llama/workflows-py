@@ -16,7 +16,6 @@ from typing import (
     Coroutine,
     Generator,
     Protocol,
-    cast,
 )
 
 from workflows.events import Event, StopEvent
@@ -74,11 +73,11 @@ class Runtime(ABC):
         ...
 
     @abstractmethod
-    def new_runtime(self, run_id: str) -> WorkflowRuntime:
+    def new_adapter(self, run_id: str) -> RunAdapter:
         """
-        Create a new runtime instance for a workflow run.
+        Create a new adapter instance for a workflow run.
 
-        Called on each workflow.run() to create the runtime that manages
+        Called on each workflow.run() to create the adapter that manages
         event delivery, timing, and I/O for that run.
         """
         ...
@@ -135,66 +134,78 @@ class Runtime(ABC):
             _current_runtime.reset(token)
 
 
-class WorkflowRuntime(Protocol):
+class RunAdapter(ABC):
     """
-    A LlamaIndex workflow's internal state is managed via an event-sourced reducer that triggers step executions. It communicates
-    with the outside world via messages. Messages may be sent to it to update its event log, and it in turn publishes messages that are made
-    available via the event stream.
+    Per-run adapter that manages event delivery and I/O for a single workflow run.
+
+    A RunAdapter is created by Runtime.new_adapter() for each workflow.run() call.
+    It handles the communication between the workflow control loop and external callers,
+    providing the event mailbox, streaming, and timing facilities.
     """
 
+    @abstractmethod
     async def send_event(self, tick: WorkflowTick) -> None:
         """Called from outside of the workflow to modify the workflow execution. WorkflowTick events are appended to a mailbox and processed sequentially"""
         ...
 
+    @abstractmethod
     async def wait_receive(self) -> WorkflowTick:
         """called from inside of the workflow control loop function to add a tick event from `send_event` to the mailbox. Function waits until a tick event is received."""
         ...
 
+    @abstractmethod
     async def write_to_event_stream(self, event: Event) -> None:
         """Called from inside of a workflow function to write / emit events to listeners outside of the workflow"""
         ...
 
+    @abstractmethod
     def stream_published_events(self) -> AsyncGenerator[Event, None]:
         """Called from outside of a workflow, reads event stream published by the workflow"""
         ...
 
+    @abstractmethod
     async def get_now(self) -> float:
         """Called from within the workflow control loop function to get the current time in seconds since epoch. If workflow is durable via replay, it should return a cached value from the first call. (e.g. this should be implemented similar to a regular durable step)"""
         ...
 
+    @abstractmethod
     async def sleep(self, seconds: float) -> None:
         """Called from within the workflow control loop function to sleep for a given number of seconds. This should integrate with the host plugin for cases where an inactive workflow may be paused, and awoken later via memoized replay. Note that other tasks in the control loop may still be running simultaneously."""
         ...
 
+    @abstractmethod
     async def close(self) -> None:
-        """API that the broker calls to close the plugin after a workflow run is fully complete"""
+        """API that the broker calls to close the adapter after a workflow run is fully complete"""
         ...
 
 
-class SnapshottableRuntime(WorkflowRuntime, Protocol):
+class SnapshottableAdapter(RunAdapter):
     """
-    Snapshot API. Optional mix in to a WorkflowRuntime. When implemented, plugin should offer a replay function to return the recorded
-    ticks so that callers can debug or replay the workflow. `on_tick` is called whenever a tick event is received externally OR as a result
-    from an internal command (e.g. a step function completing, a timeout occurring, etc.)
+    RunAdapter mixin that adds snapshot/replay capabilities.
 
+    Adapters that extend this class can record ticks for debugging or replay.
+    `on_tick` is called whenever a tick event is received externally OR as a
+    result from an internal command (e.g. a step function completing, a timeout
+    occurring, etc.)
+
+    Use `as_snapshottable_adapter()` to check if an adapter supports snapshotting.
     """
 
+    @abstractmethod
     def on_tick(self, tick: WorkflowTick) -> None:
         """Called whenever a tick event is received"""
         ...
 
+    @abstractmethod
     def replay(self) -> list[WorkflowTick]:
         """return the recorded ticks for replay"""
         ...
 
 
-def as_snapshottable(runtime: WorkflowRuntime) -> SnapshottableRuntime | None:
-    """Check if a runtime is snapshottable."""
-    if (
-        getattr(runtime, "on_tick", None) is not None
-        and getattr(runtime, "replay", None) is not None
-    ):
-        return cast(SnapshottableRuntime, runtime)
+def as_snapshottable_adapter(adapter: RunAdapter) -> SnapshottableAdapter | None:
+    """Check if an adapter is snapshottable."""
+    if isinstance(adapter, SnapshottableAdapter):
+        return adapter
     return None
 
 
