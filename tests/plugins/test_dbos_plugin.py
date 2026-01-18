@@ -1,21 +1,19 @@
 from __future__ import annotations
 
-from typing import Generator, Any
 from pathlib import Path
+from typing import Any, Generator
 
 import pytest
 
 # Require Python 3.10+ for dbos typing
 # if sys.version_info < (3, 10):  # pragma: no cover - environment guard
 #     pytest.skip("Requires Python 3.10 or higher", allow_module_level=True)
-
-from dbos import DBOS, DBOSConfig
-from workflows.plugins.dbos import dbos_runtime
-
-from workflows.workflow import Workflow
+from dbos import DBOS, DBOSConfig  # pyright: ignore[reportMissingImports]
+from workflows.context.context import Context
 from workflows.decorators import step
 from workflows.events import StartEvent, StopEvent
-from workflows.context.context import Context
+from workflows.plugins.dbos import dbos_runtime
+from workflows.workflow import Workflow
 
 
 @pytest.fixture()

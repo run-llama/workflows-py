@@ -62,3 +62,18 @@ class IdentityWeakKeyDict(Generic[K, V]):
 
     def __delitem__(self, obj: K) -> None:
         del self._d[_IdentityWeakRef(obj)]
+
+    @overload
+    def pop(self, obj: K) -> V: ...
+
+    @overload
+    def pop(self, obj: K, default: V) -> V: ...
+
+    @overload
+    def pop(self, obj: K, default: None) -> V | None: ...
+
+    def pop(self, obj: K, default: V | None = None) -> V | None:
+        return self._d.pop(_IdentityWeakRef(obj), default)
+
+    def clear(self) -> None:
+        self._d.clear()

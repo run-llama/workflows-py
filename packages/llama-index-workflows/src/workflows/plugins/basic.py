@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from typing import AsyncGenerator, Callable
+from typing import Any, AsyncGenerator, Callable
 
 from workflows.decorators import P, R
 from workflows.events import Event, StopEvent
@@ -21,21 +21,26 @@ from workflows.runtime.types.ticks import WorkflowTick
 from workflows.workflow import Workflow
 
 
-class BasicRuntime:
+class BasicRuntime(Plugin):
+    """Default asyncio-based runtime with no durability."""
+
     def register(
         self,
         workflow: Workflow,
         workflow_function: ControlLoopFunction,
-        steps: dict[str, StepWorkerFunction],
+        steps: dict[str, StepWorkerFunction[Any]],
     ) -> None | RegisteredWorkflow:
+        # No wrapping needed for basic runtime
         return None
 
     def new_runtime(self, run_id: str) -> WorkflowRuntime:
         snapshottable: SnapshottableRuntime = AsyncioWorkflowRuntime(run_id)
         return snapshottable
 
+    # launch() and destroy() use default no-op implementations from Plugin
 
-basic_runtime: Plugin = BasicRuntime()
+
+basic_runtime = BasicRuntime()
 
 
 class AsyncioWorkflowRuntime:
