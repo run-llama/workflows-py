@@ -99,6 +99,24 @@ class Plugin(ABC):
         """
         pass
 
+    def track_workflow(self, workflow: Workflow) -> None:
+        """
+        Track a workflow instance for registration at launch time.
+
+        Called by Workflow.__init__ to register with the plugin.
+        Override in plugins that need to track workflows (e.g., DBOSRuntime).
+        Default implementation is a no-op.
+        """
+        pass
+
+    def get_registered(self, workflow: Workflow) -> RegisteredWorkflow | None:
+        """
+        Get the registered workflow if available.
+
+        Returns the pre-registered workflow from launch(), or None if not tracked.
+        """
+        return None
+
     def __enter__(self) -> Plugin:
         """Enter context manager, setting this as the current plugin."""
         self._token = _current_plugin.set(self)

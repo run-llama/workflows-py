@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from workflows.runtime.types.plugin import Plugin
+from workflows.runtime.types.plugin import Plugin, _current_plugin
 
 
 def get_current_plugin() -> Plugin:
@@ -13,9 +13,8 @@ def get_current_plugin() -> Plugin:
 
     Returns the context-scoped plugin if set, otherwise returns basic_runtime.
     """
-    # Inline imports to avoid circular dependency (basic -> plugin -> workflow)
+    # Inline import to avoid circular dependency (basic -> plugin -> workflow)
     from workflows.plugins.basic import basic_runtime
-    from workflows.runtime.types.plugin import _current_plugin
 
     plugin = _current_plugin.get()
     return plugin if plugin is not None else basic_runtime

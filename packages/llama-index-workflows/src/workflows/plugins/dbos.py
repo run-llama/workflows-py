@@ -17,6 +17,7 @@ from typing import Any, AsyncGenerator
 from dbos import DBOS, SetWorkflowID  # type: ignore[import-not-found]
 
 from workflows.events import Event, StopEvent
+from workflows.runtime.control_loop import control_loop
 from workflows.runtime.types.internal_state import BrokerState
 from workflows.runtime.types.plugin import (
     ControlLoopFunction,
@@ -24,8 +25,12 @@ from workflows.runtime.types.plugin import (
     RegisteredWorkflow,
     WorkflowRuntime,
 )
-from workflows.runtime.types.step_function import StepWorkerFunction
+from workflows.runtime.types.step_function import (
+    StepWorkerFunction,
+    as_step_worker_function,
+)
 from workflows.runtime.types.ticks import WorkflowTick
+from workflows.runtime.workflow_tracker import WorkflowTracker
 from workflows.workflow import Workflow
 
 
@@ -35,7 +40,24 @@ async def _durable_time() -> float:
 
 
 class DBOSRuntime(Plugin):
-    """DBOS-backed workflow runtime for durable execution."""
+    """
+    DBOS-backed workflow runtime for durable execution.
+
+    Workflows are registered at launch() time with stable names,
+    enabling distributed workers and recovery.
+    """
+
+    def __init__(self) -> None:
+        self._tracker = WorkflowTracker()
+        self._dbos_launched = False
+
+    def track_workflow(self, workflow: Workflow) -> None:
+        """Track a workflow for registration at launch time."""
+        self._tracker.add(workflow)
+
+    def get_registered(self, workflow: Workflow) -> RegisteredWorkflow | None:
+        """Get the registered workflow if available."""
+        return self._tracker.get_registered(workflow)
 
     def register(
         self,
@@ -44,11 +66,19 @@ class DBOSRuntime(Plugin):
         steps: dict[str, StepWorkerFunction[Any]],
     ) -> RegisteredWorkflow | None:
         """
-        Wrap the workflow control loop in a DBOS workflow so ticks are received via DBOS.recv
-        and sent via DBOS.send, enabling durable orchestration.
-        """
+        Wrap workflow with DBOS decorators.
 
-        @DBOS.workflow()  # type: ignore[misc]
+        Called at launch() time for each tracked workflow.
+        Uses stable names based on workflow class and assigned name.
+        """
+        # Compute stable name for DBOS registration
+        name = self._tracker.get_name(workflow)
+        if name is None:
+            # Generate name from class if not explicitly set
+            name = workflow.__class__.__name__
+
+        # Create DBOS-wrapped control loop with stable name
+        @DBOS.workflow(name=f"{name}.control_loop")  # type: ignore[misc]
         async def _dbos_control_loop(
             start_event: Event | None,
             init_state: BrokerState | None,
@@ -57,9 +87,10 @@ class DBOSRuntime(Plugin):
             with SetWorkflowID(run_id):  # pyright: ignore[reportCallIssue]
                 return await workflow_function(start_event, init_state, run_id)
 
+        # Wrap steps with stable names
         wrapped_steps: dict[str, StepWorkerFunction[Any]] = {
-            name: DBOS.step()(step)  # pyright: ignore[reportAttributeAccessIssue]
-            for name, step in steps.items()  # type: ignore[misc]
+            step_name: DBOS.step(name=f"{name}.{step_name}")(step)  # type: ignore[misc]
+            for step_name, step in steps.items()
         }
 
         return RegisteredWorkflow(
@@ -67,11 +98,47 @@ class DBOSRuntime(Plugin):
         )
 
     def new_runtime(self, run_id: str) -> WorkflowRuntime:
-        runtime: WorkflowRuntime = DBOSWorkflowRuntime(run_id)
-        return runtime
+        if not self._dbos_launched:
+            raise RuntimeError(
+                "DBOS plugin not launched. Call plugin.launch() before running workflows."
+            )
+        return DBOSWorkflowRuntime(run_id)
 
+    def launch(self) -> None:
+        """
+        Launch DBOS and register all tracked workflows.
 
-dbos_runtime = DBOSRuntime()
+        Must be called before running any workflows.
+        """
+        if self._dbos_launched:
+            return  # Already launched
+
+        # Register each pending workflow with DBOS
+        for workflow in self._tracker.get_pending():
+            # Get steps from the workflow instance (includes class + added steps)
+            step_funcs = workflow._get_steps()
+            step_workers: dict[str, StepWorkerFunction[Any]] = {
+                name: as_step_worker_function(getattr(func, "__func__", func))
+                for name, func in step_funcs.items()
+            }
+
+            # Register with DBOS (this applies decorators)
+            registered = self.register(workflow, control_loop, step_workers)
+            if registered is not None:
+                self._tracker.set_registered(workflow, registered)
+
+        # Mark as launched (no more workflows can be added)
+        self._tracker.mark_launched()
+
+        # Launch DBOS runtime
+        DBOS.launch()  # type: ignore[misc]
+        self._dbos_launched = True
+
+    def destroy(self) -> None:
+        """Clean up DBOS resources."""
+        self._tracker.clear()
+        self._dbos_launched = False
+        # Note: DBOS doesn't have a clean shutdown API currently
 
 
 class DBOSWorkflowRuntime:

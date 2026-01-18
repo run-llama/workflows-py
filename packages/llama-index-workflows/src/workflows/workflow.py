@@ -142,7 +142,6 @@ class Workflow(metaclass=WorkflowMeta):
 
         # Plugin registration: explicit > context-scoped > basic_runtime
         from workflows.plugins._context import get_current_plugin
-        from workflows.runtime.workflow_tracker import WorkflowTracker
 
         if plugin is not None:
             self._plugin = plugin
@@ -150,12 +149,8 @@ class Workflow(metaclass=WorkflowMeta):
             # get_current_plugin() falls back to basic_runtime
             self._plugin = get_current_plugin()
 
-        # Register with plugin's tracker (if plugin supports it)
-        # TODO: Replace this getattr kludge with a proper method on Plugin ABC,
-        # e.g., plugin.track_workflow(self) that's a no-op in BasicRuntime.
-        tracker = getattr(self._plugin, "_tracker", None)
-        if isinstance(tracker, WorkflowTracker):
-            tracker.add(self)
+        # Register with plugin for tracking (no-op for BasicRuntime)
+        self._plugin.track_workflow(self)
 
     @property
     def plugin(self) -> Plugin:

@@ -9,15 +9,15 @@ import pytest
 # if sys.version_info < (3, 10):  # pragma: no cover - environment guard
 #     pytest.skip("Requires Python 3.10 or higher", allow_module_level=True)
 from dbos import DBOS, DBOSConfig  # pyright: ignore[reportMissingImports]
-from workflows.context.context import Context
 from workflows.decorators import step
 from workflows.events import StartEvent, StopEvent
-from workflows.plugins.dbos import dbos_runtime
+from workflows.plugins.dbos import DBOSRuntime
 from workflows.workflow import Workflow
 
 
 @pytest.fixture()
-def dbos(tmp_path: Path) -> Generator[None, Any, None]:
+def dbos_config(tmp_path: Path) -> Generator[None, Any, None]:
+    """Configure DBOS without launching - let the plugin handle launch."""
     # Use a file-based SQLite DB so the schema persists across connections/threads
     db_file: Path = tmp_path / "dbos_test.sqlite3"
     # Allow usage across threads in tests
@@ -28,9 +28,7 @@ def dbos(tmp_path: Path) -> Generator[None, Any, None]:
         "system_database_url": system_db_url,
         "run_admin_server": False,
     }
-    # DBOS.reset_system_database()
     DBOS(config=config)
-    DBOS.launch()
     try:
         yield None
     finally:
@@ -44,9 +42,14 @@ class SimpleWorkflow(Workflow):
 
 
 @pytest.mark.asyncio
-async def test_dbos_plugin_simple_run(dbos: None) -> None:
-    wf = SimpleWorkflow()
-    ctx: Context = Context(wf, plugin=dbos_runtime)
-    handler = wf.run(ctx=ctx)
-    result = await handler
-    assert result == "ok"
+async def test_dbos_plugin_simple_run(dbos_config: None) -> None:
+    """Test workflow runs with DBOS plugin using new lifecycle."""
+    plugin = DBOSRuntime()
+    wf = SimpleWorkflow(plugin=plugin)
+    plugin.launch()  # Registers workflows and calls DBOS.launch()
+    try:
+        handler = wf.run()
+        result = await handler
+        assert result == "ok"
+    finally:
+        plugin.destroy()

@@ -130,25 +130,11 @@ class Context(Generic[MODEL_T]):
         workflow: Workflow,
         previous_context: dict[str, Any] | None = None,
         serializer: BaseSerializer | None = None,
-        plugin: Plugin | None = None,
     ) -> None:
         self._serializer = serializer or JsonSerializer()
         self._broker_run = None
         self._workflow = workflow
-
-        # Use workflow's plugin, fall back to explicit param for compatibility
-        # TODO: Remove the plugin parameter entirely - it's not a public interface.
-        # Just use workflow.plugin directly.
-        if plugin is not None:
-            warnings.warn(
-                "Passing plugin to Context is deprecated. "
-                "Pass plugin to Workflow instead.",
-                DeprecationWarning,
-                stacklevel=2,
-            )
-            self._plugin = plugin
-        else:
-            self._plugin = workflow.plugin
+        self._plugin = workflow.plugin
 
         # parse the serialized context
         serializer = serializer or JsonSerializer()
