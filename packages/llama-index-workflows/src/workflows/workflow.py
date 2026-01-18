@@ -16,6 +16,7 @@ from pydantic import ValidationError
 
 if TYPE_CHECKING:  # pragma: no cover
     from .context import Context
+    from .runtime.types.plugin import Plugin
 from .decorators import StepConfig, StepFunction
 from .errors import (
     WorkflowConfigurationError,
@@ -95,6 +96,8 @@ class Workflow(metaclass=WorkflowMeta):
     # Populated by the metaclass; declared here for type checkers.
     _step_functions: dict[str, StepFunction]
 
+    _plugin: Plugin
+
     def __init__(
         self,
         timeout: float | None = 45.0,
@@ -102,6 +105,7 @@ class Workflow(metaclass=WorkflowMeta):
         verbose: bool = False,
         resource_manager: ResourceManager | None = None,
         num_concurrent_runs: int | None = None,
+        plugin: Plugin | None = None,
     ) -> None:
         """
         Initialize a workflow instance.
@@ -115,6 +119,9 @@ class Workflow(metaclass=WorkflowMeta):
             resource_manager (ResourceManager | None): Custom resource manager
                 for dependency injection.
             num_concurrent_runs (int | None): Limit on concurrent `run()` calls.
+            plugin (Plugin | None): Optional plugin to use for this workflow.
+                If not provided, uses the current context-scoped plugin or
+                falls back to basic_runtime.
         """
         # Configuration
         self._timeout = timeout
@@ -132,6 +139,28 @@ class Workflow(metaclass=WorkflowMeta):
         self._resource_manager = resource_manager or ResourceManager()
         # Instrumentation
         self._dispatcher = dispatcher
+
+        # Plugin registration: explicit > context-scoped > basic_runtime
+        from workflows.plugins._context import get_current_plugin
+        from workflows.runtime.workflow_tracker import WorkflowTracker
+
+        if plugin is not None:
+            self._plugin = plugin
+        else:
+            # get_current_plugin() falls back to basic_runtime
+            self._plugin = get_current_plugin()
+
+        # Register with plugin's tracker (if plugin supports it)
+        # TODO: Replace this getattr kludge with a proper method on Plugin ABC,
+        # e.g., plugin.track_workflow(self) that's a no-op in BasicRuntime.
+        tracker = getattr(self._plugin, "_tracker", None)
+        if isinstance(tracker, WorkflowTracker):
+            tracker.add(self)
+
+    @property
+    def plugin(self) -> Plugin:
+        """The plugin this workflow is registered with."""
+        return self._plugin
 
     def _ensure_start_event_class(self) -> type[StartEvent]:
         """
