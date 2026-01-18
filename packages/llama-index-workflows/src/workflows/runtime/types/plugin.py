@@ -1,19 +1,20 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 LlamaIndex Inc.
 """
-A plugin interface to switch out a broker runtime (external library or service that manages durable/distributed step execution).
+A runtime interface to switch out a broker runtime (external library or service that manages durable/distributed step execution).
 """
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from contextlib import contextmanager
 from contextvars import ContextVar, Token
 from dataclasses import dataclass
-from types import TracebackType
 from typing import (
     Any,
     AsyncGenerator,
     Coroutine,
+    Generator,
     Protocol,
     cast,
 )
@@ -24,8 +25,10 @@ from workflows.runtime.types.step_function import StepWorkerFunction
 from workflows.runtime.types.ticks import WorkflowTick
 from workflows.workflow import Workflow
 
-# Context variable for implicit plugin scoping
-_current_plugin: ContextVar[Plugin | None] = ContextVar("current_plugin", default=None)
+# Context variable for implicit runtime scoping
+_current_runtime: ContextVar[Runtime | None] = ContextVar(
+    "current_runtime", default=None
+)
 
 
 @dataclass
@@ -34,24 +37,24 @@ class RegisteredWorkflow:
     steps: dict[str, StepWorkerFunction[Any]]
 
 
-class Plugin(ABC):
+class Runtime(ABC):
     """
-    Abstract base class for workflow execution plugins.
+    Abstract base class for workflow execution runtimes.
 
-    Plugins control how workflows are registered, launched, and executed.
+    Runtimes control how workflows are registered, launched, and executed.
     The default BasicRuntime uses asyncio; DBOSRuntime adds durability.
 
     Lifecycle:
-    1. Create plugin instance
-    2. Create workflow instances (auto-register with plugin)
+    1. Create runtime instance
+    2. Create workflow instances (auto-register with runtime via registering())
     3. Call launch() to start workers/register with backend
     4. Run workflows
     5. Call destroy() to clean up
 
-    Can be used as a context manager for automatic launch on exit.
+    Use registering() context manager for implicit workflow registration.
     """
 
-    _token: Token[Plugin | None]
+    _token: Token[Runtime | None]
 
     @abstractmethod
     def register(
@@ -61,9 +64,9 @@ class Plugin(ABC):
         steps: dict[str, StepWorkerFunction[Any]],
     ) -> None | RegisteredWorkflow:
         """
-        Register a workflow with the plugin's runtime.
+        Register a workflow with the runtime.
 
-        Called at launch() time for each tracked workflow. Plugins can
+        Called at launch() time for each tracked workflow. Runtimes can
         wrap the workflow_function and steps (e.g., with DBOS decorators).
 
         Returns RegisteredWorkflow with wrapped functions, or None to use originals.
@@ -82,20 +85,20 @@ class Plugin(ABC):
 
     def launch(self) -> None:
         """
-        Launch the plugin and register all tracked workflows.
+        Launch the runtime and register all tracked workflows.
 
         For DBOS, this wraps workflows with decorators and calls DBOS.launch().
         For BasicRuntime, this is a no-op.
 
-        Must be called before running workflows (unless using context manager).
+        Must be called before running workflows.
         """
         pass
 
     def destroy(self) -> None:
         """
-        Clean up plugin resources.
+        Clean up runtime resources.
 
-        Called when done with the plugin. Stops workers, closes connections.
+        Called when done with the runtime. Stops workers, closes connections.
         """
         pass
 
@@ -103,8 +106,8 @@ class Plugin(ABC):
         """
         Track a workflow instance for registration at launch time.
 
-        Called by Workflow.__init__ to register with the plugin.
-        Override in plugins that need to track workflows (e.g., DBOSRuntime).
+        Called by Workflow.__init__ to register with the runtime.
+        Override in runtimes that need to track workflows (e.g., DBOSRuntime).
         Default implementation is a no-op.
         """
         pass
@@ -117,22 +120,19 @@ class Plugin(ABC):
         """
         return None
 
-    def __enter__(self) -> Plugin:
-        """Enter context manager, setting this as the current plugin."""
-        self._token = _current_plugin.set(self)
-        return self
+    @contextmanager
+    def registering(self) -> Generator[Runtime, None, None]:
+        """
+        Context manager for implicit workflow registration.
 
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc_val: BaseException | None,
-        exc_tb: TracebackType | None,
-    ) -> None:
-        """Exit context manager, auto-launching and resetting context."""
-        _current_plugin.reset(self._token)
-        if exc_type is None:
-            # Only auto-launch on clean exit
-            self.launch()
+        Workflows created inside this block will automatically register
+        with this runtime. Does NOT call launch() on exit.
+        """
+        token = _current_runtime.set(self)
+        try:
+            yield self
+        finally:
+            _current_runtime.reset(token)
 
 
 class WorkflowRuntime(Protocol):

@@ -43,13 +43,13 @@ class SimpleWorkflow(Workflow):
 
 @pytest.mark.asyncio
 async def test_dbos_plugin_simple_run(dbos_config: None) -> None:
-    """Test workflow runs with DBOS plugin using new lifecycle."""
-    plugin = DBOSRuntime()
-    wf = SimpleWorkflow(plugin=plugin)
-    plugin.launch()  # Registers workflows and calls DBOS.launch()
+    """Test workflow runs with DBOS runtime using new lifecycle."""
+    runtime = DBOSRuntime()
+    wf = SimpleWorkflow(runtime=runtime)
+    runtime.launch()  # Registers workflows and calls DBOS.launch()
     try:
         handler = wf.run()
         result = await handler
         assert result == "ok"
     finally:
-        plugin.destroy()
+        runtime.destroy()

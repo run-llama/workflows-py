@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2025 LlamaIndex Inc.
 """
-DBOS Plugin for durable workflow execution.
+DBOS Runtime for durable workflow execution.
 
 This module requires the `dbos` package to be installed.
 When imported without dbos, an ImportError will be raised.
@@ -21,8 +21,8 @@ from workflows.runtime.control_loop import control_loop
 from workflows.runtime.types.internal_state import BrokerState
 from workflows.runtime.types.plugin import (
     ControlLoopFunction,
-    Plugin,
     RegisteredWorkflow,
+    Runtime,
     WorkflowRuntime,
 )
 from workflows.runtime.types.step_function import (
@@ -39,7 +39,7 @@ async def _durable_time() -> float:
     return time.time()
 
 
-class DBOSRuntime(Plugin):
+class DBOSRuntime(Runtime):
     """
     DBOS-backed workflow runtime for durable execution.
 
@@ -100,7 +100,7 @@ class DBOSRuntime(Plugin):
     def new_runtime(self, run_id: str) -> WorkflowRuntime:
         if not self._dbos_launched:
             raise RuntimeError(
-                "DBOS plugin not launched. Call plugin.launch() before running workflows."
+                "DBOS runtime not launched. Call runtime.launch() before running workflows."
             )
         return DBOSWorkflowRuntime(run_id)
 

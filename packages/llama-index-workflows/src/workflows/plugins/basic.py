@@ -11,8 +11,8 @@ from workflows.decorators import P, R
 from workflows.events import Event, StopEvent
 from workflows.runtime.types.plugin import (
     ControlLoopFunction,
-    Plugin,
     RegisteredWorkflow,
+    Runtime,
     SnapshottableRuntime,
     WorkflowRuntime,
 )
@@ -21,7 +21,7 @@ from workflows.runtime.types.ticks import WorkflowTick
 from workflows.workflow import Workflow
 
 
-class BasicRuntime(Plugin):
+class BasicRuntime(Runtime):
     """Default asyncio-based runtime with no durability."""
 
     def register(
@@ -37,7 +37,7 @@ class BasicRuntime(Plugin):
         snapshottable: SnapshottableRuntime = AsyncioWorkflowRuntime(run_id)
         return snapshottable
 
-    # launch() and destroy() use default no-op implementations from Plugin
+    # launch() and destroy() use default no-op implementations from Runtime
 
 
 basic_runtime = BasicRuntime()
@@ -45,7 +45,7 @@ basic_runtime = BasicRuntime()
 
 class AsyncioWorkflowRuntime:
     """
-    A plugin interface to switch out a broker runtime (external library or service that manages durable/distributed step execution)
+    A runtime interface to switch out a broker runtime (external library or service that manages durable/distributed step execution)
     """
 
     def __init__(

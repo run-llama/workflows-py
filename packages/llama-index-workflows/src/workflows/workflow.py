@@ -16,7 +16,7 @@ from pydantic import ValidationError
 
 if TYPE_CHECKING:  # pragma: no cover
     from .context import Context
-    from .runtime.types.plugin import Plugin
+    from .runtime.types.plugin import Runtime
 from .decorators import StepConfig, StepFunction
 from .errors import (
     WorkflowConfigurationError,
@@ -96,7 +96,7 @@ class Workflow(metaclass=WorkflowMeta):
     # Populated by the metaclass; declared here for type checkers.
     _step_functions: dict[str, StepFunction]
 
-    _plugin: Plugin
+    _runtime: Runtime
 
     def __init__(
         self,
@@ -105,7 +105,7 @@ class Workflow(metaclass=WorkflowMeta):
         verbose: bool = False,
         resource_manager: ResourceManager | None = None,
         num_concurrent_runs: int | None = None,
-        plugin: Plugin | None = None,
+        runtime: Runtime | None = None,
     ) -> None:
         """
         Initialize a workflow instance.
@@ -119,8 +119,8 @@ class Workflow(metaclass=WorkflowMeta):
             resource_manager (ResourceManager | None): Custom resource manager
                 for dependency injection.
             num_concurrent_runs (int | None): Limit on concurrent `run()` calls.
-            plugin (Plugin | None): Optional plugin to use for this workflow.
-                If not provided, uses the current context-scoped plugin or
+            runtime (Runtime | None): Optional runtime to use for this workflow.
+                If not provided, uses the current context-scoped runtime or
                 falls back to basic_runtime.
         """
         # Configuration
@@ -140,22 +140,22 @@ class Workflow(metaclass=WorkflowMeta):
         # Instrumentation
         self._dispatcher = dispatcher
 
-        # Plugin registration: explicit > context-scoped > basic_runtime
-        from workflows.plugins._context import get_current_plugin
+        # Runtime registration: explicit > context-scoped > basic_runtime
+        from workflows.plugins._context import get_current_runtime
 
-        if plugin is not None:
-            self._plugin = plugin
+        if runtime is not None:
+            self._runtime = runtime
         else:
-            # get_current_plugin() falls back to basic_runtime
-            self._plugin = get_current_plugin()
+            # get_current_runtime() falls back to basic_runtime
+            self._runtime = get_current_runtime()
 
-        # Register with plugin for tracking (no-op for BasicRuntime)
-        self._plugin.track_workflow(self)
+        # Register with runtime for tracking (no-op for BasicRuntime)
+        self._runtime.track_workflow(self)
 
     @property
-    def plugin(self) -> Plugin:
-        """The plugin this workflow is registered with."""
-        return self._plugin
+    def runtime(self) -> Runtime:
+        """The runtime this workflow is registered with."""
+        return self._runtime
 
     def _ensure_start_event_class(self) -> type[StartEvent]:
         """

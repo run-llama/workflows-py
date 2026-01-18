@@ -33,7 +33,7 @@ from workflows.events import (
 from workflows.handler import WorkflowHandler
 from workflows.runtime.broker import WorkflowBroker
 from workflows.runtime.types.internal_state import BrokerState
-from workflows.runtime.types.plugin import Plugin, WorkflowRuntime
+from workflows.runtime.types.plugin import Runtime, WorkflowRuntime
 from workflows.types import RunResultT
 
 from .serializers import BaseSerializer, JsonSerializer
@@ -122,7 +122,7 @@ class Context(Generic[MODEL_T]):
     # Backing state store; serialized as `state`
     _state_store: InMemoryStateStore[MODEL_T]
     _broker_run: WorkflowBroker[MODEL_T] | None
-    _plugin: Plugin
+    _runtime: Runtime
     _workflow: Workflow
 
     def __init__(
@@ -134,7 +134,7 @@ class Context(Generic[MODEL_T]):
         self._serializer = serializer or JsonSerializer()
         self._broker_run = None
         self._workflow = workflow
-        self._plugin = workflow.plugin
+        self._runtime = workflow.runtime
 
         # parse the serialized context
         serializer = serializer or JsonSerializer()
@@ -205,18 +205,20 @@ class Context(Generic[MODEL_T]):
             return self._broker_run.is_running
 
     def _init_broker(
-        self, workflow: Workflow, plugin: WorkflowRuntime | None = None
+        self, workflow: Workflow, workflow_runtime: WorkflowRuntime | None = None
     ) -> WorkflowBroker[MODEL_T]:
         if self._broker_run is not None:
             raise WorkflowRuntimeError("Broker already initialized")
-        # Initialize a runtime plugin (asyncio-based by default)
-        runtime: WorkflowRuntime = plugin or self._plugin.new_runtime(str(uuid.uuid4()))
+        # Initialize a workflow runtime (asyncio-based by default)
+        wf_runtime: WorkflowRuntime = workflow_runtime or self._runtime.new_runtime(
+            str(uuid.uuid4())
+        )
         # Initialize the new broker implementation (broker2)
         broker: WorkflowBroker[MODEL_T] = WorkflowBroker(
             workflow=workflow,
             context=cast("Context[MODEL_T]", self),
-            runtime=runtime,
-            plugin=self._plugin,
+            workflow_runtime=wf_runtime,
+            runtime=self._runtime,
         )
         self._broker_run = broker
         return broker

@@ -31,7 +31,7 @@ from workflows.events import (
 from workflows.handler import WorkflowHandler
 from workflows.runtime.control_loop import control_loop, rebuild_state_from_ticks
 from workflows.runtime.types.internal_state import BrokerState
-from workflows.runtime.types.plugin import Plugin, WorkflowRuntime, as_snapshottable
+from workflows.runtime.types.plugin import Runtime, WorkflowRuntime, as_snapshottable
 from workflows.runtime.types.results import (
     AddCollectedEvent,
     AddWaiter,
@@ -74,8 +74,8 @@ class WorkflowBroker(Generic[MODEL_T]):
     """
 
     _context: Context[MODEL_T]
-    _runtime: WorkflowRuntime
-    _plugin: Plugin
+    _workflow_runtime: WorkflowRuntime
+    _runtime: Runtime
     _is_running: bool
     _handler: WorkflowHandler | None
     _workflow: Workflow
@@ -87,12 +87,12 @@ class WorkflowBroker(Generic[MODEL_T]):
         self,
         workflow: Workflow,
         context: Context[MODEL_T],
-        runtime: WorkflowRuntime,
-        plugin: Plugin,
+        workflow_runtime: WorkflowRuntime,
+        runtime: Runtime,
     ) -> None:
         self._context = context
+        self._workflow_runtime = workflow_runtime
         self._runtime = runtime
-        self._plugin = plugin
         self._is_running = False
         self._handler = None
         self._workflow = workflow
@@ -151,14 +151,14 @@ class WorkflowBroker(Generic[MODEL_T]):
                             step_workers[name] = as_step_worker_function(unbound)
 
                         registered = workflow_registry.get_registered_workflow(
-                            workflow, self._plugin, control_loop, step_workers
+                            workflow, self._runtime, control_loop, step_workers
                         )
 
                         # Register run context prior to invoking control loop
                         workflow_registry.register_run(
                             run_id=run_id,
                             workflow=workflow,
-                            plugin=self._runtime,
+                            runtime=self._workflow_runtime,
                             context=self._context,  # type: ignore
                             steps=registered.steps,
                         )
@@ -203,7 +203,7 @@ class WorkflowBroker(Generic[MODEL_T]):
 
     # outer handler API to cancel the workflow run
     def cancel_run(self) -> None:
-        self._execute_task(self._runtime.send_event(TickCancelRun()))
+        self._execute_task(self._workflow_runtime.send_event(TickCancelRun()))
 
     @property
     def is_running(self) -> bool:
@@ -218,9 +218,9 @@ class WorkflowBroker(Generic[MODEL_T]):
 
     @property
     def _tick_log(self) -> list[WorkflowTick]:
-        snapshottable = as_snapshottable(self._runtime)
+        snapshottable = as_snapshottable(self._workflow_runtime)
         if snapshottable is None:
-            raise WorkflowRuntimeError("Plugin is not snapshottable")
+            raise WorkflowRuntimeError("Runtime is not snapshottable")
         return snapshottable.replay()
 
     # mostly a debug API. May be removed in the future.
@@ -282,7 +282,9 @@ class WorkflowBroker(Generic[MODEL_T]):
                 )
 
         self._execute_task(
-            self._runtime.send_event(TickAddEvent(event=message, step_name=step))
+            self._workflow_runtime.send_event(
+                TickAddEvent(event=message, step_name=step)
+            )
         )
 
     def _get_step_ctx(self, fn: str) -> StepWorkerContext:
@@ -332,12 +334,12 @@ class WorkflowBroker(Generic[MODEL_T]):
 
     def stream_published_events(self) -> AsyncGenerator[Event, None]:
         """The internal queue used for streaming events to callers."""
-        return self._runtime.stream_published_events()
+        return self._workflow_runtime.stream_published_events()
 
     # step API only
     def write_event_to_stream(self, ev: Event | None) -> None:
         if ev is not None:
-            self._execute_task(self._runtime.write_to_event_stream(ev))
+            self._execute_task(self._workflow_runtime.write_to_event_stream(ev))
 
     async def shutdown(self) -> None:
         """Cancels the running workflow loop
@@ -346,8 +348,8 @@ class WorkflowBroker(Generic[MODEL_T]):
         broker as not running. Queues and state remain available so callers can
         inspect or drain leftover events.
         """
-        await self._runtime.send_event(TickCancelRun())
+        await self._workflow_runtime.send_event(TickCancelRun())
         for worker in self._workers:
             worker.cancel()
         self._workers.clear()
-        await self._runtime.close()
+        await self._workflow_runtime.close()

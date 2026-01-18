@@ -10,13 +10,13 @@ from typing import Any, AsyncGenerator, Optional
 import pytest
 import time_machine
 from workflows.events import Event, StopEvent
-from workflows.runtime.types.plugin import ControlLoopFunction, Plugin, WorkflowRuntime
+from workflows.runtime.types.plugin import ControlLoopFunction, Runtime, WorkflowRuntime
 from workflows.runtime.types.step_function import StepWorkerFunction
 from workflows.runtime.types.ticks import WorkflowTick
 from workflows.workflow import Workflow
 
 
-class MockPlugin(Plugin):
+class MockRuntime(Runtime):
     def register(
         self,
         workflow: Workflow,
@@ -26,10 +26,10 @@ class MockPlugin(Plugin):
         return
 
     def new_runtime(self, run_id: str) -> WorkflowRuntime:
-        return MockRuntimePlugin(run_id)
+        return MockWorkflowRuntime(run_id)
 
 
-class MockRuntimePlugin(WorkflowRuntime):
+class MockWorkflowRuntime(WorkflowRuntime):
     """Mock WorkflowRuntime for testing control loops."""
 
     def __init__(
@@ -95,14 +95,14 @@ class MockRuntimePlugin(WorkflowRuntime):
 
 
 @pytest.fixture
-async def test_plugin() -> MockRuntimePlugin:
-    return MockRuntimePlugin(run_id="test")
+async def test_plugin() -> MockWorkflowRuntime:
+    return MockWorkflowRuntime(run_id="test")
 
 
 @pytest.fixture
 async def test_plugin_with_time_machine() -> AsyncGenerator[
-    tuple[MockRuntimePlugin, time_machine.Coordinates], None
+    tuple[MockWorkflowRuntime, time_machine.Coordinates], None
 ]:
-    """Plugin with time-machine at epoch 1000.0, tick=True."""
+    """Runtime with time-machine at epoch 1000.0, tick=True."""
     with time_machine.travel("2026-01-07T12:27:00.000-08:00", tick=True) as traveller:
-        yield MockRuntimePlugin(run_id="test", traveller=traveller), traveller
+        yield MockWorkflowRuntime(run_id="test", traveller=traveller), traveller

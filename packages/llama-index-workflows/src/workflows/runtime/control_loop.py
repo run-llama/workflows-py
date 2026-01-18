@@ -310,7 +310,7 @@ async def control_loop(
         raise WorkflowRuntimeError("Run context not found for control loop")
     state = init_state or BrokerState.from_workflow(current.workflow)
     runner = _ControlLoopRunner(
-        current.workflow, current.plugin, current.context, current.steps, state
+        current.workflow, current.runtime, current.context, current.steps, state
     )
     return await runner.run(start_event=start_event)
 

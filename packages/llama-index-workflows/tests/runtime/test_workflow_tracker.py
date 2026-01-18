@@ -1,4 +1,6 @@
-"""Tests for WorkflowTracker."""
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 LlamaIndex Inc.
+"""Tests for WorkflowTracker with strong references."""
 
 from __future__ import annotations
 
@@ -139,7 +141,8 @@ def test_clear_resets_all_state() -> None:
     assert tracker.is_launched is False
 
 
-def test_pending_uses_weak_references() -> None:
+def test_strong_refs_survive_gc() -> None:
+    """Workflows survive GC when tracked with strong references."""
     tracker = WorkflowTracker()
     wf = SimpleWorkflow()
     w = weakref.ref(wf)
@@ -147,28 +150,33 @@ def test_pending_uses_weak_references() -> None:
     tracker.add(wf)
     assert len(tracker.get_pending()) == 1
 
-    # Drop strong reference and force collection
+    # Drop external strong reference and force collection
     del wf
     gc.collect()
 
-    # Object should be collected and no longer in pending
-    assert w() is None
-    assert tracker.get_pending() == []
+    # With strong refs, the object should still be alive
+    assert w() is not None
+    assert len(tracker.get_pending()) == 1
 
 
-def test_names_use_weak_references() -> None:
+def test_clear_releases_references() -> None:
+    """clear() releases strong refs, allowing GC."""
     tracker = WorkflowTracker()
     wf = SimpleWorkflow()
     w = weakref.ref(wf)
 
     tracker.add(wf, name="my_workflow")
-    assert tracker.get_name(wf) == "my_workflow"
-
-    # Drop strong reference and force collection
     del wf
     gc.collect()
 
-    # Object should be collected
+    # Still alive before clear
+    assert w() is not None
+
+    # Clear the tracker
+    tracker.clear()
+    gc.collect()
+
+    # Now the object should be collected
     assert w() is None
 
 
@@ -183,3 +191,17 @@ def test_multiple_workflows_tracked_independently() -> None:
     assert len(tracker.get_pending()) == 2
     assert tracker.get_name(wf1) == "workflow_1"
     assert tracker.get_name(wf2) == "workflow_2"
+
+
+def test_add_same_workflow_twice_is_idempotent() -> None:
+    """Adding the same workflow twice should not duplicate it."""
+    tracker = WorkflowTracker()
+    wf = SimpleWorkflow()
+
+    tracker.add(wf, name="my_workflow")
+    tracker.add(wf, name="updated_name")  # Second add with different name
+
+    # Should only be one workflow
+    assert len(tracker.get_pending()) == 1
+    # Name should be updated
+    assert tracker.get_name(wf) == "updated_name"
