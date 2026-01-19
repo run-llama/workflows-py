@@ -36,7 +36,7 @@ class StepWorkerFunction(Protocol, Generic[R]):
         state: StepWorkerState,
         step_name: str,
         event: Event,
-        context: Context,  # TODO - pass an identifier and re-hydrate from the plugin for distributed step workers
+        context: Context,  # TODO - pass an identifier and re-hydrate from the runtime for distributed step workers
         workflow: Workflow,
     ) -> Awaitable[list[StepFunctionResult[R]]]: ...
 

@@ -16,6 +16,7 @@ from pydantic import ValidationError
 
 if TYPE_CHECKING:  # pragma: no cover
     from .context import Context
+    from .runtime.types.plugin import Runtime
 from .decorators import StepConfig, StepFunction
 from .errors import (
     WorkflowConfigurationError,
@@ -95,6 +96,9 @@ class Workflow(metaclass=WorkflowMeta):
     # Populated by the metaclass; declared here for type checkers.
     _step_functions: dict[str, StepFunction]
 
+    _runtime: Runtime
+    _name: str | None
+
     def __init__(
         self,
         timeout: float | None = 45.0,
@@ -102,6 +106,8 @@ class Workflow(metaclass=WorkflowMeta):
         verbose: bool = False,
         resource_manager: ResourceManager | None = None,
         num_concurrent_runs: int | None = None,
+        runtime: Runtime | None = None,
+        name: str | None = None,
     ) -> None:
         """
         Initialize a workflow instance.
@@ -115,12 +121,20 @@ class Workflow(metaclass=WorkflowMeta):
             resource_manager (ResourceManager | None): Custom resource manager
                 for dependency injection.
             num_concurrent_runs (int | None): Limit on concurrent `run()` calls.
+            runtime (Runtime | None): Optional runtime to use for this workflow.
+                If not provided, uses the current context-scoped runtime or
+                falls back to basic_runtime.
+            name (str | None): Optional explicit name for this workflow.
+                If not provided, a module-qualified name is computed from
+                the class's `__module__` and `__qualname__` attributes.
         """
         # Configuration
         self._timeout = timeout
         self._verbose = verbose
         self._disable_validation = disable_validation
         self._num_concurrent_runs = num_concurrent_runs
+        # Store explicit name (None means use computed name)
+        self._name = name
         # Detect StartEvent issues before StopEvent for clearer guidance
         self._start_event_class = self._ensure_start_event_class()
         self._stop_event_class = self._ensure_stop_event_class()
@@ -132,6 +146,43 @@ class Workflow(metaclass=WorkflowMeta):
         self._resource_manager = resource_manager or ResourceManager()
         # Instrumentation
         self._dispatcher = dispatcher
+
+        # Runtime registration: explicit > context-scoped > basic_runtime
+        from workflows.plugins._context import get_current_runtime
+
+        if runtime is not None:
+            self._runtime = runtime
+        else:
+            # get_current_runtime() falls back to basic_runtime
+            self._runtime = get_current_runtime()
+
+        # Register with runtime for tracking (no-op for BasicRuntime)
+        self._runtime.track_workflow(self)
+
+    @property
+    def runtime(self) -> Runtime:
+        """The runtime this workflow is registered with."""
+        return self._runtime
+
+    @property
+    def name(self) -> str:
+        """
+        The workflow name.
+
+        If an explicit name was provided at construction, returns that.
+        Otherwise, returns a module-qualified name based on the class's
+        __module__ and __qualname__ attributes.
+
+        Examples:
+            - Explicit: `Workflow(name="my-workflow")` → `"my-workflow"`
+            - Module-level class: `"mymodule.MyWorkflow"`
+            - Nested class: `"mymodule.Outer.Inner"`
+            - Function-scoped: `"mymodule.func.<locals>.LocalWorkflow"`
+        """
+        if self._name is not None:
+            return self._name
+        cls = self.__class__
+        return f"{cls.__module__}.{cls.__qualname__}"
 
     def _ensure_start_event_class(self) -> type[StartEvent]:
         """

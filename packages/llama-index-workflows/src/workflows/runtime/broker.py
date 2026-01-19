@@ -31,7 +31,14 @@ from workflows.events import (
 from workflows.handler import WorkflowHandler
 from workflows.runtime.control_loop import control_loop, rebuild_state_from_ticks
 from workflows.runtime.types.internal_state import BrokerState
-from workflows.runtime.types.plugin import Plugin, WorkflowRuntime, as_snapshottable
+from workflows.runtime.types.plugin import (
+    RegisteredWorkflow,
+    RunAdapter,
+    RunContext,
+    Runtime,
+    as_snapshottable_adapter,
+    run_context,
+)
 from workflows.runtime.types.results import (
     AddCollectedEvent,
     AddWaiter,
@@ -46,7 +53,6 @@ from workflows.runtime.types.step_function import (
     as_step_worker_function,
 )
 from workflows.runtime.types.ticks import TickAddEvent, TickCancelRun, WorkflowTick
-from workflows.runtime.workflow_registry import workflow_registry
 from workflows.utils import _nanoid as nanoid
 
 from ..context.state_store import MODEL_T
@@ -74,8 +80,8 @@ class WorkflowBroker(Generic[MODEL_T]):
     """
 
     _context: Context[MODEL_T]
-    _runtime: WorkflowRuntime
-    _plugin: Plugin
+    _run_adapter: RunAdapter
+    _runtime: Runtime
     _is_running: bool
     _handler: WorkflowHandler | None
     _workflow: Workflow
@@ -87,12 +93,12 @@ class WorkflowBroker(Generic[MODEL_T]):
         self,
         workflow: Workflow,
         context: Context[MODEL_T],
-        runtime: WorkflowRuntime,
-        plugin: Plugin,
+        run_adapter: RunAdapter,
+        runtime: Runtime,
     ) -> None:
         self._context = context
+        self._run_adapter = run_adapter
         self._runtime = runtime
-        self._plugin = plugin
         self._is_running = False
         self._handler = None
         self._workflow = workflow
@@ -143,35 +149,35 @@ class WorkflowBroker(Generic[MODEL_T]):
                     try:
                         exception_raised = None
 
-                        step_workers: dict[str, StepWorkerFunction] = {}
-                        for name, step_func in workflow._get_steps().items():
-                            # Avoid capturing a bound method (which retains the instance).
-                            # If it's a bound method, extract the unbound function from the class.
-                            unbound = getattr(step_func, "__func__", step_func)
-                            step_workers[name] = as_step_worker_function(unbound)
+                        registered = self._runtime.get_registered(workflow)
+                        if registered is None:
+                            step_workers: dict[str, StepWorkerFunction] = {}
+                            for name, step_func in workflow._get_steps().items():
+                                unbound = getattr(step_func, "__func__", step_func)
+                                step_workers[name] = as_step_worker_function(unbound)
 
-                        registered = workflow_registry.get_registered_workflow(
-                            workflow, self._plugin, control_loop, step_workers
-                        )
+                            wrapped = self._runtime.register(
+                                workflow, control_loop, step_workers
+                            )
+                            if wrapped is not None:
+                                registered = wrapped
+                            else:
+                                registered = RegisteredWorkflow(
+                                    control_loop, step_workers
+                                )
 
-                        # Register run context prior to invoking control loop
-                        workflow_registry.register_run(
-                            run_id=run_id,
+                        run_ctx = RunContext(
                             workflow=workflow,
-                            plugin=self._runtime,
-                            context=self._context,  # type: ignore
+                            run_adapter=self._run_adapter,
+                            context=self._context,  # type: ignore[arg-type]
                             steps=registered.steps,
                         )
-
-                        try:
+                        with run_context(run_ctx):
                             workflow_result = await registered.workflow_function(
                                 start_event,
                                 init_state,
                                 run_id,
                             )
-                        finally:
-                            # ensure run context is cleaned up even on failure
-                            workflow_registry.delete_run(run_id)
                         result._set_stop_event(workflow_result)
                     except Exception as e:
                         exception_raised = e
@@ -203,7 +209,7 @@ class WorkflowBroker(Generic[MODEL_T]):
 
     # outer handler API to cancel the workflow run
     def cancel_run(self) -> None:
-        self._execute_task(self._runtime.send_event(TickCancelRun()))
+        self._execute_task(self._run_adapter.send_event(TickCancelRun()))
 
     @property
     def is_running(self) -> bool:
@@ -218,9 +224,9 @@ class WorkflowBroker(Generic[MODEL_T]):
 
     @property
     def _tick_log(self) -> list[WorkflowTick]:
-        snapshottable = as_snapshottable(self._runtime)
+        snapshottable = as_snapshottable_adapter(self._run_adapter)
         if snapshottable is None:
-            raise WorkflowRuntimeError("Plugin is not snapshottable")
+            raise WorkflowRuntimeError("Adapter is not snapshottable")
         return snapshottable.replay()
 
     # mostly a debug API. May be removed in the future.
@@ -282,7 +288,7 @@ class WorkflowBroker(Generic[MODEL_T]):
                 )
 
         self._execute_task(
-            self._runtime.send_event(TickAddEvent(event=message, step_name=step))
+            self._run_adapter.send_event(TickAddEvent(event=message, step_name=step))
         )
 
     def _get_step_ctx(self, fn: str) -> StepWorkerContext:
@@ -332,12 +338,12 @@ class WorkflowBroker(Generic[MODEL_T]):
 
     def stream_published_events(self) -> AsyncGenerator[Event, None]:
         """The internal queue used for streaming events to callers."""
-        return self._runtime.stream_published_events()
+        return self._run_adapter.stream_published_events()
 
     # step API only
     def write_event_to_stream(self, ev: Event | None) -> None:
         if ev is not None:
-            self._execute_task(self._runtime.write_to_event_stream(ev))
+            self._execute_task(self._run_adapter.write_to_event_stream(ev))
 
     async def shutdown(self) -> None:
         """Cancels the running workflow loop
@@ -346,8 +352,8 @@ class WorkflowBroker(Generic[MODEL_T]):
         broker as not running. Queues and state remain available so callers can
         inspect or drain leftover events.
         """
-        await self._runtime.send_event(TickCancelRun())
+        await self._run_adapter.send_event(TickCancelRun())
         for worker in self._workers:
             worker.cancel()
         self._workers.clear()
-        await self._runtime.close()
+        await self._run_adapter.close()

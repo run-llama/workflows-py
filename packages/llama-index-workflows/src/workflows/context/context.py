@@ -31,10 +31,9 @@ from workflows.events import (
     StopEvent,
 )
 from workflows.handler import WorkflowHandler
-from workflows.plugins.basic import basic_runtime
 from workflows.runtime.broker import WorkflowBroker
 from workflows.runtime.types.internal_state import BrokerState
-from workflows.runtime.types.plugin import Plugin, WorkflowRuntime
+from workflows.runtime.types.plugin import RunAdapter, Runtime
 from workflows.types import RunResultT
 
 from .serializers import BaseSerializer, JsonSerializer
@@ -123,7 +122,7 @@ class Context(Generic[MODEL_T]):
     # Backing state store; serialized as `state`
     _state_store: InMemoryStateStore[MODEL_T]
     _broker_run: WorkflowBroker[MODEL_T] | None
-    _plugin: Plugin
+    _runtime: Runtime
     _workflow: Workflow
 
     def __init__(
@@ -131,12 +130,11 @@ class Context(Generic[MODEL_T]):
         workflow: Workflow,
         previous_context: dict[str, Any] | None = None,
         serializer: BaseSerializer | None = None,
-        plugin: Plugin = basic_runtime,
     ) -> None:
         self._serializer = serializer or JsonSerializer()
         self._broker_run = None
-        self._plugin = plugin
         self._workflow = workflow
+        self._runtime = workflow.runtime
 
         # parse the serialized context
         serializer = serializer or JsonSerializer()
@@ -207,18 +205,20 @@ class Context(Generic[MODEL_T]):
             return self._broker_run.is_running
 
     def _init_broker(
-        self, workflow: Workflow, plugin: WorkflowRuntime | None = None
+        self, workflow: Workflow, run_adapter: RunAdapter | None = None
     ) -> WorkflowBroker[MODEL_T]:
         if self._broker_run is not None:
             raise WorkflowRuntimeError("Broker already initialized")
-        # Initialize a runtime plugin (asyncio-based by default)
-        runtime: WorkflowRuntime = plugin or self._plugin.new_runtime(str(uuid.uuid4()))
+        # Initialize a run adapter (asyncio-based by default)
+        adapter: RunAdapter = run_adapter or self._runtime.new_adapter(
+            str(uuid.uuid4())
+        )
         # Initialize the new broker implementation (broker2)
         broker: WorkflowBroker[MODEL_T] = WorkflowBroker(
             workflow=workflow,
             context=cast("Context[MODEL_T]", self),
-            runtime=runtime,
-            plugin=self._plugin,
+            run_adapter=adapter,
+            runtime=self._runtime,
         )
         self._broker_run = broker
         return broker
