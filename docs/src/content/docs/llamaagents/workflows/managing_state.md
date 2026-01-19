@@ -58,7 +58,7 @@ class CounterState(BaseModel):
 Then, simply annotate your workflow state with the state model:
 
 ```python
-from workflows import Workflow, step
+from workflows import Workflow, step, Context
 from workflows.events import (
     StartEvent,
     StopEvent,
