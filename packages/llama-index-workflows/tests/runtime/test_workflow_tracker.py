@@ -6,11 +6,13 @@ from __future__ import annotations
 
 import gc
 import weakref
+from typing import Any, cast
 
 import pytest
 from workflows import Workflow, step
 from workflows.events import StartEvent, StopEvent
-from workflows.runtime.types.plugin import RegisteredWorkflow
+from workflows.runtime.types.plugin import ControlLoopFunction, RegisteredWorkflow
+from workflows.runtime.types.step_function import StepWorkerFunction
 from workflows.runtime.workflow_tracker import WorkflowTracker
 
 
@@ -93,14 +95,14 @@ def test_set_and_get_registered() -> None:
     tracker = WorkflowTracker()
     wf = SimpleWorkflow()
 
-    async def control_loop(
+    async def mock_control_loop(
         start_event: object, init_state: object, run_id: str
     ) -> StopEvent:
         return StopEvent(result="done")
 
     registered = RegisteredWorkflow(
-        workflow_function=control_loop,  # type: ignore
-        steps={"start": lambda: None},  # type: ignore
+        workflow_function=cast(ControlLoopFunction, mock_control_loop),
+        steps=cast(dict[str, StepWorkerFunction[Any]], {"start": lambda: None}),
     )
 
     tracker.set_registered(wf, registered)
@@ -122,14 +124,14 @@ def test_clear_resets_all_state() -> None:
     tracker.add(wf, name="my_workflow")
     tracker.mark_launched()
 
-    async def control_loop(
+    async def mock_control_loop(
         start_event: object, init_state: object, run_id: str
     ) -> StopEvent:
         return StopEvent(result="done")
 
     registered = RegisteredWorkflow(
-        workflow_function=control_loop,  # type: ignore
-        steps={"start": lambda: None},  # type: ignore
+        workflow_function=cast(ControlLoopFunction, mock_control_loop),
+        steps=cast(dict[str, StepWorkerFunction[Any]], {"start": lambda: None}),
     )
     tracker.set_registered(wf, registered)
 

@@ -44,7 +44,7 @@ class StatefulWorkflow(Workflow):
     @step
     async def start(self, ctx: Context, ev: StartEvent) -> StopEvent:
         if hasattr(ev, "value"):
-            self.value = ev.value  # type: ignore[attr-defined]
+            self.value = getattr(ev, "value")
         return StopEvent(result=self.value)
 
 

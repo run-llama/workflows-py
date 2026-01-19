@@ -41,7 +41,7 @@ from workflows.runtime.types.step_function import as_step_worker_function
 from workflows.runtime.types.ticks import TickAddEvent, TickCancelRun
 from workflows.workflow import Workflow
 
-from .conftest import MockRunAdapter  # type: ignore[import]
+from .conftest import MockRunAdapter
 
 
 class IntermediateEvent(Event):

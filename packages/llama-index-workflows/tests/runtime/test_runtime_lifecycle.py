@@ -4,11 +4,17 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 import pytest
 from workflows import Workflow, step
 from workflows.events import StartEvent, StopEvent
 from workflows.plugins import BasicRuntime, basic_runtime, get_current_runtime
-from workflows.runtime.types.plugin import Runtime, _current_runtime
+from workflows.runtime.types.plugin import (
+    ControlLoopFunction,
+    Runtime,
+    _current_runtime,
+)
 
 
 class SimpleWorkflow(Workflow):
@@ -127,13 +133,13 @@ def test_basic_runtime_register_returns_none() -> None:
     wf = SimpleWorkflow()
     runtime = BasicRuntime()
 
-    # Mock control loop and steps
-    async def control_loop(
+    # Mock control loop - cast to protocol since we only test the return value
+    async def mock_control_loop(
         start_event: object, init_state: object, run_id: str
     ) -> StopEvent:
         return StopEvent(result="done")
 
-    result = runtime.register(wf, control_loop, {})  # type: ignore[arg-type]
+    result = runtime.register(wf, cast(ControlLoopFunction, mock_control_loop), {})
     assert result is None
 
 
