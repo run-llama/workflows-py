@@ -55,7 +55,7 @@ from workflows.runtime.types.step_function import (
 from workflows.runtime.types.ticks import TickAddEvent, TickCancelRun, WorkflowTick
 from workflows.utils import _nanoid as nanoid
 
-from ..context.state_store import MODEL_T, DictState
+from ..context.state_store import MODEL_T
 
 if TYPE_CHECKING:
     from workflows import Workflow
@@ -169,7 +169,7 @@ class WorkflowBroker(Generic[MODEL_T]):
                         run_ctx = RunContext(
                             workflow=workflow,
                             run_adapter=self._run_adapter,
-                            context=cast(Context[DictState], self._context),
+                            context=self._context,  # type: ignore[arg-type]
                             steps=registered.steps,
                         )
                         with run_context(run_ctx):
