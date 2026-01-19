@@ -48,6 +48,7 @@ from workflows.runtime.types.internal_state import (
 from workflows.runtime.types.plugin import (
     RunAdapter,
     as_snapshottable_adapter,
+    get_current_run,
 )
 from workflows.runtime.types.results import (
     AddCollectedEvent,
@@ -70,7 +71,6 @@ from workflows.runtime.types.ticks import (
     TickTimeout,
     WorkflowTick,
 )
-from workflows.runtime.workflow_registry import workflow_registry
 from workflows.workflow import Workflow
 
 if TYPE_CHECKING:
@@ -304,10 +304,7 @@ async def control_loop(
     """
     The main async control loop for a workflow run.
     """
-    # Prefer run-scoped context if available (set by broker)
-    current = workflow_registry.get_run(run_id)
-    if current is None:
-        raise WorkflowRuntimeError("Run context not found for control loop")
+    current = get_current_run()
     state = init_state or BrokerState.from_workflow(current.workflow)
     runner = _ControlLoopRunner(
         current.workflow, current.run_adapter, current.context, current.steps, state

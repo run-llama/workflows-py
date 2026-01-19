@@ -14,7 +14,7 @@ from typing import Any, AsyncGenerator
 
 # DBOS is an optional dependency
 # Import will fail at runtime if dbos is not installed
-from dbos import DBOS, SetWorkflowID  # type: ignore[import-not-found]
+from dbos import DBOS, SetWorkflowID
 
 from workflows.events import Event, StopEvent
 from workflows.runtime.control_loop import control_loop
@@ -34,7 +34,7 @@ from workflows.runtime.workflow_tracker import WorkflowTracker
 from workflows.workflow import Workflow
 
 
-@DBOS.step()  # type: ignore[misc]
+@DBOS.step()
 async def _durable_time() -> float:
     return time.time()
 
@@ -78,18 +78,18 @@ class DBOSRuntime(Runtime):
             name = workflow.__class__.__name__
 
         # Create DBOS-wrapped control loop with stable name
-        @DBOS.workflow(name=f"{name}.control_loop")  # type: ignore[misc]
+        @DBOS.workflow(name=f"{name}.control_loop")
         async def _dbos_control_loop(
             start_event: Event | None,
             init_state: BrokerState | None,
             run_id: str,
         ) -> StopEvent:
-            with SetWorkflowID(run_id):  # pyright: ignore[reportCallIssue]
+            with SetWorkflowID(run_id):
                 return await workflow_function(start_event, init_state, run_id)
 
         # Wrap steps with stable names
         wrapped_steps: dict[str, StepWorkerFunction[Any]] = {
-            step_name: DBOS.step(name=f"{name}.{step_name}")(step)  # type: ignore[misc]
+            step_name: DBOS.step(name=f"{name}.{step_name}")(step)
             for step_name, step in steps.items()
         }
 
@@ -131,7 +131,7 @@ class DBOSRuntime(Runtime):
         self._tracker.mark_launched()
 
         # Launch DBOS runtime
-        DBOS.launch()  # type: ignore[misc]
+        DBOS.launch()
         self._dbos_launched = True
 
     def destroy(self) -> None:
@@ -160,20 +160,18 @@ class DBOSRunAdapter(RunAdapter):
     # Mailbox used by control loop and broker
     async def wait_receive(self) -> WorkflowTick:
         # Receive next tick via DBOS durable notification
-        tick = await DBOS.recv_async()  # type: ignore[misc]
-        return tick  # type: ignore[return-value]
+        tick = await DBOS.recv_async()
+        return tick
 
     async def send_event(self, tick: WorkflowTick) -> None:
-        await DBOS.send_async(self.run_id, tick)  # type: ignore[misc]
+        await DBOS.send_async(self.run_id, tick)
 
     # Event stream used by handlers/observers
     async def write_to_event_stream(self, event: Event) -> None:
-        await DBOS.write_stream_async("published_events", event)  # type: ignore[misc]
+        await DBOS.write_stream_async("published_events", event)
 
     async def stream_published_events(self) -> AsyncGenerator[Event, None]:
-        async for event in DBOS.read_stream_async(  # type: ignore[misc]
-            self.run_id, "published_events"
-        ):
+        async for event in DBOS.read_stream_async(self.run_id, "published_events"):
             yield event
 
     # Timing utilities
@@ -181,7 +179,7 @@ class DBOSRunAdapter(RunAdapter):
         return await _durable_time()
 
     async def sleep(self, seconds: float) -> None:
-        await DBOS.sleep_async(seconds)  # type: ignore[misc]
+        await DBOS.sleep_async(seconds)
 
     async def close(self) -> None:
         pass

@@ -36,9 +36,9 @@ from workflows.events import (
 from workflows.retry_policy import ConstantDelayRetryPolicy, RetryPolicy
 from workflows.runtime.control_loop import control_loop
 from workflows.runtime.types.internal_state import BrokerState
+from workflows.runtime.types.plugin import RunContext, run_context
 from workflows.runtime.types.step_function import as_step_worker_function
 from workflows.runtime.types.ticks import TickAddEvent, TickCancelRun
-from workflows.runtime.workflow_registry import workflow_registry
 from workflows.workflow import Workflow
 
 from .conftest import MockRunAdapter  # type: ignore[import]
@@ -155,23 +155,20 @@ def run_control_loop(
     ctx = Context(workflow=workflow)
     ctx._broker_run = ctx._init_broker(workflow, run_adapter=test_runtime)
     run_id = str(uuid.uuid4())
-    workflow_registry.register_run(
-        run_id=run_id,
-        workflow=workflow,
-        run_adapter=test_runtime,
-        context=ctx,
-        steps=step_workers,
-    )
 
     async def _run() -> StopEvent:
-        try:
+        run_ctx = RunContext(
+            workflow=workflow,
+            run_adapter=test_runtime,
+            context=ctx,
+            steps=step_workers,
+        )
+        with run_context(run_ctx):
             return await control_loop(
                 start_event=start_event,
                 init_state=BrokerState.from_workflow(workflow),
                 run_id=run_id,
             )
-        finally:
-            workflow_registry.delete_run(run_id)
 
     return _run()
 

@@ -11,12 +11,16 @@ from contextlib import contextmanager
 from contextvars import ContextVar, Token
 from dataclasses import dataclass
 from typing import (
+    TYPE_CHECKING,
     Any,
     AsyncGenerator,
     Coroutine,
     Generator,
     Protocol,
 )
+
+if TYPE_CHECKING:
+    from workflows.context.context import Context
 
 from workflows.events import Event, StopEvent
 from workflows.runtime.types.internal_state import BrokerState
@@ -34,6 +38,37 @@ _current_runtime: ContextVar[Runtime | None] = ContextVar(
 class RegisteredWorkflow:
     workflow_function: ControlLoopFunction
     steps: dict[str, StepWorkerFunction[Any]]
+
+
+@dataclass
+class RunContext:
+    """Context for an active workflow run, available via get_current_run()."""
+
+    workflow: Workflow
+    run_adapter: RunAdapter
+    context: Context
+    steps: dict[str, StepWorkerFunction[Any]]
+
+
+_current_run: ContextVar[RunContext | None] = ContextVar("current_run", default=None)
+
+
+@contextmanager
+def run_context(ctx: RunContext) -> Generator[RunContext, None, None]:
+    """Set the current run context for the duration of a workflow run."""
+    token = _current_run.set(ctx)
+    try:
+        yield ctx
+    finally:
+        _current_run.reset(token)
+
+
+def get_current_run() -> RunContext:
+    """Get the current run context. Raises if not in a workflow run."""
+    ctx = _current_run.get()
+    if ctx is None:
+        raise RuntimeError("Not in a workflow run context")
+    return ctx
 
 
 class Runtime(ABC):

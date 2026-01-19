@@ -31,7 +31,14 @@ from workflows.events import (
 from workflows.handler import WorkflowHandler
 from workflows.runtime.control_loop import control_loop, rebuild_state_from_ticks
 from workflows.runtime.types.internal_state import BrokerState
-from workflows.runtime.types.plugin import RunAdapter, Runtime, as_snapshottable_adapter
+from workflows.runtime.types.plugin import (
+    RegisteredWorkflow,
+    RunAdapter,
+    RunContext,
+    Runtime,
+    as_snapshottable_adapter,
+    run_context,
+)
 from workflows.runtime.types.results import (
     AddCollectedEvent,
     AddWaiter,
@@ -46,10 +53,9 @@ from workflows.runtime.types.step_function import (
     as_step_worker_function,
 )
 from workflows.runtime.types.ticks import TickAddEvent, TickCancelRun, WorkflowTick
-from workflows.runtime.workflow_registry import workflow_registry
 from workflows.utils import _nanoid as nanoid
 
-from ..context.state_store import MODEL_T
+from ..context.state_store import MODEL_T, DictState
 
 if TYPE_CHECKING:
     from workflows import Workflow
@@ -143,39 +149,35 @@ class WorkflowBroker(Generic[MODEL_T]):
                     try:
                         exception_raised = None
 
-                        # Check if runtime has pre-registered workflows (from launch())
                         registered = self._runtime.get_registered(workflow)
                         if registered is None:
-                            # Fallback to on-the-fly registration
                             step_workers: dict[str, StepWorkerFunction] = {}
                             for name, step_func in workflow._get_steps().items():
-                                # Avoid capturing a bound method (which retains the instance).
-                                # If it's a bound method, extract the unbound function from the class.
                                 unbound = getattr(step_func, "__func__", step_func)
                                 step_workers[name] = as_step_worker_function(unbound)
 
-                            registered = workflow_registry.get_registered_workflow(
-                                workflow, self._runtime, control_loop, step_workers
+                            wrapped = self._runtime.register(
+                                workflow, control_loop, step_workers
                             )
+                            if wrapped is not None:
+                                registered = wrapped
+                            else:
+                                registered = RegisteredWorkflow(
+                                    control_loop, step_workers
+                                )
 
-                        # Register run context prior to invoking control loop
-                        workflow_registry.register_run(
-                            run_id=run_id,
+                        run_ctx = RunContext(
                             workflow=workflow,
                             run_adapter=self._run_adapter,
-                            context=self._context,  # type: ignore
+                            context=cast(Context[DictState], self._context),
                             steps=registered.steps,
                         )
-
-                        try:
+                        with run_context(run_ctx):
                             workflow_result = await registered.workflow_function(
                                 start_event,
                                 init_state,
                                 run_id,
                             )
-                        finally:
-                            # ensure run context is cleaned up even on failure
-                            workflow_registry.delete_run(run_id)
                         result._set_stop_event(workflow_result)
                     except Exception as e:
                         exception_raised = e
