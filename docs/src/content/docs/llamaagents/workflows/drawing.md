@@ -48,6 +48,7 @@ Setting up the server is straightforward:
 import asyncio
 from workflows import Workflow, step
 from workflows.events import StartEvent, StopEvent
+from workflows.server import WorkflowServer
 
 class MyWorkflow(Workflow):
     @step

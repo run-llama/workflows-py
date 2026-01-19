@@ -44,7 +44,7 @@ class JokeFlow(Workflow):
         # Build a query engine using the index and the llm from the start event
         query_engine = ev.an_index.as_query_engine(llm=ev.an_llm)
         topic = await query_engine.aquery(
-            f"What is the closest topic to {a_string_field}"
+            f"What is the closest topic to {ev.a_string_field}"
         )
         # Use the llm attached to the start event to instruct the model
         prompt = f"Write your best joke about {topic}."
@@ -98,7 +98,7 @@ class JokeFlow(Workflow):
 
         prompt = f"Give a thorough analysis and critique of the following joke: {joke}"
         response = await self.llm.acomplete(prompt)
-        return MyStopEvent(response)
+        return MyStopEvent(critique=response)
 
     ...
 ```

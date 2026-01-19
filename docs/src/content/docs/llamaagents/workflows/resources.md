@@ -9,10 +9,13 @@ Resources are external dependencies you can inject into the steps of a workflow.
 As a simple example, look at `memory` from llama-index in the following workflow:
 
 ```python
+from typing import Annotated
+
+from workflows import Workflow, step
+from workflows.events import Event, StartEvent, StopEvent
 from workflows.resource import Resource
 from llama_index.core.llms import ChatMessage
 from llama_index.core.memory import Memory
-from typing import Annotated
 
 
 def get_memory(*args, **kwargs):

@@ -17,6 +17,7 @@ First, create a Python file (e.g., `my_server.py`):
 
 ```python
 # my_server.py
+import asyncio
 from workflows import Workflow, step
 from workflows.context import Context
 from workflows.events import Event, StartEvent, StopEvent
@@ -291,8 +292,8 @@ Assuming you are running the server example from above, we can use `WorkflowClie
 ```python
 from workflows.client import WorkflowClient
 
-async def main()
-  client = WorkflowClient(base_url="http://0.0.0.0:8080")
+async def main():
+    client = WorkflowClient(base_url="http://0.0.0.0:8080")
     workflows = await client.list_workflows()
     print("===== AVAILABLE WORKFLOWS ====")
     print(workflows)
@@ -357,14 +358,14 @@ await server.serve("0.0.0.0", "8080")
 You can now run the workflow and, when the human interaction is required, send the human response back:
 
 ```python
-from workflow.client import WorkflowClient
+from workflows.client import WorkflowClient
 
 client = WorkflowClient(base_url="http://0.0.0.0:8080")
 handler = await client.run_workflow_nowait("human")
 handler_id = handler.handler_id
 print(handler_id)
 async for event in client.get_workflow_events(handler_id=handler_id):
-    if "RequestEvent" == event.type
+    if "RequestEvent" == event.type:
         print(
             "Workflow is requiring human input:",
             event.value.get("prompt", ""),
