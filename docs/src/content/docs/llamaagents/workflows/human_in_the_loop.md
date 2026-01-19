@@ -9,7 +9,8 @@ Since workflows are so flexible, there are many possible ways to implement human
 The easiest way to implement a human-in-the-loop is to use the `InputRequiredEvent` and `HumanResponseEvent` events during event streaming.
 
 ```python
-from workflows.events import InputRequiredEvent, HumanResponseEvent
+from workflows import Workflow, step
+from workflows.events import StartEvent, StopEvent, InputRequiredEvent, HumanResponseEvent
 
 
 class HumanInTheLoopWorkflow(Workflow):
@@ -46,6 +47,8 @@ If needed, you can also subclass these two events to add custom payloads.
 You can break out of the event loop and resume later. This is useful when you want to pause the workflow to wait for a human response asynchronously (e.g., from a web request).
 
 ```python
+from workflows import Context
+
 handler = workflow.run()
 async for event in handler.stream_events():
     if isinstance(event, InputRequiredEvent):

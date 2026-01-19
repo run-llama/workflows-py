@@ -17,6 +17,8 @@ To set a policy for a specific step, all you have to do is passing a policy obje
 
 
 ```python
+from workflows import Workflow, Context, step
+from workflows.events import StartEvent, StopEvent
 from workflows.retry_policy import ConstantDelayRetryPolicy
 
 
@@ -46,6 +48,7 @@ For example, this is a retry policy that's excited about the weekend and only re
 
 ```python
 from datetime import datetime
+from typing import Optional
 
 
 class RetryOnFridayPolicy:

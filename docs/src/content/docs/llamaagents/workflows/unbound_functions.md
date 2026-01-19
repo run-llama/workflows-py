@@ -9,6 +9,8 @@ Throughout these docs, we have been showing workflows defined as classes. Howeve
 First we create an empty class to hold the steps:
 
 ```python
+from workflows import Workflow
+
 class TestWorkflow(Workflow):
     pass
 ```
@@ -16,6 +18,9 @@ class TestWorkflow(Workflow):
 Now we can add steps to the workflow by defining functions and decorating them with the `@step()` decorator:
 
 ```python
+from workflows import step
+from workflows.events import StartEvent, StopEvent
+
 @step(workflow=TestWorkflow)
 def some_step(ev: StartEvent) -> StopEvent:
     return StopEvent()

@@ -29,7 +29,7 @@ There are cases where the state might be manipulated by multiple steps running a
 async def my_step(self, ctx: Context, ev: StartEvent) -> StopEvent:
    # No other steps can access the state while the `with` block is running
    async with ctx.store.edit_state() as ctx_state:
-       if "count" not in state:
+       if "count" not in ctx_state:
            ctx_state["count"] = 0
        ctx_state["count"] += 1
    return StopEvent()
@@ -58,7 +58,7 @@ class CounterState(BaseModel):
 Then, simply annotate your workflow state with the state model:
 
 ```python
-from workflows import Workflow, step
+from workflows import Workflow, Context, step
 from workflows.events import (
     StartEvent,
     StopEvent,
@@ -97,6 +97,6 @@ result = await handler
 # ctx = Context.from_dict(workflow, ctx_dict)
 
 # continue with next run
-handler = w.run(ctx=ctx)
+handler = workflow.run(ctx=ctx)
 result = await handler
 ```
