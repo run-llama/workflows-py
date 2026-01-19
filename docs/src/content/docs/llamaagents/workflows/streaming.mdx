@@ -63,7 +63,7 @@ class MyWorkflow(Workflow):
 
         return SecondEvent(
             second_output="Second step complete, full response attached",
-            response=response,
+            response=full_resp,
         )
 
     @step
