@@ -101,6 +101,7 @@ def workflow_with_resources() -> Workflow:
 def events() -> list[type[Event]]:
     return [OneTestEvent, AnotherTestEvent]
 
+
 # --- Nested workflow for testing ---
 
 
