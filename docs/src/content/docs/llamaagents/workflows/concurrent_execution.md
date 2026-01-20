@@ -12,6 +12,7 @@ To emit multiple events to trigger multiple steps, you can use `ctx.send_event()
 
 ```python
 import asyncio
+import random
 from workflows import Workflow, Context, step
 from workflows.events import Event, StartEvent, StopEvent
 
@@ -41,6 +42,7 @@ If you execute the previous example, you'll note that the workflow stops after w
 
 ```python
 import asyncio
+import random
 from workflows import Workflow, Context, step
 from workflows.events import Event, StartEvent, StopEvent
 

@@ -319,7 +319,23 @@ def rebuild_state_from_ticks(
     state: BrokerState,
     ticks: list[WorkflowTick],
 ) -> BrokerState:
-    """Rebuild the state from a list of ticks"""
+    """Rebuild the state from a list of ticks.
+
+    When reconstructing state (e.g., for checkpointing), we must first apply
+    rewind_in_progress() to match what happens at runtime when resuming a workflow.
+    This clears in_progress, moves events back to the queue, and then re-assigns
+    new worker IDs starting from 0.
+
+    Without this, resuming a workflow and then checkpointing again would fail
+    because the original in_progress worker IDs don't match the new worker IDs
+    assigned after rewind.
+    """
+    # Apply rewind_in_progress to match what happens at runtime when resuming.
+    # This re-assigns worker IDs so they align with the ticks that were recorded
+    # after the workflow was resumed.
+    state, _ = rewind_in_progress(state, time.time())
+
+    # Replay ticks to rebuild state
     for tick in ticks:
         state, _ = _reduce_tick(
             tick, state, time.time()

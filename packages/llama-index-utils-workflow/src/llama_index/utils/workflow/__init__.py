@@ -22,15 +22,15 @@ from workflows.events import (
     StopEvent,
 )
 from workflows.handler import WorkflowHandler
-from workflows.protocol import (
+from workflows.representation import (
     WorkflowGenericNode,
     WorkflowGraph,
     WorkflowGraphEdge,
     WorkflowGraphNode,
     WorkflowResourceNode,
 )
-from workflows.representation_utils import (
-    extract_workflow_structure as _extract_workflow_structure,
+from workflows.representation import (
+    get_workflow_representation as _get_workflow_representation,
 )
 from workflows.runtime.types.results import AddCollectedEvent, StepWorkerResult
 from workflows.runtime.types.ticks import TickAddEvent, TickStepResult, WorkflowTick
@@ -343,7 +343,7 @@ def _extract_single_agent_structure(agent: BaseWorkflowAgent) -> WorkflowGraph:
             # Add edge from agent to tool
             edges.append(WorkflowGraphEdge(source="agent", target=tool_id))
 
-    return WorkflowGraph(nodes=nodes, edges=edges)
+    return WorkflowGraph(name=agent.name, nodes=nodes, edges=edges)
 
 
 def _process_tools_and_handoffs(
@@ -432,7 +432,7 @@ def _extract_agent_workflow_structure(
         agent_nodes = [n for n in nodes if n.node_type == "workflow_agent"]
         edges.append(WorkflowGraphEdge(source=agent_nodes[-1].id, target="output"))
 
-    return WorkflowGraph(nodes=nodes, edges=edges)
+    return WorkflowGraph(name=type(agent_workflow).__name__, nodes=nodes, edges=edges)
 
 
 def _extract_execution_graph(
@@ -515,7 +515,7 @@ def draw_all_possible_flows(
         max_label_length: Maximum label length before truncation (None = no limit)
 
     """
-    graph = _extract_workflow_structure(workflow)
+    graph = _get_workflow_representation(workflow)
     _render_pyvis(graph, filename, notebook, max_label_length)
 
 
@@ -536,7 +536,7 @@ def draw_all_possible_flows_mermaid(
         The Mermaid diagram as a string
 
     """
-    graph = _extract_workflow_structure(workflow)
+    graph = _get_workflow_representation(workflow)
     return _render_mermaid(graph, filename, max_label_length)
 
 

@@ -11,7 +11,7 @@ from workflows.events import (
     InputRequiredEvent,
     StopEvent,
 )
-from workflows.protocol import (
+from workflows.representation.types import (
     WorkflowEventNode,
     WorkflowExternalNode,
     WorkflowGraph,
@@ -92,8 +92,19 @@ def _create_resource_node(resource_def: ResourceDefinition) -> WorkflowResourceN
     )
 
 
-def extract_workflow_structure(workflow: Workflow) -> WorkflowGraph:
-    """Extract workflow structure into a graph representation."""
+def get_workflow_representation(workflow: Workflow) -> WorkflowGraph:
+    """Build a graph representation of a workflow's structure.
+
+    Extracts the workflow's steps, events, and resources into a WorkflowGraph
+    that can be used for visualization or analysis.
+
+    Args:
+        workflow: The workflow instance to build a representation for.
+
+    Returns:
+        A WorkflowGraph containing nodes for steps, events, resources,
+        and external interactions, with edges showing the data flow.
+    """
     # Get workflow steps
     steps: dict[str, StepFunction] = get_steps_from_class(workflow)
     if not steps:
@@ -237,5 +248,11 @@ def extract_workflow_structure(workflow: Workflow) -> WorkflowGraph:
                 )
             )
 
+    workflow_name = type(workflow).__name__
     workflow_description = inspect.getdoc(workflow)
-    return WorkflowGraph(nodes=nodes, edges=edges, description=workflow_description)
+    return WorkflowGraph(
+        name=workflow_name, nodes=nodes, edges=edges, description=workflow_description
+    )
+
+
+__all__ = ["get_workflow_representation"]

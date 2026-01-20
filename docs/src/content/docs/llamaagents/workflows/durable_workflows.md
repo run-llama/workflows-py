@@ -73,7 +73,7 @@ class DurableWorkflow(Workflow):
         self.redis = r
 
     @step
-    def convert_documents(self, ev: StartEvent, ctx: Context) -> StopEvent:
+    async def convert_documents(self, ev: StartEvent, ctx: Context) -> StopEvent:
         # Get the workflow input
         document_ids = ev.ids
         # Get the list of processed documents from the state store
@@ -84,7 +84,7 @@ class DurableWorkflow(Workflow):
 		            continue
             convert()
             # Update the state store
-            converted_id.append(doc_id)
+            converted_ids.append(doc_id)
             await ctx.store.set("converted_ids", converted_ids)
             # Create a snapshot of the current context
             self.redis.hset("ctx", mapping=ctx.to_dict())
@@ -104,7 +104,7 @@ def get_redis_client(*args, **kwargs):
 
 class DurableWorkflow(Workflow):
     @step
-    def convert_documents(
+    async def convert_documents(
         self,
         ev: StartEvent,
         ctx: Context,
@@ -120,7 +120,7 @@ class DurableWorkflow(Workflow):
 		            continue
             convert()
             # Update the state store
-            converted_id.append(doc_id)
+            converted_ids.append(doc_id)
             await ctx.store.set("converted_ids", converted_ids)
             # Create a snapshot of the current context
             redis.hset("ctx", mapping=ctx.to_dict())

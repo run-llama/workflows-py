@@ -1,5 +1,18 @@
 # llama-index-utils-workflow
 
+## 0.7.1
+
+### Patch Changes
+
+- 40be1c7: add workflow class name to WorkflowGraph representation
+
+## 0.7.0
+
+### Minor Changes
+
+- e53c654: Add further detail to workflow graph, mainly adding `Resource` nodes to workflow graph and visualizations
+- 0d72b4d: reorganize workflow graph representation types
+
 ## 0.6.0
 
 ### Minor Changes

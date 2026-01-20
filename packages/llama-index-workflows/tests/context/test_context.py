@@ -58,6 +58,26 @@ async def test_collect_events() -> None:
 
 
 @pytest.mark.asyncio
+async def test_collect_events_empty_expected_list() -> None:
+    """
+    Test that collect_events returns an empty list (not None) when the
+    expected list is empty. This edge case should immediately return []
+    since there are no events to collect.
+    """
+
+    class TestWorkflow(Workflow):
+        @step
+        async def start_step(self, ctx: Context, ev: StartEvent) -> StopEvent:
+            # Pass an empty list of expected events
+            events = ctx.collect_events(ev, [])
+            # Should return an empty list, not None
+            return StopEvent(result=events)
+
+    r = await WorkflowTestRunner(TestWorkflow()).run()
+    assert r.result == []
+
+
+@pytest.mark.asyncio
 async def test_collect_events_with_extra_event_type() -> None:
     """
     Test that collect_events properly handles when an event of a different type

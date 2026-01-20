@@ -1,5 +1,34 @@
 # llama-index-workflows
 
+## 2.12.2
+
+### Patch Changes
+
+- bfbfba4: Return an empty list for empty target events, rather than None
+- 85f948e: fix: rebuild_state_from_ticks clears in_progress before replaying
+
+  Fixed ctx.to_dict() failing with "Worker X not found in in_progress" when checkpointing resumed workflows. The function now also rewinds in progress when recreating from ticks, to match the actual behavior when resuming a workflow.
+
+## 2.12.1
+
+### Patch Changes
+
+- 40be1c7: add workflow class name to WorkflowGraph representation
+
+## 2.12.0
+
+### Minor Changes
+
+- e53c654: Add further detail to workflow graph, mainly adding `Resource` nodes to workflow graph and visualizations
+- 2ff316d: Updates workflow server with functionality to drop and restore idle workflow handlers that are waiting on external input.
+- 0d72b4d: reorganize workflow graph representation types
+- f96faa2: Add dedicated StopEvent subclasses for workflow termination (timeout, cancellation, failure)
+
+### Patch Changes
+
+- 3b043b8: Track when workflows are idle (waiting on external input)
+- 7a85c96: Add ResourceConfig for resource-level configuration injection
+
 ## 2.11.7
 
 ### Patch Changes
