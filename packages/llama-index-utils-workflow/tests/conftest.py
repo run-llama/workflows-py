@@ -100,3 +100,30 @@ def workflow_with_resources() -> Workflow:
 @pytest.fixture()
 def events() -> list[type[Event]]:
     return [OneTestEvent, AnotherTestEvent]
+
+# --- Nested workflow for testing ---
+
+
+class ChildWorkflowA(Workflow):
+    @step()
+    async def child_start(self, ev: StartEvent) -> StopEvent:
+        return StopEvent(result="Child processed")
+
+
+class ParentWorkflow(Workflow):
+    @step()
+    async def parent_start(self, ev: StartEvent) -> Event:
+        # Instantiate the nested workflow. The drawing function will inspect this.
+        child_wf = ChildWorkflowA()
+        # The actual run logic is not important for drawing.
+        _ = await child_wf.run(input="dummy")
+        return Event(result="some result")
+
+    @step()
+    async def parent_end(self, ev: Event) -> StopEvent:
+        return StopEvent(result="Final Result")
+
+
+@pytest.fixture()
+def nested_workflow() -> Workflow:
+    return ParentWorkflow()

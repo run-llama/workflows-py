@@ -453,3 +453,33 @@ def test_resource_node_deduplication_in_rendering(
     assert len(resource_node_defs) == 2, (
         f"Expected 2 unique resource nodes, found {len(resource_node_defs)}: {resource_node_defs}"
     )
+
+
+def test_draw_all_possible_flows_nested_mermaid(nested_workflow: Workflow) -> None:
+    """Test Mermaid diagram generation for nested workflows."""
+    result = draw_all_possible_flows_nested_mermaid(nested_workflow)
+
+    # Basic checks
+    assert isinstance(result, str)
+    assert result.startswith("flowchart TD")
+
+    # Check for parent workflow nodes
+    assert "step_parent_start" in result
+    assert "step_parent_end" in result
+
+    # Check for child workflow nodes (prefixed)
+    assert "step_parent_start_ChildWorkflowA_child_start" in result
+    assert "event_parent_start_ChildWorkflowA_StartEvent" in result
+    assert "event_parent_start_ChildWorkflowA_StopEvent" in result
+
+    # Check for linking edges
+    # Parent step -> child start
+    assert (
+        'step_parent_start -->|"nested workflow: ChildWorkflowA"| event_parent_start_ChildWorkflowA_StartEvent'
+        in result
+    )
+    # Child stop -> parent step
+    assert (
+        'event_parent_start_ChildWorkflowA_StopEvent -->|"nested workflow return: ChildWorkflowA"| step_parent_start'
+        in result
+    )
