@@ -31,6 +31,11 @@ from workflows.representation_utils import (
 from workflows.runtime.types.results import AddCollectedEvent, StepWorkerResult
 from workflows.runtime.types.ticks import TickAddEvent, TickStepResult, WorkflowTick
 
+import inspect
+import ast
+import textwrap
+import sys
+
 
 def _truncate_label(label: str, max_length: int) -> str:
     """Truncate long labels for visualization."""
@@ -722,3 +727,112 @@ def draw_most_recent_execution_mermaid(
             f.write(diagram_string)
 
     return diagram_string
+
+
+def _get_workflow_classes_from_step(method_callable) -> list[str]:
+    workflow_classes = []
+    try:
+        source = inspect.getsource(method_callable)
+        clean_source = textwrap.dedent(source)
+        tree = ast.parse(clean_source)
+        
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                # Check if calling a class with 'Workflow' in the name
+                if isinstance(node.func, ast.Name) and "Workflow" in node.func.id:
+                    if node.func.id not in workflow_classes:
+                        workflow_classes.append(node.func.id)
+    except Exception:
+        return []
+    return workflow_classes
+
+def draw_all_possible_flows_nested_mermaid(
+    workflow: Workflow,
+    filename: str = "workflow_nested_flows.mermaid",
+    max_label_length: int | None = None,
+) -> str:
+    parent_graph = _extract_workflow_structure(workflow)
+    steps_lookup = workflow._get_steps()
+
+    print(f"--- Analyzing Nested Workflows ---")
+    
+    for node in list(parent_graph.nodes):
+        step_id = getattr(node, "id", str(node))
+        
+        if getattr(node, "node_type", None) == "step":
+            step = steps_lookup.get(step_id)
+            
+            # Now returns a list of class names
+            nested_wf_classnames = _get_workflow_classes_from_step(step)
+            
+            # Iterate through every detected workflow class in this step
+            for nested_wf_classname in nested_wf_classnames:
+                print(f"Detected nested Workflow '{nested_wf_classname}' in step: {step_id}")
+                
+                try:
+                    module_name = step.__module__
+                    module = sys.modules.get(module_name) or sys.modules.get('__main__')
+                    wf_class = getattr(module, nested_wf_classname)
+                    
+                    child_wf_instance = wf_class()
+                    child_graph = _extract_workflow_structure(child_wf_instance)
+                    
+                    # Ensure prefix is unique even if the same class is called in different steps
+                    prefix = f"{step_id}_{nested_wf_classname}_"
+                    
+                    # Merge nodes
+                    for c_node in list(child_graph.nodes):
+                        c_node_id = getattr(c_node, "id", str(c_node))
+                        new_node = WorkflowGenericNode(
+                            id=f"{prefix}{c_node_id}",
+                            label=getattr(c_node, "label", c_node_id),
+                            node_type=getattr(c_node, "node_type", "step"),
+                            event_type=getattr(c_node, "event_type", None),
+                        )
+                        parent_graph.nodes.append(new_node)
+                    
+                    # Merge edges
+                    for edge in child_graph.edges:
+                        parent_graph.edges.append(
+                            WorkflowGraphEdge(
+                                source=f"{prefix}{edge.source}",
+                                target=f"{prefix}{edge.target}",
+                                label=edge.label
+                            )
+                        )
+
+                    # Link Parent Step to Child Start
+                    child_start_event_id = next(
+                        (n.id for n in child_graph.nodes if getattr(n, 'event_type', None) == 'StartEvent'),
+                        None
+                    )
+                    if child_start_event_id:
+                        parent_graph.edges.append(
+                            WorkflowGraphEdge(
+                                source=step_id, 
+                                target=f"{prefix}{child_start_event_id}", 
+                                label=f"nested workflow: {nested_wf_classname}"
+                            )
+                        )
+
+                    # Link Child Stop back to Parent Step
+                    child_stop_event_id = next(
+                        (n.id for n in child_graph.nodes if getattr(n, 'event_type', None) == 'StopEvent'),
+                        None
+                    )
+                    if child_stop_event_id:
+                        parent_graph.edges.append(
+                            WorkflowGraphEdge(
+                                source=f"{prefix}{child_stop_event_id}", 
+                                target=step_id, 
+                                label=f"nested workflow return: {nested_wf_classname}"
+                            )
+                        )
+                        
+                except Exception as e:
+                    print(f"Could not attach nested workflow {nested_wf_classname}: {e}")
+
+    print(f"------------------------------")
+    return _render_mermaid(parent_graph, filename, max_label_length)
+
+
