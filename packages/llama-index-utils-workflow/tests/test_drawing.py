@@ -4,6 +4,7 @@ import pytest
 from llama_index.utils.workflow import (
     draw_all_possible_flows,
     draw_all_possible_flows_mermaid,
+    draw_all_possible_flows_nested_mermaid,
     draw_most_recent_execution,
     draw_most_recent_execution_mermaid,
 )
