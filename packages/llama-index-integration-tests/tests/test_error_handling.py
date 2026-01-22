@@ -5,11 +5,11 @@ handled correctly, and that early stopping methods work as expected.
 """
 
 import pytest
-from llama_index.core.workflow.errors import WorkflowRuntimeError
 from llama_index_integration_tests.helpers import (
     make_text_response,
     make_tool_call_response,
 )
+from workflows.errors import WorkflowRuntimeError
 
 
 async def test_max_iterations_raises_error(create_workflow) -> None:
