@@ -77,7 +77,7 @@ def create_workflow() -> WorkflowFactory:
             **kwargs,
         )
 
-    return _create
+    return _create  # type: ignore[return-value]
 
 
 @pytest.fixture(params=["function", "react"])
@@ -129,4 +129,4 @@ def create_simple_workflow(agent_type: str) -> SimpleWorkflowFactory:
             **kwargs,
         )
 
-    return _create
+    return _create  # type: ignore[return-value]

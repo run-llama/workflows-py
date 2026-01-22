@@ -4,6 +4,7 @@ These tests verify that wait_for_event works correctly inside tool
 functions, and that workflows can be paused, serialized, and resumed.
 """
 
+from conftest import WorkflowFactory
 from llama_index_integration_tests.helpers import (
     make_text_response,
     make_tool_call_response,
@@ -11,8 +12,6 @@ from llama_index_integration_tests.helpers import (
 from workflows import Context
 from workflows.context import PickleSerializer
 from workflows.events import HumanResponseEvent, InputRequiredEvent
-
-from .conftest import WorkflowFactory
 
 
 async def test_wait_for_event_in_tool(create_workflow: WorkflowFactory) -> None:

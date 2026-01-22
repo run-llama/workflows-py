@@ -5,13 +5,12 @@ by llama-index agents, including state persistence across steps and
 access from within tool functions.
 """
 
+from conftest import WorkflowFactory
 from llama_index_integration_tests.helpers import (
     make_text_response,
     make_tool_call_response,
 )
 from workflows import Context
-
-from .conftest import WorkflowFactory
 
 
 async def test_initial_state_accessible_in_tool(
@@ -78,7 +77,9 @@ async def test_state_modification_persists(create_workflow: WorkflowFactory) -> 
     assert final_state["counter"] == 2
 
 
-async def test_state_survives_handler_access(create_workflow: WorkflowFactory) -> None:
+async def test_state_survives_handler_access(
+    create_workflow: WorkflowFactory,
+) -> None:
     """Test that state can be read from handler.ctx after workflow completes."""
 
     async def set_result(ctx: Context) -> str:

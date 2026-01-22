@@ -5,13 +5,12 @@ handled correctly, and that early stopping methods work as expected.
 """
 
 import pytest
+from conftest import WorkflowFactory
 from llama_index_integration_tests.helpers import (
     make_text_response,
     make_tool_call_response,
 )
 from workflows.errors import WorkflowRuntimeError
-
-from .conftest import WorkflowFactory
 
 
 async def test_max_iterations_raises_error(create_workflow: WorkflowFactory) -> None:
@@ -60,7 +59,9 @@ async def test_early_stopping_generate(create_workflow: WorkflowFactory) -> None
     assert result is not None
 
 
-async def test_tool_error_captured_in_result(create_workflow: WorkflowFactory) -> None:
+async def test_tool_error_captured_in_result(
+    create_workflow: WorkflowFactory,
+) -> None:
     """Test that tool errors are captured rather than crashing the workflow."""
 
     def failing_tool() -> str:

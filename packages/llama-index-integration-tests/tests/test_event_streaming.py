@@ -5,13 +5,12 @@ agents, including write_event_to_stream, collect_events, and the
 stream_events() API.
 """
 
+from conftest import SimpleWorkflowFactory, WorkflowFactory
 from llama_index.core.agent.workflow import AgentOutput, ToolCall, ToolCallResult
 from llama_index_integration_tests.helpers import (
     make_text_response,
     make_tool_call_response,
 )
-
-from .conftest import SimpleWorkflowFactory, WorkflowFactory
 
 
 async def test_stream_events_yields_events(
