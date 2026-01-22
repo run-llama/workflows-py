@@ -11,6 +11,7 @@ resolution-markers = [
 members = [
     "docs",
     "llama-agents-workspace",
+    "llama-index-integration-tests",
     "llama-index-utils-workflow",
     "llama-index-workflows",
     "workflows-dev",
@@ -1643,6 +1644,37 @@ wheels = [
 ]
 
 [[package]]
+name = "llama-index-integration-tests"
+version = "0.1.0"
+source = { editable = "packages/llama-index-integration-tests" }
+dependencies = [
+    { name = "llama-index-core" },
+    { name = "llama-index-workflows" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "pytest-cov" },
+    { name = "pytest-timeout" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "llama-index-core", specifier = ">=0.12.0" },
+    { name = "llama-index-workflows", editable = "packages/llama-index-workflows" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pytest", specifier = ">=8.4.2" },
+    { name = "pytest-asyncio", specifier = ">=0.24.0" },
+    { name = "pytest-cov", specifier = ">=7.0.0" },
+    { name = "pytest-timeout", specifier = ">=2.3.1" },
+]
+
+[[package]]
 name = "llama-index-utils-workflow"
 version = "0.7.1"
 source = { editable = "packages/llama-index-utils-workflow" }
@@ -1677,7 +1709,7 @@ dev = [
 
 [[package]]
 name = "llama-index-workflows"
-version = "2.12.1"
+version = "2.12.2"
 source = { editable = "packages/llama-index-workflows" }
 dependencies = [
     { name = "eval-type-backport", marker = "python_full_version < '3.10'" },
