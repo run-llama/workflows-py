@@ -67,9 +67,6 @@ select = [
 "examples/**/*" = ["T201"]
 "packages/*/tests/**/*" = [
   "T201",
-  "ANN001",
-  "ANN002",
-  "ANN003",
   # remove UP007 and UP045 after removing 3.9 support
   "UP007",
   "UP045"

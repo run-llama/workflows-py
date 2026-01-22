@@ -11,8 +11,10 @@ from llama_index_integration_tests.helpers import (
 )
 from workflows.errors import WorkflowRuntimeError
 
+from .conftest import WorkflowFactory
 
-async def test_max_iterations_raises_error(create_workflow) -> None:
+
+async def test_max_iterations_raises_error(create_workflow: WorkflowFactory) -> None:
     """Test that exceeding max_iterations raises WorkflowRuntimeError."""
 
     def infinite_tool() -> str:
@@ -29,7 +31,7 @@ async def test_max_iterations_raises_error(create_workflow) -> None:
         await workflow.run(user_msg="Loop forever", max_iterations=5)
 
 
-async def test_early_stopping_generate(create_workflow) -> None:
+async def test_early_stopping_generate(create_workflow: WorkflowFactory) -> None:
     """Test early_stopping_method='generate' produces a final response instead of error."""
 
     def looping_tool() -> str:
@@ -58,7 +60,7 @@ async def test_early_stopping_generate(create_workflow) -> None:
     assert result is not None
 
 
-async def test_tool_error_captured_in_result(create_workflow) -> None:
+async def test_tool_error_captured_in_result(create_workflow: WorkflowFactory) -> None:
     """Test that tool errors are captured rather than crashing the workflow."""
 
     def failing_tool() -> str:
@@ -81,7 +83,9 @@ async def test_tool_error_captured_in_result(create_workflow) -> None:
     assert result is not None
 
 
-async def test_max_iterations_configurable_per_run(create_workflow) -> None:
+async def test_max_iterations_configurable_per_run(
+    create_workflow: WorkflowFactory,
+) -> None:
     """Test that max_iterations can be set per run() call."""
     call_count = 0
 

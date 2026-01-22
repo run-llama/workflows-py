@@ -11,8 +11,12 @@ from llama_index_integration_tests.helpers import (
     make_tool_call_response,
 )
 
+from .conftest import SimpleWorkflowFactory, WorkflowFactory
 
-async def test_stream_events_yields_events(create_simple_workflow) -> None:
+
+async def test_stream_events_yields_events(
+    create_simple_workflow: SimpleWorkflowFactory,
+) -> None:
     """Test that stream_events() yields events during workflow execution."""
     workflow = create_simple_workflow(
         responses=[make_text_response("Hello!")],
@@ -30,7 +34,9 @@ async def test_stream_events_yields_events(create_simple_workflow) -> None:
     assert len(events) > 0
 
 
-async def test_agent_output_streamed(create_simple_workflow) -> None:
+async def test_agent_output_streamed(
+    create_simple_workflow: SimpleWorkflowFactory,
+) -> None:
     """Test that AgentOutput events are streamed."""
     workflow = create_simple_workflow(
         responses=[make_text_response("Test response")],
@@ -49,7 +55,7 @@ async def test_agent_output_streamed(create_simple_workflow) -> None:
     assert len(agent_outputs) >= 1
 
 
-async def test_tool_call_events_streamed(create_workflow) -> None:
+async def test_tool_call_events_streamed(create_workflow: WorkflowFactory) -> None:
     """Test that ToolCall and ToolCallResult events are streamed."""
 
     def dummy_tool() -> str:
@@ -81,7 +87,7 @@ async def test_tool_call_events_streamed(create_workflow) -> None:
     assert len(tool_results) >= 1
 
 
-async def test_multiple_tool_calls_streamed(create_workflow) -> None:
+async def test_multiple_tool_calls_streamed(create_workflow: WorkflowFactory) -> None:
     """Test that multiple sequential tool calls each produce events."""
     call_count = 0
 
@@ -113,7 +119,9 @@ async def test_multiple_tool_calls_streamed(create_workflow) -> None:
     assert call_count == 2
 
 
-async def test_handler_result_after_streaming(create_simple_workflow) -> None:
+async def test_handler_result_after_streaming(
+    create_simple_workflow: SimpleWorkflowFactory,
+) -> None:
     """Test that awaiting handler after streaming returns the final result."""
     workflow = create_simple_workflow(
         responses=[make_text_response("Final answer")],
@@ -132,7 +140,9 @@ async def test_handler_result_after_streaming(create_simple_workflow) -> None:
     assert isinstance(result, AgentOutput)
 
 
-async def test_events_contain_agent_name(create_simple_workflow) -> None:
+async def test_events_contain_agent_name(
+    create_simple_workflow: SimpleWorkflowFactory,
+) -> None:
     """Test that streamed events contain the current agent name."""
     workflow = create_simple_workflow(
         name="named_agent",

@@ -1,6 +1,6 @@
 """Shared fixtures for llama-index workflow integration tests."""
 
-from typing import Callable, List, Union
+from typing import Any, Callable, List, Protocol, Union
 
 import pytest
 from llama_index.core.agent.workflow import (
@@ -17,8 +17,32 @@ from llama_index_integration_tests.helpers import (
 )
 
 
+class WorkflowFactory(Protocol):
+    """Protocol for workflow factory fixtures."""
+
+    def __call__(
+        self,
+        name: str = ...,
+        tools: List[Union[BaseTool, Callable[..., Any]]] | None = ...,
+        responses: List[ChatMessage] | None = ...,
+        initial_state: dict[str, Any] | None = ...,
+        **kwargs: Any,
+    ) -> AgentWorkflow: ...
+
+
+class SimpleWorkflowFactory(Protocol):
+    """Protocol for simple workflow factory fixtures."""
+
+    def __call__(
+        self,
+        name: str = ...,
+        responses: List[ChatMessage] | None = ...,
+        **kwargs: Any,
+    ) -> AgentWorkflow: ...
+
+
 @pytest.fixture
-def create_workflow():
+def create_workflow() -> WorkflowFactory:
     """Factory fixture to create AgentWorkflow with FunctionAgent.
 
     FunctionAgent is used because it supports function calling via
@@ -27,11 +51,11 @@ def create_workflow():
 
     def _create(
         name: str = "test_agent",
-        tools: List[Union[BaseTool, Callable]] | None = None,
+        tools: List[Union[BaseTool, Callable[..., Any]]] | None = None,
         responses: List[ChatMessage] | None = None,
-        initial_state: dict | None = None,
-        **kwargs,
-    ):
+        initial_state: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> AgentWorkflow:
         if responses is None:
             responses = [make_text_response("Done")]
 
@@ -57,17 +81,17 @@ def create_workflow():
 
 
 @pytest.fixture(params=["function", "react"])
-def agent_type(request) -> str:
+def agent_type(request: pytest.FixtureRequest) -> str:
     """Parameterized fixture for agent type.
 
     Use this only for tests that don't involve tool invocations,
     since ReActAgent uses text parsing instead of function calling.
     """
-    return request.param
+    return request.param  # type: ignore[return-value]
 
 
 @pytest.fixture
-def create_simple_workflow(agent_type: str):
+def create_simple_workflow(agent_type: str) -> SimpleWorkflowFactory:
     """Factory for simple workflows (no tools) parameterized by agent type.
 
     Use this for tests that want to verify behavior across both
@@ -77,8 +101,8 @@ def create_simple_workflow(agent_type: str):
     def _create(
         name: str = "test_agent",
         responses: List[ChatMessage] | None = None,
-        **kwargs,
-    ):
+        **kwargs: Any,
+    ) -> AgentWorkflow:
         if responses is None:
             responses = [make_text_response("Done")]
 

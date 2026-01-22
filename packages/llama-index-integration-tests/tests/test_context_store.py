@@ -11,8 +11,12 @@ from llama_index_integration_tests.helpers import (
 )
 from workflows import Context
 
+from .conftest import WorkflowFactory
 
-async def test_initial_state_accessible_in_tool(create_workflow) -> None:
+
+async def test_initial_state_accessible_in_tool(
+    create_workflow: WorkflowFactory,
+) -> None:
     """Test that initial_state is accessible via ctx.store in tools."""
     received_value = None
 
@@ -39,7 +43,7 @@ async def test_initial_state_accessible_in_tool(create_workflow) -> None:
     assert received_value == "initial_value"
 
 
-async def test_state_modification_persists(create_workflow) -> None:
+async def test_state_modification_persists(create_workflow: WorkflowFactory) -> None:
     """Test that state modifications in tools persist across calls."""
     call_count = 0
 
@@ -74,7 +78,7 @@ async def test_state_modification_persists(create_workflow) -> None:
     assert final_state["counter"] == 2
 
 
-async def test_state_survives_handler_access(create_workflow) -> None:
+async def test_state_survives_handler_access(create_workflow: WorkflowFactory) -> None:
     """Test that state can be read from handler.ctx after workflow completes."""
 
     async def set_result(ctx: Context) -> str:
@@ -102,7 +106,7 @@ async def test_state_survives_handler_access(create_workflow) -> None:
     assert state["result"] == "computation_complete"
 
 
-async def test_complex_state_types(create_workflow) -> None:
+async def test_complex_state_types(create_workflow: WorkflowFactory) -> None:
     """Test that complex state types (nested dicts, lists) work correctly."""
 
     async def modify_complex_state(ctx: Context) -> str:
@@ -135,7 +139,7 @@ async def test_complex_state_types(create_workflow) -> None:
     assert state["nested"]["name"] == "test"  # Unchanged
 
 
-async def test_multiple_tools_share_state(create_workflow) -> None:
+async def test_multiple_tools_share_state(create_workflow: WorkflowFactory) -> None:
     """Test that multiple different tools can share state."""
 
     async def tool_a(ctx: Context) -> str:

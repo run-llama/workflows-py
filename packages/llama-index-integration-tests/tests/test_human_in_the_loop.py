@@ -12,8 +12,10 @@ from workflows import Context
 from workflows.context import PickleSerializer
 from workflows.events import HumanResponseEvent, InputRequiredEvent
 
+from .conftest import WorkflowFactory
 
-async def test_wait_for_event_in_tool(create_workflow) -> None:
+
+async def test_wait_for_event_in_tool(create_workflow: WorkflowFactory) -> None:
     """Test that wait_for_event works inside a tool function."""
     received_response = None
 
@@ -57,7 +59,7 @@ async def test_wait_for_event_in_tool(create_workflow) -> None:
     assert received_response == "Alice"
 
 
-async def test_context_dict_serialization(create_workflow) -> None:
+async def test_context_dict_serialization(create_workflow: WorkflowFactory) -> None:
     """Test that context can be serialized to dict and restored."""
 
     async def pausable_tool(ctx: Context) -> str:
@@ -96,7 +98,7 @@ async def test_context_dict_serialization(create_workflow) -> None:
     assert result is not None
 
 
-async def test_pickle_serialization(create_workflow) -> None:
+async def test_pickle_serialization(create_workflow: WorkflowFactory) -> None:
     """Test that context can be pickle-serialized for cross-process persistence."""
 
     async def pausable_tool(ctx: Context) -> str:
@@ -137,7 +139,9 @@ async def test_pickle_serialization(create_workflow) -> None:
     assert result is not None
 
 
-async def test_state_preserved_across_pause_resume(create_workflow) -> None:
+async def test_state_preserved_across_pause_resume(
+    create_workflow: WorkflowFactory,
+) -> None:
     """Test that workflow state is preserved when pausing and resuming."""
 
     async def stateful_pause(ctx: Context) -> str:
