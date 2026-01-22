@@ -7,8 +7,7 @@ works correctly with the workflows package.
 from typing import List
 
 import pytest
-
-from llama_index.core.agent.workflow import ReActAgent, AgentInput
+from llama_index.core.agent.workflow import AgentInput, ReActAgent
 from llama_index.core.base.llms.types import ChatMessage, MessageRole
 from llama_index.core.llms.mock import MockFunctionCallingLLM
 from llama_index.core.memory import ChatMemoryBuffer
@@ -150,7 +149,7 @@ async def test_react_agent_with_memory() -> None:
                 [
                     ChatMessage(
                         role=MessageRole.ASSISTANT,
-                        content="Thought: I need to get the weather\nAction: get_weather\nAction Input: {\"city\": \"London\"}\n",
+                        content='Thought: I need to get the weather\nAction: get_weather\nAction Input: {"city": "London"}\n',
                     ),
                     ChatMessage(
                         role=MessageRole.ASSISTANT,

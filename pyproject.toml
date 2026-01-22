@@ -34,7 +34,7 @@ pythonVersion = "3.14"
 
 [[tool.basedpyright.executionEnvironments]]
 root = "packages/llama-index-integration-tests"
-pythonVersion = "3.9"
+pythonVersion = "3.13"
 
 [[tool.basedpyright.executionEnvironments]]
 root = "examples"

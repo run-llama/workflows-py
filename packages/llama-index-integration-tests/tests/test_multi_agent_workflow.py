@@ -6,17 +6,15 @@ works correctly with the workflows package.
 
 from typing import List
 
-import pytest
-
 from llama_index.core.agent.workflow import (
+    AgentOutput,
     AgentWorkflow,
     FunctionAgent,
-    AgentOutput,
 )
 from llama_index.core.base.llms.types import ChatMessage, MessageRole
 from llama_index.core.llms.mock import MockFunctionCallingLLM
 from llama_index.core.memory import ChatMemoryBuffer
-from llama_index.core.tools import FunctionTool, ToolSelection
+from llama_index.core.tools import FunctionTool
 
 
 def _response_generator_from_list(responses: List[ChatMessage]):

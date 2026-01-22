@@ -7,8 +7,7 @@ works correctly with the workflows package.
 from typing import List
 
 import pytest
-
-from llama_index.core.agent.workflow import FunctionAgent, AgentInput
+from llama_index.core.agent.workflow import FunctionAgent
 from llama_index.core.base.llms.types import ChatMessage, MessageRole
 from llama_index.core.llms.mock import MockFunctionCallingLLM
 from llama_index.core.memory import ChatMemoryBuffer
