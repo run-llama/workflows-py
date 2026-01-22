@@ -2,6 +2,7 @@
 # Copyright (c) 2026 LlamaIndex Inc.
 
 import json
+import re
 from pathlib import Path
 from typing import Annotated, Optional
 from unittest import mock
@@ -91,7 +92,8 @@ async def test_function_resource_init() -> None:
     assert retval.cache
     assert not retval._is_async
 
-    result = await retval.call()
+    resource_manager = ResourceManager()
+    result = await retval.call(resource_manager)
     assert result == "string"
 
 
@@ -109,13 +111,15 @@ def test_resource_config_init(
     retval = ResourceConfig(config_file="config.json")
     assert isinstance(retval, _ResourceConfig)
     assert retval.path_selector is None
-    assert retval.config_file == "config.json"
+    # config_file is resolved to absolute path
+    expected_path = str(tmp_path / "config.json")
+    assert retval.config_file == expected_path
     assert retval.cls_factory is None
-    assert retval.name == "config.json"
+    assert retval.name == expected_path
 
     # modify path selector, modify name
     retval.path_selector = "hello.world"
-    assert retval.name == "config.json.hello.world"
+    assert retval.name == f"{expected_path}.hello.world"
 
     retval.path_selector = None
 
@@ -146,14 +150,15 @@ def test_resource_config_path_selector(
     with open("config.json", "w") as f:
         json.dump(data, f)
 
+    expected_path = str(tmp_path / "config.json")
     resource = ResourceConfig(config_file="config.json", path_selector="memory")
-    assert resource.name == "config.json.memory"
+    assert resource.name == f"{expected_path}.memory"
     resource.cls_factory = ChatMessages
     value = resource.call()
     assert isinstance(value, ChatMessages)
     assert value.messages == ["hello"]
     resource.path_selector = "core.fs"
-    assert resource.name == "config.json.core.fs"
+    assert resource.name == f"{expected_path}.core.fs"
     resource.cls_factory = Fs
     value = resource.call()
     assert isinstance(value, Fs)
@@ -178,7 +183,7 @@ def test_resource_config_path_selector_error(
     resource.cls_factory = Fs
     with pytest.raises(
         ValueError,
-        match=r"Expected dictionary for configuration from config.json at path core.fs.files, got: .*",
+        match=r"Expected dictionary for configuration from .+config\.json at path core\.fs\.files, got: .*",
     ):
         resource.call()
 
@@ -186,7 +191,7 @@ def test_resource_config_path_selector_error(
     resource.path_selector = "core.filesystem"
     with pytest.raises(
         ValueError,
-        match=r"Expected dictionary for configuration from config.json at path core.filesystem, got: .*",
+        match=r"Expected dictionary for configuration from .+config\.json at path core\.filesystem, got: .*",
     ):
         resource.call()
 
@@ -195,7 +200,7 @@ def test_resource_config_path_selector_error(
     resource.path_selector = "core.filesystem.fs"
     with pytest.raises(
         ValueError,
-        match=r"Expected dictionary for configuration from config.json at path core.filesystem, got: .*",
+        match=r"Expected dictionary for configuration from .+config\.json at path core\.filesystem, got: .*",
     ):
         resource.call()
 
@@ -442,3 +447,237 @@ async def test_resource_manager() -> None:
     m = ResourceManager()
     await m.set("test_resource", 42)
     assert m.get_all() == {"test_resource": 42}
+
+
+@pytest.mark.asyncio
+async def test_recursive_resource_injection() -> None:
+    """Test that a Resource can depend on another Resource."""
+
+    class DBConnection:
+        def __init__(self, host: str):
+            self.host = host
+
+    class Repository:
+        def __init__(self, db: DBConnection):
+            self.db = db
+
+    def get_db_connection() -> DBConnection:
+        return DBConnection(host="localhost")
+
+    def get_repository(
+        db: Annotated[DBConnection, Resource(get_db_connection)],
+    ) -> Repository:
+        return Repository(db)
+
+    class TestWorkflow(Workflow):
+        @step
+        def start_step(self, ev: StartEvent) -> SecondEvent:
+            return SecondEvent(msg="Hello")
+
+        @step
+        def use_repo(
+            self,
+            ev: SecondEvent,
+            repo: Annotated[Repository, Resource(get_repository)],
+        ) -> StopEvent:
+            assert repo.db.host == "localhost"
+            return StopEvent()
+
+    wf = TestWorkflow(disable_validation=True)
+    await wf.run()
+
+
+@pytest.mark.asyncio
+async def test_recursive_resource_caching() -> None:
+    """Test that nested resources respect individual cache settings."""
+    call_counts = {"db": 0, "repo": 0}
+
+    class DBConnection:
+        pass
+
+    class Repository:
+        def __init__(self, db: DBConnection):
+            self.db = db
+
+    def get_db_connection() -> DBConnection:
+        call_counts["db"] += 1
+        return DBConnection()
+
+    def get_repository(
+        db: Annotated[DBConnection, Resource(get_db_connection)],
+    ) -> Repository:
+        call_counts["repo"] += 1
+        return Repository(db)
+
+    class StepEvent(Event):
+        pass
+
+    class TestWorkflow(Workflow):
+        @step
+        def step1(
+            self,
+            ev: StartEvent,
+            repo: Annotated[Repository, Resource(get_repository)],
+        ) -> StepEvent:
+            return StepEvent()
+
+        @step
+        def step2(
+            self,
+            ev: StepEvent,
+            repo: Annotated[Repository, Resource(get_repository)],
+        ) -> StopEvent:
+            return StopEvent()
+
+    wf = TestWorkflow(disable_validation=True)
+    await wf.run()
+
+    # Both should be cached (called once each)
+    assert call_counts["db"] == 1
+    assert call_counts["repo"] == 1
+
+
+@pytest.mark.asyncio
+async def test_circular_resource_dependency_detection() -> None:
+    """Test that circular dependencies are detected at runtime."""
+
+    class A:
+        pass
+
+    class B:
+        pass
+
+    # Create the cycle by modifying __annotations__ after creating the resources
+    # This allows us to create mutual dependencies
+
+    def cyclic_factory_a(b: Annotated[B, "placeholder"]) -> A:  # type: ignore
+        return A()
+
+    def cyclic_factory_b(a: Annotated[A, "placeholder"]) -> B:  # type: ignore
+        return B()
+
+    # Create resources
+    cyclic_res_a = Resource(cyclic_factory_a)
+    cyclic_res_b = Resource(cyclic_factory_b)
+
+    # Modify annotations to create the cycle:
+    # cyclic_res_a depends on cyclic_res_b, and cyclic_res_b depends on cyclic_res_a
+    cyclic_factory_a.__annotations__["b"] = Annotated[B, cyclic_res_b]
+    cyclic_factory_b.__annotations__["a"] = Annotated[A, cyclic_res_a]
+
+    class TestWorkflow(Workflow):
+        @step
+        def start_step(
+            self,
+            ev: StartEvent,
+            a: Annotated[A, cyclic_res_a],
+        ) -> StopEvent:
+            return StopEvent()
+
+    wf = TestWorkflow(disable_validation=True)
+    expected_chain = (
+        f"{cyclic_factory_a.__qualname__} -> "
+        f"{cyclic_factory_b.__qualname__} -> "
+        f"{cyclic_factory_a.__qualname__}"
+    )
+    with pytest.raises(ValueError, match=re.escape(expected_chain)):
+        await wf.run()
+
+
+@pytest.mark.asyncio
+async def test_non_cached_resource_single_resolution_cycle() -> None:
+    """Non-cached resources should resolve once per dependency graph."""
+    call_counts = {"d": 0}
+
+    class D:
+        pass
+
+    def get_d() -> D:
+        call_counts["d"] += 1
+        return D()
+
+    def get_b(d: Annotated[D, Resource(get_d, cache=False)]) -> str:
+        return "b"
+
+    def get_c(d: Annotated[D, Resource(get_d, cache=False)]) -> str:
+        return "c"
+
+    class TestWorkflow(Workflow):
+        @step
+        def start_step(
+            self,
+            ev: StartEvent,
+            b: Annotated[str, Resource(get_b)],
+            c: Annotated[str, Resource(get_c)],
+        ) -> StopEvent:
+            assert b == "b"
+            assert c == "c"
+            return StopEvent()
+
+    wf = TestWorkflow(disable_validation=True)
+    await wf.run()
+    assert call_counts["d"] == 1
+
+
+@pytest.mark.asyncio
+async def test_resource_config_in_step_signature(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test that ResourceConfig can be used directly in step signatures."""
+    monkeypatch.chdir(tmp_path)
+
+    data = {"file": "test.txt", "permission_mode": "r"}
+    with open("config.json", "w") as f:
+        json.dump(data, f)
+
+    class TestWorkflow(Workflow):
+        @step
+        def start_step(self, ev: StartEvent) -> SecondEvent:
+            return SecondEvent(msg="Hello")
+
+        @step
+        def use_config(
+            self,
+            ev: SecondEvent,
+            config: Annotated[FileData, ResourceConfig(config_file="config.json")],
+        ) -> StopEvent:
+            assert config.file == "test.txt"
+            assert config.permission_mode == "r"
+            return StopEvent()
+
+    wf = TestWorkflow(disable_validation=True)
+    await wf.run()
+
+
+@pytest.mark.asyncio
+async def test_resource_config_in_step_with_path_selector(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test ResourceConfig with path_selector in step signatures."""
+    monkeypatch.chdir(tmp_path)
+
+    data = {
+        "database": {"file": "db.sqlite", "permission_mode": "rw"},
+        "cache": {"file": "cache.json", "permission_mode": "r"},
+    }
+    with open("config.json", "w") as f:
+        json.dump(data, f)
+
+    class TestWorkflow(Workflow):
+        @step
+        def use_db_config(
+            self,
+            ev: StartEvent,
+            db_config: Annotated[
+                FileData,
+                ResourceConfig(config_file="config.json", path_selector="database"),
+            ],
+        ) -> StopEvent:
+            assert db_config.file == "db.sqlite"
+            assert db_config.permission_mode == "rw"
+            return StopEvent()
+
+    wf = TestWorkflow(disable_validation=True)
+    await wf.run()

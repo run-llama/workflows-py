@@ -158,7 +158,7 @@ class _ControlLoopRunner:
                     )
                 )
             except Exception as e:
-                logger.error("error running step worker function: ", e, exc_info=True)
+                logger.error("error running step worker function: %s", e, exc_info=True)
                 self.queue_tick(
                     TickStepResult(
                         step_name=command.step_name,

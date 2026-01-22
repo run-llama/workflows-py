@@ -36,7 +36,7 @@ from pydantic import BaseModel
 
 from .errors import WorkflowValidationError
 from .events import Event, EventType
-from .resource import ResourceDefinition
+from .resource import ResourceDefinition, ResourceDescriptor
 
 BUSY_WAIT_DELAY = 0.01
 
@@ -104,11 +104,11 @@ def inspect_signature(fn: Callable) -> StepSignatureSpec:
         if get_origin(annotation) is Annotated:
             args = get_args(annotation)
             type_annotation = args[0] if args else None
-            resource = args[1] if len(args) > 1 else None
-            if resource is not None:
+            descriptor = args[1] if len(args) > 1 else None
+            if descriptor is not None and isinstance(descriptor, ResourceDescriptor):
                 resources.append(
                     ResourceDefinition(
-                        name=name, resource=resource, type_annotation=type_annotation
+                        name=name, resource=descriptor, type_annotation=type_annotation
                     )
                 )
             continue
