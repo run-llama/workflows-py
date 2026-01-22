@@ -1,32 +1,27 @@
 # LlamaIndex Integration Tests
 
-This package contains integration tests to validate that llama-index-core workflow abstractions continue to work correctly with the workflows package.
+This package contains integration tests to validate that llama-index-core workflow abstractions work correctly with the workflows package.
 
 ## Purpose
 
-The llama-index-core package has several workflow abstractions that subclass `Workflow` from this package:
+The llama-index-core package uses several workflow features:
+- `ctx.store.get/set` for state management
+- `ctx.wait_for_event` for human-in-the-loop patterns
+- Event streaming via `stream_events()`
+- Context serialization for pause/resume
 
-- `BaseWorkflowAgent` - Base class for workflow-based agents
-- `FunctionAgent` - Function calling agent
-- `ReActAgent` - ReAct (Reasoning + Acting) agent
-- `AgentWorkflow` - Multi-agent orchestration workflow
-- `CodeActAgent` - Agent that can execute Python code
+These tests ensure updates to the workflows package don't break these integration points.
 
-These tests ensure that updates to the workflows package don't break these abstractions.
+## Test Organization
 
-## Test Coverage
+Tests are organized by **workflow feature**, not agent type. Each test is parameterized to run against both `FunctionAgent` and `ReActAgent`.
 
-### Agent Tests
-- `test_function_agent.py` - FunctionAgent execution, tools, max iterations, early stopping
-- `test_react_agent.py` - ReActAgent execution, retry on parse errors, memory
-- `test_multi_agent_workflow.py` - Multi-agent orchestration, handoff, event streaming
-
-### Workflow Feature Tests
-- `test_workflow_features.py` - Core workflow features used with agents:
-  - `wait_for_event` inside tool functions (human-in-the-loop pattern)
-  - Context state management via `ctx.store`
-  - Pickle serialization for workflow pause/resume
-  - Multiple sequential tool calls with shared state
+| File | Coverage |
+|------|----------|
+| `test_context_store.py` | `ctx.store.get/set`, state persistence, tool access to state |
+| `test_event_streaming.py` | `stream_events()`, event types, tool call events |
+| `test_human_in_the_loop.py` | `wait_for_event`, context serialization, pause/resume |
+| `test_error_handling.py` | Max iterations, early stopping, tool errors |
 
 ## Running Tests
 
@@ -36,4 +31,4 @@ uv run --directory packages/llama-index-integration-tests pytest
 
 ## Note
 
-This package is not published. It is only used for testing purposes during development.
+This package is not published. It exists only for integration testing during development.
