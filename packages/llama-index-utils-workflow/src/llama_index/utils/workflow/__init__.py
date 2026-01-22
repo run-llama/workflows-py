@@ -7,7 +7,7 @@ import inspect
 import json
 import sys
 import textwrap
-from typing import Any, Dict, List, Tuple, Union, cast
+from typing import Any, Callable, Dict, List, Tuple, Union, cast
 
 from llama_index.core.agent.workflow import (
     AgentWorkflow,
@@ -755,7 +755,6 @@ def draw_all_possible_flows_nested_mermaid(
     filename: str = "workflow_nested_flows.mermaid",
     max_label_length: int | None = None,
 ) -> str:
-
     parent_graph = _get_workflow_representation(workflow)
     steps_lookup = workflow._get_steps()
 
