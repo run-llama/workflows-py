@@ -755,7 +755,8 @@ def draw_all_possible_flows_nested_mermaid(
     filename: str = "workflow_nested_flows.mermaid",
     max_label_length: int | None = None,
 ) -> str:
-    parent_graph = _extract_workflow_structure(workflow)
+
+    parent_graph = _get_workflow_representation(workflow)
     steps_lookup = workflow._get_steps()
 
     for node in list(parent_graph.nodes):
@@ -775,7 +776,7 @@ def draw_all_possible_flows_nested_mermaid(
                     wf_class = getattr(module, nested_wf_classname)
 
                     child_wf_instance = wf_class()
-                    child_graph = _extract_workflow_structure(child_wf_instance)
+                    child_graph = _get_workflow_representation(child_wf_instance)
 
                     # Ensure prefix is unique even if the same class is called in different steps
                     prefix = f"{step_id}_{nested_wf_classname}_"
