@@ -10,10 +10,9 @@ import pytest
 
 from llama_index.core.agent.workflow import ReActAgent, AgentInput
 from llama_index.core.base.llms.types import ChatMessage, MessageRole
+from llama_index.core.llms.mock import MockFunctionCallingLLM
 from llama_index.core.memory import ChatMemoryBuffer
 from llama_index.core.tools import FunctionTool
-
-from llama_index_integration_tests.mock_llm import MockFunctionCallingLLM
 
 
 def _response_generator_from_list(responses: List[ChatMessage]):

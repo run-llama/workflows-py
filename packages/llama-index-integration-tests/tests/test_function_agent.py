@@ -10,12 +10,10 @@ import pytest
 
 from llama_index.core.agent.workflow import FunctionAgent, AgentInput
 from llama_index.core.base.llms.types import ChatMessage, MessageRole
-from llama_index.core.tools import ToolSelection
+from llama_index.core.llms.mock import MockFunctionCallingLLM
 from llama_index.core.memory import ChatMemoryBuffer
-from llama_index.core.tools import FunctionTool
+from llama_index.core.tools import FunctionTool, ToolSelection
 from llama_index.core.workflow.errors import WorkflowRuntimeError
-
-from llama_index_integration_tests.mock_llm import MockFunctionCallingLLM
 
 
 def _response_generator_from_list(responses: List[ChatMessage]):
@@ -129,15 +127,8 @@ async def test_max_iterations() -> None:
         _ = await agent.run(user_msg="test")
 
 
-@pytest.mark.skip(
-    reason="early_stopping_method='generate' requires llama-index-core >= 0.14.13"
-)
 async def test_early_stopping_method_generate() -> None:
-    """Test early_stopping_method='generate' produces a final response.
-
-    Note: This feature requires llama-index-core >= 0.14.13 which is not yet
-    released. This test is skipped until that version is available on PyPI.
-    """
+    """Test early_stopping_method='generate' produces a final response."""
 
     def random_tool() -> str:
         return "random"
