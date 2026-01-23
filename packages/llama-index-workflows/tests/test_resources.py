@@ -701,3 +701,288 @@ async def test_resource_config_in_step_with_path_selector(
 
     wf = TestWorkflow(disable_validation=True)
     await wf.run()
+
+
+# Tests for resource validation during workflow.validate()
+
+
+def test_validate_detects_circular_resource_dependency() -> None:
+    """Test that validate() detects circular resource dependencies."""
+
+    class A:
+        pass
+
+    class B:
+        pass
+
+    def cyclic_factory_a(b: Annotated[B, "placeholder"]) -> A:  # type: ignore
+        return A()
+
+    def cyclic_factory_b(a: Annotated[A, "placeholder"]) -> B:  # type: ignore
+        return B()
+
+    cyclic_res_a = Resource(cyclic_factory_a)
+    cyclic_res_b = Resource(cyclic_factory_b)
+
+    # Create circular dependency
+    cyclic_factory_a.__annotations__["b"] = Annotated[B, cyclic_res_b]
+    cyclic_factory_b.__annotations__["a"] = Annotated[A, cyclic_res_a]
+
+    class TestWorkflow(Workflow):
+        @step
+        def start_step(
+            self,
+            ev: StartEvent,
+            a: Annotated[A, cyclic_res_a],
+        ) -> StopEvent:
+            return StopEvent()
+
+    wf = TestWorkflow(disable_validation=True)
+    # Circular deps are caught at resolution time by ResourceManager
+    with pytest.raises(Exception, match=r"Circular resource dependency detected"):
+        wf.validate(validate_resources=True)
+
+
+def test_validate_resource_config_success(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test that validate() succeeds with valid resource config."""
+    monkeypatch.chdir(tmp_path)
+
+    data = {"file": "test.txt", "permission_mode": "r"}
+    with open("config.json", "w") as f:
+        json.dump(data, f)
+
+    class TestWorkflow(Workflow):
+        @step
+        def start_step(
+            self,
+            ev: StartEvent,
+            config: Annotated[FileData, ResourceConfig(config_file="config.json")],
+        ) -> StopEvent:
+            return StopEvent()
+
+    wf = TestWorkflow(disable_validation=True)
+    # Should not raise
+    wf.validate(validate_resource_configs=True, validate_resources=False)
+
+
+def test_validate_resource_config_invalid_data(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test that validate() fails with invalid resource config data."""
+    monkeypatch.chdir(tmp_path)
+
+    # Missing required 'permission_mode' field
+    data = {"file": "test.txt"}
+    with open("config.json", "w") as f:
+        json.dump(data, f)
+
+    class TestWorkflow(Workflow):
+        @step
+        def start_step(
+            self,
+            ev: StartEvent,
+            config: Annotated[FileData, ResourceConfig(config_file="config.json")],
+        ) -> StopEvent:
+            return StopEvent()
+
+    wf = TestWorkflow(disable_validation=True)
+    with pytest.raises(Exception, match=r"Resource config validation failed"):
+        wf.validate(validate_resource_configs=True, validate_resources=False)
+
+
+def test_validate_resource_config_disabled(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test that validate() skips resource config validation when disabled."""
+    monkeypatch.chdir(tmp_path)
+
+    # Invalid data but should be ignored since validation is disabled
+    data = {"file": "test.txt"}  # Missing permission_mode
+    with open("config.json", "w") as f:
+        json.dump(data, f)
+
+    class TestWorkflow(Workflow):
+        @step
+        def start_step(
+            self,
+            ev: StartEvent,
+            config: Annotated[FileData, ResourceConfig(config_file="config.json")],
+        ) -> StopEvent:
+            return StopEvent()
+
+    wf = TestWorkflow(disable_validation=True)
+    # Should not raise because resource config validation is disabled
+    wf.validate(validate_resource_configs=False, validate_resources=False)
+
+
+def test_validate_nested_resource_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test that validate() validates nested resource configs."""
+    monkeypatch.chdir(tmp_path)
+
+    data = {"file": "test.txt", "permission_mode": "r"}
+    with open("config.json", "w") as f:
+        json.dump(data, f)
+
+    def get_file_operator(
+        config: Annotated[FileData, ResourceConfig(config_file="config.json")],
+    ) -> FileOperator:
+        return FileOperator(data=config)
+
+    class TestWorkflow(Workflow):
+        @step
+        def start_step(
+            self,
+            ev: StartEvent,
+            operator: Annotated[FileOperator, Resource(get_file_operator)],
+        ) -> StopEvent:
+            return StopEvent()
+
+    wf = TestWorkflow(disable_validation=True)
+    # Should validate the nested ResourceConfig
+    wf.validate(validate_resource_configs=True, validate_resources=False)
+
+
+def test_validate_nested_resource_config_invalid(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test that validate() fails with invalid nested resource config."""
+    monkeypatch.chdir(tmp_path)
+
+    # Invalid data - missing required field
+    data = {"file": "test.txt"}
+    with open("config.json", "w") as f:
+        json.dump(data, f)
+
+    def get_file_operator(
+        config: Annotated[FileData, ResourceConfig(config_file="config.json")],
+    ) -> FileOperator:
+        return FileOperator(data=config)
+
+    class TestWorkflow(Workflow):
+        @step
+        def start_step(
+            self,
+            ev: StartEvent,
+            operator: Annotated[FileOperator, Resource(get_file_operator)],
+        ) -> StopEvent:
+            return StopEvent()
+
+    wf = TestWorkflow(disable_validation=True)
+    with pytest.raises(Exception, match=r"Resource config validation failed"):
+        wf.validate(validate_resource_configs=True, validate_resources=False)
+
+
+def test_validate_resources_enabled() -> None:
+    """Test that validate() resolves resources when enabled."""
+    call_count = {"count": 0}
+
+    def get_string() -> str:
+        call_count["count"] += 1
+        return "test"
+
+    class TestWorkflow(Workflow):
+        @step
+        def start_step(
+            self,
+            ev: StartEvent,
+            value: Annotated[str, Resource(get_string)],
+        ) -> StopEvent:
+            return StopEvent()
+
+    wf = TestWorkflow(disable_validation=True)
+    # Resource factory should be called during validation
+    wf.validate(validate_resource_configs=True, validate_resources=True)
+    assert call_count["count"] == 1
+
+
+def test_validate_resources_disabled_by_default() -> None:
+    """Test that resource factories are not resolved by default."""
+    call_count = {"count": 0}
+
+    def get_string() -> str:
+        call_count["count"] += 1
+        return "test"
+
+    class TestWorkflow(Workflow):
+        @step
+        def start_step(
+            self,
+            ev: StartEvent,
+            value: Annotated[str, Resource(get_string)],
+        ) -> StopEvent:
+            return StopEvent()
+
+    wf = TestWorkflow(disable_validation=True)
+    # Resource factory should NOT be called during validation (default)
+    wf.validate()  # Uses defaults: validate_resource_configs=True, validate_resources=False
+    assert call_count["count"] == 0
+
+
+def test_validate_resource_factory_failure() -> None:
+    """Test that validate() reports resource factory failures."""
+
+    def failing_factory() -> str:
+        raise RuntimeError("Factory failed!")
+
+    class TestWorkflow(Workflow):
+        @step
+        def start_step(
+            self,
+            ev: StartEvent,
+            value: Annotated[str, Resource(failing_factory)],
+        ) -> StopEvent:
+            return StopEvent()
+
+    wf = TestWorkflow(disable_validation=True)
+    with pytest.raises(Exception, match=r"Resource validation failed"):
+        wf.validate(validate_resources=True)
+
+
+def test_validate_without_resources() -> None:
+    """Test that validation works fine for workflows without resources."""
+
+    class TestWorkflow(Workflow):
+        @step
+        def start_step(self, ev: StartEvent) -> StopEvent:
+            return StopEvent()
+
+    wf = TestWorkflow(disable_validation=True)
+    # Should not raise
+    wf.validate()
+
+
+def test_validate_annotation_shadowing_with_resource_factory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test that validation works with factory annotation shadowing."""
+    monkeypatch.chdir(tmp_path)
+
+    data = {"name": "test_name"}
+    with open("config.json", "w") as f:
+        json.dump(data, f)
+
+    # Use the module-scoped helper that tests annotation shadowing
+    factory_resource = _get_factory_with_config_path(str(tmp_path / "config.json"))
+
+    class TestWorkflow(Workflow):
+        @step
+        def start_step(
+            self,
+            ev: StartEvent,
+            result: Annotated[dict, factory_resource],
+        ) -> StopEvent:
+            return StopEvent()
+
+    wf = TestWorkflow(disable_validation=True)
+    # Should validate the nested ResourceConfig in the factory
+    wf.validate(validate_resource_configs=True)
