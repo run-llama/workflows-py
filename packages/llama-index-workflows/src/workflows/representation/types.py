@@ -88,6 +88,38 @@ class WorkflowResourceNode(WorkflowNodeBase):
     )
 
 
+class WorkflowResourceConfigNode(WorkflowNodeBase):
+    """A resource config node representing a configuration loaded from a JSON file."""
+
+    node_type: Literal["resource_config"] = Field(
+        default="resource_config", description="Discriminator field for node type"
+    )
+    type_name: str | None = Field(
+        default=None,
+        description="The Pydantic BaseModel type that the config is validated against",
+    )
+    config_file: str | None = Field(
+        default=None,
+        description="Path to the JSON configuration file",
+    )
+    path_selector: str | None = Field(
+        default=None,
+        description="Dot-separated path selector for nested configuration values",
+    )
+    config_schema: dict[str, Any] | None = Field(
+        default=None,
+        description="Pydantic JSON schema for the config type",
+    )
+    config_value: dict[str, Any] | None = Field(
+        default=None,
+        description="The configuration value read from the file (if readable)",
+    )
+    description: str | None = Field(
+        default=None,
+        description="Human-readable description of the config's purpose and contents",
+    )
+
+
 class WorkflowGenericNode(WorkflowNodeBase):
     """A generic node for custom visualization types not covered by standard node types.
 
@@ -121,6 +153,7 @@ WorkflowGraphNode = Union[
     WorkflowEventNode,
     WorkflowExternalNode,
     WorkflowResourceNode,
+    WorkflowResourceConfigNode,
     WorkflowGenericNode,
 ]
 
@@ -247,6 +280,7 @@ __all__ = [
     "WorkflowEventNode",
     "WorkflowExternalNode",
     "WorkflowResourceNode",
+    "WorkflowResourceConfigNode",
     "WorkflowGenericNode",
     "WorkflowGraphNode",
     "WorkflowGraphEdge",

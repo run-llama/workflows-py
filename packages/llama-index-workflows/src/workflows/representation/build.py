@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import hashlib
 import inspect
+from typing import Any
+
+from pydantic import BaseModel
 
 from workflows import Workflow
-from workflows.decorators import StepConfig, StepFunction
+from workflows.decorators import StepFunction
 from workflows.events import (
     Event,
     HumanResponseEvent,
@@ -17,12 +20,14 @@ from workflows.representation.types import (
     WorkflowGraph,
     WorkflowGraphEdge,
     WorkflowGraphNode,
+    WorkflowResourceConfigNode,
     WorkflowResourceNode,
     WorkflowStepNode,
 )
 from workflows.resource import (
     ResourceDefinition,
     ResourceDescriptor,
+    _get_resource_config_data,
     _Resource,
     _ResourceConfig,
 )
@@ -30,6 +35,15 @@ from workflows.utils import (
     get_steps_from_class,
     get_steps_from_instance,
 )
+
+
+def _get_type_name(type_annotation: type | None) -> str | None:
+    """Extract a readable type name from a type annotation."""
+    if type_annotation is None:
+        return None
+    if hasattr(type_annotation, "__name__"):
+        return type_annotation.__name__
+    return str(type_annotation)
 
 
 def _get_resource_identity(resource: ResourceDescriptor) -> int:
@@ -62,6 +76,47 @@ def _get_event_type_chain(cls: type) -> list[str]:
     return names
 
 
+def _create_resource_config_node(
+    resource_config: _ResourceConfig,
+    type_annotation: type | None,
+) -> WorkflowResourceConfigNode:
+    """Create a WorkflowResourceConfigNode from a _ResourceConfig."""
+    # Compute unique hash for deduplication based on config file and path selector
+    hash_input = f"{resource_config.config_file}:{resource_config.path_selector or ''}"
+    unique_hash = hashlib.sha256(hash_input.encode()).hexdigest()[:12]
+
+    node_id = f"resource_config_{unique_hash}"
+    type_name = _get_type_name(type_annotation)
+    # Prefer explicit label, then type name, then config file path
+    label = resource_config.label or type_name or resource_config.config_file
+
+    # Extract JSON schema if type is a BaseModel
+    config_schema: dict[str, Any] | None = None
+    if (
+        type_annotation is not None
+        and isinstance(type_annotation, type)
+        and issubclass(type_annotation, BaseModel)
+    ):
+        model_cls: type[BaseModel] = type_annotation
+        config_schema = model_cls.model_json_schema()
+
+    # Read config value using existing infrastructure
+    config_value = _get_resource_config_data(
+        resource_config.config_file, resource_config.path_selector
+    )
+
+    return WorkflowResourceConfigNode(
+        id=node_id,
+        label=label,
+        type_name=type_name,
+        config_file=resource_config.config_file,
+        path_selector=resource_config.path_selector,
+        config_schema=config_schema,
+        config_value=config_value,
+        description=resource_config.description,
+    )
+
+
 def _create_resource_node(resource_def: ResourceDefinition) -> WorkflowResourceNode:
     """Create a WorkflowResourceNode from a ResourceDefinition.
 
@@ -69,15 +124,7 @@ def _create_resource_node(resource_def: ResourceDefinition) -> WorkflowResourceN
     rather than at Resource creation time for performance.
     """
     resource = resource_def.resource
-
-    # Get type name from annotation
-    type_name: str | None = None
-    if resource_def.type_annotation is not None:
-        type_annotation = resource_def.type_annotation
-        if hasattr(type_annotation, "__name__"):
-            type_name = type_annotation.__name__
-        else:
-            type_name = str(type_annotation)
+    type_name = _get_type_name(resource_def.type_annotation)
 
     # Extract source metadata lazily - only available for _Resource with factory
     source_file: str | None = None
@@ -86,18 +133,9 @@ def _create_resource_node(resource_def: ResourceDefinition) -> WorkflowResourceN
 
     if isinstance(resource, _Resource):
         factory = resource._factory
-        try:
-            source_file = inspect.getfile(factory)  # type: ignore[arg-type]
-        except (TypeError, OSError):
-            pass
-        try:
-            _, source_line = inspect.getsourcelines(factory)  # type: ignore[arg-type]
-        except (TypeError, OSError):
-            pass
+        source_file = inspect.getfile(factory)  # type: ignore[arg-type]
+        _, source_line = inspect.getsourcelines(factory)  # type: ignore[arg-type]
         resource_description = inspect.getdoc(factory)
-    elif isinstance(resource, _ResourceConfig):
-        # For ResourceConfig, the source is the config file
-        source_file = resource.config_file
 
     # Compute unique hash for deduplication
     hash_input = f"{resource.name}:{source_file or 'unknown'}"
@@ -139,21 +177,102 @@ def get_workflow_representation(workflow: Workflow) -> WorkflowGraph:
     nodes: list[WorkflowGraphNode] = []
     edges: list[WorkflowGraphEdge] = []
     added_nodes: set[str] = set()  # Track added node IDs to avoid duplicates
-    added_resource_nodes: dict[int, WorkflowResourceNode] = {}  # Track by factory id
+    # Track resource nodes by identity (factory id for _Resource)
+    added_resource_nodes: dict[int, WorkflowResourceNode] = {}
+    # Track resource config nodes by config_file>path_selector
+    added_resource_config_nodes: dict[str, WorkflowResourceConfigNode] = {}
+    # Track descriptor nodes by identity for step edges (_Resource or _ResourceConfig)
+    added_descriptor_nodes: dict[
+        int, WorkflowResourceNode | WorkflowResourceConfigNode
+    ] = {}
+    # Track which resources have had their dependencies expanded
+    expanded_resources: set[int] = set()
+    expanding_resources: set[int] = set()
+    # Track resource dependency edges to avoid duplicates
+    resource_edge_keys: set[tuple[str, str, str | None]] = set()
 
-    step_config: StepConfig | None = None
+    def _ensure_resource_config_node(
+        resource_config: _ResourceConfig,
+        type_annotation: type | None,
+    ) -> WorkflowResourceConfigNode:
+        selector = resource_config.path_selector
+        config_key = resource_config.config_file + (
+            (">" + selector) if selector else ""
+        )
+        if config_key in added_resource_config_nodes:
+            return added_resource_config_nodes[config_key]
+        node = _create_resource_config_node(resource_config, type_annotation)
+        nodes.append(node)
+        added_resource_config_nodes[config_key] = node
+        return node
+
+    def _ensure_resource_node(
+        resource: _Resource,
+        type_annotation: type | None,
+        param_name: str,
+    ) -> WorkflowResourceNode:
+        resource_id = _get_resource_identity(resource)
+        if resource_id in added_resource_nodes:
+            return added_resource_nodes[resource_id]
+        node = _create_resource_node(
+            ResourceDefinition(
+                name=param_name,
+                resource=resource,
+                type_annotation=type_annotation,
+            )
+        )
+        nodes.append(node)
+        added_resource_nodes[resource_id] = node
+        return node
+
+    def _track_resource_edge(
+        source: str,
+        target: str,
+        label: str | None,
+    ) -> None:
+        key = (source, target, label)
+        if key in resource_edge_keys:
+            return
+        resource_edge_keys.add(key)
+        edges.append(WorkflowGraphEdge(source=source, target=target, label=label))
+
+    def _ensure_descriptor_node(
+        descriptor: ResourceDescriptor,
+        type_annotation: type | None,
+        param_name: str,
+    ) -> WorkflowResourceNode | WorkflowResourceConfigNode:
+        descriptor_id = _get_resource_identity(descriptor)
+        if isinstance(descriptor, _ResourceConfig):
+            node = _ensure_resource_config_node(descriptor, type_annotation)
+            added_descriptor_nodes[descriptor_id] = node
+            return node
+        if isinstance(descriptor, _Resource):
+            node = _ensure_resource_node(descriptor, type_annotation, param_name)
+            added_descriptor_nodes[descriptor_id] = node
+            resource_id = _get_resource_identity(descriptor)
+            if resource_id in expanded_resources:
+                return node
+            if resource_id in expanding_resources:
+                return node
+            expanding_resources.add(resource_id)
+            for dep_name, dep_descriptor, dep_type in descriptor.get_dependencies():
+                dep_node = _ensure_descriptor_node(dep_descriptor, dep_type, dep_name)
+                _track_resource_edge(source=node.id, target=dep_node.id, label=dep_name)
+            expanding_resources.remove(resource_id)
+            expanded_resources.add(resource_id)
+            return node
+        raise TypeError(
+            f"Unsupported resource descriptor type: {type(descriptor).__name__}"
+        )
 
     # Only one kind of `StopEvent` is allowed in a `Workflow`.
     # Assuming that `Workflow` is validated before drawing, it's enough to find the first one.
     current_stop_event = None
-    for step_name, step_func in steps.items():
-        step_config = step_func._step_config
-
-        for return_type in step_config.return_types:
+    for step_func in steps.values():
+        for return_type in step_func._step_config.return_types:
             if issubclass(return_type, StopEvent):
                 current_stop_event = return_type
                 break
-
         if current_stop_event:
             break
 
@@ -217,11 +336,11 @@ def get_workflow_representation(workflow: Workflow) -> WorkflowGraph:
 
         # Add resource nodes (deduplicated by resource identity)
         for resource_def in step_config.resources:
-            resource_id = _get_resource_identity(resource_def.resource)
-            if resource_id not in added_resource_nodes:
-                resource_node = _create_resource_node(resource_def)
-                nodes.append(resource_node)
-                added_resource_nodes[resource_id] = resource_node
+            _ensure_descriptor_node(
+                resource_def.resource,
+                resource_def.type_annotation,
+                resource_def.name,
+            )
 
     # Second pass: Add edges
     for step_name, step_func in steps.items():
@@ -265,7 +384,7 @@ def get_workflow_representation(workflow: Workflow) -> WorkflowGraph:
         # Edges from steps to resources (with variable name as label)
         for resource_def in step_config.resources:
             resource_id = _get_resource_identity(resource_def.resource)
-            resource_node = added_resource_nodes[resource_id]
+            resource_node = added_descriptor_nodes[resource_id]
             edges.append(
                 WorkflowGraphEdge(
                     source=step_name,

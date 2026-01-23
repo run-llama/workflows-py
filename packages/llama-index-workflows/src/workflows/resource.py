@@ -192,12 +192,16 @@ class _ResourceConfig(Generic[B]):
     config_file: str
     path_selector: str | None
     cls_factory: Type[B] | None
+    label: str | None
+    description: str | None
 
     def __init__(
         self,
         config_file: str,
         path_selector: str | None,
         cls_factory: Type[B] | None = None,
+        label: str | None = None,
+        description: str | None = None,
     ) -> None:
         config_path = Path(config_file)
         if not config_path.is_file():
@@ -210,6 +214,8 @@ class _ResourceConfig(Generic[B]):
         self.config_file = str(config_path.resolve())
         self.path_selector = path_selector
         self.cls_factory = cls_factory
+        self.label = label
+        self.description = description
 
     @property
     def name(self) -> str:
@@ -259,20 +265,27 @@ class _ResourceConfig(Generic[B]):
 def ResourceConfig(
     config_file: str,
     path_selector: str | None = None,
+    label: str | None = None,
+    description: str | None = None,
 ) -> _ResourceConfig:
     """
     Wrapper for a _ResourceConfig.
 
-    Attributes:
-        config_file (str): JSON file where the configuration is stored
-        path_selector (str | None): Path selector to retrieve a specific value from the JSON map
-        cache (bool): Cache the resource's value to avoid re-computation.
+    Args:
+        config_file: JSON file where the configuration is stored.
+        path_selector: Path selector to retrieve a specific value from the JSON map.
+        label: Human-friendly short name for display in visualizations.
+        description: Longer description explaining the purpose and contents of this config.
 
     Returns:
-        _ResourceConfig: A configured resource representation
+        _ResourceConfig: A configured resource representation.
     """
-
-    return _ResourceConfig(config_file=config_file, path_selector=path_selector)
+    return _ResourceConfig(
+        config_file=config_file,
+        path_selector=path_selector,
+        label=label,
+        description=description,
+    )
 
 
 class ResourceDefinition(BaseModel):

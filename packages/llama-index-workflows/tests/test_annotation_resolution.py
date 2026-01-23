@@ -12,6 +12,7 @@ from pydantic import BaseModel
 from workflows.decorators import step
 from workflows.errors import WorkflowValidationError
 from workflows.events import StartEvent, StopEvent
+from workflows.representation import get_workflow_representation
 from workflows.resource import Resource, ResourceConfig
 from workflows.workflow import Workflow
 
@@ -140,6 +141,44 @@ async def test_nested_resource_in_resource_with_future_annotations() -> None:
     wf = WorkflowWithNestedResources(disable_validation=True)
     result = await wf.run()
     assert result == "done"
+
+
+def test_resource_config_representation_with_future_annotations(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Representation should include ResourceConfig under future annotations."""
+    monkeypatch.chdir(tmp_path)
+
+    class SimpleConfig(BaseModel):
+        name: str
+
+    class SimpleClient:
+        def __init__(self, config: SimpleConfig) -> None:
+            self.config = config
+
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps({"name": "demo"}))
+
+    def get_client(
+        config: Annotated[SimpleConfig, ResourceConfig(config_file=str(config_path))],
+    ) -> SimpleClient:
+        return SimpleClient(config=config)
+
+    class WorkflowWithConfig(Workflow):
+        @step
+        async def start_step(
+            self,
+            ev: StartEvent,
+            client: Annotated[SimpleClient, Resource(get_client)],
+        ) -> StopEvent:
+            return StopEvent(result="done")
+
+    graph = get_workflow_representation(WorkflowWithConfig())
+    resource_config_nodes = [
+        node for node in graph.nodes if node.node_type == "resource_config"
+    ]
+    assert len(resource_config_nodes) == 1
 
 
 @pytest.mark.asyncio
