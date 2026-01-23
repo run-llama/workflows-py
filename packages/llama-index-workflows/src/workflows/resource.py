@@ -35,6 +35,28 @@ T = TypeVar("T")
 B = TypeVar("B", bound=BaseModel)
 
 
+def _get_factory_type_hints(
+    factory: Callable[..., Any],
+    localns: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Resolve type hints for a factory function, avoiding shadowing.
+
+    Filters localns to exclude names that exist in factory's __globals__,
+    so types resolve from the factory's module while allowing closure variables.
+    """
+    filtered_localns = localns
+    if filtered_localns:
+        globalns = getattr(factory, "__globals__", {})
+        filtered_localns = {
+            k: v for k, v in filtered_localns.items() if k not in globalns
+        }
+
+    try:
+        return get_type_hints(factory, include_extras=True, localns=filtered_localns)
+    except NameError:
+        return {}
+
+
 @runtime_checkable
 class ResourceDescriptor(Protocol):
     """Common interface for resource descriptors.
@@ -65,6 +87,10 @@ class ResourceDescriptor(Protocol):
         """Store local namespace for resolving deferred type annotations."""
         ...
 
+    def get_dependencies(self) -> list[tuple[str, ResourceDescriptor, type | None]]:
+        """Return factory dependencies. Empty for non-factory resources."""
+        ...
+
 
 class _Resource(Generic[T]):
     """Internal wrapper for resource factories.
@@ -84,37 +110,12 @@ class _Resource(Generic[T]):
         self, resource_manager: ResourceManager
     ) -> dict[str, Any]:
         """Resolve annotated ResourceDescriptor dependencies."""
-        params = inspect.signature(self._factory).parameters
-
-        # Resolve type hints - filter localns to avoid shadowing types from factory's module.
-        # Only include names from localns that don't exist in the factory's globalns,
-        # so types resolve from the factory's module while allowing closure variables.
-        localns = self._localns
-        if localns:
-            globalns = getattr(self._factory, "__globals__", {})
-            localns = {k: v for k, v in localns.items() if k not in globalns}
-
-        try:
-            type_hints = get_type_hints(
-                self._factory, include_extras=True, localns=localns
-            )
-        except NameError:
-            type_hints = {}
-
         resolved: dict[str, Any] = {}
 
-        for param in params.values():
-            annotation = type_hints.get(param.name, param.annotation)
-            if get_origin(annotation) is Annotated:
-                args = get_args(annotation)
-                if len(args) >= 2:
-                    descriptor = args[1]
-                    type_annotation = args[0]
-
-                    if isinstance(descriptor, ResourceDescriptor):
-                        descriptor.set_type_annotation(type_annotation)
-                        descriptor.set_localns(self._localns)
-                        resolved[param.name] = await resource_manager.get(descriptor)
+        for param_name, descriptor, type_annotation in self.get_dependencies():
+            descriptor.set_type_annotation(type_annotation)
+            descriptor.set_localns(self._localns)
+            resolved[param_name] = await resource_manager.get(descriptor)
 
         return resolved
 
@@ -141,6 +142,23 @@ class _Resource(Generic[T]):
     def set_localns(self, localns: dict[str, Any] | None) -> None:
         """Store local namespace for resolving deferred type annotations."""
         self._localns = localns
+
+    def get_dependencies(self) -> list[tuple[str, ResourceDescriptor, type | None]]:
+        """Extract ResourceDescriptor dependencies from factory signature."""
+        deps: list[tuple[str, ResourceDescriptor, type | None]] = []
+        params = inspect.signature(self._factory).parameters
+        type_hints = _get_factory_type_hints(self._factory, self._localns)
+
+        for param in params.values():
+            annotation = type_hints.get(param.name, param.annotation)
+            if get_origin(annotation) is Annotated:
+                args = get_args(annotation)
+                if len(args) >= 2:
+                    descriptor = args[1]
+                    if isinstance(descriptor, ResourceDescriptor):
+                        type_annotation = args[0]
+                        deps.append((param.name, descriptor, type_annotation))
+        return deps
 
 
 @functools.lru_cache(maxsize=1)
@@ -232,6 +250,10 @@ class _ResourceConfig(Generic[B]):
     def set_localns(self, localns: dict[str, Any] | None) -> None:
         """No-op for config-backed resources."""
         pass
+
+    def get_dependencies(self) -> list[tuple[str, ResourceDescriptor, type | None]]:
+        """No dependencies for config-backed resources."""
+        return []
 
 
 def ResourceConfig(
