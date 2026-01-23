@@ -22,6 +22,7 @@ from typing import (
     cast,
     get_args,
     get_origin,
+    get_type_hints,
     runtime_checkable,
 )
 
@@ -60,6 +61,10 @@ class ResourceDescriptor(Protocol):
         """Provide the annotated type for config-backed resources."""
         ...
 
+    def set_localns(self, localns: dict[str, Any] | None) -> None:
+        """Store local namespace for resolving deferred type annotations."""
+        ...
+
 
 class _Resource(Generic[T]):
     """Internal wrapper for resource factories.
@@ -73,23 +78,36 @@ class _Resource(Generic[T]):
         self._is_async = inspect.iscoroutinefunction(factory)
         self.name = getattr(factory, "__qualname__", type(factory).__name__)
         self.cache = cache
+        self._localns: dict[str, Any] | None = None
 
     async def _resolve_dependencies(
         self, resource_manager: ResourceManager
     ) -> dict[str, Any]:
         """Resolve annotated ResourceDescriptor dependencies."""
         params = inspect.signature(self._factory).parameters
+
+        # Resolve type hints using stored localns for PEP 563 support
+        try:
+            type_hints = get_type_hints(
+                self._factory, include_extras=True, localns=self._localns
+            )
+        except NameError:
+            type_hints = {}
+
         resolved: dict[str, Any] = {}
 
         for param in params.values():
-            if get_origin(param.annotation) is Annotated:
-                args = get_args(param.annotation)
+            annotation = type_hints.get(param.name, param.annotation)
+            if get_origin(annotation) is Annotated:
+                args = get_args(annotation)
                 if len(args) >= 2:
                     descriptor = args[1]
                     type_annotation = args[0]
 
                     if isinstance(descriptor, ResourceDescriptor):
                         descriptor.set_type_annotation(type_annotation)
+                        # Propagate localns to nested resources
+                        descriptor.set_localns(self._localns)
                         resolved[param.name] = await resource_manager.get(descriptor)
 
         return resolved
@@ -113,6 +131,10 @@ class _Resource(Generic[T]):
     def set_type_annotation(self, type_annotation: Any) -> None:
         """No-op for factory-backed resources."""
         return None
+
+    def set_localns(self, localns: dict[str, Any] | None) -> None:
+        """Store local namespace for resolving deferred type annotations."""
+        self._localns = localns
 
 
 @functools.lru_cache(maxsize=1)
@@ -200,6 +222,10 @@ class _ResourceConfig(Generic[B]):
         """Assign the annotated class for config-backed resources when missing."""
         if self.cls_factory is None:
             self.cls_factory = cast(Type[B], type_annotation)
+
+    def set_localns(self, localns: dict[str, Any] | None) -> None:
+        """No-op for config-backed resources."""
+        pass
 
 
 def ResourceConfig(

@@ -3,13 +3,16 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, cast
 
 import pytest
+from pydantic import BaseModel
 from workflows.decorators import step
 from workflows.errors import WorkflowValidationError
 from workflows.events import StartEvent, StopEvent
-from workflows.resource import Resource
+from workflows.resource import Resource, ResourceConfig
 from workflows.workflow import Workflow
 
 if TYPE_CHECKING:
@@ -65,3 +68,75 @@ def test_step_decorator_error_message_for_unresolved_string_annotations() -> Non
             @step
             async def start(self, ev: StartEvent) -> "MissingReturn":
                 return cast("MissingReturn", StopEvent(result="ok"))
+
+
+@pytest.mark.asyncio
+async def test_resource_config_in_factory_with_future_annotations(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ResourceConfig in resource factories should resolve under future annotations."""
+    monkeypatch.chdir(tmp_path)
+
+    class SimpleConfig(BaseModel):
+        name: str
+
+    class SimpleClient:
+        def __init__(self, config: SimpleConfig) -> None:
+            self.config = config
+
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps({"name": "demo"}))
+
+    def get_client(
+        config: Annotated[SimpleConfig, ResourceConfig(config_file=str(config_path))],
+    ) -> SimpleClient:
+        return SimpleClient(config=config)
+
+    class WorkflowWithConfig(Workflow):
+        @step
+        async def start_step(
+            self,
+            ev: StartEvent,
+            client: Annotated[SimpleClient, Resource(get_client)],
+        ) -> StopEvent:
+            assert client.config.name == "demo"
+            return StopEvent(result="done")
+
+    wf = WorkflowWithConfig(disable_validation=True)
+    await wf.run()
+
+
+@pytest.mark.asyncio
+async def test_nested_resource_in_resource_with_future_annotations() -> None:
+    """Nested Resource dependencies should resolve under future annotations."""
+
+    class DBConnection:
+        def __init__(self) -> None:
+            self.connected = True
+
+    class Repository:
+        def __init__(self, db: DBConnection) -> None:
+            self.db = db
+
+    def get_db() -> DBConnection:
+        return DBConnection()
+
+    def get_repo(
+        db: Annotated[DBConnection, Resource(get_db)],
+    ) -> Repository:
+        return Repository(db=db)
+
+    class WorkflowWithNestedResources(Workflow):
+        @step
+        async def start_step(
+            self,
+            ev: StartEvent,
+            repo: Annotated[Repository, Resource(get_repo)],
+        ) -> StopEvent:
+            assert repo.db.connected
+            return StopEvent(result="done")
+
+    wf = WorkflowWithNestedResources(disable_validation=True)
+    result = await wf.run()
+    assert result == "done"

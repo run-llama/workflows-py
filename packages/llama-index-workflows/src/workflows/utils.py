@@ -108,6 +108,8 @@ def inspect_signature(
             type_annotation = args[0] if args else None
             descriptor = args[1] if len(args) > 1 else None
             if descriptor is not None and isinstance(descriptor, ResourceDescriptor):
+                # Pass localns to resource for nested annotation resolution
+                descriptor.set_localns(localns)
                 resources.append(
                     ResourceDefinition(
                         name=name, resource=descriptor, type_annotation=type_annotation
