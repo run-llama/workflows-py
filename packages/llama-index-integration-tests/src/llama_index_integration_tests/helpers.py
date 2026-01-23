@@ -30,16 +30,7 @@ def make_tool_call_response(
     """Create a ChatMessage with a tool call."""
     return ChatMessage(
         role=MessageRole.ASSISTANT,
-        content=content,
-        additional_kwargs={
-            "tool_calls": [
-                ToolSelection(
-                    tool_id=tool_id,
-                    tool_name=tool_name,
-                    tool_kwargs=tool_kwargs or {},
-                )
-            ]
-        },
+        content=[TextBlock(text=content), ToolCallBlock(tool_call_id=tool_id, tool_name=tool_name, tool_kwargs=tool_kwargs or {})],
     )
 
 
