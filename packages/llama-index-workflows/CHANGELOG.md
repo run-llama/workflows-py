@@ -1,5 +1,16 @@
 # llama-index-workflows
 
+## 2.13.0
+
+### Minor Changes
+
+- 6dd7fc0: Add resource config node support to workflow representation
+- be19869: Add support for injecting resources more flexibly
+
+  - Add support for injecting Resources recursively, so a Resource can depend on another Resource or ResourceConfig
+  - Add support for injecting ResourceConfig directly into steps
+  - Fix issues with resolving from String quoted types
+
 ## 2.12.2
 
 ### Patch Changes
