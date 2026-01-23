@@ -2,8 +2,12 @@
 
 from typing import Callable, List
 
-from llama_index.core.base.llms.types import ChatMessage, MessageRole
-from llama_index.core.tools import ToolSelection
+from llama_index.core.base.llms.types import (
+    ChatMessage,
+    MessageRole,
+    TextBlock,
+    ToolCallBlock,
+)
 
 
 def response_generator_from_list(responses: List[ChatMessage]) -> Callable:
@@ -30,7 +34,12 @@ def make_tool_call_response(
     """Create a ChatMessage with a tool call."""
     return ChatMessage(
         role=MessageRole.ASSISTANT,
-        content=[TextBlock(text=content), ToolCallBlock(tool_call_id=tool_id, tool_name=tool_name, tool_kwargs=tool_kwargs or {})],
+        content=[
+            TextBlock(text=content),
+            ToolCallBlock(
+                tool_call_id=tool_id, tool_name=tool_name, tool_kwargs=tool_kwargs or {}
+            ),
+        ],
     )
 
 
