@@ -28,7 +28,9 @@ from server_test_fixtures import (
 from workflows import Context, step
 
 # Prepare the event to send
+from workflows.context.context_types import SerializedContext
 from workflows.context.serializers import JsonSerializer
+from workflows.context.state_store import DictState, InMemoryStateStore
 from workflows.events import StartEvent, StopEvent
 from workflows.workflow import Workflow
 
@@ -41,6 +43,15 @@ class CustomStopWorkflow(Workflow):
     @step
     async def finish(self, ev: StartEvent) -> CustomStopEvent:
         return CustomStopEvent(message="custom-completed")
+
+
+async def serialize_context(state_dict: dict[str, Any]) -> SerializedContext:
+    ser_context = SerializedContext()
+    state = InMemoryStateStore(DictState())
+    for key, value in state_dict.items():
+        await state.set(key, value)
+    ser_context.state = state.to_dict(JsonSerializer())
+    return ser_context
 
 
 @pytest.fixture
@@ -196,9 +207,9 @@ async def test_run_workflow_no_kwargs(client: AsyncClient) -> None:
 async def test_run_workflow_with_context(
     client: AsyncClient, server: WorkflowServer
 ) -> None:
-    ctx: Context = Context(server._workflows["test"])
-    await ctx.store.set("test_param", "message from context")
-    ctx_dict = ctx.to_dict()
+    ctx_dict = (
+        await serialize_context({"test_param": "message from context"})
+    ).model_dump(mode="python")
     response = await client.post("/workflows/test/run", json={"context": ctx_dict})
     assert response.status_code == 200
     data = response.json()
@@ -356,9 +367,9 @@ async def test_run_workflow_nowait_not_found(client: AsyncClient) -> None:
 @pytest.mark.asyncio
 async def test_get_workflow_result(client: AsyncClient, server: WorkflowServer) -> None:
     # Setup a context to test all the code paths
-    ctx: Context = Context(server._workflows["test"])
-    await ctx.store.set("test_param", "message from context")
-    ctx_dict = ctx.to_dict()
+    ctx_dict = (
+        await serialize_context({"test_param": "message from context"})
+    ).model_dump(mode="python")
     # run no-wait
     response = await client.post(
         "/workflows/test/run-nowait", json={"context": ctx_dict}
