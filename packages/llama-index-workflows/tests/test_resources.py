@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 LlamaIndex Inc.
 
+from __future__ import annotations
+
 import json
 import re
 from pathlib import Path
@@ -24,6 +26,24 @@ from workflows.workflow import Workflow
 cc: int
 cc1: int
 cc2: int
+
+
+# Test fixtures for annotation shadowing tests
+class _FactoryConfig(BaseModel):
+    """Config class defined in test_resources module scope."""
+
+    name: str
+
+
+def _get_factory_with_config_path(config_path: str) -> _Resource:
+    """Returns a Resource that creates a factory using module-scoped _FactoryConfig."""
+
+    def factory(
+        config: Annotated[_FactoryConfig, ResourceConfig(config_file=config_path)],
+    ) -> dict:
+        return {"name": config.name}
+
+    return Resource(factory)
 
 
 class SecondEvent(Event):

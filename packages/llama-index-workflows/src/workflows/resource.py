@@ -86,10 +86,17 @@ class _Resource(Generic[T]):
         """Resolve annotated ResourceDescriptor dependencies."""
         params = inspect.signature(self._factory).parameters
 
-        # Resolve type hints using stored localns for PEP 563 support
+        # Resolve type hints - filter localns to avoid shadowing types from factory's module.
+        # Only include names from localns that don't exist in the factory's globalns,
+        # so types resolve from the factory's module while allowing closure variables.
+        localns = self._localns
+        if localns:
+            globalns = getattr(self._factory, "__globals__", {})
+            localns = {k: v for k, v in localns.items() if k not in globalns}
+
         try:
             type_hints = get_type_hints(
-                self._factory, include_extras=True, localns=self._localns
+                self._factory, include_extras=True, localns=localns
             )
         except NameError:
             type_hints = {}
@@ -106,7 +113,6 @@ class _Resource(Generic[T]):
 
                     if isinstance(descriptor, ResourceDescriptor):
                         descriptor.set_type_annotation(type_annotation)
-                        # Propagate localns to nested resources
                         descriptor.set_localns(self._localns)
                         resolved[param.name] = await resource_manager.get(descriptor)
 

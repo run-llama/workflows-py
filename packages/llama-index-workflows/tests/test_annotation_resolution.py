@@ -140,3 +140,44 @@ async def test_nested_resource_in_resource_with_future_annotations() -> None:
     wf = WorkflowWithNestedResources(disable_validation=True)
     result = await wf.run()
     assert result == "done"
+
+
+@pytest.mark.asyncio
+async def test_localns_does_not_shadow_factory_module_types(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Factory annotations should resolve from factory's module, not step's scope."""
+    monkeypatch.chdir(tmp_path)
+
+    # Import the factory helper from test_resources which has its own _FactoryConfig class
+    from tests.test_resources import _get_factory_with_config_path
+
+    # Define a LOCAL class with the same name as test_resources._FactoryConfig
+    # This should NOT shadow the factory's type when resolving annotations
+    class _FactoryConfig:
+        """Local shadow - factory should NOT use this."""
+
+        wrong_type = True
+
+    config_path = tmp_path / "config.json"
+    config_path.write_text('{"name": "test-value"}')
+
+    # Get a resource that uses the module-scoped _FactoryConfig from test_resources
+    # The factory is defined in test_resources module, so its annotations should
+    # resolve using test_resources' namespace, NOT this local namespace
+    resource = _get_factory_with_config_path(str(config_path))
+
+    class WorkflowTestingShadow(Workflow):
+        @step
+        async def start_step(
+            self,
+            ev: StartEvent,
+            result: Annotated[dict, resource],
+        ) -> StopEvent:
+            return StopEvent(result=result)
+
+    wf = WorkflowTestingShadow(disable_validation=True)
+    result = await wf.run()
+    # If the factory used the local _FactoryConfig (wrong), this would fail
+    assert result == {"name": "test-value"}
