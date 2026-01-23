@@ -4,5 +4,6 @@
 
 Add support for injecting resources more flexibly
 
-- Can inject Resources recursively, so a Resource can depend on a resourc
-- Can inject Resource configs directly into steps
+- Add support for injecting Resources recursively, so a Resource can depend on another Resource or ResourceConfig
+- Add support for injecting ResourceConfig directly into steps
+- Fix issues with resolving from String quoted types
