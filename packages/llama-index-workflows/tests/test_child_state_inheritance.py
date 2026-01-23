@@ -194,6 +194,66 @@ async def test_incompatible_state_types_raises_error() -> None:
 
 
 # ============================================================================
+# Test: Sibling state types (both inherit from same base) raise error
+# ============================================================================
+
+
+class SiblingStateOne(BaseState):
+    """First sibling state extending BaseState."""
+
+    sibling_one_field: int = Field(default=1)
+
+
+class SiblingStateTwo(BaseState):
+    """Second sibling state extending BaseState - incompatible with SiblingStateOne."""
+
+    sibling_two_field: str = Field(default="two")
+
+
+class WorkflowWithSiblingStates(Workflow):
+    """Workflow with two sibling state types that share a common base."""
+
+    @step
+    async def step_one(
+        self, ctx: Context[SiblingStateOne], ev: StartEvent
+    ) -> MiddleEvent:
+        return MiddleEvent()
+
+    @step
+    async def step_two(
+        self, ctx: Context[SiblingStateTwo], ev: MiddleEvent
+    ) -> StopEvent:
+        return StopEvent()
+
+
+@pytest.mark.asyncio
+async def test_sibling_state_types_raises_error() -> None:
+    """
+    Test that sibling state types (both inherit from same base) raise ValueError.
+
+    When two state types both inherit from the same base but neither is a
+    subclass of the other (they're siblings), they are incompatible.
+
+    Example:
+        BaseState
+           ├── SiblingStateOne (has sibling_one_field: int)
+           └── SiblingStateTwo (has sibling_two_field: str)
+
+    Neither sibling is a subclass of the other, so they can't be used together.
+    """
+    workflow = WorkflowWithSiblingStates()
+    test_runner = WorkflowTestRunner(workflow)
+
+    with pytest.raises(ValueError) as exc_info:
+        await test_runner.run()
+
+    # Verify the error message mentions incompatible hierarchy
+    assert "not in a compatible inheritance hierarchy" in str(exc_info.value)
+    assert "SiblingStateOne" in str(exc_info.value)
+    assert "SiblingStateTwo" in str(exc_info.value)
+
+
+# ============================================================================
 # Test: Using child state type everywhere still works
 # ============================================================================
 
