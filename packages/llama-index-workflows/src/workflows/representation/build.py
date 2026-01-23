@@ -100,14 +100,10 @@ def _create_resource_config_node(
         model_cls: type[BaseModel] = type_annotation
         config_schema = model_cls.model_json_schema()
 
-    # Read config value using existing infrastructure (with error handling)
-    config_value: dict[str, Any] | None = None
-    try:
-        config_value = _get_resource_config_data(
-            resource_config.config_file, resource_config.path_selector
-        )
-    except (OSError, ValueError):
-        pass  # File not readable or path selector invalid
+    # Read config value using existing infrastructure
+    config_value = _get_resource_config_data(
+        resource_config.config_file, resource_config.path_selector
+    )
 
     return WorkflowResourceConfigNode(
         id=node_id,
@@ -137,14 +133,8 @@ def _create_resource_node(resource_def: ResourceDefinition) -> WorkflowResourceN
 
     if isinstance(resource, _Resource):
         factory = resource._factory
-        try:
-            source_file = inspect.getfile(factory)  # type: ignore[arg-type]
-        except (TypeError, OSError):
-            pass
-        try:
-            _, source_line = inspect.getsourcelines(factory)  # type: ignore[arg-type]
-        except (TypeError, OSError):
-            pass
+        source_file = inspect.getfile(factory)  # type: ignore[arg-type]
+        _, source_line = inspect.getsourcelines(factory)  # type: ignore[arg-type]
         resource_description = inspect.getdoc(factory)
 
     # Compute unique hash for deduplication
@@ -189,10 +179,8 @@ def get_workflow_representation(workflow: Workflow) -> WorkflowGraph:
     added_nodes: set[str] = set()  # Track added node IDs to avoid duplicates
     # Track resource nodes by identity (factory id for _Resource)
     added_resource_nodes: dict[int, WorkflowResourceNode] = {}
-    # Track resource config nodes by (config_file, path_selector)
-    added_resource_config_nodes: dict[
-        tuple[str, str | None], WorkflowResourceConfigNode
-    ] = {}
+    # Track resource config nodes by config_file>path_selector
+    added_resource_config_nodes: dict[str, WorkflowResourceConfigNode] = {}
     # Track descriptor nodes by identity for step edges (_Resource or _ResourceConfig)
     added_descriptor_nodes: dict[
         int, WorkflowResourceNode | WorkflowResourceConfigNode
@@ -207,7 +195,10 @@ def get_workflow_representation(workflow: Workflow) -> WorkflowGraph:
         resource_config: _ResourceConfig,
         type_annotation: type | None,
     ) -> WorkflowResourceConfigNode:
-        config_key = (resource_config.config_file, resource_config.path_selector)
+        selector = resource_config.path_selector
+        config_key = resource_config.config_file + (
+            (">" + selector) if selector else ""
+        )
         if config_key in added_resource_config_nodes:
             return added_resource_config_nodes[config_key]
         node = _create_resource_config_node(resource_config, type_annotation)
