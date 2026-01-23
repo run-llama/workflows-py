@@ -20,11 +20,31 @@ from workflows.representation.types import (
     WorkflowResourceNode,
     WorkflowStepNode,
 )
-from workflows.resource import ResourceDefinition
+from workflows.resource import (
+    ResourceDefinition,
+    ResourceDescriptor,
+    _Resource,
+    _ResourceConfig,
+)
 from workflows.utils import (
     get_steps_from_class,
     get_steps_from_instance,
 )
+
+
+def _get_resource_identity(resource: ResourceDescriptor) -> int:
+    """Get a unique identifier for resource deduplication.
+
+    For _Resource, uses the factory function identity.
+    For _ResourceConfig, uses (config_file, path_selector) hash.
+    """
+    if isinstance(resource, _Resource):
+        return id(resource._factory)
+    if isinstance(resource, _ResourceConfig):
+        # Use hash of config_file + path_selector for deduplication
+        hash_input = f"{resource.config_file}:{resource.path_selector or ''}"
+        return hash(hash_input)
+    return id(resource)
 
 
 def _get_event_type_chain(cls: type) -> list[str]:
@@ -49,7 +69,6 @@ def _create_resource_node(resource_def: ResourceDefinition) -> WorkflowResourceN
     rather than at Resource creation time for performance.
     """
     resource = resource_def.resource
-    factory = resource._factory
 
     # Get type name from annotation
     type_name: str | None = None
@@ -60,18 +79,25 @@ def _create_resource_node(resource_def: ResourceDefinition) -> WorkflowResourceN
         else:
             type_name = str(type_annotation)
 
-    # Extract source metadata lazily
+    # Extract source metadata lazily - only available for _Resource with factory
     source_file: str | None = None
     source_line: int | None = None
-    try:
-        source_file = inspect.getfile(factory)
-    except (TypeError, OSError):
-        pass
-    try:
-        _, source_line = inspect.getsourcelines(factory)
-    except (TypeError, OSError):
-        pass
-    resource_description = inspect.getdoc(factory)
+    resource_description: str | None = None
+
+    if isinstance(resource, _Resource):
+        factory = resource._factory
+        try:
+            source_file = inspect.getfile(factory)  # type: ignore[arg-type]
+        except (TypeError, OSError):
+            pass
+        try:
+            _, source_line = inspect.getsourcelines(factory)  # type: ignore[arg-type]
+        except (TypeError, OSError):
+            pass
+        resource_description = inspect.getdoc(factory)
+    elif isinstance(resource, _ResourceConfig):
+        # For ResourceConfig, the source is the config file
+        source_file = resource.config_file
 
     # Compute unique hash for deduplication
     hash_input = f"{resource.name}:{source_file or 'unknown'}"
@@ -189,13 +215,13 @@ def get_workflow_representation(workflow: Workflow) -> WorkflowGraph:
                 )
                 added_nodes.add("external_step")
 
-        # Add resource nodes (deduplicated by factory identity)
+        # Add resource nodes (deduplicated by resource identity)
         for resource_def in step_config.resources:
-            factory_id = id(resource_def.resource._factory)
-            if factory_id not in added_resource_nodes:
+            resource_id = _get_resource_identity(resource_def.resource)
+            if resource_id not in added_resource_nodes:
                 resource_node = _create_resource_node(resource_def)
                 nodes.append(resource_node)
-                added_resource_nodes[factory_id] = resource_node
+                added_resource_nodes[resource_id] = resource_node
 
     # Second pass: Add edges
     for step_name, step_func in steps.items():
@@ -238,8 +264,8 @@ def get_workflow_representation(workflow: Workflow) -> WorkflowGraph:
 
         # Edges from steps to resources (with variable name as label)
         for resource_def in step_config.resources:
-            factory_id = id(resource_def.resource._factory)
-            resource_node = added_resource_nodes[factory_id]
+            resource_id = _get_resource_identity(resource_def.resource)
+            resource_node = added_resource_nodes[resource_id]
             edges.append(
                 WorkflowGraphEdge(
                     source=step_name,

@@ -52,11 +52,13 @@ async def partial(
     kwargs[step_config.event_name] = event
     if step_config.context_parameter:
         kwargs[step_config.context_parameter] = context
-    for resource in step_config.resources:
-        resource_value = await workflow._resource_manager.get(
-            resource=resource.resource
-        )
-        kwargs[resource.name] = resource_value
+    with workflow._resource_manager.resolution_scope():
+        for resource_def in step_config.resources:
+            descriptor = resource_def.resource
+            descriptor.set_type_annotation(resource_def.type_annotation)
+            # Unified resolution through ResourceManager
+            resource_value = await workflow._resource_manager.get(resource=descriptor)
+            kwargs[resource_def.name] = resource_value
     return functools.partial(func, **kwargs)
 
 

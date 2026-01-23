@@ -6,6 +6,7 @@ from __future__ import annotations
 import functools
 import inspect
 import json
+from contextlib import contextmanager
 from pathlib import Path
 from typing import (
     Annotated,
@@ -13,12 +14,16 @@ from typing import (
     Awaitable,
     Callable,
     Generic,
+    Iterator,
     Optional,
+    Protocol,
     Type,
     TypeVar,
     cast,
     get_args,
     get_origin,
+    get_type_hints,
+    runtime_checkable,
 )
 
 from pydantic import (
@@ -28,6 +33,63 @@ from pydantic import (
 
 T = TypeVar("T")
 B = TypeVar("B", bound=BaseModel)
+
+
+def _get_factory_type_hints(
+    factory: Callable[..., Any],
+    localns: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Resolve type hints for a factory function, avoiding shadowing.
+
+    Filters localns to exclude names that exist in factory's __globals__,
+    so types resolve from the factory's module while allowing closure variables.
+    """
+    filtered_localns = localns
+    if filtered_localns:
+        globalns = getattr(factory, "__globals__", {})
+        filtered_localns = {
+            k: v for k, v in filtered_localns.items() if k not in globalns
+        }
+
+    try:
+        return get_type_hints(factory, include_extras=True, localns=filtered_localns)
+    except NameError:
+        return {}
+
+
+@runtime_checkable
+class ResourceDescriptor(Protocol):
+    """Common interface for resource descriptors.
+
+    Both _Resource and _ResourceConfig implement this protocol, allowing
+    unified resolution through ResourceManager without isinstance checks.
+    """
+
+    @property
+    def name(self) -> str:
+        """Unique identifier for caching and cycle detection."""
+        ...
+
+    @property
+    def cache(self) -> bool:
+        """Whether to cache the resolved value."""
+        ...
+
+    async def resolve(self, manager: ResourceManager) -> Any:
+        """Resolve the resource, returning the concrete value."""
+        ...
+
+    def set_type_annotation(self, type_annotation: Any) -> None:
+        """Provide the annotated type for config-backed resources."""
+        ...
+
+    def set_localns(self, localns: dict[str, Any] | None) -> None:
+        """Store local namespace for resolving deferred type annotations."""
+        ...
+
+    def get_dependencies(self) -> list[tuple[str, ResourceDescriptor, type | None]]:
+        """Return factory dependencies. Empty for non-factory resources."""
+        ...
 
 
 class _Resource(Generic[T]):
@@ -42,33 +104,61 @@ class _Resource(Generic[T]):
         self._is_async = inspect.iscoroutinefunction(factory)
         self.name = getattr(factory, "__qualname__", type(factory).__name__)
         self.cache = cache
-        self.resource_configs: Optional[dict[str, BaseModel]] = None  # noqa: UP045
+        self._localns: dict[str, Any] | None = None
 
-    def prepare_resource_configs(self) -> None:
-        if self.resource_configs is None:
-            params = inspect.signature(self._factory).parameters
-            resource_configs: dict[str, BaseModel] = {}
-            if len(params) > 0:
-                for param in params.values():
-                    if get_origin(param.annotation) is Annotated:
-                        args = get_args(param.annotation)
-                        if len(args) == 2 and isinstance(args[1], _ResourceConfig):
-                            resource_config = args[1]
-                            resource_config.cls_factory = args[0]
-                            value = resource_config.call()
-                            resource_configs.update({param.name: value})
-            self.resource_configs = resource_configs
-        return None
+    async def _resolve_dependencies(
+        self, resource_manager: ResourceManager
+    ) -> dict[str, Any]:
+        """Resolve annotated ResourceDescriptor dependencies."""
+        resolved: dict[str, Any] = {}
 
-    async def call(self) -> T:
+        for param_name, descriptor, type_annotation in self.get_dependencies():
+            descriptor.set_type_annotation(type_annotation)
+            descriptor.set_localns(self._localns)
+            resolved[param_name] = await resource_manager.get(descriptor)
+
+        return resolved
+
+    async def call(self, resource_manager: ResourceManager) -> T:
         """Invoke the underlying factory, awaiting if necessary."""
-        self.prepare_resource_configs()
-        args = cast(dict[str, BaseModel], self.resource_configs)
+        args = await self._resolve_dependencies(resource_manager)
         if self._is_async:
             result = await cast(Callable[..., Awaitable[T]], self._factory)(**args)
         else:
             result = cast(Callable[..., T], self._factory)(**args)
         return result
+
+    async def resolve(self, manager: ResourceManager) -> T:
+        """Resolve the resource via the manager.
+
+        Implements ResourceDescriptor protocol.
+        """
+        return await self.call(manager)
+
+    def set_type_annotation(self, type_annotation: Any) -> None:
+        """No-op for factory-backed resources."""
+        return None
+
+    def set_localns(self, localns: dict[str, Any] | None) -> None:
+        """Store local namespace for resolving deferred type annotations."""
+        self._localns = localns
+
+    def get_dependencies(self) -> list[tuple[str, ResourceDescriptor, type | None]]:
+        """Extract ResourceDescriptor dependencies from factory signature."""
+        deps: list[tuple[str, ResourceDescriptor, type | None]] = []
+        params = inspect.signature(self._factory).parameters
+        type_hints = _get_factory_type_hints(self._factory, self._localns)
+
+        for param in params.values():
+            annotation = type_hints.get(param.name, param.annotation)
+            if get_origin(annotation) is Annotated:
+                args = get_args(annotation)
+                if len(args) >= 2:
+                    descriptor = args[1]
+                    if isinstance(descriptor, ResourceDescriptor):
+                        type_annotation = args[0]
+                        deps.append((param.name, descriptor, type_annotation))
+        return deps
 
 
 @functools.lru_cache(maxsize=1)
@@ -99,19 +189,25 @@ class _ResourceConfig(Generic[B]):
     Internal wrapper for a pydantic-based resource whose configuration can be read from a JSON file.
     """
 
+    config_file: str
+    path_selector: str | None
+    cls_factory: Type[B] | None
+
     def __init__(
         self,
         config_file: str,
         path_selector: str | None,
         cls_factory: Type[B] | None = None,
     ) -> None:
-        if not Path(config_file).is_file():
+        config_path = Path(config_file)
+        if not config_path.is_file():
             raise FileNotFoundError(f"No such file: {config_file}")
-        if Path(config_file).suffix != ".json":
+        if config_path.suffix != ".json":
             raise ValueError(
                 "Only JSON files can be used to load Pydantic-based resources."
             )
-        self.config_file = config_file
+        # Store absolute path to ensure cache keys are unique across working directories
+        self.config_file = str(config_path.resolve())
         self.path_selector = path_selector
         self.cls_factory = cls_factory
 
@@ -121,7 +217,11 @@ class _ResourceConfig(Generic[B]):
             return self.config_file + "." + self.path_selector
         return self.config_file
 
-    # make async for compatibility with _Resource
+    @property
+    def cache(self) -> bool:
+        """ResourceConfig instances are always cached."""
+        return True
+
     def call(self) -> B:
         sel_data = _get_resource_config_data(
             config_file=self.config_file, path_selector=self.path_selector
@@ -133,6 +233,27 @@ class _ResourceConfig(Generic[B]):
             raise ValueError(
                 "Class factory should be set to a BaseModel subclass before calling"
             )
+
+    async def resolve(self, manager: ResourceManager) -> B:
+        """Resolve the config resource.
+
+        Implements ResourceDescriptor protocol.
+        Note: cls_factory must be set before calling this method.
+        """
+        return self.call()
+
+    def set_type_annotation(self, type_annotation: Any) -> None:
+        """Assign the annotated class for config-backed resources when missing."""
+        if self.cls_factory is None:
+            self.cls_factory = cast(Type[B], type_annotation)
+
+    def set_localns(self, localns: dict[str, Any] | None) -> None:
+        """No-op for config-backed resources."""
+        pass
+
+    def get_dependencies(self) -> list[tuple[str, ResourceDescriptor, type | None]]:
+        """No dependencies for config-backed resources."""
+        return []
 
 
 def ResourceConfig(
@@ -159,13 +280,13 @@ class ResourceDefinition(BaseModel):
 
     Attributes:
         name (str): Parameter name in the step function.
-        resource (_Resource): Factory wrapper used by the manager to produce the dependency.
-        type_annotation (type | None): The type annotation from Annotated[T, Resource(...)].
+        resource (ResourceDescriptor): Descriptor used to produce the dependency.
+        type_annotation (type | None): The type annotation from Annotated[T, ...].
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
     name: str
-    resource: _Resource
+    resource: ResourceDescriptor
     type_annotation: Any = None
 
 
@@ -215,21 +336,58 @@ class ResourceManager:
 
     def __init__(self) -> None:
         self.resources: dict[str, Any] = {}
+        self._resolving: list[str] = []  # Track resources being resolved in order
+        self._resolution_cache: dict[str, Any] = {}
+        self._resolution_depth = 0
+
+    @contextmanager
+    def resolution_scope(self) -> Iterator[None]:
+        """Scope non-cached resolution values to a single dependency graph."""
+        self._resolution_depth += 1
+        try:
+            yield
+        finally:
+            self._resolution_depth -= 1
+            if self._resolution_depth == 0:
+                self._resolution_cache.clear()
 
     async def set(self, name: str, val: Any) -> None:
         """Register a resource instance under a name."""
         self.resources.update({name: val})
 
-    async def get(self, resource: _Resource) -> Any:
-        """Return a resource instance, honoring cache settings."""
-        if not resource.cache:
-            val = await resource.call()
-        elif resource.cache and not self.resources.get(resource.name, None):
-            val = await resource.call()
-            await self.set(resource.name, val)
-        else:
-            val = self.resources.get(resource.name)
-        return val
+    async def get(self, resource: ResourceDescriptor) -> Any:
+        if self._resolution_depth == 0:
+            with self.resolution_scope():
+                return await self._get(resource)
+        return await self._get(resource)
+
+    async def _get(self, resource: ResourceDescriptor) -> Any:
+        """Return a resource instance, honoring cache settings.
+
+        Works with any ResourceDescriptor implementation (_Resource or _ResourceConfig).
+        """
+        # Cycle detection
+        if resource.name in self._resolving:
+            chain = " -> ".join(self._resolving) + f" -> {resource.name}"
+            raise ValueError(f"Circular resource dependency detected: {chain}")
+
+        # Check cache first (before marking as resolving)
+        if resource.cache and resource.name in self.resources:
+            return self.resources[resource.name]
+        if resource.name in self._resolution_cache:
+            return self._resolution_cache[resource.name]
+
+        # Mark as resolving for cycle detection
+        self._resolving.append(resource.name)
+        try:
+            val = await resource.resolve(self)
+            if resource.cache:
+                await self.set(resource.name, val)
+            self._resolution_cache[resource.name] = val
+            return val
+        finally:
+            if resource.name in self._resolving:
+                self._resolving.remove(resource.name)
 
     def get_all(self) -> dict[str, Any]:
         """Return all materialized resources."""
