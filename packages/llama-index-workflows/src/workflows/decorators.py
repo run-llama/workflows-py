@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import inspect
 import sys
 from typing import (
     TYPE_CHECKING,
@@ -130,33 +131,36 @@ def step(
     """
 
     def decorator(func: Callable[P, R]) -> StepFunction[P, R]:
-        if not isinstance(num_workers, int) or num_workers <= 0:
-            raise WorkflowValidationError(
-                "num_workers must be an integer greater than 0"
-            )
-
-        func = make_step_function(func, num_workers, retry_policy)
-
-        # If this is a free function, call add_step() explicitly.
-        if is_free_function(func.__qualname__):
-            if workflow is None:
-                msg = f"To decorate {func.__name__} please pass a workflow class to the @step decorator."
-                raise WorkflowValidationError(msg)
-            workflow.add_step(func)
-
-        return func
+        localns = _capture_decorator_localns()
+        return _apply_step_decorator(
+            func,
+            num_workers=num_workers,
+            retry_policy=retry_policy,
+            workflow=workflow,
+            localns=localns,
+        )
 
     if func is not None:
         # The decorator was used without parentheses, like `@step`
-        return decorator(func)
+        localns = _capture_callsite_localns()
+        return _apply_step_decorator(
+            func,
+            num_workers=num_workers,
+            retry_policy=retry_policy,
+            workflow=workflow,
+            localns=localns,
+        )
     return decorator
 
 
 def make_step_function(
-    func: Callable[P, R], num_workers: int = 4, retry_policy: RetryPolicy | None = None
+    func: Callable[P, R],
+    num_workers: int = 4,
+    retry_policy: RetryPolicy | None = None,
+    localns: dict[str, Any] | None = None,
 ) -> StepFunction[P, R]:
     # This will raise providing a message with the specific validation failure
-    spec = inspect_signature(func)
+    spec = inspect_signature(func, localns=localns)
     validate_step_signature(spec)
 
     event_name, accepted_events = next(iter(spec.accepted_events.items()))
@@ -174,3 +178,60 @@ def make_step_function(
     )
 
     return casted
+
+
+def _apply_step_decorator(
+    func: Callable[P, R],
+    *,
+    num_workers: int,
+    retry_policy: RetryPolicy | None,
+    workflow: Type["Workflow"] | None,
+    localns: dict[str, Any] | None,
+) -> StepFunction[P, R]:
+    if not isinstance(num_workers, int) or num_workers <= 0:
+        raise WorkflowValidationError("num_workers must be an integer greater than 0")
+
+    func = make_step_function(
+        func, num_workers=num_workers, retry_policy=retry_policy, localns=localns
+    )
+
+    # If this is a free function, call add_step() explicitly.
+    if is_free_function(func.__qualname__):
+        if workflow is None:
+            msg = f"To decorate {func.__name__} please pass a workflow class to the @step decorator."
+            raise WorkflowValidationError(msg)
+        workflow.add_step(func)
+
+    return func
+
+
+def _capture_decorator_localns() -> dict[str, Any]:
+    frame = inspect.currentframe()
+    if frame is None or frame.f_back is None:
+        return {}
+
+    try:
+        decorator_frame = frame.f_back
+        localns: dict[str, Any] = {}
+        localns.update(decorator_frame.f_locals)
+        if decorator_frame.f_back is not None:
+            localns.update(decorator_frame.f_back.f_locals)
+        return localns
+    finally:
+        del frame
+
+
+def _capture_callsite_localns() -> dict[str, Any]:
+    frame = inspect.currentframe()
+    if frame is None or frame.f_back is None or frame.f_back.f_back is None:
+        return {}
+
+    try:
+        callsite_frame = frame.f_back.f_back
+        localns: dict[str, Any] = {}
+        localns.update(callsite_frame.f_locals)
+        if callsite_frame.f_back is not None:
+            localns.update(callsite_frame.f_back.f_locals)
+        return localns
+    finally:
+        del frame
