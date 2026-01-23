@@ -161,8 +161,17 @@ class _Resource(Generic[T]):
         return deps
 
 
-@functools.lru_cache(maxsize=1)
 def _get_resource_config_data(
+    config_file: str,
+    path_selector: str | None,
+) -> dict[str, Any]:
+    # Resolve to absolute path for cache key to handle different working directories
+    abs_path = str(Path(config_file).resolve())
+    return _get_resource_config_data_cached(abs_path, path_selector)
+
+
+@functools.lru_cache(maxsize=128)
+def _get_resource_config_data_cached(
     config_file: str,
     path_selector: str | None,
 ) -> dict[str, Any]:

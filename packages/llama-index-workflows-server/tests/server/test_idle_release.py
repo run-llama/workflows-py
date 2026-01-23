@@ -18,6 +18,7 @@ from llama_agents.server.memory_workflow_store import MemoryWorkflowStore
 from llama_agents.server.server import WorkflowServer, _WorkflowHandler
 from server_test_fixtures import async_yield, wait_for_passing
 from workflows import Context, Workflow, step
+from workflows.context.context_types import SerializedContext
 from workflows.events import HumanResponseEvent, StartEvent, StopEvent
 
 
@@ -242,7 +243,7 @@ async def test_idle_release_restores_idle_since_on_reload(
 
     # Seed a persisted handler with idle_since
     idle_time = datetime.now(timezone.utc) - timedelta(minutes=2)
-    ctx = Context(waiting_workflow).to_dict()
+    ctx = SerializedContext().model_dump(mode="python")
     await seed_persistent_handler(
         memory_store,
         "idle-restore-1",
@@ -326,7 +327,7 @@ async def test_idle_handlers_not_resumed_on_server_start(
     """Test that idle handlers are not loaded into memory on server start."""
     # Seed the store with an idle handler
     idle_time = datetime.now(timezone.utc) - timedelta(minutes=2)
-    ctx = Context(waiting_workflow).to_dict()
+    ctx = SerializedContext().model_dump(mode="python")
     await seed_persistent_handler(
         memory_store,
         "idle-on-start-1",
@@ -536,7 +537,7 @@ async def test_try_reload_is_singleton_under_concurrency(
 
     # Seed a persisted idle handler
     idle_time = datetime.now(timezone.utc) - timedelta(minutes=2)
-    ctx = Context(waiting_workflow).to_dict()
+    ctx = SerializedContext().model_dump(mode="python")
     handler_id = "concurrent-reload-test"
     await seed_persistent_handler(
         memory_store,
@@ -617,9 +618,12 @@ async def test_release_handler_cancels_runtime_on_checkpoint_failure(
             ctx = run_handler.ctx
             assert ctx is not None
 
-            # Store a non-serializable object in context store
+            # Store a non-serializable object in context store directly
+            # (bypassing the Context.store property which requires internal context)
             # This will cause checkpoint() to fail when it tries to serialize
-            await ctx.store.set("bad_data", lambda x: x)  # lambdas can't be serialized
+            state_store = ctx._face._external_adapter.get_state_store()  # type: ignore[union-attr]
+            assert state_store is not None
+            await state_store.set("bad_data", lambda x: x)
 
             # Advance time past the idle timeout to trigger the timer
             await advance_time(traveller, timedelta(milliseconds=200), iterations=20)

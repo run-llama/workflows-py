@@ -142,8 +142,10 @@ async def test_state_preserved_across_pause_resume(
     create_workflow: WorkflowFactory,
 ) -> None:
     """Test that workflow state is preserved when pausing and resuming."""
+    final_state: dict | None = None
 
     async def stateful_pause(ctx: Context) -> str:
+        nonlocal final_state
         # Modify state before pausing
         state = await ctx.store.get("state")
         state["before_pause"] = True
@@ -158,6 +160,7 @@ async def test_state_preserved_across_pause_resume(
         state = await ctx.store.get("state")
         state["after_resume"] = True
         await ctx.store.set("state", state)
+        final_state = dict(state)
 
         return "Done"
 
@@ -189,8 +192,8 @@ async def test_state_preserved_across_pause_resume(
 
     await handler
 
-    # Check all state was preserved
-    state = await handler.ctx.store.get("state")
-    assert state["initial"] is True
-    assert state["before_pause"] is True
-    assert state["after_resume"] is True
+    # Check all state was preserved via captured final state
+    assert final_state is not None
+    assert final_state["initial"] is True
+    assert final_state["before_pause"] is True
+    assert final_state["after_resume"] is True

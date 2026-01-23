@@ -19,6 +19,7 @@ from typing import Coroutine, Optional, Union
 import pytest
 import time_machine
 from workflows.context import Context
+from workflows.context.state_store import DictState, InMemoryStateStore
 from workflows.decorators import step
 from workflows.errors import WorkflowCancelledByUser, WorkflowTimeoutError
 from workflows.events import (
@@ -33,15 +34,16 @@ from workflows.events import (
     WorkflowIdleEvent,
     WorkflowTimedOutEvent,
 )
+from workflows.plugins.basic import setting_run_id
 from workflows.retry_policy import ConstantDelayRetryPolicy, RetryPolicy
 from workflows.runtime.control_loop import control_loop
 from workflows.runtime.types.internal_state import BrokerState
+from workflows.runtime.types.plugin import RunContext, run_context
 from workflows.runtime.types.step_function import as_step_worker_function
 from workflows.runtime.types.ticks import TickAddEvent, TickCancelRun
-from workflows.runtime.workflow_registry import workflow_registry
 from workflows.workflow import Workflow
 
-from .conftest import MockRuntimePlugin  # type: ignore[import]
+from .conftest import MockRunAdapter, MockRuntime
 
 
 class IntermediateEvent(Event):
@@ -144,44 +146,50 @@ class CollectWorkflow(Workflow):
 
 
 def run_control_loop(
-    workflow: Workflow, start_event: Optional[StartEvent], plugin: MockRuntimePlugin
+    workflow: Workflow,
+    start_event: Optional[StartEvent],
+    test_runtime: MockRunAdapter,
 ) -> Coroutine[None, None, StopEvent]:
     step_workers = {}
     for name, step_func in workflow._get_steps().items():
         unbound = getattr(step_func, "__func__", step_func)
         step_workers[name] = as_step_worker_function(unbound)
-    ctx = Context(workflow=workflow)
-    ctx._broker_run = ctx._init_broker(workflow, plugin=plugin)
     run_id = str(uuid.uuid4())
-    workflow_registry.register_run(
-        run_id=run_id,
-        workflow=workflow,
-        plugin=plugin,
-        context=ctx,
-        steps=step_workers,
-    )
+    # Set up mock runtime with the test adapter
+    mock_runtime = MockRuntime()
+    test_runtime.set_state_store(InMemoryStateStore(DictState()))
+    mock_runtime.set_adapter(run_id, test_runtime)
+    # Override workflow's runtime to use mock
+    workflow._runtime = mock_runtime
+    with setting_run_id(run_id):
+        ctx = Context._create_internal(workflow=workflow)
 
     async def _run() -> StopEvent:
-        try:
-            return await control_loop(
-                start_event=start_event,
-                init_state=BrokerState.from_workflow(workflow),
-                run_id=run_id,
+        with setting_run_id(run_id):
+            run_ctx = RunContext(
+                workflow=workflow,
+                run_adapter=test_runtime,
+                context=ctx,
+                steps=step_workers,
             )
-        finally:
-            workflow_registry.delete_run(run_id)
+            with run_context(run_ctx):
+                return await control_loop(
+                    start_event=start_event,
+                    init_state=BrokerState.from_workflow(workflow),
+                    run_id=run_id,
+                )
 
     return _run()
 
 
 async def wait_for_stop_event(
-    plugin: MockRuntimePlugin, timeout: float = 1.0
+    plugin: MockRunAdapter, timeout: float = 1.0
 ) -> Optional[StopEvent]:
     """
     Helper to wait for a StopEvent in the event stream.
 
     Args:
-        plugin: The MockRuntimePlugin to read events from
+        plugin: The MockRunAdapter to read events from
         timeout: Maximum time to wait for StopEvent (default: 1.0 seconds)
 
     Returns:
@@ -202,7 +210,7 @@ async def wait_for_stop_event(
 
 
 @pytest.mark.asyncio
-async def test_control_loop_happy_path(test_plugin: MockRuntimePlugin) -> None:
+async def test_control_loop_happy_path(test_plugin: MockRunAdapter) -> None:
     """
     Test the happy path through the control loop.
 
@@ -217,7 +225,7 @@ async def test_control_loop_happy_path(test_plugin: MockRuntimePlugin) -> None:
     result = await run_control_loop(
         workflow=SimpleWorkflow(timeout=1.0),
         start_event=StartEvent(),
-        plugin=test_plugin,
+        test_runtime=test_plugin,
     )
 
     # Verify the workflow completed with expected result
@@ -226,7 +234,9 @@ async def test_control_loop_happy_path(test_plugin: MockRuntimePlugin) -> None:
 
 
 @pytest.mark.asyncio
-async def test_control_loop_with_external_event(test_plugin: MockRuntimePlugin) -> None:
+async def test_control_loop_with_external_event(
+    test_plugin: MockRunAdapter,
+) -> None:
     """
     Test that external events can be sent to a running workflow.
 
@@ -252,7 +262,7 @@ async def test_control_loop_with_external_event(test_plugin: MockRuntimePlugin) 
         run_control_loop(
             workflow=workflow,
             start_event=None,
-            plugin=test_plugin,
+            test_runtime=test_plugin,
         )
     )
 
@@ -268,7 +278,7 @@ async def test_control_loop_with_external_event(test_plugin: MockRuntimePlugin) 
 
 
 @pytest.mark.asyncio
-async def test_control_loop_timeout(test_plugin: MockRuntimePlugin) -> None:
+async def test_control_loop_timeout(test_plugin: MockRunAdapter) -> None:
     """
     Test that workflow timeout raises WorkflowTimeoutError and publishes WorkflowTimedOutEvent.
 
@@ -288,7 +298,7 @@ async def test_control_loop_timeout(test_plugin: MockRuntimePlugin) -> None:
         run_control_loop(
             workflow=wf,
             start_event=StartEvent(),
-            plugin=test_plugin,
+            test_runtime=test_plugin,
         )
     )
 
@@ -311,7 +321,7 @@ async def test_control_loop_timeout(test_plugin: MockRuntimePlugin) -> None:
 
 
 @pytest.mark.asyncio
-async def test_control_loop_retry_policy(test_plugin: MockRuntimePlugin) -> None:
+async def test_control_loop_retry_policy(test_plugin: MockRunAdapter) -> None:
     """
     Test that retry policy works correctly when a step fails initially but succeeds on retry.
     """
@@ -331,7 +341,7 @@ async def test_control_loop_retry_policy(test_plugin: MockRuntimePlugin) -> None
     result = await run_control_loop(
         workflow=wf,
         start_event=StartEvent(),
-        plugin=test_plugin,
+        test_runtime=test_plugin,
     )
 
     assert isinstance(result, StopEvent)
@@ -340,7 +350,7 @@ async def test_control_loop_retry_policy(test_plugin: MockRuntimePlugin) -> None
 
 @pytest.mark.asyncio
 async def test_control_loop_step_failure_publishes_stop_event(
-    test_plugin: MockRuntimePlugin,
+    test_plugin: MockRunAdapter,
 ) -> None:
     """
     Test that when a step fails permanently (retries exhausted),
@@ -359,7 +369,7 @@ async def test_control_loop_step_failure_publishes_stop_event(
         run_control_loop(
             workflow=wf,
             start_event=StartEvent(),
-            plugin=test_plugin,
+            test_runtime=test_plugin,
         )
     )
 
@@ -394,7 +404,7 @@ async def test_control_loop_step_failure_publishes_stop_event(
 
 
 @pytest.mark.asyncio
-async def test_control_loop_waiter_resolution(test_plugin: MockRuntimePlugin) -> None:
+async def test_control_loop_waiter_resolution(test_plugin: MockRunAdapter) -> None:
     class Awaited(Event):
         tag: str
 
@@ -414,7 +424,7 @@ async def test_control_loop_waiter_resolution(test_plugin: MockRuntimePlugin) ->
         run_control_loop(
             workflow=wf,
             start_event=StartEvent(),
-            plugin=test_plugin,
+            test_runtime=test_plugin,
         )
     )
 
@@ -437,7 +447,7 @@ async def test_control_loop_waiter_resolution(test_plugin: MockRuntimePlugin) ->
 
 @pytest.mark.asyncio
 async def test_control_loop_input_required_published_to_stream(
-    test_plugin: MockRuntimePlugin,
+    test_plugin: MockRunAdapter,
 ) -> None:
     """
     Test that InputRequiredEvent is automatically published to the outward stream.
@@ -466,7 +476,7 @@ async def test_control_loop_input_required_published_to_stream(
         run_control_loop(
             workflow=wf,
             start_event=StartEvent(),
-            plugin=test_plugin,
+            test_runtime=test_plugin,
         )
     )
 
@@ -494,14 +504,14 @@ async def test_control_loop_input_required_published_to_stream(
 
 @pytest.mark.asyncio
 async def test_control_loop_collect_events_same_type(
-    test_plugin: MockRuntimePlugin,
+    test_plugin: MockRunAdapter,
 ) -> None:
     wf = CollectWorkflow(timeout=1.0)
     result = await asyncio.create_task(
         run_control_loop(
             workflow=wf,
             start_event=StartEvent(),
-            plugin=test_plugin,
+            test_runtime=test_plugin,
         )
     )
 
@@ -511,26 +521,26 @@ async def test_control_loop_collect_events_same_type(
 
 @pytest.mark.asyncio
 async def test_control_loop_collect_events_multiple_types(
-    test_plugin: MockRuntimePlugin,
+    test_plugin: MockRunAdapter,
 ) -> None:
     wf = CollectMultipleEventTypesWorkflow(timeout=1.0)
     result = await run_control_loop(
         workflow=wf,
         start_event=StartEvent(),
-        plugin=test_plugin,
+        test_runtime=test_plugin,
     )
     assert isinstance(result, StopEvent)
     assert result.result == "sum_33"
 
 
 @pytest.mark.asyncio
-async def test_control_loop_stream_events(test_plugin: MockRuntimePlugin) -> None:
+async def test_control_loop_stream_events(test_plugin: MockRunAdapter) -> None:
     wf = SimpleWorkflow(timeout=5.0)
     task = asyncio.create_task(
         run_control_loop(
             workflow=wf,
             start_event=StartEvent(),
-            plugin=test_plugin,
+            test_runtime=test_plugin,
         )
     )
 
@@ -563,7 +573,7 @@ class SomeEvent(HumanResponseEvent):
 
 
 @pytest.mark.asyncio
-async def test_control_loop_per_step_routing(test_plugin: MockRuntimePlugin) -> None:
+async def test_control_loop_per_step_routing(test_plugin: MockRunAdapter) -> None:
     class RouteWorkflow(Workflow):
         @step
         async def starter(self, ev: StartEvent) -> Optional[StopEvent]:
@@ -582,7 +592,7 @@ async def test_control_loop_per_step_routing(test_plugin: MockRuntimePlugin) -> 
         run_control_loop(
             workflow=wf,
             start_event=StartEvent(),
-            plugin=test_plugin,
+            test_runtime=test_plugin,
         )
     )
 
@@ -596,7 +606,7 @@ async def test_control_loop_per_step_routing(test_plugin: MockRuntimePlugin) -> 
 
 @pytest.mark.asyncio
 async def test_control_loop_concurrency_queueing(
-    test_plugin: MockRuntimePlugin,
+    test_plugin: MockRunAdapter,
 ) -> None:
     class LimitedWorkflow(Workflow):
         @step(num_workers=1)
@@ -610,7 +620,7 @@ async def test_control_loop_concurrency_queueing(
     task = asyncio.create_task(
         run_control_loop(
             workflow=wf,
-            plugin=test_plugin,
+            test_runtime=test_plugin,
             start_event=None,
         )
     )
@@ -636,7 +646,7 @@ async def test_control_loop_concurrency_queueing(
 
 
 @pytest.mark.asyncio
-async def test_control_loop_user_cancellation(test_plugin: MockRuntimePlugin) -> None:
+async def test_control_loop_user_cancellation(test_plugin: MockRunAdapter) -> None:
     """
     Test that user cancellation raises WorkflowCancelledByUser and publishes WorkflowCancelledEvent.
 
@@ -655,7 +665,7 @@ async def test_control_loop_user_cancellation(test_plugin: MockRuntimePlugin) ->
     task = asyncio.create_task(
         run_control_loop(
             workflow=wf,
-            plugin=test_plugin,
+            test_runtime=test_plugin,
             start_event=StartEvent(),
         )
     )
@@ -682,7 +692,7 @@ async def test_control_loop_user_cancellation(test_plugin: MockRuntimePlugin) ->
 
 @pytest.mark.asyncio
 async def test_control_loop_retry_with_delay(
-    test_plugin_with_time_machine: tuple[MockRuntimePlugin, time_machine.Coordinates],
+    test_plugin_with_time_machine: tuple[MockRunAdapter, time_machine.Coordinates],
 ) -> None:
     """Test that retry delay is enforced between attempts."""
     test_plugin, _ = test_plugin_with_time_machine
@@ -705,7 +715,7 @@ async def test_control_loop_retry_with_delay(
     result = await run_control_loop(
         workflow=wf,
         start_event=StartEvent(),
-        plugin=test_plugin,
+        test_runtime=test_plugin,
     )
 
     assert isinstance(result, StopEvent)
@@ -723,7 +733,7 @@ async def test_control_loop_retry_with_delay(
 
 @pytest.mark.asyncio
 async def test_control_loop_retry_gives_up_after_max_attempts(
-    test_plugin_with_time_machine: tuple[MockRuntimePlugin, time_machine.Coordinates],
+    test_plugin_with_time_machine: tuple[MockRunAdapter, time_machine.Coordinates],
 ) -> None:
     """Test that workflow fails after exhausting maximum_attempts."""
     test_plugin, _ = test_plugin_with_time_machine
@@ -747,7 +757,7 @@ async def test_control_loop_retry_gives_up_after_max_attempts(
         await run_control_loop(
             workflow=wf,
             start_event=StartEvent(),
-            plugin=test_plugin,
+            test_runtime=test_plugin,
         )
 
     assert wf.attempt_count == max_attempts
@@ -755,7 +765,7 @@ async def test_control_loop_retry_gives_up_after_max_attempts(
 
 @pytest.mark.asyncio
 async def test_control_loop_retry_exhaustion_respects_total_time(
-    test_plugin_with_time_machine: tuple[MockRuntimePlugin, time_machine.Coordinates],
+    test_plugin_with_time_machine: tuple[MockRunAdapter, time_machine.Coordinates],
 ) -> None:
     """Test that retry policy receives correct elapsed_time across retries."""
     test_plugin, _ = test_plugin_with_time_machine
@@ -794,7 +804,7 @@ async def test_control_loop_retry_exhaustion_respects_total_time(
     result = await run_control_loop(
         workflow=wf,
         start_event=StartEvent(),
-        plugin=test_plugin,
+        test_runtime=test_plugin,
     )
 
     assert isinstance(result, StopEvent)
@@ -826,7 +836,7 @@ async def test_control_loop_retry_exhaustion_respects_total_time(
 
 @pytest.mark.asyncio
 async def test_control_loop_emits_idle_event_when_waiting(
-    test_plugin: MockRuntimePlugin,
+    test_plugin: MockRunAdapter,
 ) -> None:
     """
     Test that WorkflowIdleEvent is emitted when workflow becomes idle waiting for event.
@@ -852,7 +862,7 @@ async def test_control_loop_emits_idle_event_when_waiting(
         run_control_loop(
             workflow=wf,
             start_event=StartEvent(),
-            plugin=test_plugin,
+            test_runtime=test_plugin,
         )
     )
 
@@ -888,7 +898,7 @@ async def test_control_loop_emits_idle_event_when_waiting(
 
 @pytest.mark.asyncio
 async def test_control_loop_idle_event_not_emitted_on_completion(
-    test_plugin: MockRuntimePlugin,
+    test_plugin: MockRunAdapter,
 ) -> None:
     """
     Test that WorkflowIdleEvent is NOT emitted when workflow completes normally.
@@ -900,7 +910,7 @@ async def test_control_loop_idle_event_not_emitted_on_completion(
     result = await run_control_loop(
         workflow=SimpleWorkflow(timeout=1.0),
         start_event=StartEvent(),
-        plugin=test_plugin,
+        test_runtime=test_plugin,
     )
 
     # Verify the workflow completed

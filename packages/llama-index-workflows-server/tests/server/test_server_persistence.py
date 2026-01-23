@@ -16,7 +16,7 @@ from server_test_fixtures import (  # type: ignore[import]
     RequestedExternalEvent,
     wait_for_passing,  # type: ignore[import]
 )
-from workflows import Context
+from workflows.context.context_types import SerializedContext
 from workflows.events import Event, InternalDispatchEvent, StopEvent
 from workflows.workflow import Workflow
 
@@ -99,7 +99,7 @@ async def test_resume_active_handlers_across_server_restart(
     # Seed the store with a valid serialized Context using public API
 
     handler_id = "resume-1"
-    initial_ctx = Context(simple_test_workflow).to_dict()
+    initial_ctx = SerializedContext().model_dump(mode="python")
     await memory_store.update(
         PersistentHandler(
             handler_id=handler_id,
@@ -212,7 +212,7 @@ async def test_startup_ignores_unregistered_workflows(
             handler_id="known-1",
             workflow_name="test",
             status="running",
-            ctx=Context(simple_test_workflow).to_dict(),
+            ctx=SerializedContext().model_dump(mode="python"),
         )
     )
 
@@ -394,7 +394,7 @@ async def test_result_for_completed_persisted_handler_without_runtime_registrati
             workflow_name="test",
             status="completed",
             result=StopEvent(result="processed: default"),
-            ctx=Context(simple_test_workflow).to_dict(),
+            ctx=SerializedContext().model_dump(mode="python"),
         )
     )
 

@@ -1,123 +1,507 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 LlamaIndex Inc.
 """
-A plugin interface to switch out a broker runtime (external library or service that manages durable/distributed step execution).
+A runtime interface to switch out a broker runtime (external library or service that manages durable/distributed step execution).
 """
 
 from __future__ import annotations
 
+from abc import ABC, abstractmethod
+from contextlib import contextmanager
+from contextvars import ContextVar, Token
 from dataclasses import dataclass
 from typing import (
     TYPE_CHECKING,
+    Any,
     AsyncGenerator,
     Coroutine,
+    Generator,
     Protocol,
-    cast,
 )
 
-from workflows.events import Event, StopEvent
-from workflows.runtime.types.internal_state import BrokerState
-from workflows.runtime.types.step_function import StepWorkerFunction
-from workflows.runtime.types.ticks import WorkflowTick
-
 if TYPE_CHECKING:
+    from workflows.context.context import Context
+    from workflows.context.serializers import BaseSerializer
+    from workflows.context.state_store import InMemoryStateStore
+    from workflows.runtime.types.internal_state import BrokerState
+    from workflows.runtime.types.step_function import StepWorkerFunction
     from workflows.workflow import Workflow
+
+from workflows.events import Event, StartEvent, StopEvent
+from workflows.runtime.types.ticks import TickCancelRun, WorkflowTick
+
+# Context variable for implicit runtime scoping
+_current_runtime: ContextVar[Runtime | None] = ContextVar(
+    "current_runtime", default=None
+)
 
 
 @dataclass
 class RegisteredWorkflow:
-    workflow_function: ControlLoopFunction
-    steps: dict[str, StepWorkerFunction]
+    workflow: Workflow
+    workflow_run_fn: WorkflowRunFunction
+    steps: dict[str, StepWorkerFunction[Any]]
 
 
-class Plugin(Protocol):
-    def register(
-        self,
-        workflow: Workflow,
-        workflow_function: ControlLoopFunction,
-        steps: dict[str, StepWorkerFunction],
-    ) -> None | RegisteredWorkflow:
-        """
-        Called on a workflow before the first time each workflow instance is run, in order to register it within the plugin's runtime.
-
-        Provides an opportunity to modify the workflow function and steps, e.g. to wrap the workflow_function, or StepWorkerFunction's within the steps a decorator.
-        """
-        ...
-
-    def new_runtime(self, run_id: str) -> WorkflowRuntime:
-        """
-        Called on each workflow run, in order to create a new runtime instance for driving the workflow via the plugin's runtime.
-        """
-        ...
-
-
-class WorkflowRuntime(Protocol):
+class InternalRunAdapter(ABC):
     """
-    A LlamaIndex workflow's internal state is managed via an event-sourced reducer that triggers step executions. It communicates
-    with the outside world via messages. Messages may be sent to it to update its event log, and it in turn publishes messages that are made
-    available via the event stream.
+    Adapter interface for use INSIDE a workflow's control loop.
+
+    This adapter is used by the workflow execution engine (broker) to receive
+    ticks from external sources, publish events to listeners, manage timing,
+    and perform durable sleeps.
+
+    The InternalRunAdapter is created by Runtime.new_internal_adapter() for each
+    workflow run and is passed to the control loop function. It provides the
+    internal-facing side of workflow communication:
+    - Receiving ticks from the external mailbox (wait_receive)
+    - Publishing events that external code can stream (write_to_event_stream)
+    - Getting current time with durability support (get_now)
+    - Sleeping with durability support (sleep)
+
+    The run_id is always available and required at construction time.
     """
 
-    async def send_event(self, tick: WorkflowTick) -> None:
-        """Called from outside of the workflow to modify the workflow execution. WorkflowTick events are appended to a mailbox and processed sequentially"""
+    @property
+    @abstractmethod
+    def run_id(self) -> str:
+        """
+        The unique identifier for this workflow run.
+
+        Always available - required at adapter construction time.
+        """
         ...
 
+    @abstractmethod
     async def wait_receive(self) -> WorkflowTick:
-        """called from inside of the workflow control loop function to add a tick event from `send_event` to the mailbox. Function waits until a tick event is received."""
+        """
+        Wait for the next tick from the mailbox.
+
+        Called from inside the workflow control loop to receive the next tick
+        event that was sent via the external adapter's send_event().
+        This method blocks until a tick is available.
+        """
         ...
 
+    @abstractmethod
     async def write_to_event_stream(self, event: Event) -> None:
-        """Called from inside of a workflow function to write / emit events to listeners outside of the workflow"""
+        """
+        Publish an event to external listeners.
+
+        Called from inside the workflow to emit events that can be observed
+        by external code via the ExternalRunAdapter's stream_published_events().
+        """
         ...
 
-    def stream_published_events(self) -> AsyncGenerator[Event, None]:
-        """Called from outside of a workflow, reads event stream published by the workflow"""
-        ...
-
+    @abstractmethod
     async def get_now(self) -> float:
-        """Called from within the workflow control loop function to get the current time in seconds since epoch. If workflow is durable via replay, it should return a cached value from the first call. (e.g. this should be implemented similar to a regular durable step)"""
+        """
+        Get the current time in seconds since epoch.
+
+        Called from within the workflow control loop. For durable workflows,
+        this should return a memoized/replayed value to ensure deterministic
+        replay behavior.
+        """
         ...
 
+    @abstractmethod
     async def sleep(self, seconds: float) -> None:
-        """Called from within the workflow control loop function to sleep for a given number of seconds. This should integrate with the host plugin for cases where an inactive workflow may be paused, and awoken later via memoized replay. Note that other tasks in the control loop may still be running simultaneously."""
+        """
+        Sleep for a given number of seconds with durability support.
+
+        Called from within the workflow control loop. For durable runtimes,
+        this integrates with the host runtime to allow workflow suspension
+        and resumption. Note that other tasks in the control loop may still
+        run simultaneously during the sleep.
+        """
         ...
 
+    @abstractmethod
+    async def send_event(self, tick: WorkflowTick) -> None:
+        """
+        Send a tick into the workflow's own mailbox from within the control loop.
+
+        Called from inside the workflow (e.g., from step functions via ctx.send_event)
+        to inject events back into the workflow's execution. The tick will be
+        received by wait_receive() on the next iteration.
+        """
+        ...
+
+    def get_state_store(self) -> InMemoryStateStore[Any] | None:
+        """
+        Get the state store for this workflow run.
+
+        Returns the state store from the runtime, or None if not initialized.
+        Default implementation returns None.
+        """
+        return None
+
+
+class ExternalRunAdapter(ABC):
+    """
+    Adapter interface for use OUTSIDE a workflow's control loop.
+
+    This adapter is used by external code (e.g., HTTP handlers, client code)
+    to interact with a running workflow - sending events into the workflow
+    and streaming events published by the workflow.
+
+    The ExternalRunAdapter is created by Runtime.new_external_adapter() and
+    provides the external-facing side of workflow communication:
+    - Sending ticks into the workflow mailbox (send_event)
+    - Streaming events published by the workflow (stream_published_events)
+    - Cleaning up resources when done (close)
+
+    The run_id is always available and matches the internal adapter's run_id.
+    """
+
+    @property
+    @abstractmethod
+    def run_id(self) -> str:
+        """
+        The unique identifier for this workflow run.
+
+        Always available - matches the InternalRunAdapter's run_id.
+        """
+        ...
+
+    @abstractmethod
+    async def send_event(self, tick: WorkflowTick) -> None:
+        """
+        Send a tick into the workflow mailbox.
+
+        Called from outside the workflow to inject events into the workflow's
+        execution. The tick will be received by the internal adapter's
+        wait_receive() method.
+        """
+        ...
+
+    @abstractmethod
+    def stream_published_events(self) -> AsyncGenerator[Event, None]:
+        """
+        Stream events published by the workflow.
+
+        Called from outside the workflow to observe events emitted by the
+        workflow via the internal adapter's write_to_event_stream().
+        Returns an async generator that yields events as they are published.
+        """
+        ...
+
+    @abstractmethod
     async def close(self) -> None:
-        """API that the broker calls to close the plugin after a workflow run is fully complete"""
+        """
+        Clean up adapter resources.
+
+        Called when done interacting with the workflow to release any
+        resources held by this adapter (e.g., close streams, release locks).
+        """
+
         ...
 
+    @abstractmethod
+    async def get_result(self) -> StopEvent:
+        """
+        Get the result of the workflow run, if completed. Will raise if the workflow failed or was cancelled
+        """
+        ...
 
-class SnapshottableRuntime(WorkflowRuntime, Protocol):
+    async def cancel(self) -> None:
+        """
+        Cancel the workflow run if it is still running.
+        """
+        await self.send_event(TickCancelRun())
+
+    def get_state_store(self) -> InMemoryStateStore[Any] | None:
+        """
+        Get the state store for this workflow run.
+
+        Returns the state store if this adapter owns it, or None if state
+        is managed externally. Default implementation returns None.
+        """
+        return None
+
+
+@dataclass
+class RunContext:
+    """Context for an active workflow run, available via get_current_run()."""
+
+    workflow: Workflow
+    run_adapter: InternalRunAdapter
+    context: Context
+    steps: dict[str, StepWorkerFunction[Any]]
+
+
+_current_run: ContextVar[RunContext | None] = ContextVar("current_run", default=None)
+
+
+@contextmanager
+def run_context(ctx: RunContext) -> Generator[RunContext, None, None]:
+    """Set the current run context for the duration of a workflow run."""
+    token = _current_run.set(ctx)
+    try:
+        yield ctx
+    finally:
+        _current_run.reset(token)
+
+
+def get_current_run() -> RunContext:
+    """Get the current run context. Raises if not in a workflow run."""
+    ctx = _current_run.get()
+    if ctx is None:
+        raise RuntimeError("Not in a workflow run context")
+    return ctx
+
+
+class Runtime(ABC):
     """
-    Snapshot API. Optional mix in to a WorkflowRuntime. When implemented, plugin should offer a replay function to return the recorded
-    ticks so that callers can debug or replay the workflow. `on_tick` is called whenever a tick event is received externally OR as a result
-    from an internal command (e.g. a step function completing, a timeout occurring, etc.)
+    Abstract base class for workflow execution runtimes.
 
+    Runtimes control how workflows are registered, launched, and executed.
+    The default BasicRuntime uses asyncio; other runtimes can add durability
+    or distributed execution.
+
+    Lifecycle:
+    1. Create runtime instance
+    2. Create workflow instances (auto-register with runtime via registering())
+    3. Call launch() to start workers/register with backend
+    4. Run workflows
+    5. Call destroy() to clean up
+
+    Use registering() context manager for implicit workflow registration.
     """
 
+    _token: Token[Runtime | None]
+
+    def get_or_register(self, workflow: "Workflow") -> RegisteredWorkflow:
+        """Get the registered workflow if available, otherwise register it."""
+        registered = self.get_registered(workflow)
+        if registered is None:
+            registered = self.register(workflow)
+        return registered
+
+    @abstractmethod
+    def register(self, workflow: "Workflow") -> RegisteredWorkflow:
+        """
+        Register a workflow with the runtime.
+
+        Called at launch() time for each tracked workflow. Runtimes can
+        wrap the control_loop and steps with their own decorators or handlers.
+
+        Returns RegisteredWorkflow with wrapped functions
+        """
+        ...
+
+    @abstractmethod
+    def run_workflow(
+        self,
+        run_id: str,
+        workflow: Workflow,
+        init_state: BrokerState,
+        start_event: StartEvent | None = None,
+        serialized_state: dict[str, Any] | None = None,
+        serializer: "BaseSerializer | None" = None,
+    ) -> ExternalRunAdapter:
+        """
+        Launch a workflow run.
+
+        The runtime creates and owns the state store based on serialized_state.
+        Returns the external adapter for the workflow run.
+
+        Args:
+            run_id: Unique identifier for this workflow run.
+            registered: The registered workflow to run.
+            init_state: Initial broker state (queues, workers, etc).
+            start_event: Optional start event to begin the workflow.
+            serialized_state: Serialized state store data to restore from.
+            serializer: Serializer to use for deserializing state.
+        """
+        ...
+
+    @abstractmethod
+    def get_internal_adapter(self) -> InternalRunAdapter:
+        """
+        Get the internal adapter for a workflow run.
+
+        Called on each workflow.run() to instantiate an interface for the workflow run internals to communicite with the runtime.
+        The workflow run must be derived from the runtime set context.
+        """
+        ...
+
+    @abstractmethod
+    def get_external_adapter(self, run_id: str) -> ExternalRunAdapter:
+        """
+        Get the external adapter for a workflow run.
+
+        Called after launching a workflow run, or when getting a handle for an existing workflow run.
+        Used to send events into the workflow and stream published events.
+
+        The run_id must match the internal adapter's run_id for the same run.
+        The external adapter is used by client code interacting with the workflow.
+        """
+        ...
+
+    def launch(self) -> None:
+        """
+        Launch the runtime and register all tracked workflows.
+
+        For BasicRuntime, this is a no-op. Other runtimes may wrap workflows
+        with decorators and initialize backend connections.
+
+        Must be called before running workflows.
+        """
+        pass
+
+    def destroy(self) -> None:
+        """
+        Clean up runtime resources.
+
+        Called when done with the runtime. Stops workers, closes connections.
+        """
+        pass
+
+    def track_workflow(self, workflow: "Workflow") -> None:
+        """
+        Track a workflow instance for registration at launch time.
+
+        Called by Workflow.__init__ to register with the runtime.
+        Override in runtimes that need to track workflows for deferred registration.
+        Default implementation is a no-op.
+        """
+        pass
+
+    def get_registered(self, workflow: "Workflow") -> RegisteredWorkflow | None:
+        """
+        Get the registered workflow if available.
+
+        Returns the pre-registered workflow from launch(), or None if not tracked.
+        """
+        return None
+
+    @contextmanager
+    def registering(self) -> Generator[Runtime, None, None]:
+        """
+        Context manager for implicit workflow registration.
+
+        Workflows created inside this block will automatically register
+        with this runtime. Does NOT call launch() on exit.
+        """
+        token = _current_runtime.set(self)
+        try:
+            yield self
+        finally:
+            _current_runtime.reset(token)
+
+
+class SnapshottableAdapter(ABC):
+    """
+    Mixin interface that adds snapshot/replay capabilities to adapters.
+
+    This is a standalone mixin (not inheriting from InternalRunAdapter or
+    ExternalRunAdapter) that can be combined with adapter implementations
+    to add tick recording for debugging or replay purposes.
+
+    Adapters that implement this interface can record ticks as they occur
+    and replay them later. `on_tick` is called whenever a tick event is
+    received externally OR as a result from an internal command (e.g., a
+    step function completing, a timeout occurring, etc.)
+
+    Use `as_snapshottable_adapter()` to check if an adapter supports snapshotting.
+    """
+
+    @property
+    @abstractmethod
+    def init_state(self) -> "BrokerState":
+        """
+        Get the initial state of the adapter.
+        """
+        ...
+
+    @abstractmethod
     def on_tick(self, tick: WorkflowTick) -> None:
-        """Called whenever a tick event is received"""
+        """
+        Called whenever a tick event is received.
+
+        This method is invoked for both external ticks (sent via send_event)
+        and internal ticks (generated by step completions, timeouts, etc.).
+        Implementations should record the tick for later replay.
+        """
         ...
 
+    @abstractmethod
     def replay(self) -> list[WorkflowTick]:
-        """return the recorded ticks for replay"""
+        """
+        Return the recorded ticks for replay.
+
+        Returns all ticks that were recorded via on_tick(), in the order
+        they were received. Used for debugging and workflow replay.
+        """
         ...
 
 
-def as_snapshottable(runtime: WorkflowRuntime) -> SnapshottableRuntime | None:
-    """Check if a runtime is snapshottable."""
-    if (
-        getattr(runtime, "on_tick", None) is not None
-        and getattr(runtime, "replay", None) is not None
-    ):
-        return cast(SnapshottableRuntime, runtime)
+def as_snapshottable_adapter(
+    adapter: ExternalRunAdapter | InternalRunAdapter,
+) -> SnapshottableAdapter | None:
+    """
+    Check if an internal adapter supports snapshotting.
+
+    Returns the adapter cast to SnapshottableAdapter if it implements
+    the snapshotting interface, or None otherwise.
+    """
+    if isinstance(adapter, SnapshottableAdapter):
+        return adapter
+    return None
+
+
+class V2RuntimeCompatibilityShim(ABC):
+    """
+    This interface will be deleted in V3. Temporary shim to support deprecated v2 functionality
+    """
+
+    @abstractmethod
+    def get_result_or_none(self) -> StopEvent | None:
+        """
+        Get the result of the workflow run, if completed. Will raise if the workflow failed or was cancelled, otherwise return None if still running
+        """
+        ...
+
+    @property
+    @abstractmethod
+    def is_running(self) -> bool:
+        """
+        Check if the workflow run is still running.
+        """
+        ...
+
+    @abstractmethod
+    def abort(self) -> None:
+        """
+        Forcefully abort the workflow execution (ungraceful hard cancel).
+
+        This immediately terminates execution by cancelling the underlying task.
+        Unlike cancel() which sends a graceful cancellation signal:
+        - In-flight step work is cancelled immediately
+        - No WorkflowCancelledEvent is emitted
+        - The workflow does not finalize gracefully
+
+        This is deprecated v2 behavior - prefer cancel_run() for graceful cancellation.
+        """
+        ...
+
+
+def as_v2_runtime_compatibility_shim(
+    adapter: ExternalRunAdapter,
+) -> V2RuntimeCompatibilityShim | None:
+    """
+    Check if an adapter supports the V2 runtime compatibility shim.
+    """
+    if isinstance(adapter, V2RuntimeCompatibilityShim):
+        return adapter
     return None
 
 
 class ControlLoopFunction(Protocol):
     """
     Protocol for a function that starts and runs the internal control loop for a workflow run.
-    Plugin decorators to the control loop function must maintain this signature.
+    Runtime decorators to the control loop function must maintain this signature.
     """
 
     def __call__(
@@ -125,4 +509,17 @@ class ControlLoopFunction(Protocol):
         start_event: Event | None,
         init_state: BrokerState | None,
         run_id: str,
+    ) -> Coroutine[None, None, StopEvent]: ...
+
+
+class WorkflowRunFunction(Protocol):
+    """
+    Protocol for a function that runs a workflow. Wraps a control loop function with glue to the runtime.
+    """
+
+    def __call__(
+        self,
+        init_state: BrokerState,
+        start_event: StartEvent | None = None,
+        tags: dict[str, Any] = {},
     ) -> Coroutine[None, None, StopEvent]: ...

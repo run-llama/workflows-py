@@ -3,6 +3,11 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 from pydantic.functional_validators import model_validator
+from typing_extensions import TypeVar
+
+from workflows.context.state_store import DictState
+
+MODEL_T = TypeVar("MODEL_T", bound=BaseModel, default=DictState)  # type: ignore
 
 
 class SerializedContextV0(BaseModel):

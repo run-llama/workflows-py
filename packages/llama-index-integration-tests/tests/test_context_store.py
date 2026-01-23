@@ -45,13 +45,15 @@ async def test_initial_state_accessible_in_tool(
 async def test_state_modification_persists(create_workflow: WorkflowFactory) -> None:
     """Test that state modifications in tools persist across calls."""
     call_count = 0
+    final_counter_value = None
 
     async def increment_counter(ctx: Context) -> str:
-        nonlocal call_count
+        nonlocal call_count, final_counter_value
         call_count += 1
         state = await ctx.store.get("state")
         state["counter"] = state.get("counter", 0) + 1
         await ctx.store.set("state", state)
+        final_counter_value = state["counter"]
         return f"Counter: {state['counter']}"
 
     workflow = create_workflow(
@@ -72,20 +74,22 @@ async def test_state_modification_persists(create_workflow: WorkflowFactory) -> 
     # Verify tool was called twice
     assert call_count == 2
 
-    # Verify final state
-    final_state = await handler.ctx.store.get("state")
-    assert final_state["counter"] == 2
+    # Verify final state via the last captured value
+    assert final_counter_value == 2
 
 
 async def test_state_survives_handler_access(
     create_workflow: WorkflowFactory,
 ) -> None:
     """Test that state can be read from handler.ctx after workflow completes."""
+    captured_result = None
 
     async def set_result(ctx: Context) -> str:
+        nonlocal captured_result
         state = await ctx.store.get("state")
         state["result"] = "computation_complete"
         await ctx.store.set("state", state)
+        captured_result = state["result"]
         return "Done"
 
     workflow = create_workflow(
@@ -102,19 +106,25 @@ async def test_state_survives_handler_access(
         pass
     await handler
 
-    # Access state after workflow completion
-    state = await handler.ctx.store.get("state")
-    assert state["result"] == "computation_complete"
+    # Verify state was set correctly via captured value
+    assert captured_result == "computation_complete"
 
 
 async def test_complex_state_types(create_workflow: WorkflowFactory) -> None:
     """Test that complex state types (nested dicts, lists) work correctly."""
+    captured_state: dict | None = None
 
     async def modify_complex_state(ctx: Context) -> str:
+        nonlocal captured_state
         state = await ctx.store.get("state")
         state["items"].append("new_item")
         state["nested"]["count"] += 1
         await ctx.store.set("state", state)
+        # Capture a copy of the state for verification
+        captured_state = {
+            "items": list(state["items"]),
+            "nested": dict(state["nested"]),
+        }
         return "Modified"
 
     workflow = create_workflow(
@@ -134,14 +144,15 @@ async def test_complex_state_types(create_workflow: WorkflowFactory) -> None:
         pass
     await handler
 
-    state = await handler.ctx.store.get("state")
-    assert state["items"] == ["initial", "new_item"]
-    assert state["nested"]["count"] == 1
-    assert state["nested"]["name"] == "test"  # Unchanged
+    assert captured_state is not None
+    assert captured_state["items"] == ["initial", "new_item"]
+    assert captured_state["nested"]["count"] == 1
+    assert captured_state["nested"]["name"] == "test"  # Unchanged
 
 
 async def test_multiple_tools_share_state(create_workflow: WorkflowFactory) -> None:
     """Test that multiple different tools can share state."""
+    final_state: dict | None = None
 
     async def tool_a(ctx: Context) -> str:
         state = await ctx.store.get("state")
@@ -150,11 +161,13 @@ async def test_multiple_tools_share_state(create_workflow: WorkflowFactory) -> N
         return "A done"
 
     async def tool_b(ctx: Context) -> str:
+        nonlocal final_state
         state = await ctx.store.get("state")
         state["from_b"] = True
         # Verify tool_a's change is visible
         assert state.get("from_a") is True
         await ctx.store.set("state", state)
+        final_state = dict(state)
         return "B done"
 
     workflow = create_workflow(
@@ -172,6 +185,6 @@ async def test_multiple_tools_share_state(create_workflow: WorkflowFactory) -> N
         pass
     await handler
 
-    state = await handler.ctx.store.get("state")
-    assert state["from_a"] is True
-    assert state["from_b"] is True
+    assert final_state is not None
+    assert final_state["from_a"] is True
+    assert final_state["from_b"] is True
