@@ -13,6 +13,7 @@ import pytest
 from pydantic import BaseModel, Field
 from workflows.decorators import step
 from workflows.events import Event, StartEvent, StopEvent
+from workflows.representation import get_workflow_representation
 from workflows.resource import (
     Resource,
     ResourceConfig,
@@ -505,6 +506,17 @@ async def test_recursive_resource_injection() -> None:
 
     wf = TestWorkflow(disable_validation=True)
     await wf.run()
+
+    graph = get_workflow_representation(workflow=wf)
+    resource_nodes = [node for node in graph.nodes if node.node_type == "resource"]
+    assert len(resource_nodes) == 2
+    resource_edges = [
+        edge
+        for edge in graph.edges
+        if edge.source.startswith("resource_") and edge.target.startswith("resource_")
+    ]
+    assert len(resource_edges) == 1
+    assert resource_edges[0].label == "db"
 
 
 @pytest.mark.asyncio
