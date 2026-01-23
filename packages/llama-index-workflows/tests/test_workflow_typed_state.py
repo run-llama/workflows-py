@@ -1,4 +1,5 @@
 import asyncio
+import json
 from typing import Optional, Union
 
 import pytest
@@ -35,11 +36,15 @@ async def test_typed_state() -> None:
 
     result = await test_runner.run()
 
-    # Check final state
+    # Check final state via to_dict()
     ctx = result.ctx
     assert ctx is not None
-    state = await ctx.store.get_state()
-    assert state.model_dump() == MyState(name="John", age=31).model_dump()
+    ctx_dict = ctx.to_dict()
+    # For typed Pydantic models, state_data is a JSON string with {"__is_pydantic": True, "value": {...}}
+    state_data = json.loads(ctx_dict["state"]["state_data"])
+    assert state_data["__is_pydantic"] is True
+    assert state_data["value"]["name"] == "John"
+    assert state_data["value"]["age"] == 31
 
 
 class SomeState(BaseModel):

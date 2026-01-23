@@ -9,10 +9,21 @@ import time
 from contextvars import copy_context
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Generic, Protocol
 
+from llama_index_instrumentation.dispatcher import instrument_tags
 from workflows.decorators import P, R, StepConfig
 from workflows.errors import WorkflowRuntimeError
 from workflows.events import (
     Event,
+    StartEvent,
+    StopEvent,
+)
+from workflows.runtime.control_loop import control_loop
+from workflows.runtime.types.internal_state import BrokerState
+from workflows.runtime.types.plugin import (
+    ControlLoopFunction,
+    RunContext,
+    WorkflowRunFunction,
+    run_context,
 )
 from workflows.runtime.types.results import (
     Returns,
@@ -36,7 +47,6 @@ class StepWorkerFunction(Protocol, Generic[R]):
         state: StepWorkerState,
         step_name: str,
         event: Event,
-        context: Context,  # TODO - pass an identifier and re-hydrate from the plugin for distributed step workers
         workflow: Workflow,
     ) -> Awaitable[list[StepFunctionResult[R]]]: ...
 
@@ -51,6 +61,7 @@ async def partial(
     kwargs: dict[str, Any] = {}
     kwargs[step_config.event_name] = event
     if step_config.context_parameter:
+        # Convert to internal face for step execution
         kwargs[step_config.context_parameter] = context
     with workflow._resource_manager.resolution_scope():
         for resource_def in step_config.resources:
@@ -60,6 +71,15 @@ async def partial(
             resource_value = await workflow._resource_manager.get(resource=descriptor)
             kwargs[resource_def.name] = resource_value
     return functools.partial(func, **kwargs)
+
+
+def as_step_worker_functions(workflow: Workflow) -> dict[str, StepWorkerFunction]:
+    step_funcs = workflow._get_steps()
+    step_workers: dict[str, StepWorkerFunction[Any]] = {
+        name: as_step_worker_function(getattr(func, "__func__", func))
+        for name, func in step_funcs.items()
+    }
+    return step_workers
 
 
 def as_step_worker_function(func: Callable[P, Awaitable[R]]) -> StepWorkerFunction[R]:
@@ -79,9 +99,11 @@ def as_step_worker_function(func: Callable[P, Awaitable[R]]) -> StepWorkerFuncti
         state: StepWorkerState,
         step_name: str,
         event: Event,
-        context: Context,
         workflow: Workflow,
     ) -> list[StepFunctionResult[R]]:
+        from workflows.context.context import Context
+
+        internal_context = Context._create_internal(workflow=workflow)
         returns = Returns[R](return_values=[])
 
         token = StepWorkerStateContextVar.set(
@@ -102,7 +124,7 @@ def as_step_worker_function(func: Callable[P, Awaitable[R]]) -> StepWorkerFuncti
                 func=workflow._dispatcher.span(call_func),
                 step_config=config,
                 event=event,
-                context=context,
+                context=internal_context,
                 workflow=workflow,
             )
 
@@ -149,3 +171,45 @@ def as_step_worker_function(func: Callable[P, Awaitable[R]]) -> StepWorkerFuncti
         pass
 
     return wrapper
+
+
+def create_workflow_run_function(
+    workflow: Workflow, control_loop_fn: ControlLoopFunction = control_loop
+) -> WorkflowRunFunction:
+    async def run_workflow(
+        init_state: BrokerState,
+        start_event: StartEvent | None = None,
+        tags: dict[str, Any] = {},
+    ) -> StopEvent:
+        from workflows.context.context import Context
+        from workflows.context.internal_context import InternalContext
+
+        registered = workflow._runtime.get_or_register(workflow)
+        # Set run_id context before creating internal context
+        internal_ctx = Context._create_internal(workflow=workflow)
+        internal_adapter = workflow._runtime.get_internal_adapter()
+        with instrument_tags(tags):
+            # defer execution to make sure the task can be captured and passed
+            # to the handler as async exception, protecting against exceptions from before_start
+            await asyncio.sleep(0)
+
+            run_ctx = RunContext(
+                workflow=workflow,
+                run_adapter=internal_adapter,
+                context=internal_ctx,
+                steps=registered.steps,
+            )
+            try:
+                with run_context(run_ctx):
+                    result = await control_loop_fn(
+                        start_event,
+                        init_state,
+                        internal_adapter.run_id,
+                    )
+                    return result
+            finally:
+                # Cancel any background tasks from InternalContext on completion or cancellation
+                if isinstance(internal_ctx._face, InternalContext):
+                    internal_ctx._face.cancel_background_tasks()
+
+    return run_workflow

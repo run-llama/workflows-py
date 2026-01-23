@@ -46,8 +46,9 @@ from workflows.runtime.types.internal_state import (
     InternalStepWorkerState,
 )
 from workflows.runtime.types.plugin import (
-    WorkflowRuntime,
-    as_snapshottable,
+    InternalRunAdapter,
+    as_snapshottable_adapter,
+    get_current_run,
 )
 from workflows.runtime.types.results import (
     AddCollectedEvent,
@@ -59,9 +60,6 @@ from workflows.runtime.types.results import (
     StepWorkerState,
     StepWorkerWaiter,
 )
-from workflows.runtime.types.step_function import (
-    StepWorkerFunction,
-)
 from workflows.runtime.types.ticks import (
     TickAddEvent,
     TickCancelRun,
@@ -70,11 +68,11 @@ from workflows.runtime.types.ticks import (
     TickTimeout,
     WorkflowTick,
 )
-from workflows.runtime.workflow_registry import workflow_registry
 from workflows.workflow import Workflow
 
 if TYPE_CHECKING:
     from workflows.context.context import Context
+    from workflows.runtime.types.step_function import StepWorkerFunction
 
 
 logger = logging.getLogger()
@@ -89,13 +87,13 @@ class _ControlLoopRunner:
     def __init__(
         self,
         workflow: Workflow,
-        plugin: WorkflowRuntime,
+        adapter: InternalRunAdapter,
         context: Context,
         step_workers: dict[str, StepWorkerFunction],
         init_state: BrokerState,
     ):
         self.workflow = workflow
-        self.plugin = plugin
+        self.adapter = adapter
         self.context = context
         self.step_workers = step_workers
         self.state = init_state
@@ -103,7 +101,7 @@ class _ControlLoopRunner:
         self.queue: asyncio.Queue[WorkflowTick] = asyncio.Queue()
         for tick in self.state.rehydrate_with_ticks():
             self.queue.put_nowait(tick)
-        self.snapshot_plugin = as_snapshottable(plugin)
+        self.snapshot_adapter = as_snapshottable_adapter(adapter)
 
     async def wait_for_tick(self) -> WorkflowTick:
         """Wait for the next tick from the internal queue."""
@@ -114,7 +112,7 @@ class _ControlLoopRunner:
         if delay:
 
             async def _delayed_queue() -> None:
-                await self.plugin.sleep(delay)
+                await self.adapter.sleep(delay)
                 self.queue.put_nowait(tick)
 
             task = asyncio.create_task(_delayed_queue())
@@ -146,7 +144,6 @@ class _ControlLoopRunner:
                     state=snapshot,
                     step_name=command.step_name,
                     event=command.event,
-                    context=self.context,
                     workflow=self.workflow,
                 )
                 self.queue_tick(
@@ -166,7 +163,7 @@ class _ControlLoopRunner:
                         event=command.event,
                         result=[
                             StepWorkerFailed(
-                                exception=e, failed_at=await self.plugin.get_now()
+                                exception=e, failed_at=await self.adapter.get_now()
                             )
                         ],
                     )
@@ -200,7 +197,7 @@ class _ControlLoopRunner:
         elif isinstance(command, CommandCompleteRun):
             return command.result
         elif isinstance(command, CommandPublishEvent):
-            await self.plugin.write_to_event_stream(command.event)
+            await self.adapter.write_to_event_stream(command.event)
             return None
         elif isinstance(command, CommandFailWorkflow):
             await self.cleanup_tasks()
@@ -240,7 +237,7 @@ class _ControlLoopRunner:
         # Start external event listener
         async def _pull() -> None:
             while True:
-                tick = await self.plugin.wait_receive()
+                tick = await self.adapter.wait_receive()
                 self.queue_tick(tick)
 
         self.workers.append(asyncio.create_task(_pull()))
@@ -257,7 +254,7 @@ class _ControlLoopRunner:
 
         # Resume any in-progress work
         self.state, commands = rewind_in_progress(
-            self.state, await self.plugin.get_now()
+            self.state, await self.adapter.get_now()
         )
         for command in commands:
             try:
@@ -272,7 +269,7 @@ class _ControlLoopRunner:
                 tick = await self.wait_for_tick()
                 try:
                     self.state, commands = _reduce_tick(
-                        tick, self.state, await self.plugin.get_now()
+                        tick, self.state, await self.adapter.get_now()
                     )
                 except Exception:
                     await self.cleanup_tasks()
@@ -281,8 +278,8 @@ class _ControlLoopRunner:
                         exc_info=True,
                     )
                     raise
-                if self.snapshot_plugin is not None:
-                    self.snapshot_plugin.on_tick(tick)
+                if self.snapshot_adapter is not None:
+                    self.snapshot_adapter.on_tick(tick)
                 for command in commands:
                     try:
                         result = await self.process_command(command)
@@ -304,13 +301,10 @@ async def control_loop(
     """
     The main async control loop for a workflow run.
     """
-    # Prefer run-scoped context if available (set by broker)
-    current = workflow_registry.get_run(run_id)
-    if current is None:
-        raise WorkflowRuntimeError("Run context not found for control loop")
+    current = get_current_run()
     state = init_state or BrokerState.from_workflow(current.workflow)
     runner = _ControlLoopRunner(
-        current.workflow, current.plugin, current.context, current.steps, state
+        current.workflow, current.run_adapter, current.context, current.steps, state
     )
     return await runner.run(start_event=start_event)
 

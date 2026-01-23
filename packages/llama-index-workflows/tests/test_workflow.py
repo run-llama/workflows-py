@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import gc
+import json
 import logging
 import pickle
 import threading
@@ -13,7 +14,10 @@ from typing import Any, Callable, Optional, Union, cast
 from unittest import mock
 
 import pytest
-from llama_index_instrumentation.dispatcher import active_instrument_tags
+from llama_index_instrumentation.dispatcher import (
+    active_instrument_tags,
+    instrument_tags,
+)
 from pydantic import PrivateAttr
 from workflows.context import Context, PickleSerializer
 from workflows.decorators import step
@@ -242,7 +246,6 @@ async def test_workflow_num_workers() -> None:
     # Ensure ctx is serializable
     ctx = r.ctx
     assert ctx
-    assert ctx._broker_run is not None
     ctx.to_dict()
 
 
@@ -266,7 +269,10 @@ async def test_workflow_step_send_event() -> None:
     r = await WorkflowTestRunner(workflow).run()
     assert r.result == "step2"
     ctx = r.ctx
-    replay = ctx._broker_run._runtime.replay()  # type:ignore
+    from workflows.context.external_context import ExternalContext
+
+    assert isinstance(ctx._face, ExternalContext)
+    replay = ctx._face._tick_log
     assert TickAddEvent(OneTestEvent(), step_name="step2") in replay
 
 
@@ -284,8 +290,10 @@ async def test_workflow_step_send_event_to_None() -> None:
 
     workflow = StepSendEventToNoneWorkflow(verbose=True)
     result = await WorkflowTestRunner(workflow).run()
-    assert result.ctx._broker_run is not None
-    replay = result.ctx._broker_run._runtime.replay()  # type:ignore
+    from workflows.context.external_context import ExternalContext
+
+    assert isinstance(result.ctx._face, ExternalContext)
+    replay = result.ctx._face._tick_log
     assert TickAddEvent(OneTestEvent()) in replay
 
 
@@ -389,31 +397,29 @@ async def test_workflow_continue_context() -> None:
         @step
         async def step(self, ctx: Context, ev: StartEvent) -> StopEvent:
             cur_number = await ctx.store.get("number", default=0)
-            await ctx.store.set("number", cur_number + 1)
-            return StopEvent(result="Done")
+            new_number = cur_number + 1
+            await ctx.store.set("number", new_number)
+            return StopEvent(result=new_number)
 
     wf = DummyWorkflow()
 
     # first run
     r = await WorkflowTestRunner(wf).run()
-    assert r.result == "Done"
+    assert r.result == 1
     ctx = r.ctx
     assert ctx
-    assert await ctx.store.get("number") == 1
 
     # second run -- independent from the first
     r = await WorkflowTestRunner(wf).run()
-    assert r.result == "Done"
+    assert r.result == 1
     ctx = r.ctx
     assert ctx
-    assert await ctx.store.get("number") == 1
 
     # third run -- continue from the second run
     handler = wf.run(ctx=ctx)
     result = await handler
     assert handler.ctx
-    assert result == "Done"
-    assert await handler.ctx.store.get("number") == 2
+    assert result == 2
 
 
 @pytest.mark.asyncio
@@ -433,24 +439,22 @@ async def test_workflow_pickle() -> None:
 
     # by default, we can't pickle the LLM/embedding object
     with pytest.raises(ValueError):
-        state_dict = ctx.to_dict()
+        ctx.to_dict()
 
     # if we allow pickle, then we can pickle the LLM/embedding object
     state_dict = ctx.to_dict(serializer=PickleSerializer())
+    # Verify step count via serialized dict (integers are JSON serialized)
+    assert json.loads(state_dict["state"]["state_data"]["_data"]["step"]) == 1
+
+    # Restore and run again to verify deserialization works
     new_ctx = Context.from_dict(wf, state_dict, serializer=PickleSerializer())
-    assert await new_ctx.store.get("step") == 1
-    new_handler = WorkflowHandler(ctx=new_ctx)
-    assert new_handler.ctx
-    assert await new_handler.ctx.store.get("step") == 1
+    r2 = await WorkflowTestRunner(wf).run(ctx=new_ctx)
+    ctx2 = r2.ctx
+    assert ctx2
 
-    # check that the step count is the same
-    cur_step = await ctx.store.get("step")
-    new_step = await new_handler.ctx.store.get("step")
-    assert new_step == cur_step
-    await WorkflowTestRunner(wf).run(ctx=new_handler.ctx)
-
-    # check that the step count is incremented
-    assert await new_handler.ctx.store.get("step") == cur_step + 1
+    # check that the step count is incremented after second run
+    state_dict2 = ctx2.to_dict(serializer=PickleSerializer())
+    assert json.loads(state_dict2["state"]["state_data"]["_data"]["step"]) == 2
 
 
 @pytest.mark.asyncio
@@ -476,6 +480,8 @@ async def test_workflow_context_to_dict() -> None:
             await signal_continue.wait()
             return StopEvent(result="Done")
 
+    from workflows.context.external_context import ExternalContext
+
     workflow = StallableWorkflow()
     try:
         handler = workflow.run()
@@ -491,10 +497,10 @@ async def test_workflow_context_to_dict() -> None:
         signal_continue.set()
         await handler2
     finally:
-        if ctx is not None and ctx._broker_run is not None:
-            await ctx._broker_run.shutdown()
-        if new_ctx is not None and new_ctx._broker_run is not None:
-            await new_ctx._broker_run.shutdown()
+        if ctx is not None and isinstance(ctx._face, ExternalContext):
+            await ctx._face.shutdown()
+        if new_ctx is not None and isinstance(new_ctx._face, ExternalContext):
+            await new_ctx._face.shutdown()
 
 
 class HumanInTheLoopWorkflow(Workflow):
@@ -555,10 +561,10 @@ async def test_human_in_the_loop_with_resume() -> None:
     assert final_result == "42"
 
     # ensure the workflow ran each step once
-    step1_runs = await new_handler.ctx.store.get("step1_runs")  # type:ignore
-    step2_runs = await new_handler.ctx.store.get("step2_runs")  # type:ignore
-    assert step1_runs == 1
-    assert step2_runs == 1
+    assert new_handler.ctx is not None
+    ctx_dict = new_handler.ctx.to_dict()
+    assert json.loads(ctx_dict["state"]["state_data"]["_data"]["step1_runs"]) == 1  # type: ignore[index]
+    assert json.loads(ctx_dict["state"]["state_data"]["_data"]["step2_runs"]) == 1  # type: ignore[index]
 
 
 @pytest.mark.asyncio
@@ -601,10 +607,9 @@ async def test_human_in_the_loop_resume_custom_start_event_inactive_ctx() -> Non
     final_result = await resumed_handler
     assert final_result == "42"
 
-    ask_runs = await resumed_handler.ctx.store.get("ask_runs")  # type: ignore[arg-type]
-    complete_runs = await resumed_handler.ctx.store.get("complete_runs")  # type: ignore[arg-type]
-    assert ask_runs == 1
-    assert complete_runs == 1
+    ctx_dict = resumed_handler.ctx.to_dict()  # type: ignore[union-attr]
+    assert json.loads(ctx_dict["state"]["state_data"]["_data"]["ask_runs"]) == 1
+    assert json.loads(ctx_dict["state"]["state_data"]["_data"]["complete_runs"]) == 1
 
 
 class DummyWorkflowForConcurrentRunsTest(Workflow):
@@ -844,6 +849,28 @@ def test__get_start_event_instance(caplog: Any) -> None:
         d._get_start_event_instance(None, wrong_field="test")
 
 
+def test_run_with_invalid_start_event_raises() -> None:
+    """Passing wrong type to start_event argument should raise ValueError."""
+
+    class SimpleWorkflow(Workflow):
+        @step
+        async def only(self, ev: StartEvent) -> StopEvent:
+            return StopEvent(result="done")
+
+    wf = SimpleWorkflow()
+
+    # Pass a non-StartEvent object
+    with pytest.raises(ValueError, match="must be an instance of 'StartEvent'"):
+        wf.run(start_event="not a StartEvent")  # type: ignore[arg-type]
+
+    # Also test with other invalid types
+    with pytest.raises(ValueError, match="must be an instance of 'StartEvent'"):
+        wf.run(start_event=42)  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match="must be an instance of 'StartEvent'"):
+        wf.run(start_event={"topic": "test"})  # type: ignore[arg-type]
+
+
 def test__ensure_start_event_class_multiple_types() -> None:
     class DummyWorkflow(Workflow):
         @step
@@ -1028,24 +1055,28 @@ async def test_workflow_non_picklable_event() -> None:
 
 
 @pytest.mark.asyncio
-async def test_inner_step_can_access_run_id_from_instrument_tags() -> None:
+async def test_inner_step_can_access_run_id_and_others_from_instrument_tags() -> None:
     # container to mutate rather than deal with nonlocal
-    run_id: dict[str, str | None] = {"run_id": None}
+    run_id: dict[str, str | None] = {"run_id": None, "foo": None}
 
     class TagReadingWorkflow(Workflow):
         @step
         async def read_tags(self, ctx: Context, ev: StartEvent) -> StopEvent:
             tags = active_instrument_tags.get()
             run_id["run_id"] = tags.get("run_id")
+            run_id["foo"] = tags.get("foo")
             return StopEvent()
 
     wf = TagReadingWorkflow()
-    handler = wf.run()
+    with instrument_tags({"foo": "bar"}):
+        handler = wf.run()
     await handler
 
     assert handler.run_id is not None
     assert run_id["run_id"] is not None
     assert run_id["run_id"] == handler.run_id
+    assert run_id["foo"] is not None
+    assert run_id["foo"] == "bar"
 
 
 class Par(Event):

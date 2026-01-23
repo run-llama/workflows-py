@@ -1,13 +1,16 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 LlamaIndex Inc.
 
-from typing import AsyncGenerator
+from typing import Any, AsyncGenerator
 
 import pytest
 from pydantic import Field
 from workflows.context import Context
+from workflows.context.state_store import DictState, InMemoryStateStore
 from workflows.decorators import step
 from workflows.events import Event, StartEvent, StopEvent
+from workflows.plugins.basic import AsyncioAdapterQueues, ExternalAsyncioAdapter
+from workflows.runtime.types.internal_state import BrokerState
 from workflows.workflow import Workflow
 
 
@@ -48,10 +51,20 @@ def events() -> list:
 
 
 @pytest.fixture()
-async def ctx(workflow: Workflow) -> AsyncGenerator[Context, None]:
-    ctx = Context(workflow=workflow)
-    broker = ctx._init_broker(workflow)
+async def ctx(workflow: Workflow) -> AsyncGenerator[Context[Any], None]:
+    from workflows.context.external_context import ExternalContext
+
+    queues = AsyncioAdapterQueues(
+        run_id="test-run",
+        init_state=BrokerState.from_workflow(workflow),
+        state_store=InMemoryStateStore(DictState()),
+    )
+    ctx = Context._create_external(
+        workflow=workflow,
+        external_adapter=ExternalAsyncioAdapter(queues=queues),
+    )
+    assert isinstance(ctx._face, ExternalContext)
     try:
         yield ctx
     finally:
-        await broker.shutdown()
+        await ctx._face.shutdown()

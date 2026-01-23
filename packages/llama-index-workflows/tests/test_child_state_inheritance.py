@@ -76,7 +76,9 @@ class ChildWorkflowWithChildState(BaseWorkflowWithBaseState):
     async def child_step(self, ctx: Context[ChildState], ev: MiddleEvent) -> StopEvent:
         # Child step can access both base and child fields
         await ctx.store.set("child_field", "set_by_child_step")
-        return StopEvent()
+        # Return state as result for testing
+        state = await ctx.store.get_state()
+        return StopEvent(result=state)
 
 
 @pytest.mark.asyncio
@@ -95,9 +97,7 @@ async def test_subtype_inheritance_works() -> None:
 
     result = await test_runner.run()
 
-    ctx = result.ctx
-    assert ctx is not None
-    state = await ctx.store.get_state()
+    state = result.result
 
     # Verify state is ChildState
     assert isinstance(state, ChildState)
@@ -128,7 +128,9 @@ class WorkflowWithBaseStateSetState(Workflow):
         # and sets it. This should merge, not obliterate child fields.
         new_state = BaseState(base_field="modified_by_base_step")
         await ctx.store.set_state(new_state)  # type: ignore[arg-type]
-        return StopEvent()
+        # Return state as result for testing
+        state = await ctx.store.get_state()
+        return StopEvent(result=state)
 
 
 @pytest.mark.asyncio
@@ -145,9 +147,7 @@ async def test_set_state_with_parent_type_merges_fields() -> None:
 
     result = await test_runner.run()
 
-    ctx = result.ctx
-    assert ctx is not None
-    state = await ctx.store.get_state()
+    state = result.result
 
     # The base field was modified
     assert state.base_field == "modified_by_base_step"
@@ -277,7 +277,9 @@ class ChildWorkflowConsistent(BaseWorkflowConsistent):
         state = await ctx.store.get_state()
         await ctx.store.set("child_field", "modified_by_child_step")
         await ctx.store.set("extra_counter", state.extra_counter + 1)
-        return StopEvent()
+        # Return state as result for testing
+        final_state = await ctx.store.get_state()
+        return StopEvent(result=final_state)
 
 
 @pytest.mark.asyncio
@@ -294,9 +296,7 @@ async def test_consistent_child_state_works() -> None:
 
     result = await test_runner.run()
 
-    ctx = result.ctx
-    assert ctx is not None
-    state = await ctx.store.get_state()
+    state = result.result
 
     # Both base and child fields should be properly set
     assert state.base_field == "modified_by_base_step"
@@ -328,7 +328,9 @@ class SetStateWorkflow(Workflow):
         state = await ctx.store.get_state()
         state.base_field = "modified_base"
         await ctx.store.set_state(state)
-        return StopEvent()
+        # Return state as result for testing
+        final_state = await ctx.store.get_state()
+        return StopEvent(result=final_state)
 
 
 @pytest.mark.asyncio
@@ -344,9 +346,7 @@ async def test_set_state_same_type_preserves_fields() -> None:
 
     result = await test_runner.run()
 
-    ctx = result.ctx
-    assert ctx is not None
-    state = await ctx.store.get_state()
+    state = result.result
 
     # The base field was modified
     assert state.base_field == "modified_base"
@@ -433,7 +433,10 @@ class ChildWorkflowDictState(BaseWorkflowDictState):
     @step
     async def end_step(self, ctx: Context, ev: MiddleEvent) -> StopEvent:
         await ctx.store.set("child_field", "set_by_child")
-        return StopEvent()
+        # Return field values as result for testing
+        base_field = await ctx.store.get("base_field")
+        child_field = await ctx.store.get("child_field")
+        return StopEvent(result={"base_field": base_field, "child_field": child_field})
 
 
 @pytest.mark.asyncio
@@ -450,15 +453,10 @@ async def test_dict_state_allows_flexible_inheritance() -> None:
 
     result = await test_runner.run()
 
-    ctx = result.ctx
-    assert ctx is not None
+    fields = result.result
 
-    # Both fields can be retrieved
-    base_field = await ctx.store.get("base_field")
-    child_field = await ctx.store.get("child_field")
-
-    assert base_field == "set_by_base"
-    assert child_field == "set_by_child"
+    assert fields["base_field"] == "set_by_base"
+    assert fields["child_field"] == "set_by_child"
 
 
 # ============================================================================
@@ -483,7 +481,9 @@ class EditStateWorkflow(Workflow):
         async with ctx.store.edit_state() as state:
             state.base_field = "edited_base"
             # Not touching child fields
-        return StopEvent()
+        # Return state as result for testing
+        final_state = await ctx.store.get_state()
+        return StopEvent(result=final_state)
 
 
 @pytest.mark.asyncio
@@ -499,9 +499,7 @@ async def test_edit_state_preserves_child_fields() -> None:
 
     result = await test_runner.run()
 
-    ctx = result.ctx
-    assert ctx is not None
-    state = await ctx.store.get_state()
+    state = result.result
 
     # Base field was modified
     assert state.base_field == "edited_base"
@@ -549,7 +547,9 @@ class GrandchildWorkflowThreeLevel(ChildWorkflowThreeLevel):
         self, ctx: Context[GrandchildState], ev: MiddleEvent
     ) -> StopEvent:
         await ctx.store.set("grandchild_field", "set_at_level3")
-        return StopEvent()
+        # Return state as result for testing
+        state = await ctx.store.get_state()
+        return StopEvent(result=state)
 
 
 @pytest.mark.asyncio
@@ -566,9 +566,7 @@ async def test_three_level_inheritance_works() -> None:
 
     result = await test_runner.run()
 
-    ctx = result.ctx
-    assert ctx is not None
-    state = await ctx.store.get_state()
+    state = result.result
 
     # Verify state is GrandchildState
     assert isinstance(state, GrandchildState)
