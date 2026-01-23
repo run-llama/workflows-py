@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import asyncio
 import functools
-import uuid
 import warnings
 from typing import (
     TYPE_CHECKING,
@@ -17,13 +16,17 @@ from typing import (
     cast,
 )
 
-from pydantic import BaseModel, ValidationError
+from llama_index_instrumentation.dispatcher import (
+    active_instrument_tags,
+    instrument_tags,
+)
 
-from workflows.context.context_types import SerializedContext
-from workflows.decorators import StepConfig
+from workflows.context.external_context import ExternalContext
+from workflows.context.internal_context import InternalContext
+from workflows.context.pre_context import PreContext
 from workflows.errors import (
     ContextSerdeError,
-    WorkflowRuntimeError,
+    ContextStateError,
 )
 from workflows.events import (
     Event,
@@ -31,14 +34,15 @@ from workflows.events import (
     StopEvent,
 )
 from workflows.handler import WorkflowHandler
-from workflows.plugins.basic import basic_runtime
-from workflows.runtime.broker import WorkflowBroker
 from workflows.runtime.types.internal_state import BrokerState
-from workflows.runtime.types.plugin import Plugin, WorkflowRuntime
+from workflows.runtime.types.plugin import (
+    ExternalRunAdapter,
+)
 from workflows.types import RunResultT
+from workflows.utils import _nanoid as nanoid
 
 from .serializers import BaseSerializer, JsonSerializer
-from .state_store import MODEL_T, DictState, InMemoryStateStore
+from .state_store import MODEL_T, InMemoryStateStore
 
 if TYPE_CHECKING:  # pragma: no cover
     from workflows import Workflow
@@ -56,6 +60,7 @@ class UnserializableKeyWarning(Warning):
 warnings.simplefilter("once", UnserializableKeyWarning)
 
 
+# TODO(v3) remove this class, and replace with direct references to the pre/internal/external contexts
 class Context(Generic[MODEL_T]):
     """
     Global, per-run context for a `Workflow`. Provides an interface into the
@@ -120,163 +125,190 @@ class Context(Generic[MODEL_T]):
     # are known to be unserializable in some cases.
     known_unserializable_keys = ("memory",)
 
-    # Backing state store; serialized as `state`
-    _state_store: InMemoryStateStore[MODEL_T]
-    _broker_run: WorkflowBroker[MODEL_T] | None
-    _plugin: Plugin
-    _workflow: Workflow
+    # Current face - context is in exactly one state at a time
+    _face: (
+        PreContext[MODEL_T] | ExternalContext[MODEL_T, Any] | InternalContext[MODEL_T]
+    )
 
     def __init__(
         self,
         workflow: Workflow,
         previous_context: dict[str, Any] | None = None,
         serializer: BaseSerializer | None = None,
-        plugin: Plugin = basic_runtime,
     ) -> None:
-        self._serializer = serializer or JsonSerializer()
-        self._broker_run = None
-        self._plugin = plugin
-        self._workflow = workflow
+        # Start in pre-run (config) state - PreContext handles deserialization
+        pre_context: PreContext[MODEL_T] = PreContext(
+            workflow=workflow,
+            previous_context=previous_context,
+            serializer=serializer,
+        )
+        self._face = pre_context
 
-        # parse the serialized context
-        serializer = serializer or JsonSerializer()
-        if previous_context is not None:
-            try:
-                # Auto-detect and convert V0 to V1 if needed
-                previous_context_parsed = SerializedContext.from_dict_auto(
-                    previous_context
-                )
-                # validate it fully parses synchronously to avoid delayed validation errors
-                BrokerState.from_serialized(
-                    previous_context_parsed, workflow, serializer
-                )
-            except ValidationError as e:
-                raise ContextSerdeError(
-                    f"Context dict specified in an invalid format: {e}"
-                ) from e
-        else:
-            previous_context_parsed = SerializedContext()
-
-        self._init_snapshot = previous_context_parsed
-
-        # initialization of the state store is a bit complex, due to inferring and validating its type from the
-        # provided workflow context args
-
-        state_types: set[Type[BaseModel]] = set()
-        for _, step_func in workflow._get_steps().items():
-            step_config: StepConfig = step_func._step_config
-            if (
-                step_config.context_state_type is not None
-                and step_config.context_state_type != DictState
-                and issubclass(step_config.context_state_type, BaseModel)
-            ):
-                state_types.add(step_config.context_state_type)
-
-        # Find the most derived state type from the inheritance hierarchy
-        # This allows base workflows to use Context[BaseState] and child workflows
-        # to use Context[ChildState] where ChildState extends BaseState
-        state_type: Type[BaseModel]
-        if state_types:
-            state_type = _find_most_derived_state_type(state_types)
-        else:
-            state_type = DictState
-        if previous_context_parsed.state:
-            # perhaps offer a way to clear on invalid
-            store_state = InMemoryStateStore.from_dict(
-                previous_context_parsed.state, serializer
-            )
-            if store_state.state_type != state_type:
-                raise ValueError(
-                    f"State type mismatch. Workflow context expected {state_type.__name__}, got {store_state.state_type.__name__}"
-                )
-            self._state_store = cast(InMemoryStateStore[MODEL_T], store_state)
-        else:
-            try:
-                state_instance = cast(MODEL_T, state_type())
-                self._state_store = InMemoryStateStore(state_instance)
-            except Exception as e:
-                raise WorkflowRuntimeError(
-                    f"Failed to initialize state of type {state_type}. Does your state define defaults for all fields? Original error:\n{e}"
-                ) from e
+    @classmethod
+    def _create_face(
+        cls,
+        face: PreContext[MODEL_T]
+        | ExternalContext[MODEL_T, Any]
+        | InternalContext[MODEL_T],
+    ) -> Context[MODEL_T]:
+        new_ctx = cast(Context[MODEL_T], object.__new__(cls))
+        new_ctx._face = face
+        return new_ctx
 
     @property
     def is_running(self) -> bool:
         """Whether the workflow is currently running."""
-        if self._broker_run is None:
-            return self._init_snapshot.is_running
+        if isinstance(self._face, PreContext):
+            return self._face.is_running
+        elif isinstance(self._face, ExternalContext):
+            return self._face.is_running
         else:
-            return self._broker_run.is_running
+            _warn_is_running_in_step()
+            return True
 
-    def _init_broker(
-        self, workflow: Workflow, plugin: WorkflowRuntime | None = None
-    ) -> WorkflowBroker[MODEL_T]:
-        if self._broker_run is not None:
-            raise WorkflowRuntimeError("Broker already initialized")
-        # Initialize a runtime plugin (asyncio-based by default)
-        runtime: WorkflowRuntime = plugin or self._plugin.new_runtime(str(uuid.uuid4()))
-        # Initialize the new broker implementation (broker2)
-        broker: WorkflowBroker[MODEL_T] = WorkflowBroker(
-            workflow=workflow,
-            context=cast("Context[MODEL_T]", self),
-            runtime=runtime,
-            plugin=self._plugin,
+    def _require_pre(self, fn: str) -> PreContext[MODEL_T]:
+        """Require context to be in pre-run state. Raises ContextStateError if not."""
+        if isinstance(self._face, PreContext):
+            return self._face  # type: ignore[invalid-return-type]
+        raise ContextStateError(
+            f"{fn} requires a pre-run context. The workflow has already started."
         )
-        self._broker_run = broker
-        return broker
+
+    def _require_external(self, fn: str) -> ExternalContext[MODEL_T, Any]:
+        """Require context to be in external state. Raises ContextStateError if not."""
+        if isinstance(self._face, ExternalContext):
+            return self._face
+        if isinstance(self._face, PreContext):
+            raise ContextStateError(
+                f"{fn} requires a running workflow. Call workflow.run() first."
+            )
+        raise ContextStateError(
+            f"{fn} is only available from handler code, not from within steps."
+        )
+
+    def _require_internal(self, fn: str) -> InternalContext[MODEL_T]:
+        """Require context to be in internal state. Raises ContextStateError if not."""
+        if isinstance(self._face, InternalContext):
+            return self._face  # type: ignore[invalid-return-type]
+        if isinstance(self._face, PreContext):
+            raise ContextStateError(
+                f"{fn} requires a running workflow. Call workflow.run() first."
+            )
+        raise ContextStateError(f"{fn} is only available from within step functions.")
+
+    @classmethod
+    def _create_internal(
+        cls,
+        workflow: Workflow,
+    ) -> Context[MODEL_T]:
+        """Create a Context directly in internal face state.
+
+        Requires a current run context (via with_current_run_id) to be set.
+        """
+        internal_adapter = workflow._runtime.get_internal_adapter()
+        new_ctx = cast(Context[MODEL_T], object.__new__(cls))
+        new_ctx._face = cast(
+            InternalContext[MODEL_T],
+            InternalContext(
+                internal_adapter=internal_adapter,
+                workflow=workflow,
+            ),
+        )
+        return new_ctx
+
+    @classmethod
+    def _create_external(
+        cls,
+        workflow: Workflow,
+        external_adapter: ExternalRunAdapter,
+        serializer: BaseSerializer = JsonSerializer(),
+    ) -> Context[MODEL_T]:
+        """Create a Context directly in external face state with a broker."""
+
+        new_ctx = cast(Context[MODEL_T], object.__new__(cls))
+
+        # Set external face
+        new_ctx._face = cast(
+            ExternalContext[MODEL_T, Any],
+            ExternalContext(
+                workflow=workflow,
+                external_adapter=external_adapter,
+                serializer=serializer,
+            ),
+        )
+        return new_ctx
 
     def _workflow_run(
         self,
         workflow: Workflow,
-        start_event: StartEvent | None = None,
-        semaphore: asyncio.Semaphore | None = None,
+        start_event: StartEvent
+        | None,  # None only when resuming a workflow from a snapshotted context
+        run_id: str | None = None,
     ) -> WorkflowHandler:
         """
         called by package internally from the workflow to run it
         """
-        prev_broker: WorkflowBroker[MODEL_T] | None = None
-        if self._broker_run is not None:
-            prev_broker = self._broker_run
-            self._broker_run = None
+        run_id = run_id or nanoid()
+        with instrument_tags({**active_instrument_tags.get(), "run_id": run_id}):
+            # Get or create PreContext for initialization
+            if isinstance(self._face, PreContext):
+                pre = self._face
+            elif isinstance(self._face, ExternalContext):
+                # Check for concurrent run
+                if self._face.is_running:
+                    raise ContextStateError(
+                        "Cannot start a new run while context is already running. "
+                        "Wait for completion or use a new Context."
+                    )
+                # Continuation: create fresh PreContext from current state
+                pre = PreContext(
+                    workflow=workflow,
+                    previous_context=self._face.to_dict(),
+                    serializer=self._face._serializer,
+                )
+            else:
+                raise ContextStateError(
+                    "Cannot start workflow from a step function context"
+                )
 
-        self._broker_run = self._init_broker(workflow)
+            # Compute state from serialized snapshot
+            init_state = BrokerState.from_serialized(
+                pre.init_snapshot, workflow, pre._serializer
+            )
 
-        async def before_start() -> None:
-            if prev_broker is not None:
-                try:
-                    await prev_broker.shutdown()
-                except Exception:
-                    pass
-            if semaphore is not None:
-                await semaphore.acquire()
+            external_adapter = workflow._runtime.run_workflow(
+                run_id=run_id,
+                workflow=workflow,
+                init_state=init_state,
+                start_event=start_event,
+                serialized_state=pre.serialized_state,
+                serializer=pre.serializer,
+            )
 
-        async def after_complete() -> None:
-            if semaphore is not None:
-                semaphore.release()
+            # TODO(v3): Remove mutation. Handler will just be the external face.
+            self._face = cast(
+                ExternalContext[MODEL_T, Any],
+                ExternalContext(
+                    workflow=workflow,
+                    external_adapter=external_adapter,
+                    serializer=pre._serializer,
+                ),
+            )
 
-        state = BrokerState.from_serialized(
-            self._init_snapshot, workflow, self._serializer
-        )
-        return self._broker_run.start(
-            workflow=workflow,
-            previous=state,
-            start_event=start_event,
-            before_start=before_start,
-            after_complete=after_complete,
-        )
+            return WorkflowHandler(
+                workflow=workflow,
+                external_adapter=external_adapter,
+                ctx=self,
+            )
 
     def _workflow_cancel_run(self) -> None:
-        """
-        Called internally from the handler to cancel a context's run
-        """
-        self._running_broker.cancel_run()
-
-    @property
-    def _running_broker(self) -> WorkflowBroker[MODEL_T]:
-        if self._broker_run is None:
-            raise WorkflowRuntimeError(
-                "Workflow run is not yet running. Make sure to only call this method after the context has been passed to a workflow.run call."
-            )
-        return self._broker_run
+        """Called internally from the handler to cancel a context's run."""
+        if isinstance(self._face, ExternalContext):
+            self._face.cancel()
+        elif isinstance(self._face, PreContext):
+            _warn_cancel_before_start()
+        else:
+            _warn_cancel_in_step()
 
     @property
     def store(self) -> InMemoryStateStore[MODEL_T]:
@@ -288,7 +320,7 @@ class Context(Generic[MODEL_T]):
         Returns:
             InMemoryStateStore[MODEL_T]: The state store instance.
         """
-        return self._state_store
+        return self._face.store  # type: ignore[return-value]
 
     def to_dict(self, serializer: BaseSerializer | None = None) -> dict[str, Any]:
         """Serialize the context to a JSON-serializable dict.
@@ -320,35 +352,15 @@ class Context(Generic[MODEL_T]):
             result = await my_workflow.run(..., ctx=restored_ctx)
             ```
         """
-        serializer = serializer or self._serializer
-
-        # Serialize state using the state manager's method
-        state_data = {}
-        if self._state_store is not None:
-            state_data = self._state_store.to_dict(serializer)
-
-        # Get the broker state - either from the running broker or from the init snapshot
-        if self._broker_run is not None:
-            broker_state = self._broker_run._state
-        else:
-            # Deserialize the init snapshot to get a BrokerState, then re-serialize it
-            # This ensures we always output the current format
-            broker_state = BrokerState.from_serialized(
-                self._init_snapshot, self._workflow, serializer
-            )
-
-        context = broker_state.to_serialized(serializer)
-        context.state = state_data
-        # mode="python" to support pickling over json if one so chooses. This should perhaps be moved into the serializers
-        return context.model_dump(mode="python")
+        return self._require_external(fn="to_dict").to_dict(serializer)
 
     @classmethod
     def from_dict(
         cls,
-        workflow: "Workflow",
+        workflow: Workflow,
         data: dict[str, Any],
         serializer: BaseSerializer | None = None,
-    ) -> "Context[MODEL_T]":
+    ) -> Context[MODEL_T]:
         """Reconstruct a `Context` from a serialized payload.
 
         Args:
@@ -389,7 +401,7 @@ class Context(Generic[MODEL_T]):
         Returns:
             list[str]: Names of steps that have at least one active worker.
         """
-        return await self._running_broker.running_steps()
+        return await self._require_external(fn="running_steps").running_steps()
 
     def collect_events(
         self, ev: Event, expected: list[Type[Event]], buffer_id: str | None = None
@@ -428,7 +440,9 @@ class Context(Generic[MODEL_T]):
         See Also:
             - [Event][workflows.events.Event]
         """
-        return self._running_broker.collect_events(ev, expected, buffer_id)
+        return self._require_internal(fn="collect_events").collect_events(
+            ev, expected, buffer_id
+        )
 
     def send_event(self, message: Event, step: str | None = None) -> None:
         """Dispatch an event to one or all workflow steps.
@@ -468,7 +482,13 @@ class Context(Generic[MODEL_T]):
             result = await handler
             ```
         """
-        return self._running_broker.send_event(message, step)
+        # send_event can be called from internal (steps) or external (handler) contexts
+        if isinstance(self._face, InternalContext):
+            self._face.send_event(message, step)
+        elif isinstance(self._face, ExternalContext):
+            self._face.send_event(message, step)
+        else:
+            _warn_send_event_before_start()
 
     async def wait_for_event(
         self,
@@ -518,7 +538,7 @@ class Context(Generic[MODEL_T]):
                 return StopEvent(result=response.response)
             ```
         """
-        return await self._running_broker.wait_for_event(
+        return await self._require_internal(fn="wait_for_event").wait_for_event(
             event_type, waiter_event, waiter_id, requirements, timeout
         )
 
@@ -537,7 +557,7 @@ class Context(Generic[MODEL_T]):
                 return StopEvent(result="ok")
             ```
         """
-        self._running_broker.write_event_to_stream(ev)
+        self._require_internal(fn="write_event_to_stream").write_event_to_stream(ev)
 
     def get_result(self) -> RunResultT:
         """Return the final result of the workflow run.
@@ -558,15 +578,29 @@ class Context(Generic[MODEL_T]):
 
         Returns:
             RunResultT: The value provided via a `StopEvent`.
+
+        Raises:
+            ContextStateError: If called before the workflow is running or
+                from within a step function.
         """
         _warn_get_result()
-        if self._running_broker._handler is None:
-            raise WorkflowRuntimeError("Workflow handler is not set")
-        return self._running_broker._handler.result()
+        stop_event = self._require_external(fn="get_result").get_result()
+        return stop_event.result if type(stop_event) is StopEvent else stop_event
 
     def stream_events(self) -> AsyncGenerator[Event, None]:
-        """The internal queue used for streaming events to callers."""
-        return self._running_broker.stream_published_events()
+        """Stream events published by the workflow.
+
+        Returns an async generator that yields events as they are published
+        by steps via `write_event_to_stream()`.
+
+        Returns:
+            AsyncGenerator[Event, None]: Stream of published events.
+
+        Raises:
+            ContextStateError: If called before the workflow is running or
+                from within a step function.
+        """
+        return self._require_external(fn="stream_events").stream_events()
 
     @property
     def streaming_queue(self) -> asyncio.Queue:
@@ -576,6 +610,7 @@ class Context(Generic[MODEL_T]):
         stream_events(). A deprecation warning is emitted once per process.
         """
         _warn_streaming_queue()
+        self._require_external(fn="streaming_queue")
         q: asyncio.Queue[Event] = asyncio.Queue()
 
         async def _pump() -> None:
@@ -618,48 +653,36 @@ def _warn_streaming_queue() -> None:
     )
 
 
-def _find_most_derived_state_type(state_types: set[Type[BaseModel]]) -> Type[BaseModel]:
-    """Find the most derived (most specific) state type from a set of types.
+@functools.lru_cache(maxsize=1)
+def _warn_is_running_in_step() -> None:
+    warnings.warn(
+        "is_running called from within a step; the workflow is always "
+        "running inside a step. This usage is deprecated.",
+        DeprecationWarning,
+        stacklevel=3,
+    )
 
-    All types must be in a single inheritance chain, i.e., one type must be
-    a subclass of all other types (the most derived type).
 
-    Args:
-        state_types: Set of state types to analyze.
+@functools.lru_cache(maxsize=1)
+def _warn_cancel_before_start() -> None:
+    warnings.warn(
+        "cancel() called before workflow started; nothing to cancel.",
+        stacklevel=3,
+    )
 
-    Returns:
-        The most derived type in the inheritance hierarchy.
 
-    Raises:
-        ValueError: If types are not in a compatible inheritance hierarchy.
-    """
-    type_list = list(state_types)
+@functools.lru_cache(maxsize=1)
+def _warn_cancel_in_step() -> None:
+    warnings.warn(
+        "cancel() called from within a step; use send_event() instead.",
+        stacklevel=3,
+    )
 
-    if len(type_list) == 1:
-        return type_list[0]
 
-    # Find the most derived type - it should be a subclass of all others
-    most_derived: Type[BaseModel] | None = None
-
-    for candidate in type_list:
-        is_most_derived = True
-        for other in type_list:
-            if other is candidate:
-                continue
-            # candidate must be a subclass of other (or equal to it)
-            if not issubclass(candidate, other):
-                is_most_derived = False
-                break
-        if is_most_derived:
-            most_derived = candidate
-            break
-
-    if most_derived is None:
-        # No single type is a subclass of all others - incompatible hierarchy
-        raise ValueError(
-            "Multiple state types are not in a compatible inheritance hierarchy. "
-            "All state types must share a common inheritance chain. Found: "
-            + ", ".join([st.__name__ for st in state_types])
-        )
-
-    return most_derived
+@functools.lru_cache(maxsize=1)
+def _warn_send_event_before_start() -> None:
+    warnings.warn(
+        "send_event() called before workflow started; event will be dropped. "
+        "Call workflow.run() first.",
+        stacklevel=3,
+    )

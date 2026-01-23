@@ -4,47 +4,82 @@
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING, Any, AsyncGenerator
+import functools
+import warnings
+from collections.abc import Generator
+from typing import TYPE_CHECKING, Any, AsyncGenerator, Awaitable
 
-from .errors import WorkflowRuntimeError
-from .events import Event, InternalDispatchEvent, StopEvent
+from workflows.runtime.types.plugin import (
+    ExternalRunAdapter,
+    as_v2_runtime_compatibility_shim,
+)
+
+from .errors import WorkflowCancelledByUser, WorkflowRuntimeError
+from .events import Event, InternalDispatchEvent, StopEvent, WorkflowCancelledEvent
 from .types import RunResultT
 
 if TYPE_CHECKING:
     from .context import Context
+    from .workflow import Workflow
 
 
-class WorkflowHandler(asyncio.Future[RunResultT]):
+class WorkflowHandler(Awaitable[RunResultT]):
     """
-    Handle a running workflow: await results, stream events, access context, or cancel.
-
-    Instances are returned by [Workflow.run][workflows.workflow.Workflow.run].
-    They can be awaited for the final result and support streaming intermediate
-    events via [stream_events][workflows.handler.WorkflowHandler.stream_events].
-
-    See Also:
-        - [Context][workflows.context.context.Context]
-        - [StopEvent][workflows.events.StopEvent]
+    Stable interface for communicating with a running workflow. Is awaitable and streamable, and supports things like cancellation.
     """
 
     _ctx: Context
-    _run_task: asyncio.Task[None] | None
-    _all_events_consumed: bool
-    _stop_event: StopEvent | None
+
+    async def _await_result(self) -> RunResultT:
+        stop_event = await self.stop_event_result()
+        return stop_event.result if type(stop_event) is StopEvent else stop_event
+
+    def __await__(self) -> Generator[Any, Any, RunResultT]:
+        return self._await_result().__await__()
 
     def __init__(
         self,
-        *args: Any,
-        ctx: Context,
-        run_id: str | None = None,
-        run_task: asyncio.Task[None] | None = None,
-        **kwargs: Any,
+        workflow: "Workflow",
+        external_adapter: ExternalRunAdapter,
+        ctx: "Context[Any] | None" = None,
     ) -> None:
-        super().__init__(*args, **kwargs)
-        self.run_id = run_id
-        self._ctx = ctx
-        self._run_task = run_task
+        from .context import Context
+
+        self._workflow = workflow
+        self._external_adapter = external_adapter
+        # TODO(v3): Remove ctx parameter. The handler will just be the external face.
+        self._ctx = (
+            ctx
+            if ctx is not None
+            else Context._create_external(
+                workflow=workflow, external_adapter=external_adapter
+            )
+        )
+        self.run_id = external_adapter.run_id
         self._all_events_consumed = False
+        self._result: StopEvent | None = None
+        self._result_exception: BaseException | None = None
+        self._result_task = asyncio.create_task(self._wait_for_result())
+        self._result_task.add_done_callback(self._handle_result_task_done)
+
+    async def _wait_for_result(self) -> StopEvent:
+        result = await self._external_adapter.get_result()
+        self._result = result
+        return result
+
+    def _handle_result_task_done(self, task: asyncio.Task[StopEvent]) -> None:
+        if task.cancelled():
+            return
+        try:
+            exc = task.exception()
+        except asyncio.CancelledError:
+            return
+        if exc is None:
+            return
+        self._result_exception = exc
+        if isinstance(exc, WorkflowCancelledByUser) and self._result is None:
+            # Preserve cancellation in handler state without changing await semantics.
+            self._result = WorkflowCancelledEvent()
 
     @property
     def ctx(self) -> Context:
@@ -53,31 +88,18 @@ class WorkflowHandler(asyncio.Future[RunResultT]):
 
     def get_stop_event(self) -> StopEvent | None:
         """The stop event for this run. Always defined once the future is done. In a future major release, this will be removed, and the result will be the stop event itself."""
-        return self._stop_event
+        return self._result
 
     async def stop_event_result(self) -> StopEvent:
         """Get the stop event for this run. Always defined once the future is done. In a future major release, this will be removed, and the result will be the stop event itself."""
-        await self.result()
-        assert self._stop_event is not None, (
-            "Stop event must be defined once the future is done."
-        )
-        return self._stop_event
-
-    def _set_stop_event(self, stop_event: StopEvent) -> None:
-        self._stop_event = stop_event
-        # sad but necessary legacy behavior:
-        # set the result to the stop event result. To be removed in a future major release,
-        # and justuse the stop event directly.
-        self.set_result(
-            stop_event.result if type(stop_event) is StopEvent else stop_event
-        )
+        return await self._result_task
 
     def __str__(self) -> str:
-        return str(self.result())
+        return f"WorkflowHandler(workflow={self._workflow.workflow_name}, run_id={self.run_id}, result={self._result})"
 
     def is_done(self) -> bool:
         """Return True when the workflow has completed."""
-        return self.done()
+        return self._result_task.done()
 
     async def stream_events(
         self, expose_internal: bool = False
@@ -139,7 +161,45 @@ class WorkflowHandler(asyncio.Future[RunResultT]):
                 self._all_events_consumed = True
                 break
 
-    async def cancel_run(self) -> None:
+    def done(self) -> bool:
+        """Return True when the workflow has completed."""
+        _warn_done_deprecated()
+        return self._result_task.done()
+
+    def cancel(self) -> None:
+        """Cancel the running workflow."""
+        _warn_cancel_deprecated()
+        shim = as_v2_runtime_compatibility_shim(self._external_adapter)
+        if shim is None:
+            raise NotImplementedError(
+                "Hard cancel is not supported by this runtime. "
+                "Use await handler.cancel_run() for graceful cancellation."
+            )
+        shim.abort()
+        self._result_task.cancel()
+
+    def exception(self) -> BaseException | None:
+        """Get the exception for this run. Always defined once the future is done."""
+        _warn_exception_deprecated()
+        try:
+            return self._result_task.exception()
+        except asyncio.CancelledError:
+            return None
+
+    def cancelled(self) -> bool:
+        """Return True when the underlying workflow has been cancelled."""
+        _warn_cancelled_deprecated()
+        if self._result_task.cancelled():
+            return True
+        exc = self.exception()
+        if exc is not None and isinstance(exc, WorkflowCancelledByUser):
+            return True
+        stop_event = self.get_stop_event()
+        if stop_event is not None and isinstance(stop_event, WorkflowCancelledEvent):
+            return True
+        return False
+
+    async def cancel_run(self, *, timeout: float = 5.0) -> None:
         """Cancel the running workflow.
 
         Signals the underlying context to raise
@@ -152,10 +212,60 @@ class WorkflowHandler(asyncio.Future[RunResultT]):
             await handler.cancel_run()
             ```
         """
-        if self.ctx:
-            self.ctx._workflow_cancel_run()
-            if self._run_task is not None:
-                try:
-                    await self._run_task
-                except Exception:
-                    pass
+        try:
+            await self._external_adapter.cancel()
+        except Exception:
+            pass
+        try:
+            await asyncio.wait_for(self._result_task, timeout=timeout)
+        except asyncio.TimeoutError:
+            pass
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            pass
+
+    async def send_event(self, event: Event, step: str | None = None) -> None:
+        """Send an event into the workflow.
+
+        Args:
+            event: The event to send into the workflow.
+            step: Optional step name to target. If None, broadcasts to all.
+        """
+        self.ctx.send_event(event, step)
+
+
+@functools.lru_cache(maxsize=1)
+def _warn_done_deprecated() -> None:
+    warnings.warn(
+        "WorkflowHandler.done() is deprecated and will be removed in a future release",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+
+
+@functools.lru_cache(maxsize=1)
+def _warn_cancel_deprecated() -> None:
+    warnings.warn(
+        "WorkflowHandler.cancel() is deprecated and will be removed in a future release. Prefer to cancel the underlying workflow with await handler.cancel_run(), and then awaiting the result with await handler to obtain the cancellation exception.",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+
+
+@functools.lru_cache(maxsize=1)
+def _warn_exception_deprecated() -> None:
+    warnings.warn(
+        "WorkflowHandler.exception() is deprecated and will be removed in a future release",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+
+
+@functools.lru_cache(maxsize=1)
+def _warn_cancelled_deprecated() -> None:
+    warnings.warn(
+        "WorkflowHandler.cancelled() is deprecated and will be removed in a future release",
+        DeprecationWarning,
+        stacklevel=2,
+    )

@@ -2,6 +2,7 @@
 # Copyright (c) 2026 LlamaIndex Inc.
 
 import asyncio
+import json
 from typing import AsyncGenerator
 
 import pytest
@@ -145,4 +146,6 @@ async def test_resume_streams() -> None:
     ctx2 = result2.ctx
 
     assert ctx2
-    assert await ctx2.store.get("cur_count") == 2
+    ctx_dict = ctx2.to_dict()
+    # State is serialized as JSON strings under state_data._data for DictState
+    assert json.loads(ctx_dict["state"]["state_data"]["_data"]["cur_count"]) == 2
