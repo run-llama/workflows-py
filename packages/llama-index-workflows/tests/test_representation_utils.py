@@ -1017,3 +1017,74 @@ def test_filter_by_node_type_with_resource_config() -> None:
     assert len(filtered.edges) == 1
     assert filtered.edges[0].source == "step1"
     assert filtered.edges[0].target == "resource_123"
+
+
+def test_resource_config_label_and_description(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ResourceConfig label and description are preserved in graph nodes."""
+    monkeypatch.chdir(tmp_path)
+
+    config_data = {"categories": ["invoice", "resume", "contract"]}
+    _write_config(tmp_path, "classify.json", config_data)
+
+    class WorkflowWithLabeledConfig(Workflow):
+        @step
+        async def classify_step(
+            self,
+            ev: StartEvent,
+            config: Annotated[
+                ConfigData,
+                ResourceConfig(
+                    config_file="classify.json",
+                    label="Document Classifier",
+                    description="Configuration for document type classification",
+                ),
+            ],
+        ) -> StopEvent:
+            return StopEvent(result="done")
+
+    wf = WorkflowWithLabeledConfig()
+    graph = get_workflow_representation(workflow=wf)
+
+    config_nodes = _resource_config_nodes(graph)
+    assert len(config_nodes) == 1
+    config_node = config_nodes[0]
+
+    # Label should be used instead of type name
+    assert config_node.label == "Document Classifier"
+    assert config_node.description == "Configuration for document type classification"
+    # Type name should still be preserved
+    assert config_node.type_name == "ConfigData"
+
+
+def test_resource_config_label_fallback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ResourceConfig without label falls back to type name."""
+    monkeypatch.chdir(tmp_path)
+
+    config_data = {"value": 123}
+    _write_config(tmp_path, "config.json", config_data)
+
+    class WorkflowWithUnlabeledConfig(Workflow):
+        @step
+        async def step(
+            self,
+            ev: StartEvent,
+            config: Annotated[ConfigData, ResourceConfig(config_file="config.json")],
+        ) -> StopEvent:
+            return StopEvent(result="done")
+
+    wf = WorkflowWithUnlabeledConfig()
+    graph = get_workflow_representation(workflow=wf)
+
+    config_nodes = _resource_config_nodes(graph)
+    assert len(config_nodes) == 1
+    config_node = config_nodes[0]
+
+    # Label should fall back to type name when not specified
+    assert config_node.label == "ConfigData"
+    assert config_node.description is None

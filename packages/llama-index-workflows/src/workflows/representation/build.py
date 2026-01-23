@@ -87,7 +87,8 @@ def _create_resource_config_node(
 
     node_id = f"resource_config_{unique_hash}"
     type_name = _get_type_name(type_annotation)
-    label = type_name or resource_config.config_file
+    # Prefer explicit label, then type name, then config file path
+    label = resource_config.label or type_name or resource_config.config_file
 
     # Extract JSON schema if type is a BaseModel
     config_schema: dict[str, Any] | None = None
@@ -116,6 +117,7 @@ def _create_resource_config_node(
         path_selector=resource_config.path_selector,
         config_schema=config_schema,
         config_value=config_value,
+        description=resource_config.description,
     )
 
 

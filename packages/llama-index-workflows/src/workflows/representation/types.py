@@ -114,6 +114,10 @@ class WorkflowResourceConfigNode(WorkflowNodeBase):
         default=None,
         description="The configuration value read from the file (if readable)",
     )
+    description: str | None = Field(
+        default=None,
+        description="Human-readable description of the config's purpose and contents",
+    )
 
 
 class WorkflowGenericNode(WorkflowNodeBase):
