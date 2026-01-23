@@ -7,7 +7,7 @@ from typing import Any
 from pydantic import BaseModel
 
 from workflows import Workflow
-from workflows.decorators import StepConfig, StepFunction
+from workflows.decorators import StepFunction
 from workflows.events import (
     Event,
     HumanResponseEvent,
@@ -35,6 +35,15 @@ from workflows.utils import (
     get_steps_from_class,
     get_steps_from_instance,
 )
+
+
+def _get_type_name(type_annotation: type | None) -> str | None:
+    """Extract a readable type name from a type annotation."""
+    if type_annotation is None:
+        return None
+    if hasattr(type_annotation, "__name__"):
+        return type_annotation.__name__
+    return str(type_annotation)
 
 
 def _get_resource_identity(resource: ResourceDescriptor) -> int:
@@ -77,15 +86,7 @@ def _create_resource_config_node(
     unique_hash = hashlib.sha256(hash_input.encode()).hexdigest()[:12]
 
     node_id = f"resource_config_{unique_hash}"
-
-    # Get type name
-    type_name: str | None = None
-    if type_annotation is not None:
-        if hasattr(type_annotation, "__name__"):
-            type_name = type_annotation.__name__
-        else:
-            type_name = str(type_annotation)
-
+    type_name = _get_type_name(type_annotation)
     label = type_name or resource_config.config_file
 
     # Extract JSON schema if type is a BaseModel
@@ -125,15 +126,7 @@ def _create_resource_node(resource_def: ResourceDefinition) -> WorkflowResourceN
     rather than at Resource creation time for performance.
     """
     resource = resource_def.resource
-
-    # Get type name from annotation
-    type_name: str | None = None
-    if resource_def.type_annotation is not None:
-        type_annotation = resource_def.type_annotation
-        if hasattr(type_annotation, "__name__"):
-            type_name = type_annotation.__name__
-        else:
-            type_name = str(type_annotation)
+    type_name = _get_type_name(resource_def.type_annotation)
 
     # Extract source metadata lazily - only available for _Resource with factory
     source_file: str | None = None
@@ -317,19 +310,14 @@ def get_workflow_representation(workflow: Workflow) -> WorkflowGraph:
             f"Unsupported resource descriptor type: {type(descriptor).__name__}"
         )
 
-    step_config: StepConfig | None = None
-
     # Only one kind of `StopEvent` is allowed in a `Workflow`.
     # Assuming that `Workflow` is validated before drawing, it's enough to find the first one.
     current_stop_event = None
-    for step_name, step_func in steps.items():
-        step_config = step_func._step_config
-
-        for return_type in step_config.return_types:
+    for step_func in steps.values():
+        for return_type in step_func._step_config.return_types:
             if issubclass(return_type, StopEvent):
                 current_stop_event = return_type
                 break
-
         if current_stop_event:
             break
 
@@ -393,13 +381,10 @@ def get_workflow_representation(workflow: Workflow) -> WorkflowGraph:
 
         # Add resource nodes (deduplicated by resource identity)
         for resource_def in step_config.resources:
-            resource_node = _ensure_descriptor_node(
+            _ensure_descriptor_node(
                 resource_def.resource,
                 resource_def.type_annotation,
                 resource_def.name,
-            )
-            added_descriptor_nodes[_get_resource_identity(resource_def.resource)] = (
-                resource_node
             )
 
     # Second pass: Add edges
