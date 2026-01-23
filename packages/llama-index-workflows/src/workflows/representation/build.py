@@ -201,41 +201,13 @@ def get_workflow_representation(workflow: Workflow) -> WorkflowGraph:
     # Track resource dependency edges to avoid duplicates
     resource_edge_keys: set[tuple[str, str, str | None]] = set()
 
-    def _merge_resource_node(
-        existing: WorkflowResourceNode,
-        incoming: WorkflowResourceNode,
-    ) -> WorkflowResourceNode:
-        if existing.type_name is None and incoming.type_name is not None:
-            existing.type_name = incoming.type_name
-            existing.label = incoming.label
-        return existing
-
-    def _merge_resource_config_node(
-        existing: WorkflowResourceConfigNode,
-        incoming: WorkflowResourceConfigNode,
-    ) -> WorkflowResourceConfigNode:
-        if existing.type_name is None and incoming.type_name is not None:
-            existing.type_name = incoming.type_name
-            existing.label = incoming.label
-        if existing.config_schema is None and incoming.config_schema is not None:
-            existing.config_schema = incoming.config_schema
-        if existing.config_value is None and incoming.config_value is not None:
-            existing.config_value = incoming.config_value
-        return existing
-
     def _ensure_resource_config_node(
         resource_config: _ResourceConfig,
         type_annotation: type | None,
     ) -> WorkflowResourceConfigNode:
         config_key = (resource_config.config_file, resource_config.path_selector)
         if config_key in added_resource_config_nodes:
-            existing = added_resource_config_nodes[config_key]
-            if type_annotation is not None:
-                incoming = _create_resource_config_node(
-                    resource_config, type_annotation
-                )
-                _merge_resource_config_node(existing, incoming)
-            return existing
+            return added_resource_config_nodes[config_key]
         node = _create_resource_config_node(resource_config, type_annotation)
         nodes.append(node)
         added_resource_config_nodes[config_key] = node
@@ -248,17 +220,7 @@ def get_workflow_representation(workflow: Workflow) -> WorkflowGraph:
     ) -> WorkflowResourceNode:
         resource_id = _get_resource_identity(resource)
         if resource_id in added_resource_nodes:
-            existing = added_resource_nodes[resource_id]
-            if type_annotation is not None and existing.type_name is None:
-                incoming = _create_resource_node(
-                    ResourceDefinition(
-                        name=param_name,
-                        resource=resource,
-                        type_annotation=type_annotation,
-                    )
-                )
-                _merge_resource_node(existing, incoming)
-            return existing
+            return added_resource_nodes[resource_id]
         node = _create_resource_node(
             ResourceDefinition(
                 name=param_name,
