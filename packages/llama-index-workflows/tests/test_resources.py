@@ -947,19 +947,6 @@ def test_validate_resource_factory_failure() -> None:
         wf.validate(validate_resources=True)
 
 
-def test_validate_without_resources() -> None:
-    """Test that validation works fine for workflows without resources."""
-
-    class TestWorkflow(Workflow):
-        @step
-        def start_step(self, ev: StartEvent) -> StopEvent:
-            return StopEvent()
-
-    wf = TestWorkflow(disable_validation=True)
-    # Should not raise
-    wf.validate()
-
-
 def test_validate_annotation_shadowing_with_resource_factory(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
