@@ -17,7 +17,13 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ["3.9", "3.10", "3.11", "3.12", "3.13", "3.14"]
-        package: [llama-index-workflows, llama-index-utils-workflow, workflows-dev]
+        package:
+          [
+            llama-index-workflows,
+            llama-index-utils-workflow,
+            workflows-dev,
+            llama-index-integration-tests,
+          ]
         exclude:
           - package: workflows-dev
             python-version: "3.9"
@@ -36,6 +42,9 @@ jobs:
             package_dir: packages/llama-index-utils-workflow
           - package: workflows-dev
             package_dir: packages/workflows-dev
+          - package: llama-index-integration-tests
+            package_dir: packages/llama-index-integration-tests
+
     steps:
       - uses: actions/checkout@v4
         with:

@@ -150,3 +150,6 @@ openapi.json
 workflow_all_flows.mermaid
 node_modules/
 .cecli*
+
+# Cloned reference repositories
+llama_index/

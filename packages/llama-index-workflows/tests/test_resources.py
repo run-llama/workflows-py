@@ -35,13 +35,13 @@ class ThirdEvent(Event):
 
 class ChatMessage(BaseModel):
     @classmethod
-    def from_str(cls, role, content):  # type: ignore
+    def from_str(cls, role, content):  # type: ignore  # noqa: ANN001
         return mock.MagicMock(content=content)
 
 
 class Memory(mock.MagicMock):
     @classmethod
-    def from_defaults(cls, *args, **kwargs):  # type: ignore
+    def from_defaults(cls, *args, **kwargs):  # type: ignore  # noqa: ANN002, ANN003
         return mock.MagicMock()
 
 
@@ -204,7 +204,7 @@ def test_resource_config_path_selector_error(
 async def test_resource() -> None:
     m = Memory.from_defaults("user_id_123", token_limit=60000)
 
-    def get_memory(*args, **kwargs) -> Memory:  # type: ignore
+    def get_memory(*args, **kwargs) -> Memory:  # type: ignore  # noqa: ANN002, ANN003
         return m
 
     class TestWorkflow(Workflow):
@@ -229,7 +229,7 @@ async def test_resource() -> None:
 async def test_resource_async() -> None:
     m = Memory.from_defaults("user_id_123", token_limit=60000)
 
-    async def get_memory(*args, **kwargs) -> Memory:  # type: ignore
+    async def get_memory(*args, **kwargs) -> Memory:  # type: ignore  # noqa: ANN002, ANN003
         return m
 
     class TestWorkflow(Workflow):

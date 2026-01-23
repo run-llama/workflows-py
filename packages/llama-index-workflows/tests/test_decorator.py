@@ -11,7 +11,7 @@ from workflows.workflow import Workflow
 
 
 def test_decorated_config(workflow: Workflow) -> None:
-    def f(self, ev: Event) -> Event:  # type: ignore
+    def f(self, ev: Event) -> Event:  # type: ignore  # noqa: ANN001
         return Event()
 
     res = step(workflow=workflow.__class__)(f)

@@ -11,6 +11,7 @@ resolution-markers = [
 members = [
     "docs",
     "llama-agents-workspace",
+    "llama-index-integration-tests",
     "llama-index-utils-workflow",
     "llama-index-workflows",
     "workflows-dev",
@@ -1586,7 +1587,7 @@ dev = [
 
 [[package]]
 name = "llama-index-core"
-version = "0.14.6"
+version = "0.14.13"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
@@ -1624,9 +1625,9 @@ dependencies = [
     { name = "typing-inspect" },
     { name = "wrapt" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/c4/bf/d61ad5a43a4df7f02c24fbc92e23a94f2182a77a77d9fb51caa8327aab5a/llama_index_core-0.14.6.tar.gz", hash = "sha256:0f73ef0d42672cd213ea5e4cefc41cc621953c7d79a26a2b17ecb0bb56ffb4fe", size = 11578176, upload-time = "2025-10-26T03:00:39.416Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/74/54/d6043a088e5e9c1d62300db7ad0ef417c6b9a92f7b4a5cade066aeafdaca/llama_index_core-0.14.13.tar.gz", hash = "sha256:c3b30d20ae0407e5d0a1d35bb3376a98e242661ebfc22da754b5a3da1f8108c0", size = 11589074, upload-time = "2026-01-21T20:44:16.287Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/89/d5/1b7f543f3e4f9a889fbef5ab4b309375986f346d7c784c770562c679a1cf/llama_index_core-0.14.6-py3-none-any.whl", hash = "sha256:24d417a0c8cfa0a6019e96454c54b848b9e8054557e0867ff40a5eb8924fcd3f", size = 11919453, upload-time = "2025-10-26T03:00:36.71Z" },
+    { url = "https://files.pythonhosted.org/packages/76/59/9769f03f1cccadcc014b3b65c166de18999b51459a0f0a579d80f6c91d80/llama_index_core-0.14.13-py3-none-any.whl", hash = "sha256:392f0a5a09433e9dea786964ef5fe5ca2a2b10aee9f979a9507c19a14da2a20a", size = 11934761, upload-time = "2026-01-21T20:44:18.892Z" },
 ]
 
 [[package]]
@@ -1640,6 +1641,37 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/af/b9/a7a74de6d8aacf4be329329495983d78d96b1a6e69b6d9fcf4a233febd4b/llama_index_instrumentation-0.4.2.tar.gz", hash = "sha256:dc4957b64da0922060690e85a6be9698ac08e34e0f69e90b01364ddec4f3de7f", size = 46146, upload-time = "2025-10-13T20:44:48.85Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/40/54/df8063b0441242e250e03d1e31ebde5dffbe24e1af32b025cb1a4544150c/llama_index_instrumentation-0.4.2-py3-none-any.whl", hash = "sha256:b4989500e6454059ab3f3c4a193575d47ab1fadb730c2e8f2b962649ae88b70b", size = 15411, upload-time = "2025-10-13T20:44:47.685Z" },
+]
+
+[[package]]
+name = "llama-index-integration-tests"
+version = "0.1.0"
+source = { editable = "packages/llama-index-integration-tests" }
+dependencies = [
+    { name = "llama-index-core" },
+    { name = "llama-index-workflows" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "pytest-cov" },
+    { name = "pytest-timeout" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "llama-index-core", specifier = ">=0.14.13" },
+    { name = "llama-index-workflows", editable = "packages/llama-index-workflows" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pytest", specifier = ">=8.4.2" },
+    { name = "pytest-asyncio", specifier = ">=0.24.0" },
+    { name = "pytest-cov", specifier = ">=7.0.0" },
+    { name = "pytest-timeout", specifier = ">=2.3.1" },
 ]
 
 [[package]]
@@ -1677,7 +1709,7 @@ dev = [
 
 [[package]]
 name = "llama-index-workflows"
-version = "2.12.1"
+version = "2.12.2"
 source = { editable = "packages/llama-index-workflows" }
 dependencies = [
     { name = "eval-type-backport", marker = "python_full_version < '3.10'" },

@@ -1,0 +1,30 @@
+[build-system]
+requires = ["uv_build>=0.9.10,<0.10.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+  "pytest>=8.4.2",
+  "pytest-asyncio>=0.24.0",
+  "pytest-cov>=7.0.0",
+  "pytest-timeout>=2.3.1"
+]
+
+[project]
+name = "llama-index-integration-tests"
+version = "0.1.0"
+description = "Integration tests for llama-index-core workflow abstractions against the workflows package"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+  "llama-index-core>=0.14.13",
+  "llama-index-workflows"
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]
+
+[tool.uv.sources]
+llama-index-workflows = {workspace = true}

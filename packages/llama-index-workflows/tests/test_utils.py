@@ -26,7 +26,7 @@ from .conftest import (  # type: ignore[import]
 
 
 def test_validate_step_signature_of_method() -> None:
-    def f(self, ev: OneTestEvent) -> OneTestEvent:  # type: ignore
+    def f(self, ev: OneTestEvent) -> OneTestEvent:  # type: ignore  # noqa: ANN001
         return OneTestEvent()
 
     validate_step_signature(inspect_signature(f))
@@ -75,7 +75,7 @@ def test_validate_step_signature_no_params() -> None:
 
 
 def test_validate_step_signature_no_annotations() -> None:
-    def f(self, ev) -> None:  # type: ignore
+    def f(self, ev) -> None:  # type: ignore  # noqa: ANN001
         pass
 
     with pytest.raises(
@@ -86,7 +86,7 @@ def test_validate_step_signature_no_annotations() -> None:
 
 
 def test_validate_step_signature_wrong_annotations() -> None:
-    def f(self, ev: str) -> None:  # type: ignore
+    def f(self, ev: str) -> None:  # type: ignore  # noqa: ANN001
         pass
 
     with pytest.raises(
@@ -97,7 +97,7 @@ def test_validate_step_signature_wrong_annotations() -> None:
 
 
 def test_validate_step_signature_no_return_annotations() -> None:
-    def f(self, ev: OneTestEvent):  # type: ignore
+    def f(self, ev: OneTestEvent):  # type: ignore  # noqa: ANN001
         pass
 
     with pytest.raises(
@@ -108,7 +108,7 @@ def test_validate_step_signature_no_return_annotations() -> None:
 
 
 def test_validate_step_signature_no_events() -> None:
-    def f(self, ctx: Context) -> None:  # type: ignore
+    def f(self, ctx: Context) -> None:  # type: ignore  # noqa: ANN001
         pass
 
     with pytest.raises(
@@ -119,10 +119,10 @@ def test_validate_step_signature_no_events() -> None:
 
 
 def test_validate_step_signature_too_many_params() -> None:
-    def f1(self, ev: OneTestEvent, foo: OneTestEvent) -> None:  # type: ignore
+    def f1(self, ev: OneTestEvent, foo: OneTestEvent) -> None:  # type: ignore  # noqa: ANN001
         pass
 
-    def f2(ev: OneTestEvent, foo: OneTestEvent) -> None:  # type: ignore
+    def f2(ev: OneTestEvent, foo: OneTestEvent) -> None:  # type: ignore  # noqa: ANN001
         pass
 
     with pytest.raises(
@@ -172,7 +172,7 @@ def test_get_param_types() -> None:
 
 
 def test_get_param_types_no_annotations() -> None:
-    def f(foo) -> None:  # type: ignore
+    def f(foo) -> None:  # type: ignore  # noqa: ANN001
         pass
 
     sig = inspect.signature(f)
