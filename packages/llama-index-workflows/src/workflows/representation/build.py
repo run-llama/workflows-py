@@ -36,13 +36,14 @@ def _get_resource_identity(resource: ResourceDescriptor) -> int:
     """Get a unique identifier for resource deduplication.
 
     For _Resource, uses the factory function identity.
-    For _ResourceConfig, uses the object identity.
+    For _ResourceConfig, uses (config_file, path_selector) hash.
     """
     if isinstance(resource, _Resource):
         return id(resource._factory)
     if isinstance(resource, _ResourceConfig):
-        # For _ResourceConfig, use the object id or a hash of config file + path_selector
-        return id(resource)
+        # Use hash of config_file + path_selector for deduplication
+        hash_input = f"{resource.config_file}:{resource.path_selector or ''}"
+        return hash(hash_input)
     return id(resource)
 
 
