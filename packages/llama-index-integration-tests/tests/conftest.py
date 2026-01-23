@@ -1,5 +1,7 @@
 """Shared fixtures for llama-index workflow integration tests."""
 
+from __future__ import annotations
+
 from typing import Any, Callable, List, Protocol, Union
 
 import pytest

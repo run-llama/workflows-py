@@ -1,5 +1,7 @@
 """Test helpers for llama-index workflow integration tests."""
 
+from __future__ import annotations
+
 from typing import Callable, List
 
 from llama_index.core.base.llms.types import (
