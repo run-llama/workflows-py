@@ -60,3 +60,117 @@ defines a resource of type `Memory` that will be provided by the `get_memory()` 
 Resources are shared among steps of a workflow, and the `Resource()` wrapper will invoke the factory function only once.
 In case this is not the desired behavior, passing `cache=False` to `Resource()` will inject different resource objects
 in different steps, invoking the factory function as many times.
+
+## Config-backed Resources
+
+For configuration data stored in JSON files, use `ResourceConfig` instead of `Resource`. It automatically loads a JSON file and parses it into a Pydantic model.
+
+```python
+from typing import Annotated
+from pydantic import BaseModel
+from workflows import Workflow, step
+from workflows.events import StartEvent, StopEvent
+from workflows.resource import ResourceConfig
+
+
+class ClassifierConfig(BaseModel):
+    categories: list[str]
+    threshold: float
+
+
+class DocumentClassifier(Workflow):
+    @step
+    async def classify(
+        self,
+        ev: StartEvent,
+        config: Annotated[
+            ClassifierConfig,
+            ResourceConfig(config_file="classifier.json"),
+        ],
+    ) -> StopEvent:
+        # config is loaded from classifier.json and validated as ClassifierConfig
+        return StopEvent(result=f"Using threshold: {config.threshold}")
+```
+
+### Parameters
+
+- `config_file`: Path to the JSON file containing the configuration.
+- `path_selector`: Optional JSON path to extract a nested value (e.g., `"settings.classifier"`).
+- `label`: Optional display name for workflow visualizations.
+- `description`: Optional description for workflow visualizations.
+
+### Selecting nested values
+
+If your JSON file contains multiple configs, use `path_selector` to extract a specific section:
+
+```python
+# Given config.json: {"classifier": {"categories": [...], "threshold": 0.8}, "other": {...}}
+config: Annotated[
+    ClassifierConfig,
+    ResourceConfig(config_file="config.json", path_selector="classifier"),
+]
+```
+
+### Labels and descriptions in visualizations
+
+When viewing workflows in the debugger or other visualization tools, `label` and `description` help identify configs:
+
+```python
+config: Annotated[
+    ClassifierConfig,
+    ResourceConfig(
+        config_file="classifier.json",
+        label="Document Classifier",
+        description="Categories and confidence threshold for classification",
+    ),
+]
+```
+
+If no label is provided, the Pydantic model's type name is used (e.g., "ClassifierConfig").
+
+## Chaining Resources
+
+Resources and ResourceConfigs can be chained together. A `Resource` factory function can declare dependencies on other resources using the same `Annotated` pattern:
+
+```python
+from typing import Annotated
+from pydantic import BaseModel
+from workflows import Workflow, step
+from workflows.events import StartEvent, StopEvent
+from workflows.resource import Resource, ResourceConfig
+from llama_index.llms.anthropic import Anthropic
+
+
+class LLMConfig(BaseModel):
+    model: str
+    temperature: float
+    max_tokens: int
+
+
+def get_llm(
+    config: Annotated[LLMConfig, ResourceConfig(config_file="llm.json")],
+) -> Anthropic:
+    return Anthropic(
+        model=config.model,
+        temperature=config.temperature,
+        max_tokens=config.max_tokens,
+    )
+
+
+class MyWorkflow(Workflow):
+    @step
+    async def generate(
+        self,
+        ev: StartEvent,
+        llm: Annotated[Anthropic, Resource(get_llm)],
+    ) -> StopEvent:
+        response = await llm.acomplete(ev.input)
+        return StopEvent(result=response.text)
+```
+
+The dependency chain is resolved automatically. In this example, when the workflow runs:
+1. `llm.json` is loaded and parsed into `LLMConfig`
+2. `get_llm` is called with that config to create the LLM client
+3. The resulting client is passed to the step
+
+This pattern works with any combination of `Resource` and `ResourceConfig` dependencies.
