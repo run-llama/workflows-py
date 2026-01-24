@@ -30,7 +30,11 @@ from .events import (
     StopEvent,
 )
 from .handler import WorkflowHandler
-from .resource import ResourceManager
+from .resource import (
+    ResourceDescriptor,
+    ResourceManager,
+    _ResourceConfig,
+)
 from .types import RunResultT
 from .utils import get_steps_from_class, get_steps_from_instance
 
@@ -359,16 +363,89 @@ class Workflow(metaclass=WorkflowMeta):
             workflow=self, start_event=start_event_instance, semaphore=self._sem
         )
 
-    def validate(self) -> bool:
+    def _validate_resource_configs(self) -> list[str]:
+        """Validate all resource configs (including nested ones) by loading them."""
+        errors: list[str] = []
+        seen: set[str] = set()
+
+        # Stack-based traversal of all resources and their dependencies
+        stack: list[ResourceDescriptor] = []
+        for step_func in self._get_steps().values():
+            for res_def in step_func._step_config.resources:
+                res_def.resource.set_type_annotation(res_def.type_annotation)
+                stack.append(res_def.resource)
+
+        while stack:
+            resource = stack.pop()
+            if resource.name in seen:
+                continue
+            seen.add(resource.name)
+
+            # Add dependencies to stack
+            for _name, dep, type_ann in resource.get_dependencies():
+                dep.set_type_annotation(type_ann)
+                stack.append(dep)
+
+            # Validate if it's a config
+            if isinstance(resource, _ResourceConfig):
+                try:
+                    resource.call()
+                except Exception as e:
+                    errors.append(f"Resource config '{resource.name}': {e}")
+
+        return errors
+
+    async def _validate_resources(self) -> list[str]:
+        """Validate all resources by resolving them (catches circular deps)."""
+        errors: list[str] = []
+        for step_func in self._get_steps().values():
+            for res_def in step_func._step_config.resources:
+                res_def.resource.set_type_annotation(res_def.type_annotation)
+                try:
+                    await self._resource_manager.get(res_def.resource)
+                except Exception as e:
+                    errors.append(f"Resource '{res_def.resource.name}': {e}")
+        return errors
+
+    def validate(
+        self,
+        *,
+        validate_resource_configs: bool = True,
+        validate_resources: bool = False,
+    ) -> bool:
         """
         Validate the workflow to ensure it's well-formed.
 
-        Returns True if the workflow uses human-in-the-loop, False otherwise.
-        """
-        return self._validate()
+        This method validates the event graph and optionally validates resources:
+        - Resource configs (JSON files with Pydantic validation) are validated by default
+        - Resource factories are not validated by default (may require env vars)
+        - Circular resource dependencies are caught when validate_resources=True
 
-    def _validate(self) -> bool:
-        if self._disable_validation:
+        Args:
+            validate_resource_configs: If True (default), validate that resource
+                config files exist and contain valid data for their Pydantic models.
+            validate_resources: If False (default), skip resolving resource factories
+                during validation. Set to True to also validate that resource
+                factories can be resolved and detect circular dependencies
+                (may require environment variables or external connections).
+
+        Returns:
+            True if the workflow uses human-in-the-loop, False otherwise.
+        """
+        return self._validate(
+            validate_resource_configs=validate_resource_configs,
+            validate_resources=validate_resources,
+            force=True,  # Explicit validate() call should always run
+        )
+
+    def _validate(
+        self,
+        *,
+        validate_resource_configs: bool = True,
+        validate_resources: bool = False,
+        force: bool = False,
+    ) -> bool:
+        if self._disable_validation and not force:
             return False
 
         # Ensure at least one step is configured before inspecting events
@@ -456,6 +533,27 @@ class Workflow(metaclass=WorkflowMeta):
             raise WorkflowValidationError(
                 f"The following events are produced but never consumed: {names}"
             )
+
+        # Resource validation
+        if validate_resource_configs:
+            if errors := self._validate_resource_configs():
+                raise WorkflowValidationError(
+                    "Resource config validation failed:\n"
+                    + "\n".join(f"  - {e}" for e in errors)
+                )
+
+        if validate_resources:
+            # Python 3.9 compat: asyncio.run() closes the loop, must restore it
+            errors = asyncio.run(self._validate_resources())
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                asyncio.set_event_loop(asyncio.new_event_loop())
+            if errors:
+                raise WorkflowValidationError(
+                    "Resource validation failed:\n"
+                    + "\n".join(f"  - {e}" for e in errors)
+                )
 
         # Check if the workflow uses human-in-the-loop
         return (
