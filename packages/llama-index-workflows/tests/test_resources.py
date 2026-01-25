@@ -131,11 +131,9 @@ def test_resource_config_init(
     retval = ResourceConfig(config_file="config.json")
     assert isinstance(retval, _ResourceConfig)
     assert retval.path_selector is None
-    # config_file is resolved to absolute path when accessed
     expected_path = str(tmp_path / "config.json")
     assert retval.config_file == expected_path
     assert retval.cls_factory is None
-    # name uses original path (not resolved) to avoid triggering file resolution
     assert retval.name == "config.json"
 
     # modify path selector, modify name
@@ -171,7 +169,6 @@ def test_resource_config_path_selector(
     with open("config.json", "w") as f:
         json.dump(data, f)
 
-    # name uses original path (not resolved) to avoid triggering file resolution
     resource = ResourceConfig(config_file="config.json", path_selector="memory")
     assert resource.name == "config.json.memory"
     resource.cls_factory = ChatMessages
@@ -881,7 +878,6 @@ def test_validate_nested_resource_config_invalid(
             return StopEvent()
 
     wf = TestWorkflow(disable_validation=True)
-    # Error should include step name, parameter name, and resource chain
     with pytest.raises(
         Exception,
         match=r"(?s)step 'start_step', parameter 'operator'.*get_file_operator.*config\.json.*permission_mode",

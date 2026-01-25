@@ -204,14 +204,12 @@ class _ResourceConfig(Generic[B]):
         label: str | None = None,
         description: str | None = None,
     ) -> None:
-        # Validate file extension at declaration time (cheap check)
         config_path = Path(config_file)
         if config_path.suffix != ".json":
             raise ValueError(
                 "Only JSON files can be used to load Pydantic-based resources."
             )
-        # Store original path - we'll resolve and validate at call time
-        # This allows ResourceConfig to be declared before the file exists
+        # Resolved lazily in config_file property
         self._original_config_file = config_file
         self._resolved_config_file = None
         self.path_selector = path_selector
@@ -221,11 +219,7 @@ class _ResourceConfig(Generic[B]):
 
     @property
     def config_file(self) -> str:
-        """Return the resolved absolute path to the config file.
-
-        The path is resolved and validated on first access, allowing the file
-        to be created after the ResourceConfig is declared.
-        """
+        """Return the resolved absolute path, validated on first access."""
         if self._resolved_config_file is None:
             config_path = Path(self._original_config_file)
             if not config_path.is_file():
@@ -235,7 +229,6 @@ class _ResourceConfig(Generic[B]):
 
     @property
     def name(self) -> str:
-        # Use original path for name to avoid triggering file resolution
         base_name = self._original_config_file
         if self.path_selector is not None:
             return base_name + "." + self.path_selector
@@ -247,7 +240,6 @@ class _ResourceConfig(Generic[B]):
         return True
 
     def call(self) -> B:
-        # Accessing config_file property will resolve and validate the path
         sel_data = _get_resource_config_data(
             config_file=self.config_file, path_selector=self.path_selector
         )
