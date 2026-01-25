@@ -189,7 +189,8 @@ class _ResourceConfig(Generic[B]):
     Internal wrapper for a pydantic-based resource whose configuration can be read from a JSON file.
     """
 
-    config_file: str
+    _original_config_file: str
+    _resolved_config_file: str | None
     path_selector: str | None
     cls_factory: Type[B] | None
     label: str | None
@@ -204,24 +205,34 @@ class _ResourceConfig(Generic[B]):
         description: str | None = None,
     ) -> None:
         config_path = Path(config_file)
-        if not config_path.is_file():
-            raise FileNotFoundError(f"No such file: {config_file}")
         if config_path.suffix != ".json":
             raise ValueError(
                 "Only JSON files can be used to load Pydantic-based resources."
             )
-        # Store absolute path to ensure cache keys are unique across working directories
-        self.config_file = str(config_path.resolve())
+        # Resolved lazily in config_file property
+        self._original_config_file = config_file
+        self._resolved_config_file = None
         self.path_selector = path_selector
         self.cls_factory = cls_factory
         self.label = label
         self.description = description
 
     @property
+    def config_file(self) -> str:
+        """Return the resolved absolute path, validated on first access."""
+        if self._resolved_config_file is None:
+            config_path = Path(self._original_config_file)
+            if not config_path.is_file():
+                raise FileNotFoundError(f"No such file: {self._original_config_file}")
+            self._resolved_config_file = str(config_path.resolve())
+        return self._resolved_config_file
+
+    @property
     def name(self) -> str:
+        base_name = self._original_config_file
         if self.path_selector is not None:
-            return self.config_file + "." + self.path_selector
-        return self.config_file
+            return base_name + "." + self.path_selector
+        return base_name
 
     @property
     def cache(self) -> bool:

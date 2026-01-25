@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import dataclass, field
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -369,29 +370,37 @@ class Workflow(metaclass=WorkflowMeta):
         seen: set[str] = set()
 
         # Stack-based traversal of all resources and their dependencies
-        stack: list[ResourceDescriptor] = []
+        stack: list[_ResourceValidationContext] = []
         for step_func in self._get_steps().values():
+            step_name = step_func.__name__
             for res_def in step_func._step_config.resources:
                 res_def.resource.set_type_annotation(res_def.type_annotation)
-                stack.append(res_def.resource)
+                stack.append(
+                    _ResourceValidationContext(
+                        resource=res_def.resource,
+                        step_name=step_name,
+                        param_name=res_def.name,
+                        resource_chain=[res_def.resource.name],
+                    )
+                )
 
         while stack:
-            resource = stack.pop()
-            if resource.name in seen:
+            ctx = stack.pop()
+            if ctx.resource.name in seen:
                 continue
-            seen.add(resource.name)
+            seen.add(ctx.resource.name)
 
             # Add dependencies to stack
-            for _name, dep, type_ann in resource.get_dependencies():
+            for _dep_param, dep, type_ann in ctx.resource.get_dependencies():
                 dep.set_type_annotation(type_ann)
-                stack.append(dep)
+                stack.append(ctx.with_dependency(dep))
 
             # Validate if it's a config
-            if isinstance(resource, _ResourceConfig):
+            if isinstance(ctx.resource, _ResourceConfig):
                 try:
-                    resource.call()
+                    ctx.resource.call()
                 except Exception as e:
-                    errors.append(f"Resource config '{resource.name}': {e}")
+                    errors.append(f"In {ctx.format_location()}: {e}")
 
         return errors
 
@@ -399,12 +408,14 @@ class Workflow(metaclass=WorkflowMeta):
         """Validate all resources by resolving them (catches circular deps)."""
         errors: list[str] = []
         for step_func in self._get_steps().values():
+            step_name = step_func.__name__
             for res_def in step_func._step_config.resources:
                 res_def.resource.set_type_annotation(res_def.type_annotation)
                 try:
                     await self._resource_manager.get(res_def.resource)
                 except Exception as e:
-                    errors.append(f"Resource '{res_def.resource.name}': {e}")
+                    location = f"step '{step_name}', parameter '{res_def.name}'"
+                    errors.append(f"In {location}: {e}")
         return errors
 
     def validate(
@@ -559,4 +570,32 @@ class Workflow(metaclass=WorkflowMeta):
         return (
             InputRequiredEvent in produced_events
             or HumanResponseEvent in consumed_events
+        )
+
+
+@dataclass
+class _ResourceValidationContext:
+    """Tracks context for resource validation to provide clear error messages."""
+
+    resource: ResourceDescriptor
+    step_name: str
+    param_name: str
+    resource_chain: list[str] = field(default_factory=list)
+
+    def format_location(self) -> str:
+        """Format the location string for error messages."""
+        if len(self.resource_chain) > 1:
+            chain_str = " -> ".join(self.resource_chain)
+            return (
+                f"step '{self.step_name}', parameter '{self.param_name}' ({chain_str})"
+            )
+        return f"step '{self.step_name}', parameter '{self.param_name}'"
+
+    def with_dependency(self, dep: ResourceDescriptor) -> _ResourceValidationContext:
+        """Create a new context for a dependency resource."""
+        return _ResourceValidationContext(
+            resource=dep,
+            step_name=self.step_name,
+            param_name=self.param_name,
+            resource_chain=[*self.resource_chain, dep.name],
         )

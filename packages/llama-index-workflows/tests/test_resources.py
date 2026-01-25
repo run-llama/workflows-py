@@ -131,15 +131,14 @@ def test_resource_config_init(
     retval = ResourceConfig(config_file="config.json")
     assert isinstance(retval, _ResourceConfig)
     assert retval.path_selector is None
-    # config_file is resolved to absolute path
     expected_path = str(tmp_path / "config.json")
     assert retval.config_file == expected_path
     assert retval.cls_factory is None
-    assert retval.name == expected_path
+    assert retval.name == "config.json"
 
     # modify path selector, modify name
     retval.path_selector = "hello.world"
-    assert retval.name == f"{expected_path}.hello.world"
+    assert retval.name == "config.json.hello.world"
 
     retval.path_selector = None
 
@@ -170,15 +169,14 @@ def test_resource_config_path_selector(
     with open("config.json", "w") as f:
         json.dump(data, f)
 
-    expected_path = str(tmp_path / "config.json")
     resource = ResourceConfig(config_file="config.json", path_selector="memory")
-    assert resource.name == f"{expected_path}.memory"
+    assert resource.name == "config.json.memory"
     resource.cls_factory = ChatMessages
     value = resource.call()
     assert isinstance(value, ChatMessages)
     assert value.messages == ["hello"]
     resource.path_selector = "core.fs"
-    assert resource.name == f"{expected_path}.core.fs"
+    assert resource.name == "config.json.core.fs"
     resource.cls_factory = Fs
     value = resource.call()
     assert isinstance(value, Fs)
@@ -790,7 +788,10 @@ def test_validate_resource_config_invalid_data(
             return StopEvent()
 
     wf = TestWorkflow(disable_validation=True)
-    with pytest.raises(Exception, match=r"Resource config validation failed"):
+    with pytest.raises(
+        Exception,
+        match=r"(?s)step 'start_step', parameter 'config'.*permission_mode",
+    ):
         wf.validate(validate_resource_configs=True, validate_resources=False)
 
 
@@ -877,7 +878,10 @@ def test_validate_nested_resource_config_invalid(
             return StopEvent()
 
     wf = TestWorkflow(disable_validation=True)
-    with pytest.raises(Exception, match=r"Resource config validation failed"):
+    with pytest.raises(
+        Exception,
+        match=r"(?s)step 'start_step', parameter 'operator'.*get_file_operator.*config\.json.*permission_mode",
+    ):
         wf.validate(validate_resource_configs=True, validate_resources=False)
 
 
@@ -943,7 +947,9 @@ def test_validate_resource_factory_failure() -> None:
             return StopEvent()
 
     wf = TestWorkflow(disable_validation=True)
-    with pytest.raises(Exception, match=r"Resource validation failed"):
+    with pytest.raises(
+        Exception, match=r"step 'start_step', parameter 'value'.*Factory failed"
+    ):
         wf.validate(validate_resources=True)
 
 
@@ -973,3 +979,70 @@ def test_validate_annotation_shadowing_with_resource_factory(
     wf = TestWorkflow(disable_validation=True)
     # Should validate the nested ResourceConfig in the factory
     wf.validate(validate_resource_configs=True)
+
+
+def test_resource_config_deferred_file_check(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test that ResourceConfig can be declared before the config file exists."""
+    monkeypatch.chdir(tmp_path)
+
+    # Declare ResourceConfig BEFORE the file exists - this should NOT raise
+    resource = ResourceConfig(config_file="config.json")
+    assert resource.name == "config.json"
+
+    # Accessing config_file property should raise because file doesn't exist yet
+    with pytest.raises(FileNotFoundError, match="No such file: config.json"):
+        _ = resource.config_file
+
+    # calling should also raise
+    resource.cls_factory = ChatMessages
+    with pytest.raises(FileNotFoundError, match="No such file: config.json"):
+        resource.call()
+
+    # Now create the file
+    data = {"messages": ["hello"]}
+    with open("config.json", "w") as f:
+        json.dump(data, f)
+
+    # Now it should work
+    result = resource.call()
+    assert isinstance(result, ChatMessages)
+    assert result.messages == ["hello"]
+
+
+@pytest.mark.asyncio
+async def test_resource_config_deferred_in_workflow(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test that workflow can be defined before config file exists."""
+    monkeypatch.chdir(tmp_path)
+
+    # Define workflow with ResourceConfig pointing to non-existent file
+    # This should NOT raise at definition time
+    class TestWorkflow(Workflow):
+        @step
+        def start_step(
+            self,
+            ev: StartEvent,
+            config: Annotated[FileData, ResourceConfig(config_file="config.json")],
+        ) -> StopEvent:
+            assert config.file == "test.txt"
+            return StopEvent()
+
+    # Workflow can be instantiated even though file doesn't exist
+    wf = TestWorkflow(disable_validation=True)
+
+    # Running should fail because file doesn't exist
+    with pytest.raises(FileNotFoundError, match="No such file: config.json"):
+        await wf.run()
+
+    # Now create the file
+    data = {"file": "test.txt", "permission_mode": "r"}
+    with open("config.json", "w") as f:
+        json.dump(data, f)
+
+    # Now it should work
+    await wf.run()
