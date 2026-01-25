@@ -369,29 +369,42 @@ class Workflow(metaclass=WorkflowMeta):
         seen: set[str] = set()
 
         # Stack-based traversal of all resources and their dependencies
-        stack: list[ResourceDescriptor] = []
+        # Each item is (resource, step_name, param_name, resource_path)
+        # resource_path tracks the chain of resources for nested configs
+        stack: list[tuple[ResourceDescriptor, str, str, list[str]]] = []
         for step_func in self._get_steps().values():
+            step_name = step_func.__name__
             for res_def in step_func._step_config.resources:
                 res_def.resource.set_type_annotation(res_def.type_annotation)
-                stack.append(res_def.resource)
+                stack.append(
+                    (res_def.resource, step_name, res_def.name, [res_def.resource.name])
+                )
 
         while stack:
-            resource = stack.pop()
+            resource, step_name, param_name, resource_path = stack.pop()
             if resource.name in seen:
                 continue
             seen.add(resource.name)
 
             # Add dependencies to stack
-            for _name, dep, type_ann in resource.get_dependencies():
+            for dep_param, dep, type_ann in resource.get_dependencies():
                 dep.set_type_annotation(type_ann)
-                stack.append(dep)
+                stack.append((dep, step_name, param_name, [*resource_path, dep.name]))
 
             # Validate if it's a config
             if isinstance(resource, _ResourceConfig):
                 try:
                     resource.call()
                 except Exception as e:
-                    errors.append(f"Resource config '{resource.name}': {e}")
+                    # Format: step_name.param_name -> resource_chain: error
+                    if len(resource_path) > 1:
+                        path_str = " -> ".join(resource_path)
+                        location = (
+                            f"step '{step_name}', parameter '{param_name}' ({path_str})"
+                        )
+                    else:
+                        location = f"step '{step_name}', parameter '{param_name}'"
+                    errors.append(f"In {location}: {e}")
 
         return errors
 
@@ -399,12 +412,14 @@ class Workflow(metaclass=WorkflowMeta):
         """Validate all resources by resolving them (catches circular deps)."""
         errors: list[str] = []
         for step_func in self._get_steps().values():
+            step_name = step_func.__name__
             for res_def in step_func._step_config.resources:
                 res_def.resource.set_type_annotation(res_def.type_annotation)
                 try:
                     await self._resource_manager.get(res_def.resource)
                 except Exception as e:
-                    errors.append(f"Resource '{res_def.resource.name}': {e}")
+                    location = f"step '{step_name}', parameter '{res_def.name}'"
+                    errors.append(f"In {location}: {e}")
         return errors
 
     def validate(

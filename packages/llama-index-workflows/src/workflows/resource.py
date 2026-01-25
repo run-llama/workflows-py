@@ -189,7 +189,8 @@ class _ResourceConfig(Generic[B]):
     Internal wrapper for a pydantic-based resource whose configuration can be read from a JSON file.
     """
 
-    config_file: str
+    _original_config_file: str
+    _resolved_config_file: str | None
     path_selector: str | None
     cls_factory: Type[B] | None
     label: str | None
@@ -203,25 +204,42 @@ class _ResourceConfig(Generic[B]):
         label: str | None = None,
         description: str | None = None,
     ) -> None:
+        # Validate file extension at declaration time (cheap check)
         config_path = Path(config_file)
-        if not config_path.is_file():
-            raise FileNotFoundError(f"No such file: {config_file}")
         if config_path.suffix != ".json":
             raise ValueError(
                 "Only JSON files can be used to load Pydantic-based resources."
             )
-        # Store absolute path to ensure cache keys are unique across working directories
-        self.config_file = str(config_path.resolve())
+        # Store original path - we'll resolve and validate at call time
+        # This allows ResourceConfig to be declared before the file exists
+        self._original_config_file = config_file
+        self._resolved_config_file = None
         self.path_selector = path_selector
         self.cls_factory = cls_factory
         self.label = label
         self.description = description
 
     @property
+    def config_file(self) -> str:
+        """Return the resolved absolute path to the config file.
+
+        The path is resolved and validated on first access, allowing the file
+        to be created after the ResourceConfig is declared.
+        """
+        if self._resolved_config_file is None:
+            config_path = Path(self._original_config_file)
+            if not config_path.is_file():
+                raise FileNotFoundError(f"No such file: {self._original_config_file}")
+            self._resolved_config_file = str(config_path.resolve())
+        return self._resolved_config_file
+
+    @property
     def name(self) -> str:
+        # Use original path for name to avoid triggering file resolution
+        base_name = self._original_config_file
         if self.path_selector is not None:
-            return self.config_file + "." + self.path_selector
-        return self.config_file
+            return base_name + "." + self.path_selector
+        return base_name
 
     @property
     def cache(self) -> bool:
@@ -229,6 +247,7 @@ class _ResourceConfig(Generic[B]):
         return True
 
     def call(self) -> B:
+        # Accessing config_file property will resolve and validate the path
         sel_data = _get_resource_config_data(
             config_file=self.config_file, path_selector=self.path_selector
         )
