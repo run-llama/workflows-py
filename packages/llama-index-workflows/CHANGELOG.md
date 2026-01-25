@@ -1,5 +1,12 @@
 # llama-index-workflows
 
+## 2.13.1
+
+### Patch Changes
+
+- e958ed2: fix: ResourceConfig was loading config file eagerly
+- ebaf212: Add resource validation to workflow.validate()
+
 ## 2.13.0
 
 ### Minor Changes
