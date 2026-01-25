@@ -1,7 +1,7 @@
 ---
 title: Click-to-Deploy from LlamaCloud
 sidebar:
-  order: 3
+  order: 20
 ---
 
 :::caution
