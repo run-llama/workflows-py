@@ -500,26 +500,55 @@ def _extract_execution_graph(
 
 
 def _get_workflow_classes_from_step(method_callable: Callable | Any) -> list[str]:
-    # Guard against None
+    """
+    Finds classes instantiated within a method that inherit from Workflow.
+    Resolves names against the method's module namespace.
+    """
     if method_callable is None:
         return []
 
     workflow_classes = []
     try:
+        # Get source and module context
         source = inspect.getsource(method_callable)
         clean_source = textwrap.dedent(source)
         tree = ast.parse(clean_source)
+        
+        # Get the module where the step is defined to look up names
+        module_name = getattr(method_callable, "__module__", None)
+        module = sys.modules.get(module_name)
+        if not module:
+            return []
 
         for node in ast.walk(tree):
+            # We are looking for instantiations: e.g., MySubWorkflow()
             if isinstance(node, ast.Call):
-                # Check if calling a class with 'Workflow' in the name
-                if isinstance(node.func, ast.Name) and "Workflow" in node.func.id:
-                    if node.func.id not in workflow_classes:
-                        workflow_classes.append(node.func.id)
-    except Exception:
-        return []
-    return workflow_classes
+                # Handle direct calls: Name()
+                if isinstance(node.func, ast.Name):
+                    class_name = node.func.id
+                # Handle attribute calls: module.Name()
+                elif isinstance(node.func, ast.Attribute):
+                    class_name = node.func.attr
+                else:
+                    continue
 
+                # Look up the name in the module's namespace
+                obj = getattr(module, class_name, None)
+
+                # Robust check: Is it a class, and is it a Workflow subclass?
+                if (
+                    inspect.isclass(obj) and 
+                    issubclass(obj, Workflow) and 
+                    obj is not Workflow  # Don't include the base class itself
+                ):
+                    if class_name not in workflow_classes:
+                        workflow_classes.append(class_name)
+
+    except Exception:
+        # Fallback to empty list if source cannot be parsed or objects resolved
+        return []
+        
+    return workflow_classes
 
     
 def _get_nested_workflow_representation(
