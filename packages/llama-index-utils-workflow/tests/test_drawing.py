@@ -4,7 +4,6 @@ import pytest
 from llama_index.utils.workflow import (
     draw_all_possible_flows,
     draw_all_possible_flows_mermaid,
-    draw_all_possible_flows_nested_mermaid,
     draw_most_recent_execution,
     draw_most_recent_execution_mermaid,
 )
@@ -456,9 +455,13 @@ def test_resource_node_deduplication_in_rendering(
     )
 
 
-def test_draw_all_possible_flows_nested_mermaid(nested_workflow: Workflow) -> None:
+def test_draw_all_possible_flows_with_child_workflow_mermaid(
+    nested_workflow: Workflow,
+) -> None:
     """Test Mermaid diagram generation for nested workflows."""
-    result = draw_all_possible_flows_nested_mermaid(nested_workflow)
+    result = draw_all_possible_flows_mermaid(
+        nested_workflow, include_child_workflows=True
+    )
 
     # Basic checks
     assert isinstance(result, str)
@@ -473,14 +476,14 @@ def test_draw_all_possible_flows_nested_mermaid(nested_workflow: Workflow) -> No
     assert "event_parent_start_ChildWorkflowA_StartEvent" in result
     assert "event_parent_start_ChildWorkflowA_StopEvent" in result
 
-    # Check for linking edges
+    # Check for linking edges using the correct labels from the implementation
     # Parent step -> child start
     assert (
-        'step_parent_start -->|"nested workflow: ChildWorkflowA"| event_parent_start_ChildWorkflowA_StartEvent'
+        'step_parent_start -->|"calls: ChildWorkflowA"| event_parent_start_ChildWorkflowA_StartEvent'
         in result
     )
     # Child stop -> parent step
     assert (
-        'event_parent_start_ChildWorkflowA_StopEvent -->|"nested workflow return: ChildWorkflowA"| step_parent_start'
+        'event_parent_start_ChildWorkflowA_StopEvent -->|"returns: ChildWorkflowA"| step_parent_start'
         in result
     )

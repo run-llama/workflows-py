@@ -513,9 +513,14 @@ def _get_workflow_classes_from_step(method_callable: Callable | Any) -> list[str
         source = inspect.getsource(method_callable)
         clean_source = textwrap.dedent(source)
         tree = ast.parse(clean_source)
-        
+
         # Get the module where the step is defined to look up names
         module_name = getattr(method_callable, "__module__", None)
+
+        # Add this guard:
+        if not isinstance(module_name, str):
+            return []
+
         module = sys.modules.get(module_name)
         if not module:
             return []
@@ -537,9 +542,9 @@ def _get_workflow_classes_from_step(method_callable: Callable | Any) -> list[str
 
                 # Robust check: Is it a class, and is it a Workflow subclass?
                 if (
-                    inspect.isclass(obj) and 
-                    issubclass(obj, Workflow) and 
-                    obj is not Workflow  # Don't include the base class itself
+                    inspect.isclass(obj)
+                    and issubclass(obj, Workflow)
+                    and obj is not Workflow  # Don't include the base class itself
                 ):
                     if class_name not in workflow_classes:
                         workflow_classes.append(class_name)
@@ -547,27 +552,29 @@ def _get_workflow_classes_from_step(method_callable: Callable | Any) -> list[str
     except Exception:
         # Fallback to empty list if source cannot be parsed or objects resolved
         return []
-        
+
     return workflow_classes
 
-    
+
 def _get_nested_workflow_representation(
-    workflow: Workflow, include_child_workflows: bool = True
+    workflow: Workflow, include_child_workflows: bool = False
 ) -> WorkflowGraph:
     """
     Introspects a workflow and builds a unified WorkflowGraph.
-    
-    If include_child_workflows is True, it performs a 1-level deep scan of 
-    step source code to find instantiated sub-workflows and merges their 
+
+    If include_child_workflows is True, it performs a 1-level deep scan of
+    step source code to find instantiated sub-workflows and merges their
     graphs into the parent graph.
     """
     parent_graph = _get_workflow_representation(workflow)
     if not include_child_workflows:
         return parent_graph
 
-    # Define the helper AFTER parent_graph is created so it can 
+    # Define the helper AFTER parent_graph is created so it can
     # modify parent_graph directly via closure (i.e. parent_graph is now in scope for this helper function.
-    def _merge_subgraph_into_parent(child_graph: WorkflowGraph, parent_step_id: str, class_name: str):
+    def _merge_subgraph_into_parent(
+        child_graph: WorkflowGraph, parent_step_id: str, class_name: str
+    ) -> None:
         """Internal helper to handle ID prefixing and edge stitching."""
         prefix = f"{parent_step_id}_{class_name}_"
 
@@ -594,8 +601,12 @@ def _get_nested_workflow_representation(
 
         # 3. Stitch: Parent Step -> Child Start
         child_start_id = next(
-            (n.id for n in child_graph.nodes if getattr(n, "event_type", None) == "StartEvent"),
-            None
+            (
+                n.id
+                for n in child_graph.nodes
+                if getattr(n, "event_type", None) == "StartEvent"
+            ),
+            None,
         )
         if child_start_id:
             parent_graph.edges.append(
@@ -608,8 +619,12 @@ def _get_nested_workflow_representation(
 
         # 4. Stitch: Child Stop -> Parent Step
         child_stop_id = next(
-            (n.id for n in child_graph.nodes if getattr(n, "event_type", None) == "StopEvent"),
-            None
+            (
+                n.id
+                for n in child_graph.nodes
+                if getattr(n, "event_type", None) == "StopEvent"
+            ),
+            None,
         )
         if child_stop_id:
             parent_graph.edges.append(
@@ -637,9 +652,11 @@ def _get_nested_workflow_representation(
 
                     child_instance = wf_class()
                     child_graph = _get_workflow_representation(child_instance)
-                    
+
                     # Executes the merge using the closure above
-                    _merge_subgraph_into_parent(child_graph, step_id, nested_wf_classname)
+                    _merge_subgraph_into_parent(
+                        child_graph, step_id, nested_wf_classname
+                    )
                 except Exception:
                     continue
 
