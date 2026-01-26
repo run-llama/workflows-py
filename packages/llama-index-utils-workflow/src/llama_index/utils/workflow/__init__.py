@@ -499,6 +499,124 @@ def _extract_execution_graph(
     return nodes, edges
 
 
+def _get_workflow_classes_from_step(method_callable: Callable | Any) -> list[str]:
+    # Guard against None
+    if method_callable is None:
+        return []
+
+    workflow_classes = []
+    try:
+        source = inspect.getsource(method_callable)
+        clean_source = textwrap.dedent(source)
+        tree = ast.parse(clean_source)
+
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                # Check if calling a class with 'Workflow' in the name
+                if isinstance(node.func, ast.Name) and "Workflow" in node.func.id:
+                    if node.func.id not in workflow_classes:
+                        workflow_classes.append(node.func.id)
+    except Exception:
+        return []
+    return workflow_classes
+
+
+    
+def _get_nested_workflow_representation(
+    workflow: Workflow, include_child_workflows: bool = True
+) -> WorkflowGraph:
+    """
+    Introspects a workflow and builds a unified WorkflowGraph.
+    
+    If include_child_workflows is True, it performs a 1-level deep scan of 
+    step source code to find instantiated sub-workflows and merges their 
+    graphs into the parent graph.
+    """
+    parent_graph = _get_workflow_representation(workflow)
+    if not include_child_workflows:
+        return parent_graph
+
+    # Define the helper AFTER parent_graph is created so it can 
+    # modify parent_graph directly via closure (i.e. parent_graph is now in scope for this helper function.
+    def _merge_subgraph_into_parent(child_graph: WorkflowGraph, parent_step_id: str, class_name: str):
+        """Internal helper to handle ID prefixing and edge stitching."""
+        prefix = f"{parent_step_id}_{class_name}_"
+
+        # 1. Merge Nodes
+        for c_node in list(child_graph.nodes):
+            c_node_id = getattr(c_node, "id", str(c_node))
+            new_node = WorkflowGenericNode(
+                id=f"{prefix}{c_node_id}",
+                label=getattr(c_node, "label", c_node_id),
+                node_type=getattr(c_node, "node_type", "step"),
+                event_type=getattr(c_node, "event_type", None),
+            )
+            parent_graph.nodes.append(new_node)
+
+        # 2. Merge Edges
+        for edge in child_graph.edges:
+            parent_graph.edges.append(
+                WorkflowGraphEdge(
+                    source=f"{prefix}{edge.source}",
+                    target=f"{prefix}{edge.target}",
+                    label=edge.label,
+                )
+            )
+
+        # 3. Stitch: Parent Step -> Child Start
+        child_start_id = next(
+            (n.id for n in child_graph.nodes if getattr(n, "event_type", None) == "StartEvent"),
+            None
+        )
+        if child_start_id:
+            parent_graph.edges.append(
+                WorkflowGraphEdge(
+                    source=parent_step_id,
+                    target=f"{prefix}{child_start_id}",
+                    label=f"calls: {class_name}",
+                )
+            )
+
+        # 4. Stitch: Child Stop -> Parent Step
+        child_stop_id = next(
+            (n.id for n in child_graph.nodes if getattr(n, "event_type", None) == "StopEvent"),
+            None
+        )
+        if child_stop_id:
+            parent_graph.edges.append(
+                WorkflowGraphEdge(
+                    source=f"{prefix}{child_stop_id}",
+                    target=parent_step_id,
+                    label=f"returns: {class_name}",
+                )
+            )
+
+    # --- Discovery and Execution Loop ---
+    steps_lookup = workflow._get_steps()
+
+    for node in list(parent_graph.nodes):
+        step_id = getattr(node, "id", str(node))
+        if getattr(node, "node_type", None) == "step":
+            step_method = steps_lookup.get(step_id)
+            nested_wf_classnames = _get_workflow_classes_from_step(step_method)
+
+            for nested_wf_classname in nested_wf_classnames:
+                try:
+                    module_name = step_method.__module__
+                    module = sys.modules.get(module_name) or sys.modules.get("__main__")
+                    wf_class = getattr(module, nested_wf_classname)
+
+                    child_instance = wf_class()
+                    child_graph = _get_workflow_representation(child_instance)
+                    
+                    # Executes the merge using the closure above
+                    _merge_subgraph_into_parent(child_graph, step_id, nested_wf_classname)
+                except Exception:
+                    continue
+
+    return parent_graph
+
+
 def draw_all_possible_flows(
     workflow: Workflow,
     filename: str = "workflow_all_flows.html",
@@ -527,105 +645,14 @@ def draw_all_possible_flows_mermaid(
 ) -> str:
     """
     Draws all possible flows of the workflow as a Mermaid diagram.
-
-    Args:
-        workflow: The workflow to visualize
-        filename: Output Mermaid filename
-        max_label_length: Maximum label length before truncation (None = no limit)
-        include_child_workflows: Whether to recursively find and include nested workflows
-
-    Returns:
-        The Mermaid diagram as a string
-
     """
-    parent_graph = _get_workflow_representation(workflow)
+    # Use the new helper to get the full graph structure
+    full_graph = _get_nested_workflow_representation(
+        workflow, include_child_workflows=include_child_workflows
+    )
 
-    if include_child_workflows:
-        steps_lookup = workflow._get_steps()
-
-        for node in list(parent_graph.nodes):
-            step_id = getattr(node, "id", str(node))
-
-            if getattr(node, "node_type", None) == "step":
-                step = steps_lookup.get(step_id)
-
-                # Now returns a list of class names
-                nested_wf_classnames = _get_workflow_classes_from_step(step)
-
-                # Iterate through every detected workflow class in this step
-                for nested_wf_classname in nested_wf_classnames:
-                    try:
-                        module_name = step.__module__
-                        module = sys.modules.get(module_name) or sys.modules.get("__main__")
-                        wf_class = getattr(module, nested_wf_classname)
-
-                        child_wf_instance = wf_class()
-                        child_graph = _get_workflow_representation(child_wf_instance)
-
-                        # Ensure prefix is unique even if the same class is called in different steps
-                        prefix = f"{step_id}_{nested_wf_classname}_"
-
-                        # Merge nodes
-                        for c_node in list(child_graph.nodes):
-                            c_node_id = getattr(c_node, "id", str(c_node))
-                            new_node = WorkflowGenericNode(
-                                id=f"{prefix}{c_node_id}",
-                                label=getattr(c_node, "label", c_node_id),
-                                node_type=getattr(c_node, "node_type", "step"),
-                                event_type=getattr(c_node, "event_type", None),
-                            )
-                            parent_graph.nodes.append(new_node)
-
-                        # Merge edges
-                        for edge in child_graph.edges:
-                            parent_graph.edges.append(
-                                WorkflowGraphEdge(
-                                    source=f"{prefix}{edge.source}",
-                                    target=f"{prefix}{edge.target}",
-                                    label=edge.label,
-                                )
-                            )
-
-                        # Link Parent Step to Child Start
-                        child_start_event_id = next(
-                            (
-                                n.id
-                                for n in child_graph.nodes
-                                if getattr(n, "event_type", None) == "StartEvent"
-                            ),
-                            None,
-                        )
-                        if child_start_event_id:
-                            parent_graph.edges.append(
-                                WorkflowGraphEdge(
-                                    source=step_id,
-                                    target=f"{prefix}{child_start_event_id}",
-                                    label=f"nested workflow: {nested_wf_classname}",
-                                )
-                            )
-
-                        # Link Child Stop back to Parent Step
-                        child_stop_event_id = next(
-                            (
-                                n.id
-                                for n in child_graph.nodes
-                                if getattr(n, "event_type", None) == "StopEvent"
-                            ),
-                            None,
-                        )
-                        if child_stop_event_id:
-                            parent_graph.edges.append(
-                                WorkflowGraphEdge(
-                                    source=f"{prefix}{child_stop_event_id}",
-                                    target=step_id,
-                                    label=f"nested workflow return: {nested_wf_classname}",
-                                )
-                            )
-
-                    except Exception:
-                        pass
-
-    return _render_mermaid(parent_graph, filename, max_label_length)
+    # Render to Mermaid format
+    return _render_mermaid(full_graph, filename, max_label_length)
 
 
 def draw_agent_with_tools(
@@ -814,26 +841,3 @@ def draw_most_recent_execution_mermaid(
             f.write(diagram_string)
 
     return diagram_string
-
-
-def _get_workflow_classes_from_step(method_callable: Callable | Any) -> list[str]:
-    # Guard against None
-    if method_callable is None:
-        return []
-
-    workflow_classes = []
-    try:
-        source = inspect.getsource(method_callable)
-        clean_source = textwrap.dedent(source)
-        tree = ast.parse(clean_source)
-
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Call):
-                # Check if calling a class with 'Workflow' in the name
-                if isinstance(node.func, ast.Name) and "Workflow" in node.func.id:
-                    if node.func.id not in workflow_classes:
-                        workflow_classes.append(node.func.id)
-    except Exception:
-        return []
-    return workflow_classes
-    
