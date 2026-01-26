@@ -111,19 +111,44 @@ class InMemoryStateStore(Generic[MODEL_T]):
         return self._state.model_copy()
 
     async def set_state(self, state: MODEL_T) -> None:
-        """Replace the current state model.
+        """Replace or merge into the current state model.
+
+        If the provided state is the exact type of the current state, it replaces
+        the state entirely. If the provided state is a parent type (i.e., the
+        current state type is a subclass of the provided state type), the fields
+        from the parent are merged onto the current state, preserving any child
+        fields that aren't present in the parent.
+
+        This enables workflow inheritance where a base workflow step can call
+        set_state with a base state type without obliterating child state fields.
 
         Args:
-            state (MODEL_T): New state of the same type as the existing model.
+            state (MODEL_T): New state, either the same type or a parent type.
 
         Raises:
-            ValueError: If the type differs from the existing state type.
+            ValueError: If the types are not compatible (neither same nor parent).
         """
-        if not isinstance(state, type(self._state)):
-            raise ValueError(f"State must be of type {type(self._state)}")
+        current_type = type(self._state)
+        new_type = type(state)
 
-        async with self._lock:
-            self._state = state
+        if isinstance(state, current_type):
+            # Exact match or subclass - direct replacement
+            async with self._lock:
+                self._state = state
+        elif issubclass(current_type, new_type):
+            # Parent type provided - merge fields onto current state
+            # This preserves child-specific fields while updating parent fields
+            async with self._lock:
+                # Get the fields from the parent type and update them on the current state
+                parent_data = state.model_dump()
+                self._state = current_type.model_validate(
+                    {**self._state.model_dump(), **parent_data}
+                )
+        else:
+            raise ValueError(
+                f"State must be of type {current_type.__name__} or a parent type, "
+                f"got {new_type.__name__}"
+            )
 
     def to_dict(self, serializer: "BaseSerializer") -> dict[str, Any]:
         """Serialize the state and model metadata for persistence.
