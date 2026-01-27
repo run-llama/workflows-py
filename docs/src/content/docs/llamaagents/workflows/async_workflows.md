@@ -6,6 +6,8 @@ title: Writing async workflows
 
 Workflows run on Python's `asyncio` event loop. The runtime uses cooperative multitasking: while one step is `await`-ing (for example, waiting for an LLM response or a network call), other steps and workflows are free to make progress.
 
+If you're new to async programming in Python, read [Introduction to async Python](/python/framework/getting_started/async_python/) first for a general overview of `asyncio`, event loops, and `await`.
+
 Steps can be defined as either `async def` or plain `def`. This page covers how each behaves and how to handle blocking or CPU-intensive work without stalling the event loop.
 
 ## Sync steps (`def` instead of `async def`)
