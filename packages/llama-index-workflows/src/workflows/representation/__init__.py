@@ -7,6 +7,7 @@ from workflows.representation.types import (
     WorkflowGraphEdge,
     WorkflowGraphNode,
     WorkflowNodeBase,
+    WorkflowResourceConfigNode,
     WorkflowResourceNode,
     WorkflowStepNode,
 )
@@ -18,6 +19,7 @@ __all__ = [
     "WorkflowEventNode",
     "WorkflowExternalNode",
     "WorkflowResourceNode",
+    "WorkflowResourceConfigNode",
     "WorkflowGenericNode",
     "WorkflowGraphNode",
     "WorkflowGraphEdge",

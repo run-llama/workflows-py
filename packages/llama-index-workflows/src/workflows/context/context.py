@@ -170,15 +170,16 @@ class Context(Generic[MODEL_T]):
                 and step_config.context_state_type != DictState
                 and issubclass(step_config.context_state_type, BaseModel)
             ):
-                state_type = step_config.context_state_type
-                state_types.add(state_type)
+                state_types.add(step_config.context_state_type)
 
-        if len(state_types) > 1:
-            raise ValueError(
-                "Multiple state types are not supported. Make sure that each Context[...] has the same generic state type. Found: "
-                + ", ".join([state_type.__name__ for state_type in state_types])
-            )
-        state_type = state_types.pop() if state_types else DictState
+        # Find the most derived state type from the inheritance hierarchy
+        # This allows base workflows to use Context[BaseState] and child workflows
+        # to use Context[ChildState] where ChildState extends BaseState
+        state_type: Type[BaseModel]
+        if state_types:
+            state_type = _find_most_derived_state_type(state_types)
+        else:
+            state_type = DictState
         if previous_context_parsed.state:
             # perhaps offer a way to clear on invalid
             store_state = InMemoryStateStore.from_dict(
@@ -615,3 +616,50 @@ def _warn_streaming_queue() -> None:
         DeprecationWarning,
         stacklevel=2,
     )
+
+
+def _find_most_derived_state_type(state_types: set[Type[BaseModel]]) -> Type[BaseModel]:
+    """Find the most derived (most specific) state type from a set of types.
+
+    All types must be in a single inheritance chain, i.e., one type must be
+    a subclass of all other types (the most derived type).
+
+    Args:
+        state_types: Set of state types to analyze.
+
+    Returns:
+        The most derived type in the inheritance hierarchy.
+
+    Raises:
+        ValueError: If types are not in a compatible inheritance hierarchy.
+    """
+    type_list = list(state_types)
+
+    if len(type_list) == 1:
+        return type_list[0]
+
+    # Find the most derived type - it should be a subclass of all others
+    most_derived: Type[BaseModel] | None = None
+
+    for candidate in type_list:
+        is_most_derived = True
+        for other in type_list:
+            if other is candidate:
+                continue
+            # candidate must be a subclass of other (or equal to it)
+            if not issubclass(candidate, other):
+                is_most_derived = False
+                break
+        if is_most_derived:
+            most_derived = candidate
+            break
+
+    if most_derived is None:
+        # No single type is a subclass of all others - incompatible hierarchy
+        raise ValueError(
+            "Multiple state types are not in a compatible inheritance hierarchy. "
+            "All state types must share a common inheritance chain. Found: "
+            + ", ".join([st.__name__ for st in state_types])
+        )
+
+    return most_derived

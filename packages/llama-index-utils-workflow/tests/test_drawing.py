@@ -1,3 +1,6 @@
+import json
+from pathlib import Path
+from typing import Annotated
 from unittest.mock import MagicMock, mock_open, patch
 
 import pytest
@@ -7,6 +10,10 @@ from llama_index.utils.workflow import (
     draw_most_recent_execution,
     draw_most_recent_execution_mermaid,
 )
+from pydantic import BaseModel
+from workflows.decorators import step
+from workflows.events import StartEvent, StopEvent
+from workflows.resource import Resource, ResourceConfig
 from workflows.workflow import Workflow
 
 
@@ -428,6 +435,107 @@ def test_mermaid_resource_style_always_defined(workflow: Workflow) -> None:
 
     # resourceStyle should be defined even if not used
     assert "classDef resourceStyle fill:#DDA0DD" in result
+
+
+def test_mermaid_resource_config_nodes_rendered(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test that resource config nodes are rendered in Mermaid output."""
+    monkeypatch.chdir(tmp_path)
+
+    config_data = {"setting": "test", "value": 1}
+    with open("config.json", "w") as f:
+        json.dump(config_data, f)
+
+    class ConfigData(BaseModel):
+        setting: str
+        value: int
+
+    class Client:
+        pass
+
+    def get_client(
+        config: Annotated[ConfigData, ResourceConfig(config_file="config.json")],
+    ) -> Client:
+        return Client()
+
+    class WorkflowWithConfig(Workflow):
+        @step
+        async def start_step(
+            self,
+            ev: StartEvent,
+            client: Annotated[Client, Resource(get_client)],
+        ) -> StopEvent:
+            return StopEvent(result="done")
+
+    result = draw_all_possible_flows_mermaid(WorkflowWithConfig())
+
+    assert "classDef resourceConfigStyle fill:#B2DFDB" in result
+    lines = result.split("\n")
+    resource_config_lines = [
+        line
+        for line in lines
+        if "resource_config_" in line and ":::" in line and " --> " not in line
+    ]
+    assert len(resource_config_lines) == 1
+    assert ":::resourceConfigStyle" in resource_config_lines[0]
+
+
+def test_pyvis_resource_config_nodes_rendered(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test that resource config nodes are rendered in Pyvis output."""
+    monkeypatch.chdir(tmp_path)
+
+    config_data = {"setting": "test", "value": 1}
+    with open("config.json", "w") as f:
+        json.dump(config_data, f)
+
+    class ConfigData(BaseModel):
+        setting: str
+        value: int
+
+    class Client:
+        pass
+
+    def get_client(
+        config: Annotated[ConfigData, ResourceConfig(config_file="config.json")],
+    ) -> Client:
+        return Client()
+
+    class WorkflowWithConfig(Workflow):
+        @step
+        async def start_step(
+            self,
+            ev: StartEvent,
+            client: Annotated[Client, Resource(get_client)],
+        ) -> StopEvent:
+            return StopEvent(result="done")
+
+    with patch("llama_index.utils.workflow.Network") as mock_network:
+        mock_net_instance = MagicMock()
+        mock_network.return_value = mock_net_instance
+
+        draw_all_possible_flows(WorkflowWithConfig(), filename="test.html")
+
+        node_calls = mock_net_instance.add_node.call_args_list
+        resource_config_nodes = []
+        for call in node_calls:
+            args, kwargs = call
+            node_id = args[0]
+            if "resource_config_" in node_id:
+                resource_config_nodes.append((node_id, kwargs))
+
+        assert len(resource_config_nodes) == 1, "Should have resource config node"
+        node_id, kwargs = resource_config_nodes[0]
+        assert kwargs.get("shape") == "box", (
+            f"Resource config node {node_id} should be box"
+        )
+        assert kwargs.get("color") == "#B2DFDB", (
+            f"Resource config node {node_id} should be light teal"
+        )
 
 
 def test_resource_node_deduplication_in_rendering(

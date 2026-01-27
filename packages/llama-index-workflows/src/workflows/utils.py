@@ -36,7 +36,7 @@ from pydantic import BaseModel
 
 from .errors import WorkflowValidationError
 from .events import Event, EventType
-from .resource import ResourceDefinition
+from .resource import ResourceDefinition, ResourceDescriptor
 
 BUSY_WAIT_DELAY = 0.01
 
@@ -51,7 +51,9 @@ class StepSignatureSpec(BaseModel):
     resources: list[Any]
 
 
-def inspect_signature(fn: Callable) -> StepSignatureSpec:
+def inspect_signature(
+    fn: Callable, localns: dict[str, Any] | None = None
+) -> StepSignatureSpec:
     """
     Given a function, ensure the signature is compatible with a workflow step.
 
@@ -72,7 +74,7 @@ def inspect_signature(fn: Callable) -> StepSignatureSpec:
         raise TypeError(f"Expected a callable object, got {type(fn).__name__}")
 
     sig = inspect.signature(fn)
-    type_hints = get_type_hints(fn, include_extras=True)
+    type_hints = _resolve_type_hints(fn, include_extras=True, localns=localns)
 
     accepted_events: dict[str, list[EventType]] = {}
     context_parameter = None
@@ -104,11 +106,13 @@ def inspect_signature(fn: Callable) -> StepSignatureSpec:
         if get_origin(annotation) is Annotated:
             args = get_args(annotation)
             type_annotation = args[0] if args else None
-            resource = args[1] if len(args) > 1 else None
-            if resource is not None:
+            descriptor = args[1] if len(args) > 1 else None
+            if descriptor is not None and isinstance(descriptor, ResourceDescriptor):
+                # Pass localns to resource for nested annotation resolution
+                descriptor.set_localns(localns)
                 resources.append(
                     ResourceDefinition(
-                        name=name, resource=resource, type_annotation=type_annotation
+                        name=name, resource=descriptor, type_annotation=type_annotation
                     )
                 )
             continue
@@ -130,7 +134,7 @@ def inspect_signature(fn: Callable) -> StepSignatureSpec:
 
     return StepSignatureSpec(
         accepted_events=accepted_events,
-        return_types=_get_return_types(fn),
+        return_types=_get_return_types(fn, localns=localns),
         context_parameter=context_parameter,
         context_state_type=context_state_type,
         resources=resources,
@@ -230,13 +234,15 @@ def _get_param_types(param: inspect.Parameter, type_hints: dict) -> list[Any]:
     return [typ]
 
 
-def _get_return_types(func: Callable) -> list[Any]:
+def _get_return_types(
+    func: Callable, localns: dict[str, Any] | None = None
+) -> list[Any]:
     """
     Extract the return type hints from a function.
 
     Handles Union, Optional, and List types.
     """
-    type_hints = get_type_hints(func)
+    type_hints = _resolve_type_hints(func, localns=localns)
     return_hint = type_hints.get("return")
     if return_hint is None:
         return []
@@ -247,6 +253,28 @@ def _get_return_types(func: Callable) -> list[Any]:
         return [t for t in get_args(return_hint) if t is not type(None)]
     else:
         return [return_hint]
+
+
+def _resolve_type_hints(
+    func: Callable,
+    *,
+    include_extras: bool = False,
+    localns: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    try:
+        return get_type_hints(func, include_extras=include_extras, localns=localns)
+    except NameError as exc:
+        missing_name = getattr(exc, "name", None)
+        missing_msg = f" Missing name: {missing_name}." if missing_name else ""
+        func_name = getattr(func, "__qualname__", type(func).__name__)
+        msg = (
+            "Failed to resolve type annotations for "
+            f"{func_name}.{missing_msg} "
+            "If you are using 'from __future__ import annotations' or string "
+            "annotations, ensure referenced names are available in module scope "
+            "or in the scope where the @step decorator is applied."
+        )
+        raise WorkflowValidationError(msg) from exc
 
 
 def is_free_function(qualname: str) -> bool:

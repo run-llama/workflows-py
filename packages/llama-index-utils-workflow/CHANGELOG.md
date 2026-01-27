@@ -1,5 +1,11 @@
 # llama-index-utils-workflow
 
+## 0.8.0
+
+### Minor Changes
+
+- 6dd7fc0: Add resource config node support to workflow representation
+
 ## 0.7.1
 
 ### Patch Changes

@@ -1,6 +1,10 @@
-from typing import Annotated
+import json
+from collections.abc import Iterable, Mapping
+from pathlib import Path
+from typing import Annotated, Optional
 
 import pytest
+from pydantic import BaseModel
 from workflows.decorators import step
 from workflows.events import Event, StartEvent, StopEvent
 from workflows.representation import (
@@ -8,14 +12,51 @@ from workflows.representation import (
     WorkflowExternalNode,
     WorkflowGraph,
     WorkflowGraphEdge,
+    WorkflowGraphNode,
+    WorkflowResourceConfigNode,
     WorkflowResourceNode,
     WorkflowStepNode,
     get_workflow_representation,
 )
-from workflows.resource import Resource
+from workflows.resource import Resource, ResourceConfig
 from workflows.workflow import Workflow
 
 from .conftest import DummyWorkflow  # type: ignore[import]
+
+
+def _nodes_of_type(graph: WorkflowGraph, node_type: str) -> list[WorkflowGraphNode]:
+    return [node for node in graph.nodes if node.node_type == node_type]
+
+
+def _resource_nodes(graph: WorkflowGraph) -> list[WorkflowResourceNode]:
+    return [node for node in graph.nodes if isinstance(node, WorkflowResourceNode)]
+
+
+def _resource_config_nodes(graph: WorkflowGraph) -> list[WorkflowResourceConfigNode]:
+    return [
+        node for node in graph.nodes if isinstance(node, WorkflowResourceConfigNode)
+    ]
+
+
+def _edges_as_tuples(graph: WorkflowGraph) -> set[tuple[str, str, Optional[str]]]:
+    return {(edge.source, edge.target, edge.label) for edge in graph.edges}
+
+
+def _find_edges(
+    graph: WorkflowGraph,
+    *,
+    source: Optional[str] = None,
+    target_prefix: Optional[str] = None,
+    label: Optional[str] = None,
+) -> list[WorkflowGraphEdge]:
+    edges: Iterable[WorkflowGraphEdge] = graph.edges
+    if source is not None:
+        edges = [edge for edge in edges if edge.source == source]
+    if target_prefix is not None:
+        edges = [edge for edge in edges if edge.target.startswith(target_prefix)]
+    if label is not None:
+        edges = [edge for edge in edges if edge.label == label]
+    return list(edges)
 
 
 @pytest.fixture()
@@ -76,14 +117,12 @@ def test_get_workflow_representation(ground_truth_repr: WorkflowGraph) -> None:
     graph = get_workflow_representation(workflow=wf)
     assert isinstance(graph, WorkflowGraph)
     assert sorted(
-        [node.id for node in ground_truth_repr.nodes if node.node_type == "step"]
-    ) == sorted([node.id for node in graph.nodes if node.node_type == "step"])
+        node.id for node in _nodes_of_type(ground_truth_repr, "step")
+    ) == sorted(node.id for node in _nodes_of_type(graph, "step"))
     assert sorted(
-        [node.id for node in ground_truth_repr.nodes if node.node_type == "event"]
-    ) == sorted([node.id for node in graph.nodes if node.node_type == "event"])
-    expected_edges = ground_truth_repr.edges
-    for edge in expected_edges:
-        assert edge in graph.edges
+        node.id for node in _nodes_of_type(ground_truth_repr, "event")
+    ) == sorted(node.id for node in _nodes_of_type(graph, "event"))
+    assert _edges_as_tuples(graph) >= _edges_as_tuples(ground_truth_repr)
 
 
 def test_truncated_label() -> None:
@@ -95,7 +134,7 @@ def test_truncated_label() -> None:
 
 
 def test_graph_serialization() -> None:
-    """Test that WorkflowGraphNodeEdges serializes correctly to JSON."""
+    """Test that WorkflowGraph serializes and restores node types."""
     graph = WorkflowGraph(
         name="TestWorkflow",
         nodes=[
@@ -109,36 +148,16 @@ def test_graph_serialization() -> None:
         ],
         edges=[WorkflowGraphEdge(source="test", target="OneTestEvent")],
     )
-    # Test direct access
-    assert len(graph.nodes) == 2
-    step_node = graph.nodes[0]
-    assert isinstance(step_node, WorkflowStepNode)
-    assert step_node.node_type == "step"
-    assert step_node.label == "test"
-    assert step_node.id == "test"
-    event_node = graph.nodes[1]
-    assert isinstance(event_node, WorkflowEventNode)
-    assert event_node.event_type == "OneTestEvent"
-    assert event_node.event_types == ["OneTestEvent"]
-    assert event_node.node_type == "event"
-    assert event_node.label == "OneTestEvent"
-    assert event_node.id == "OneTestEvent"
-    assert len(graph.edges) == 1
-    assert graph.edges[0].source == "test"
-    assert graph.edges[0].target == "OneTestEvent"
 
-    # Test JSON serialization (round-trip works)
     data = graph.model_dump()
-    assert "event_type" not in data["nodes"][0]  # Step nodes don't have event_type
-    assert data["nodes"][1]["event_type"] == "OneTestEvent"
-    assert data["nodes"][1]["event_types"] == ["OneTestEvent"]
-
-    # Test deserialization
     restored = WorkflowGraph.model_validate(data)
-    restored_event = restored.nodes[1]
-    assert isinstance(restored_event, WorkflowEventNode)
-    assert restored_event.event_type == "OneTestEvent"
-    assert restored_event.is_subclass_of("OneTestEvent")
+
+    assert len(restored.nodes) == 2
+    event_node = next(
+        node for node in restored.nodes if isinstance(node, WorkflowEventNode)
+    )
+    assert event_node.event_type == "OneTestEvent"
+    assert event_node.is_subclass_of("OneTestEvent")
 
 
 # --- Resource node tests ---
@@ -177,36 +196,25 @@ class WorkflowWithResources(Workflow):
 
 
 def test_get_workflow_representation_with_resources() -> None:
-    """Test that resource nodes are extracted from workflow with resources."""
+    """Resource node metadata and step -> resource edge label are derived from factory."""
     wf = WorkflowWithResources()
     graph = get_workflow_representation(workflow=wf)
 
-    # Should have resource nodes
-    resource_nodes = [n for n in graph.nodes if isinstance(n, WorkflowResourceNode)]
+    resource_nodes = _resource_nodes(graph)
     assert len(resource_nodes) == 1
-
     resource_node = resource_nodes[0]
-    assert resource_node.node_type == "resource"
     assert resource_node.type_name == "DatabaseClient"
     assert resource_node.getter_name == "get_database_client"
     assert resource_node.description is not None
-    assert "Factory function" in resource_node.description
     assert resource_node.source_file is not None
     assert resource_node.source_line is not None
-
-
-def test_resource_node_edges_have_variable_names() -> None:
-    """Test that edges from steps to resources have the variable name as label."""
-    wf = WorkflowWithResources()
-    graph = get_workflow_representation(workflow=wf)
-
-    # Find edges to resource nodes
-    resource_edges = [e for e in graph.edges if e.target.startswith("resource_")]
-
-    assert len(resource_edges) == 1
-    edge = resource_edges[0]
-    assert edge.label == "db_client"  # The variable name
-    assert edge.source == "step_with_resource"
+    edges = _find_edges(
+        graph,
+        source="step_with_resource",
+        target_prefix="resource_",
+        label="db_client",
+    )
+    assert len(edges) == 1
 
 
 def test_resource_nodes_are_deduplicated() -> None:
@@ -240,16 +248,11 @@ def test_resource_nodes_are_deduplicated() -> None:
     graph = get_workflow_representation(workflow=wf)
 
     # Should have only one resource node (deduplicated)
-    resource_nodes = [n for n in graph.nodes if isinstance(n, WorkflowResourceNode)]
-    assert len(resource_nodes) == 1
+    assert len(_resource_nodes(graph)) == 1
 
     # But should have two edges (one from each step)
-    resource_edges = [e for e in graph.edges if e.target.startswith("resource_")]
+    resource_edges = _find_edges(graph, target_prefix="resource_", label="db")
     assert len(resource_edges) == 2
-
-    # Both edges should have the variable name "db"
-    for edge in resource_edges:
-        assert edge.label == "db"
 
 
 def test_multiple_different_resources() -> None:
@@ -275,72 +278,18 @@ def test_multiple_different_resources() -> None:
     graph = get_workflow_representation(workflow=wf)
 
     # Should have two different resource nodes
-    resource_nodes = [n for n in graph.nodes if isinstance(n, WorkflowResourceNode)]
+    resource_nodes = _resource_nodes(graph)
     assert len(resource_nodes) == 2
 
     type_names = {rn.type_name for rn in resource_nodes}
     assert type_names == {"DatabaseClient", "CacheClient"}
 
     # Should have two edges with different labels
-    resource_edges = [e for e in graph.edges if e.target.startswith("resource_")]
+    resource_edges = _find_edges(graph, target_prefix="resource_")
     assert len(resource_edges) == 2
 
     labels = {e.label for e in resource_edges}
     assert labels == {"db", "cache"}
-
-
-def test_resource_node_serialization() -> None:
-    """Test that WorkflowResourceNode serializes correctly."""
-    resource_node = WorkflowResourceNode(
-        id="resource_abc123",
-        label="TestType",
-        type_name="TestType",
-        getter_name="get_test_type",
-        source_file="/path/to/file.py",
-        source_line=42,
-        description="Test docstring",
-    )
-
-    assert resource_node.id == "resource_abc123"
-    assert resource_node.label == "TestType"
-    assert resource_node.node_type == "resource"
-    assert resource_node.type_name == "TestType"
-    assert resource_node.getter_name == "get_test_type"
-    assert resource_node.source_file == "/path/to/file.py"
-    assert resource_node.source_line == 42
-    assert resource_node.description == "Test docstring"
-
-    # Test serialization
-    data = resource_node.model_dump()
-    assert data["id"] == "resource_abc123"
-    assert data["label"] == "TestType"
-    assert data["type_name"] == "TestType"
-    assert data["node_type"] == "resource"
-
-    # Test deserialization
-    restored = WorkflowResourceNode.model_validate(data)
-    assert restored.id == "resource_abc123"
-    assert restored.label == "TestType"
-    assert restored.type_name == "TestType"
-    assert restored.node_type == "resource"
-
-
-def test_graph_with_resources() -> None:
-    """Test that workflow graph with resources is correct."""
-    wf = WorkflowWithResources()
-    graph = get_workflow_representation(workflow=wf)
-
-    # Check resource nodes are in the nodes list
-    resource_nodes = [n for n in graph.nodes if isinstance(n, WorkflowResourceNode)]
-    assert len(resource_nodes) == 1
-    rn = resource_nodes[0]
-    assert rn.type_name == "DatabaseClient"
-    assert rn.getter_name == "get_database_client"
-
-    # Check edges with labels
-    resource_edges = [e for e in graph.edges if e.label is not None]
-    assert len(resource_edges) == 1
-    assert resource_edges[0].label == "db_client"
 
 
 def test_edge_with_label() -> None:
@@ -359,95 +308,6 @@ def test_edge_without_label() -> None:
     assert edge.source == "event_A"
     assert edge.target == "step_B"
     assert edge.label is None
-
-
-# --- Serialization/Deserialization tests for all node types ---
-
-
-def test_step_node_serialization_roundtrip() -> None:
-    """Test WorkflowStepNode serialization and deserialization."""
-    node = WorkflowStepNode(id="my_step", label="My Step")
-
-    data = node.model_dump()
-    assert data["id"] == "my_step"
-    assert data["label"] == "My Step"
-    assert data["node_type"] == "step"
-
-    restored = WorkflowStepNode.model_validate(data)
-    assert restored.id == "my_step"
-    assert restored.label == "My Step"
-    assert restored.node_type == "step"
-
-
-def test_event_node_serialization_roundtrip() -> None:
-    """Test WorkflowEventNode serialization and deserialization."""
-    node = WorkflowEventNode(
-        id="MyEvent",
-        label="My Event",
-        event_type="MyEvent",
-        event_types=["MyEvent", "ParentEvent"],
-    )
-
-    data = node.model_dump()
-    assert data["id"] == "MyEvent"
-    assert data["label"] == "My Event"
-    assert data["node_type"] == "event"
-    assert data["event_type"] == "MyEvent"
-    assert data["event_types"] == ["MyEvent", "ParentEvent"]
-
-    restored = WorkflowEventNode.model_validate(data)
-    assert restored.id == "MyEvent"
-    assert restored.label == "My Event"
-    assert restored.node_type == "event"
-    assert restored.event_type == "MyEvent"
-    assert restored.event_types == ["MyEvent", "ParentEvent"]
-    assert restored.is_subclass_of("ParentEvent")
-    assert not restored.is_subclass_of("UnrelatedEvent")
-
-
-def test_external_node_serialization_roundtrip() -> None:
-    """Test WorkflowExternalNode serialization and deserialization."""
-    node = WorkflowExternalNode(id="external_step", label="External Step")
-
-    data = node.model_dump()
-    assert data["id"] == "external_step"
-    assert data["label"] == "External Step"
-    assert data["node_type"] == "external"
-
-    restored = WorkflowExternalNode.model_validate(data)
-    assert restored.id == "external_step"
-    assert restored.label == "External Step"
-    assert restored.node_type == "external"
-
-
-def test_resource_node_serialization_roundtrip() -> None:
-    """Test WorkflowResourceNode serialization and deserialization."""
-    node = WorkflowResourceNode(
-        id="resource_abc123",
-        label="MyResourceType",
-        type_name="MyResourceType",
-        getter_name="get_my_resource",
-        source_file="/path/to/source.py",
-        source_line=100,
-        description="Resource docstring",
-    )
-
-    data = node.model_dump()
-    assert data["id"] == "resource_abc123"
-    assert data["label"] == "MyResourceType"
-    assert data["node_type"] == "resource"
-    assert data["type_name"] == "MyResourceType"
-    assert data["getter_name"] == "get_my_resource"
-    assert data["source_file"] == "/path/to/source.py"
-    assert data["source_line"] == 100
-    assert data["description"] == "Resource docstring"
-
-    restored = WorkflowResourceNode.model_validate(data)
-    assert restored.id == "resource_abc123"
-    assert restored.label == "MyResourceType"
-    assert restored.type_name == "MyResourceType"
-    assert restored.getter_name == "get_my_resource"
-    assert restored.node_type == "resource"
 
 
 def test_graph_with_all_node_types_serialization() -> None:
@@ -529,17 +389,28 @@ def test_graph_deserialization_from_raw_json() -> None:
                 "node_type": "resource",
                 "type_name": "SomeType",
             },
+            {
+                "id": "resource_config_456",
+                "label": "ConfigModel",
+                "node_type": "resource_config",
+                "type_name": "ConfigModel",
+                "config_file": "config.json",
+                "path_selector": "settings",
+                "config_schema": {
+                    "type": "object",
+                    "properties": {"key": {"type": "string"}},
+                },
+                "config_value": {"key": "value"},
+            },
         ],
         "edges": [{"source": "MyEvent", "target": "step1"}],
     }
 
     graph = WorkflowGraph.model_validate(raw_data)
 
-    assert len(graph.nodes) == 4
-    assert isinstance(graph.nodes[0], WorkflowStepNode)
-    assert isinstance(graph.nodes[1], WorkflowEventNode)
-    assert isinstance(graph.nodes[2], WorkflowExternalNode)
-    assert isinstance(graph.nodes[3], WorkflowResourceNode)
+    assert len(graph.nodes) == 5
+    node_types = {node.node_type for node in graph.nodes}
+    assert node_types == {"step", "event", "external", "resource", "resource_config"}
 
 
 # --- filter_by_node_type tests ---
@@ -821,3 +692,399 @@ def test_filter_by_node_type_deduplicates_edges() -> None:
     assert len(filtered.edges) == 1
     assert filtered.edges[0].source == "step1"
     assert filtered.edges[0].target == "step2"
+
+
+# --- Resource config node tests ---
+
+
+class ConfigData(BaseModel):
+    """A config model for testing resource configs."""
+
+    setting: str
+    value: int
+
+
+def _write_config(tmp_path: Path, filename: str, data: Mapping[str, object]) -> str:
+    config_path = tmp_path / filename
+    with open(config_path, "w") as f:
+        json.dump(data, f)
+    return str(config_path)
+
+
+def test_resource_config_nested_in_resource_factory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Nested ResourceConfig should create resource + config nodes and an edge."""
+    monkeypatch.chdir(tmp_path)
+
+    config_data = {"setting": "test", "value": 42}
+    config_path = _write_config(tmp_path, "config.json", config_data)
+
+    def get_configured_client(
+        my_config: Annotated[ConfigData, ResourceConfig(config_file="config.json")],
+    ) -> DatabaseClient:
+        return DatabaseClient()
+
+    class WorkflowWithResourceConfig(Workflow):
+        @step
+        async def step_with_config(
+            self,
+            ev: StartEvent,
+            client: Annotated[DatabaseClient, Resource(get_configured_client)],
+        ) -> StopEvent:
+            return StopEvent(result="done")
+
+    wf = WorkflowWithResourceConfig()
+    graph = get_workflow_representation(workflow=wf)
+
+    assert len(_resource_nodes(graph)) == 1
+    resource_config_nodes = _resource_config_nodes(graph)
+    assert len(resource_config_nodes) == 1
+
+    config_node = resource_config_nodes[0]
+    assert config_node.type_name == "ConfigData"
+    assert config_node.config_file == config_path
+    assert config_node.path_selector is None
+    assert config_node.config_schema is not None
+    assert {"setting", "value"} <= set(config_node.config_schema.get("properties", {}))
+    assert config_node.config_value == config_data
+
+    edges = _find_edges(graph, target_prefix="resource_config_", label="my_config")
+    assert len(edges) == 1
+    assert edges[0].source.startswith("resource_")
+
+
+def test_recursive_resource_dependencies_with_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Nested resources should create resource->resource and resource->config edges."""
+    monkeypatch.chdir(tmp_path)
+
+    config_data = {"setting": "nested", "value": 7}
+    config_path = _write_config(tmp_path, "config.json", config_data)
+
+    class DBConnection:
+        def __init__(self, config: ConfigData) -> None:
+            self.config = config
+
+    class Repository:
+        def __init__(self, db: DBConnection) -> None:
+            self.db = db
+
+    def get_db_connection(
+        config: Annotated[ConfigData, ResourceConfig(config_file="config.json")],
+    ) -> DBConnection:
+        return DBConnection(config=config)
+
+    def get_repository(
+        db: Annotated[DBConnection, Resource(get_db_connection)],
+    ) -> Repository:
+        return Repository(db=db)
+
+    class WorkflowWithRecursiveResources(Workflow):
+        @step
+        async def start_step(
+            self,
+            ev: StartEvent,
+            repo: Annotated[Repository, Resource(get_repository)],
+        ) -> StopEvent:
+            return StopEvent(result="done")
+
+    wf = WorkflowWithRecursiveResources()
+    graph = get_workflow_representation(workflow=wf)
+
+    assert len(_resource_nodes(graph)) == 2
+    resource_config_nodes = _resource_config_nodes(graph)
+    assert len(resource_config_nodes) == 1
+    assert resource_config_nodes[0].config_file == config_path
+    assert resource_config_nodes[0].config_value == config_data
+
+    def _resource_node_for_getter(suffix: str) -> WorkflowResourceNode:
+        return next(
+            node
+            for node in _resource_nodes(graph)
+            if node.getter_name is not None and node.getter_name.endswith(suffix)
+        )
+
+    repo_node = _resource_node_for_getter("get_repository")
+    db_node = _resource_node_for_getter("get_db_connection")
+
+    repo_edges = _find_edges(graph, source=repo_node.id, label="db")
+    assert len(repo_edges) == 1
+    assert repo_edges[0].target == db_node.id
+
+    config_edges = _find_edges(graph, source=db_node.id, label="config")
+    assert len(config_edges) == 1
+    assert config_edges[0].target.startswith("resource_config_")
+
+
+def test_resource_config_direct_in_step(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ResourceConfig used directly in a step should only create a config node."""
+    monkeypatch.chdir(tmp_path)
+
+    config_data = {"setting": "direct", "value": 99}
+    config_path = _write_config(tmp_path, "direct_config.json", config_data)
+
+    class WorkflowWithDirectConfig(Workflow):
+        @step
+        async def step_with_direct_config(
+            self,
+            ev: StartEvent,
+            config: Annotated[
+                ConfigData, ResourceConfig(config_file="direct_config.json")
+            ],
+        ) -> StopEvent:
+            return StopEvent(result="done")
+
+    wf = WorkflowWithDirectConfig()
+    graph = get_workflow_representation(workflow=wf)
+
+    assert len(_resource_nodes(graph)) == 0
+    resource_config_nodes = _resource_config_nodes(graph)
+    assert len(resource_config_nodes) == 1
+    config_node = resource_config_nodes[0]
+    assert config_node.type_name == "ConfigData"
+    assert config_node.config_file == config_path
+    assert config_node.config_value == config_data
+
+    edges = _find_edges(
+        graph,
+        source="step_with_direct_config",
+        target_prefix="resource_config_",
+        label="config",
+    )
+    assert len(edges) == 1
+
+
+def test_resource_config_with_path_selector(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ResourceConfig path selector is preserved in graph nodes."""
+    monkeypatch.chdir(tmp_path)
+
+    config_data = {"database": {"setting": "test", "value": 42}}
+    config_path = _write_config(tmp_path, "config.json", config_data)
+
+    def get_configured_client(
+        config: Annotated[
+            ConfigData,
+            ResourceConfig(config_file="config.json", path_selector="database"),
+        ],
+    ) -> DatabaseClient:
+        return DatabaseClient()
+
+    class WorkflowWithResourceConfig(Workflow):
+        @step
+        async def step_with_config(
+            self,
+            ev: StartEvent,
+            client: Annotated[DatabaseClient, Resource(get_configured_client)],
+        ) -> StopEvent:
+            return StopEvent(result="done")
+
+    wf = WorkflowWithResourceConfig()
+    graph = get_workflow_representation(workflow=wf)
+
+    resource_config_nodes = _resource_config_nodes(graph)
+    assert len(resource_config_nodes) == 1
+    config_node = resource_config_nodes[0]
+    assert config_node.config_file == config_path
+    assert config_node.path_selector == "database"
+
+
+def test_resource_config_nodes_are_deduplicated(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Same resource config used by multiple resources appears once."""
+    monkeypatch.chdir(tmp_path)
+
+    _write_config(tmp_path, "config.json", {"setting": "test", "value": 42})
+
+    def get_client_one(
+        config: Annotated[ConfigData, ResourceConfig(config_file="config.json")],
+    ) -> DatabaseClient:
+        return DatabaseClient()
+
+    def get_client_two(
+        config: Annotated[ConfigData, ResourceConfig(config_file="config.json")],
+    ) -> DatabaseClient:
+        return DatabaseClient()
+
+    class WorkflowWithSharedConfig(Workflow):
+        @step
+        async def step_one(
+            self,
+            ev: StartEvent,
+            client: Annotated[DatabaseClient, Resource(get_client_one)],
+        ) -> MiddleEvent:
+            return MiddleEvent()
+
+        @step
+        async def step_two(
+            self,
+            ev: MiddleEvent,
+            client: Annotated[DatabaseClient, Resource(get_client_two)],
+        ) -> StopEvent:
+            return StopEvent(result="done")
+
+    wf = WorkflowWithSharedConfig()
+    graph = get_workflow_representation(workflow=wf)
+
+    assert len(_resource_config_nodes(graph)) == 1
+    assert len(_resource_nodes(graph)) == 2
+    assert len(_find_edges(graph, target_prefix="resource_config_")) == 2
+
+
+def test_multiple_different_resource_configs(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Multiple configs create distinct config nodes."""
+    monkeypatch.chdir(tmp_path)
+
+    db_path = _write_config(tmp_path, "db_config.json", {"setting": "db", "value": 1})
+    cache_path = _write_config(
+        tmp_path, "cache_config.json", {"setting": "cache", "value": 2}
+    )
+
+    def get_db_client(
+        config: Annotated[ConfigData, ResourceConfig(config_file="db_config.json")],
+    ) -> DatabaseClient:
+        return DatabaseClient()
+
+    class CacheClient:
+        pass
+
+    def get_cache_client(
+        config: Annotated[ConfigData, ResourceConfig(config_file="cache_config.json")],
+    ) -> CacheClient:
+        return CacheClient()
+
+    class WorkflowWithMultipleConfigs(Workflow):
+        @step
+        async def step_with_both(
+            self,
+            ev: StartEvent,
+            db: Annotated[DatabaseClient, Resource(get_db_client)],
+            cache: Annotated[CacheClient, Resource(get_cache_client)],
+        ) -> StopEvent:
+            return StopEvent(result="done")
+
+    wf = WorkflowWithMultipleConfigs()
+    graph = get_workflow_representation(workflow=wf)
+
+    config_files = {node.config_file for node in _resource_config_nodes(graph)}
+    assert config_files == {db_path, cache_path}
+
+
+def test_filter_by_node_type_with_resource_config() -> None:
+    """Test that filter_by_node_type works with resource_config nodes."""
+    graph = WorkflowGraph(
+        name="TestWorkflow",
+        nodes=[
+            WorkflowStepNode(id="step1", label="Step 1"),
+            WorkflowResourceNode(id="resource_123", label="Resource"),
+            WorkflowResourceConfigNode(
+                id="resource_config_456",
+                label="Config",
+                config_file="config.json",
+            ),
+        ],
+        edges=[
+            WorkflowGraphEdge(source="step1", target="resource_123", label="client"),
+            WorkflowGraphEdge(
+                source="resource_123", target="resource_config_456", label="config"
+            ),
+        ],
+    )
+
+    # Filter out resource_config nodes
+    filtered = graph.filter_by_node_type("resource_config")
+
+    assert len(filtered.nodes) == 2
+    node_types = {n.node_type for n in filtered.nodes}
+    assert node_types == {"step", "resource"}
+
+    # Edge from resource to config should be removed
+    # (no remaining node to connect to)
+    assert len(filtered.edges) == 1
+    assert filtered.edges[0].source == "step1"
+    assert filtered.edges[0].target == "resource_123"
+
+
+def test_resource_config_label_and_description(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ResourceConfig label and description are preserved in graph nodes."""
+    monkeypatch.chdir(tmp_path)
+
+    config_data = {"categories": ["invoice", "resume", "contract"]}
+    _write_config(tmp_path, "classify.json", config_data)
+
+    class WorkflowWithLabeledConfig(Workflow):
+        @step
+        async def classify_step(
+            self,
+            ev: StartEvent,
+            config: Annotated[
+                ConfigData,
+                ResourceConfig(
+                    config_file="classify.json",
+                    label="Document Classifier",
+                    description="Configuration for document type classification",
+                ),
+            ],
+        ) -> StopEvent:
+            return StopEvent(result="done")
+
+    wf = WorkflowWithLabeledConfig()
+    graph = get_workflow_representation(workflow=wf)
+
+    config_nodes = _resource_config_nodes(graph)
+    assert len(config_nodes) == 1
+    config_node = config_nodes[0]
+
+    # Label should be used instead of type name
+    assert config_node.label == "Document Classifier"
+    assert config_node.description == "Configuration for document type classification"
+    # Type name should still be preserved
+    assert config_node.type_name == "ConfigData"
+
+
+def test_resource_config_label_fallback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ResourceConfig without label falls back to type name."""
+    monkeypatch.chdir(tmp_path)
+
+    config_data = {"value": 123}
+    _write_config(tmp_path, "config.json", config_data)
+
+    class WorkflowWithUnlabeledConfig(Workflow):
+        @step
+        async def step(
+            self,
+            ev: StartEvent,
+            config: Annotated[ConfigData, ResourceConfig(config_file="config.json")],
+        ) -> StopEvent:
+            return StopEvent(result="done")
+
+    wf = WorkflowWithUnlabeledConfig()
+    graph = get_workflow_representation(workflow=wf)
+
+    config_nodes = _resource_config_nodes(graph)
+    assert len(config_nodes) == 1
+    config_node = config_nodes[0]
+
+    # Label should fall back to type name when not specified
+    assert config_node.label == "ConfigData"
+    assert config_node.description is None

@@ -33,6 +33,10 @@ root = "packages/workflows-dev"
 pythonVersion = "3.14"
 
 [[tool.basedpyright.executionEnvironments]]
+root = "packages/llama-index-integration-tests"
+pythonVersion = "3.13"
+
+[[tool.basedpyright.executionEnvironments]]
 root = "examples"
 pythonVersion = "3.14"
 
@@ -63,9 +67,6 @@ select = [
 "examples/**/*" = ["T201"]
 "packages/*/tests/**/*" = [
   "T201",
-  "ANN001",
-  "ANN002",
-  "ANN003",
   # remove UP007 and UP045 after removing 3.9 support
   "UP007",
   "UP045"
@@ -80,11 +81,13 @@ exclude = ["**/uv.lock", "**/.gitignore"]
 llama-index-workflows = {workspace = true}
 llama-index-utils-workflow = {workspace = true}
 workflows-dev = {workspace = true}
+llama-index-integration-tests = {workspace = true}
 
 [tool.uv.workspace]
 members = [
   "packages/llama-index-workflows",
   "packages/llama-index-utils-workflow",
   "packages/workflows-dev",
+  "packages/llama-index-integration-tests",
   "docs/api_docs"
 ]

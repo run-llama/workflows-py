@@ -27,6 +27,7 @@ from workflows.representation import (
     WorkflowGraph,
     WorkflowGraphEdge,
     WorkflowGraphNode,
+    WorkflowResourceConfigNode,
     WorkflowResourceNode,
 )
 from workflows.representation import (
@@ -49,6 +50,8 @@ def _get_node_color(node: WorkflowGraphNode) -> str:
         return "#BEDAE4"  # Light blue-gray for external
     elif node.node_type == "resource":
         return "#DDA0DD"  # Plum/light purple for resources
+    elif node.node_type == "resource_config":
+        return "#B2DFDB"  # Light teal for resource configs
     elif node.node_type == "event":
         if node.is_subclass_of("StartEvent"):
             return "#E27AFF"  # Pink for start events
@@ -83,6 +86,8 @@ def _get_node_shape(node: WorkflowGraphNode) -> str:
         return "ellipse"
     elif node.node_type == "resource":
         return "hexagon"
+    elif node.node_type == "resource_config":
+        return "box"
     elif node.node_type in ("agent", "tool", "workflow_agent", "workflow_handoff"):
         return "ellipse"
     elif node.node_type == "workflow_base":
@@ -129,6 +134,15 @@ def _render_pyvis(
             if node.description:
                 title_parts.append(f"Doc: {node.description[:100]}...")
             title = "\n".join(title_parts)
+        elif isinstance(node, WorkflowResourceConfigNode):
+            title_parts = []
+            if node.type_name:
+                title_parts.append(f"Type: {node.type_name}")
+            if node.config_file:
+                title_parts.append(f"File: {node.config_file}")
+            if node.path_selector:
+                title_parts.append(f"Path: {node.path_selector}")
+            title = "\n".join(title_parts) if title_parts else title
 
         net.add_node(
             node.id,
@@ -175,6 +189,8 @@ def _get_mermaid_css_class(node: WorkflowGraphNode) -> str:
         return "externalStyle"
     elif node.node_type == "resource":
         return "resourceStyle"
+    elif node.node_type == "resource_config":
+        return "resourceConfigStyle"
     elif node.node_type == "event":
         if node.is_subclass_of("StartEvent"):
             return "startEventStyle"
@@ -278,6 +294,7 @@ def _render_mermaid(
             "    classDef stepStyle fill:#ADD8E6,color:#000000,line-height:1.2",
             "    classDef externalStyle fill:#BEDAE4,color:#000000,line-height:1.2",
             "    classDef resourceStyle fill:#DDA0DD,color:#000000,line-height:1.2",
+            "    classDef resourceConfigStyle fill:#B2DFDB,color:#000000,line-height:1.2",
             "    classDef startEventStyle fill:#E27AFF,color:#000000",
             "    classDef stopEventStyle fill:#FFA07A,color:#000000",
             "    classDef defaultEventStyle fill:#90EE90,color:#000000",
@@ -867,6 +884,7 @@ def draw_most_recent_execution_mermaid(
         "classDef stepStyle fill:#ADD8E6,color:#000000,line-height:1.2",
         "classDef externalStyle fill:#BEDAE4,color:#000000,line-height:1.2",
         "classDef resourceStyle fill:#DDA0DD,color:#000000,line-height:1.2",
+        "classDef resourceConfigStyle fill:#B2DFDB,color:#000000,line-height:1.2",
         "classDef startEventStyle fill:#E27AFF,color:#000000",
         "classDef stopEventStyle fill:#FFA07A,color:#000000",
         "classDef defaultEventStyle fill:#90EE90,color:#000000",
