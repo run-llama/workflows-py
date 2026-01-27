@@ -48,6 +48,8 @@ def _get_node_color(node: WorkflowGraphNode) -> str:
         return "#ADD8E6"  # Light blue for steps
     elif node.node_type == "external":
         return "#BEDAE4"  # Light blue-gray for external
+    elif node.node_type == "child_connector":
+        return "#E0E0E0"  # Light gray for child workflow connectors
     elif node.node_type == "resource":
         return "#DDA0DD"  # Plum/light purple for resources
     elif node.node_type == "resource_config":
@@ -82,6 +84,8 @@ def _get_node_shape(node: WorkflowGraphNode) -> str:
     """Determine shape for a node based on its type."""
     if node.node_type in ("step", "external"):
         return "box"
+    elif node.node_type == "child_connector":
+        return "ellipse"
     elif node.node_type == "event":
         return "ellipse"
     elif node.node_type == "resource":
@@ -187,6 +191,8 @@ def _get_mermaid_css_class(node: WorkflowGraphNode) -> str:
         return "stepStyle"
     elif node.node_type == "external":
         return "externalStyle"
+    elif node.node_type == "child_connector":
+        return "childConnectorStyle"
     elif node.node_type == "resource":
         return "resourceStyle"
     elif node.node_type == "resource_config":
@@ -306,6 +312,7 @@ def _render_mermaid(
             "    classDef workflowAgentStyle fill:#66ccff,color:#000000",
             "    classDef workflowToolStyle fill:#ff9966,color:#000000",
             "    classDef workflowHandoffStyle fill:#E27AFF,color:#000000",
+            "    classDef childConnectorStyle fill:#E0E0E080,color:#555555,stroke-width:0px",
         ]
     )
 
@@ -616,7 +623,7 @@ def _get_nested_workflow_representation(
                 )
             )
 
-        # 3. Stitch: Parent Step -> Child Start
+        # 3. Stitch: Parent Step -> "calls" node -> Child Start
         child_start_id = next(
             (
                 n.id
@@ -626,15 +633,24 @@ def _get_nested_workflow_representation(
             None,
         )
         if child_start_id:
+            calls_node_id = f"{prefix}calls"
+            parent_graph.nodes.append(
+                WorkflowGenericNode(
+                    id=calls_node_id,
+                    label=f"calls: {class_name}",
+                    node_type="child_connector",
+                )
+            )
+            parent_graph.edges.append(
+                WorkflowGraphEdge(source=parent_step_id, target=calls_node_id)
+            )
             parent_graph.edges.append(
                 WorkflowGraphEdge(
-                    source=parent_step_id,
-                    target=f"{prefix}{child_start_id}",
-                    label=f"calls: {class_name}",
+                    source=calls_node_id, target=f"{prefix}{child_start_id}"
                 )
             )
 
-        # 4. Stitch: Child Stop -> Parent Step
+        # 4. Stitch: Child Stop -> "returns" node -> Parent Step
         child_stop_id = next(
             (
                 n.id
@@ -644,12 +660,21 @@ def _get_nested_workflow_representation(
             None,
         )
         if child_stop_id:
+            returns_node_id = f"{prefix}returns"
+            parent_graph.nodes.append(
+                WorkflowGenericNode(
+                    id=returns_node_id,
+                    label=f"returns: {class_name}",
+                    node_type="child_connector",
+                )
+            )
             parent_graph.edges.append(
                 WorkflowGraphEdge(
-                    source=f"{prefix}{child_stop_id}",
-                    target=parent_step_id,
-                    label=f"returns: {class_name}",
+                    source=f"{prefix}{child_stop_id}", target=returns_node_id
                 )
+            )
+            parent_graph.edges.append(
+                WorkflowGraphEdge(source=returns_node_id, target=parent_step_id)
             )
 
     # --- Discovery and Execution Loop ---
@@ -685,6 +710,7 @@ def draw_all_possible_flows(
     filename: str = "workflow_all_flows.html",
     notebook: bool = False,
     max_label_length: int | None = None,
+    include_child_workflows: bool = True,
 ) -> None:
     """
     Draws all possible flows of the workflow using Pyvis.
@@ -694,9 +720,12 @@ def draw_all_possible_flows(
         filename: Output HTML filename
         notebook: Whether running in notebook environment
         max_label_length: Maximum label length before truncation (None = no limit)
+        include_child_workflows: Whether to include child workflow graphs
 
     """
-    graph = _get_workflow_representation(workflow)
+    graph = _get_nested_workflow_representation(
+        workflow, include_child_workflows=include_child_workflows
+    )
     _render_pyvis(graph, filename, notebook, max_label_length)
 
 
