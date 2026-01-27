@@ -561,3 +561,96 @@ def test_resource_node_deduplication_in_rendering(
     assert len(resource_node_defs) == 2, (
         f"Expected 2 unique resource nodes, found {len(resource_node_defs)}: {resource_node_defs}"
     )
+
+
+def test_draw_all_possible_flows_with_child_workflow_mermaid(
+    nested_workflow: Workflow,
+) -> None:
+    """Test Mermaid diagram generation for nested workflows."""
+    result = draw_all_possible_flows_mermaid(
+        nested_workflow, include_child_workflows=True
+    )
+
+    # Basic checks
+    assert isinstance(result, str)
+    assert result.startswith("flowchart TD")
+
+    # Check for parent workflow nodes
+    assert "step_parent_start" in result
+    assert "step_parent_end" in result
+
+    # Check for child workflow nodes (prefixed)
+    assert "step_parent_start_ChildWorkflowA_child_start" in result
+    assert "event_parent_start_ChildWorkflowA_StartEvent" in result
+    assert "event_parent_start_ChildWorkflowA_StopEvent" in result
+
+    # Check for connector nodes (calls/returns are now nodes, not edge labels)
+    assert "child_connector_parent_start_ChildWorkflowA_calls" in result
+    assert "calls: ChildWorkflowA" in result
+    assert "child_connector_parent_start_ChildWorkflowA_returns" in result
+    assert "returns: ChildWorkflowA" in result
+
+    # Parent step -> calls node -> child StartEvent
+    assert (
+        "step_parent_start --> child_connector_parent_start_ChildWorkflowA_calls"
+        in result
+    )
+    assert (
+        "child_connector_parent_start_ChildWorkflowA_calls --> event_parent_start_ChildWorkflowA_StartEvent"
+        in result
+    )
+    # Child StopEvent -> returns node -> parent step
+    assert (
+        "event_parent_start_ChildWorkflowA_StopEvent --> child_connector_parent_start_ChildWorkflowA_returns"
+        in result
+    )
+    assert (
+        "child_connector_parent_start_ChildWorkflowA_returns --> step_parent_start"
+        in result
+    )
+
+
+def test_draw_all_possible_flows_with_child_workflow_pyvis(
+    nested_workflow: Workflow,
+) -> None:
+    """Test Pyvis diagram generation includes nested child workflow nodes and edges."""
+    with patch("llama_index.utils.workflow.Network") as mock_network:
+        mock_net_instance = MagicMock()
+        mock_network.return_value = mock_net_instance
+
+        draw_all_possible_flows(
+            nested_workflow, filename="test.html", include_child_workflows=True
+        )
+
+        node_ids = [call[0][0] for call in mock_net_instance.add_node.call_args_list]
+
+        # Parent nodes present
+        assert "parent_start" in node_ids
+        assert "parent_end" in node_ids
+
+        # Child workflow nodes present (prefixed)
+        assert "parent_start_ChildWorkflowA_child_start" in node_ids
+        assert "parent_start_ChildWorkflowA_StartEvent" in node_ids
+        assert "parent_start_ChildWorkflowA_StopEvent" in node_ids
+
+        # Connector nodes present
+        assert "parent_start_ChildWorkflowA_calls" in node_ids
+        assert "parent_start_ChildWorkflowA_returns" in node_ids
+
+        # Check stitching edges through connector nodes
+        edge_pairs = [
+            (call[0][0], call[0][1])
+            for call in mock_net_instance.add_edge.call_args_list
+        ]
+        # parent_start -> calls node -> child StartEvent
+        assert ("parent_start", "parent_start_ChildWorkflowA_calls") in edge_pairs
+        assert (
+            "parent_start_ChildWorkflowA_calls",
+            "parent_start_ChildWorkflowA_StartEvent",
+        ) in edge_pairs
+        # child StopEvent -> returns node -> parent_start
+        assert (
+            "parent_start_ChildWorkflowA_StopEvent",
+            "parent_start_ChildWorkflowA_returns",
+        ) in edge_pairs
+        assert ("parent_start_ChildWorkflowA_returns", "parent_start") in edge_pairs
