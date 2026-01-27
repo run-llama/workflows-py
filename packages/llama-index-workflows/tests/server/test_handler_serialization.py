@@ -8,12 +8,14 @@ from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
 import pytest
-from workflows.context import Context
 from workflows.events import Event, StopEvent
 from workflows.handler import WorkflowHandler
 from workflows.protocol import HandlerData
 from workflows.server.memory_workflow_store import MemoryWorkflowStore
 from workflows.server.server import _WorkflowHandler
+from workflows.workflow import Workflow
+
+from tests.runtime.conftest import MockRunAdapter
 
 
 class MyStopEvent(StopEvent):
@@ -21,10 +23,19 @@ class MyStopEvent(StopEvent):
 
 
 @pytest.mark.asyncio
-async def test__workflow_handler_to_dict_json_roundtrip() -> None:
-    ctx = MagicMock(spec=Context)
-    handler: WorkflowHandler = WorkflowHandler(ctx=ctx)
-    handler.set_result(MyStopEvent(message="ok"))
+async def test_workflow_handler_to_dict_json_roundtrip() -> None:
+    workflow = MagicMock(spec=Workflow)
+    workflow.workflow_name = "TestWorkflow"
+    adapter = MockRunAdapter(run_id="test-run-id")
+    # Set the result on the adapter
+    stop_event = MyStopEvent(message="ok")
+    adapter.set_result(stop_event)
+
+    handler: WorkflowHandler = WorkflowHandler(
+        workflow=workflow, external_adapter=adapter
+    )
+    # Wait for the result task to complete
+    await asyncio.sleep(0)
 
     queue: asyncio.Queue[Event] = asyncio.Queue()
 

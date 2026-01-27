@@ -4,14 +4,14 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from typing import Optional, Union
 
 import pytest
 from pydantic import BaseModel
 from workflows.context import Context
-from workflows.context.state_store import DictState
 from workflows.decorators import step
-from workflows.errors import WorkflowRuntimeError
+from workflows.errors import ContextStateError, WorkflowRuntimeError
 from workflows.events import (
     Event,
     HumanResponseEvent,
@@ -19,6 +19,8 @@ from workflows.events import (
     StartEvent,
     StopEvent,
 )
+from workflows.plugins.basic import setting_run_id
+from workflows.runtime.types.internal_state import BrokerState
 from workflows.runtime.types.ticks import TickAddEvent
 from workflows.testing import WorkflowTestRunner
 from workflows.workflow import Workflow
@@ -28,6 +30,31 @@ from ..conftest import (  # type: ignore[import]
     LastEvent,
     OneTestEvent,
 )
+
+
+@pytest.fixture()
+def internal_ctx(workflow: Workflow) -> Context:
+    """Create a context directly in internal face for testing store operations."""
+    from workflows.context.state_store import DictState, InMemoryStateStore
+    from workflows.plugins.basic import (
+        AsyncioAdapterQueues,
+        BasicRuntime,
+    )
+
+    # Set up a runtime with state store for this workflow
+    runtime = BasicRuntime()
+    run_id = "test-run"
+    init_state = BrokerState.from_workflow(workflow)
+    # Create queues with state store so get_internal_adapter() returns adapter with store
+    queues = AsyncioAdapterQueues(
+        run_id=run_id,
+        init_state=init_state,
+        state_store=InMemoryStateStore(DictState()),
+    )
+    runtime._queues[run_id] = queues
+    workflow._runtime = runtime
+    with setting_run_id(run_id):
+        return Context._create_internal(workflow=workflow)
 
 
 @pytest.mark.asyncio
@@ -131,39 +158,51 @@ async def test_collect_events_with_extra_event_type() -> None:
     # Verify the collector was called multiple times (once for each event)
     ctx = r.ctx
     assert ctx is not None
-    calls = await ctx.store.get("calls")
+    ctx_dict = ctx.to_dict()
+    # State is serialized as JSON strings under state_data._data
+    calls = json.loads(ctx_dict["state"]["state_data"]["_data"]["calls"])
     # Should be called at least 3 times: once for LastEvent (returns None),
     # once for OneTestEvent (returns None), once for AnotherTestEvent (returns result)
     assert calls >= 3
 
 
 @pytest.mark.asyncio
-async def test_get_default(workflow: Workflow) -> None:
-    c1: Context[DictState] = Context(workflow)
-    assert await c1.store.get("test_key", default=42) == 42
+async def test_get_default(internal_ctx: Context) -> None:
+    assert await internal_ctx.store.get("test_key", default=42) == 42
 
 
 @pytest.mark.asyncio
-async def test_get(ctx: Context) -> None:
-    await ctx.store.set("foo", 42)
-    assert await ctx.store.get("foo") == 42
+async def test_get(internal_ctx: Context) -> None:
+    await internal_ctx.store.set("foo", 42)
+    assert await internal_ctx.store.get("foo") == 42
 
 
 @pytest.mark.asyncio
-async def test_get_not_found(ctx: Context) -> None:
+async def test_get_not_found(internal_ctx: Context) -> None:
     with pytest.raises(ValueError):
-        await ctx.store.get("foo")
+        await internal_ctx.store.get("foo")
 
 
 @pytest.mark.asyncio
-async def test_send_event_step_is_none(workflow: Workflow, ctx: Context) -> None:
+async def test_send_event_step_is_none(workflow: Workflow) -> None:
+    from workflows.context.external_context import ExternalContext
+
     ev = Event(foo="bar")
-    ctx._workflow_run(workflow, start_event=StartEvent())
-    ctx.send_event(ev)
-    await asyncio.sleep(0.01)
-    assert ctx._broker_run is not None
-    replay = ctx._broker_run._tick_log
-    assert TickAddEvent(event=ev, step_name=None) in replay
+    # Create a fresh context and run workflow
+    ctx = Context(workflow)
+    handler = ctx._workflow_run(workflow, start_event=StartEvent())
+    try:
+        handler.ctx.send_event(ev)
+        await asyncio.sleep(0.01)
+        # handler.ctx is a new external context
+        external_face = handler.ctx._face
+        assert isinstance(external_face, ExternalContext)
+        replay = external_face._tick_log
+        assert TickAddEvent(event=ev, step_name=None) in replay
+    finally:
+        external_face = handler.ctx._face
+        assert isinstance(external_face, ExternalContext)
+        await external_face.shutdown()
 
 
 @pytest.mark.asyncio
@@ -185,14 +224,16 @@ async def test_send_event_to_wrong_step(ctx: Context) -> None:
 
 @pytest.mark.asyncio
 async def test_empty_inprogress_when_workflow_done(workflow: Workflow) -> None:
+    from workflows.context.external_context import ExternalContext
+
     result = await WorkflowTestRunner(workflow).run()
     ctx = result.ctx
 
     # there shouldn't be any in progress events
     assert ctx is not None
-    assert ctx._broker_run is not None
+    assert isinstance(ctx._face, ExternalContext)
     # After workflow completion, in_progress should be empty for all steps
-    state = ctx._broker_run._state
+    state = ctx._face._state
     for step_name, worker_state in state.workers.items():
         assert len(worker_state.in_progress) == 0, (
             f"Step {step_name} has {len(worker_state.in_progress)} in-progress events"
@@ -230,6 +271,7 @@ class CustomState(BaseModel):
 @pytest.mark.asyncio
 async def test_wait_for_event_in_workflow_serialization() -> None:
     """Ensure hitl works with serialization and custom state."""
+    from workflows.context.external_context import ExternalContext
 
     class TestWorkflow(Workflow):
         @step
@@ -264,9 +306,9 @@ async def test_wait_for_event_in_workflow_serialization() -> None:
     # verify creating a new context has the correct state
     new_ctx = Context.from_dict(workflow, ctx_dict)
     new_handler = workflow.run(ctx=new_ctx)
-    assert new_ctx._broker_run
+    assert isinstance(new_handler.ctx._face, ExternalContext)
     # Check that the waiters are properly restored
-    state = new_ctx._broker_run._state
+    state = new_handler.ctx._face._state
     total_waiters = sum(
         len(worker.collected_waiters) for worker in state.workers.values()
     )
@@ -277,9 +319,9 @@ async def test_wait_for_event_in_workflow_serialization() -> None:
     new_handler.ctx.send_event(Event(msg="bar"))
     result = await new_handler
     assert result == "bar"
-    assert new_handler.ctx._broker_run
+    assert isinstance(new_handler.ctx._face, ExternalContext)
     # After workflow completion, there should be no more waiters
-    state = new_handler.ctx._broker_run._state
+    state = new_handler.ctx._face._state
     total_waiters = sum(
         len(worker.collected_waiters) for worker in state.workers.values()
     )
@@ -379,8 +421,180 @@ async def test_wait_for_multiple_events_in_workflow() -> None:
 
 
 @pytest.mark.asyncio
-async def test_clear(ctx: Context) -> None:
-    await ctx.store.set("test_key", 42)
-    await ctx.store.clear()
-    res = await ctx.store.get("test_key", default=None)
+async def test_clear(internal_ctx: Context) -> None:
+    await internal_ctx.store.set("test_key", 42)
+    await internal_ctx.store.clear()
+    res = await internal_ctx.store.get("test_key", default=None)
     assert res is None
+
+
+# ============================================================================
+# Context State Validation Tests (HIGH PRIORITY coverage gaps)
+# ============================================================================
+
+
+@pytest.mark.asyncio
+async def test_running_steps_before_run_raises(workflow: Workflow) -> None:
+    """Calling running_steps() before workflow.run() should raise ContextStateError."""
+    ctx = Context(workflow)
+    with pytest.raises(ContextStateError, match="requires a running workflow"):
+        await ctx.running_steps()
+
+
+@pytest.mark.asyncio
+async def test_store_access_outside_step_raises() -> None:
+    """Accessing ctx.store from handler code (outside step) should raise ContextStateError."""
+
+    class SimpleWorkflow(Workflow):
+        @step
+        async def only(self, ev: StartEvent) -> StopEvent:
+            return StopEvent(result="done")
+
+    wf = SimpleWorkflow()
+    handler = wf.run()
+
+    # Attempt to access store from external context (handler code)
+    with pytest.raises(ContextStateError, match="only available from within step"):
+        _ = handler.ctx.store
+
+    await handler
+
+
+@pytest.mark.asyncio
+async def test_to_dict_before_run_raises(workflow: Workflow) -> None:
+    """Calling to_dict() before workflow.run() should raise ContextStateError."""
+    ctx = Context(workflow)
+    with pytest.raises(ContextStateError, match="requires a running workflow"):
+        ctx.to_dict()
+
+
+@pytest.mark.asyncio
+async def test_stream_events_before_run_raises(workflow: Workflow) -> None:
+    """Calling stream_events() before workflow.run() should raise ContextStateError."""
+    ctx = Context(workflow)
+    with pytest.raises(ContextStateError, match="requires a running workflow"):
+        ctx.stream_events()
+
+
+# ============================================================================
+# Cancel/SendEvent Warning Tests (MEDIUM PRIORITY coverage gaps)
+# ============================================================================
+
+
+@pytest.mark.asyncio
+async def test_cancel_before_start_warns(workflow: Workflow) -> None:
+    """Calling cancel before run() should emit warning."""
+    from workflows.context.context import _warn_cancel_before_start
+
+    # Clear the lru_cache to ensure warning fires
+    _warn_cancel_before_start.cache_clear()
+
+    ctx = Context(workflow)
+    with pytest.warns(UserWarning, match="cancel.*called before workflow started"):
+        ctx._workflow_cancel_run()
+
+
+@pytest.mark.asyncio
+async def test_send_event_before_start_warns(workflow: Workflow) -> None:
+    """Sending event before run() should emit warning about dropped event."""
+    from workflows.context.context import _warn_send_event_before_start
+
+    # Clear the lru_cache to ensure warning fires
+    _warn_send_event_before_start.cache_clear()
+
+    ctx = Context(workflow)
+    with pytest.warns(UserWarning, match="send_event.*called before workflow started"):
+        ctx.send_event(Event())
+
+
+@pytest.mark.asyncio
+async def test_is_running_in_step_warns() -> None:
+    """Calling is_running from within a step should emit deprecation warning."""
+    from workflows.context.context import _warn_is_running_in_step
+
+    # Clear the lru_cache to ensure warning fires
+    _warn_is_running_in_step.cache_clear()
+
+    is_running_value = None
+
+    class TestWorkflow(Workflow):
+        @step
+        async def check_running(self, ctx: Context, ev: StartEvent) -> StopEvent:
+            nonlocal is_running_value
+            is_running_value = ctx.is_running
+            return StopEvent(result="done")
+
+    wf = TestWorkflow()
+    with pytest.warns(DeprecationWarning, match="is_running called from within a step"):
+        await wf.run()
+
+    # Should still return True despite the warning
+    assert is_running_value is True
+
+
+@pytest.mark.asyncio
+async def test_cancel_in_step_warns() -> None:
+    """Calling cancel from within a step should emit warning."""
+    from workflows.context.context import _warn_cancel_in_step
+
+    # Clear the lru_cache to ensure warning fires
+    _warn_cancel_in_step.cache_clear()
+
+    class TestWorkflow(Workflow):
+        @step
+        async def cancel_self(self, ctx: Context, ev: StartEvent) -> StopEvent:
+            ctx._workflow_cancel_run()
+            return StopEvent(result="done")
+
+    wf = TestWorkflow()
+    with pytest.warns(UserWarning, match="cancel.*called from within a step"):
+        await wf.run()
+
+
+@pytest.mark.asyncio
+async def test_get_result_before_complete_raises() -> None:
+    """Calling get_result() while workflow still running should raise WorkflowRuntimeError."""
+    from workflows.context.context import _warn_get_result
+
+    # Clear the lru_cache to ensure deprecation warning fires
+    _warn_get_result.cache_clear()
+
+    step_started = asyncio.Event()
+    step_continue = asyncio.Event()
+
+    class SlowWorkflow(Workflow):
+        @step
+        async def slow(self, ev: StartEvent) -> StopEvent:
+            step_started.set()
+            await step_continue.wait()
+            return StopEvent(result="done")
+
+    wf = SlowWorkflow()
+    handler = wf.run()
+
+    # Wait for step to start
+    await step_started.wait()
+
+    # Try to get result before workflow completes - should raise
+    with pytest.warns(DeprecationWarning):  # get_result is deprecated
+        with pytest.raises(WorkflowRuntimeError, match="is not complete"):
+            handler.ctx.get_result()
+
+    # Let workflow complete
+    step_continue.set()
+    await handler
+
+
+@pytest.mark.asyncio
+async def test_get_result_pre_context_raises(workflow: Workflow) -> None:
+    """Calling get_result() before run() should raise ContextStateError."""
+    from workflows.context.context import _warn_get_result
+
+    # Clear the lru_cache to ensure deprecation warning fires
+    _warn_get_result.cache_clear()
+
+    ctx = Context(workflow)
+
+    with pytest.warns(DeprecationWarning):  # get_result is deprecated
+        with pytest.raises(ContextStateError, match="requires a running workflow"):
+            ctx.get_result()
