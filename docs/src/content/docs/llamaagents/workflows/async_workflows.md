@@ -1,18 +1,38 @@
 ---
 sidebar:
   order: 15
-title: Working with blocking code
+title: Writing async workflows
 ---
 
-Workflows are built on top of Python's `asyncio` event loop. Every workflow step is an `async` function, and the runtime relies on cooperative multitasking: while one step is `await`-ing (for example, waiting for an LLM response or a network call), other steps and workflows are free to make progress.
+Workflows run on Python's `asyncio` event loop. The runtime uses cooperative multitasking: while one step is `await`-ing (for example, waiting for an LLM response or a network call), other steps and workflows are free to make progress.
 
-**Blocking code breaks this model.** If a step calls a synchronous function that takes a long time to return — whether it's doing I/O or heavy computation — the entire event loop stalls. No other steps, workflows, or even unrelated async tasks can run until that blocking call finishes.
+Steps can be defined as either `async def` or plain `def`. This page covers how each behaves and how to handle blocking or CPU-intensive work without stalling the event loop.
 
-This page covers how to safely integrate blocking code into your workflows.
+## Sync steps (`def` instead of `async def`)
 
-## Blocking I/O libraries
+Workflow steps can be defined as plain `def` functions instead of `async def`. When the runtime encounters a sync step, it automatically offloads the entire function to the default thread pool using `asyncio.get_event_loop().run_in_executor()`, so the event loop is never blocked:
 
-Many Python libraries only offer synchronous APIs: database drivers, HTTP clients, file system operations, SDK calls, and more. When you need to use one of these inside a workflow step, offload the call to a thread pool using `asyncio.to_thread`:
+```python
+from workflows import Workflow, step
+from workflows.events import StartEvent, StopEvent
+import requests
+
+
+class SyncStepWorkflow(Workflow):
+    @step
+    def fetch_data(self, ev: StartEvent) -> StopEvent:
+        # This runs in a thread automatically — the event loop stays free
+        response = requests.get("https://api.example.com/data")
+        return StopEvent(result=response.json())
+```
+
+This is the simplest option when your step body is entirely synchronous. The framework handles the thread-offloading for you, including preserving `contextvars` across the thread boundary.
+
+However, there are cases where you still need finer-grained control inside an `async def` step — for example, when only part of the step is blocking, or when you want to use a dedicated executor for CPU-heavy work. The sections below cover those scenarios.
+
+## Blocking I/O in async steps
+
+Many Python libraries only offer synchronous APIs: database drivers, HTTP clients, file system operations, SDK calls, and more. When you need to use one of these inside an `async def` workflow step, offload the call to a thread pool using `asyncio.to_thread`:
 
 ```python
 import asyncio
@@ -120,7 +140,8 @@ Note that functions submitted to a `ProcessPoolExecutor` must be picklable (top-
 
 | Scenario | Solution | Why |
 |---|---|---|
-| Synchronous I/O (HTTP, DB, file) | `await asyncio.to_thread(fn, ...)` | Frees the event loop while I/O completes in a thread |
+| Entire step is synchronous | Define the step as `def` instead of `async def` | The runtime automatically runs it in a thread pool |
+| Blocking call inside an `async def` step | `await asyncio.to_thread(fn, ...)` | Frees the event loop while I/O completes in a thread |
 | CPU-intensive work | `await loop.run_in_executor(pool, fn, ...)` with a small dedicated pool | Queues heavy computation so it doesn't starve the event loop or other tasks |
 
-The core principle is straightforward: **never let a workflow step block the asyncio event loop.** Any work that isn't natively async should be offloaded to a thread or process and `await`-ed, so the runtime can continue processing other steps and workflows concurrently.
+The core principle is straightforward: **never block the asyncio event loop.** For fully synchronous steps, use a plain `def` and let the framework handle threading. For blocking calls within an `async def` step, offload them to a thread or process and `await` the result.
