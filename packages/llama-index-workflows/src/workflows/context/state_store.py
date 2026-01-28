@@ -1,14 +1,24 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 LlamaIndex Inc.
+
+from __future__ import annotations
+
 import asyncio
+import functools
 import warnings
 from contextlib import asynccontextmanager
-from typing import Any, AsyncGenerator, Generic, Optional, Type
+from typing import TYPE_CHECKING, Any, AsyncGenerator, Generic, Type
 
 from pydantic import BaseModel, ValidationError
 from typing_extensions import TypeVar
 
+from workflows.decorators import StepConfig
 from workflows.events import DictLikeModel
 
 from .serializers import BaseSerializer
+
+if TYPE_CHECKING:
+    from workflows.workflow import Workflow
 
 MAX_DEPTH = 1000
 
@@ -99,8 +109,16 @@ class InMemoryStateStore(Generic[MODEL_T]):
 
     def __init__(self, initial_state: MODEL_T):
         self._state = initial_state
-        self._lock = asyncio.Lock()
         self.state_type = type(initial_state)
+
+    @functools.cached_property
+    def _lock(self) -> asyncio.Lock:
+        """Lazy lock initialization for Python 3.14+ compatibility.
+
+        asyncio.Lock() requires a running event loop in Python 3.14+.
+        Using cached_property defers creation to first use in async context.
+        """
+        return asyncio.Lock()
 
     async def get_state(self) -> MODEL_T:
         """Return a shallow copy of the current state model.
@@ -255,7 +273,7 @@ class InMemoryStateStore(Generic[MODEL_T]):
 
             self._state = state
 
-    async def get(self, path: str, default: Optional[Any] = Ellipsis) -> Any:
+    async def get(self, path: str, default: Any = Ellipsis) -> Any:
         """Get a nested value using dot-separated paths.
 
         Supports dict keys, list indices, and attribute access transparently at
@@ -370,3 +388,84 @@ class InMemoryStateStore(Generic[MODEL_T]):
 
         # fallback to attribute assignment
         setattr(obj, segment, value)
+
+
+def infer_state_type(workflow: "Workflow") -> type[BaseModel]:
+    """Infer the state type from workflow step configs.
+
+    Looks at Context[T] annotations in step functions to determine
+    the expected state type. Returns DictState if no typed state is found.
+
+    Args:
+        workflow: The workflow to inspect for state type annotations.
+
+    Returns:
+        The inferred state type, or DictState if none found.
+
+    Raises:
+        ValueError: If multiple different state types are found.
+    """
+    state_types: set[type[BaseModel]] = set()
+    for _, step_func in workflow._get_steps().items():
+        step_config: StepConfig = step_func._step_config
+        if (
+            step_config.context_state_type is not None
+            and step_config.context_state_type != DictState
+            and issubclass(step_config.context_state_type, BaseModel)
+        ):
+            state_types.add(step_config.context_state_type)
+
+    state_type: Type[BaseModel]
+    if state_types:
+        state_type = _find_most_derived_state_type(state_types)
+    else:
+        state_type = DictState
+
+    return state_type
+
+
+def _find_most_derived_state_type(state_types: set[Type[BaseModel]]) -> Type[BaseModel]:
+    """Find the most derived (most specific) state type from a set of types.
+
+    All types must be in a single inheritance chain, i.e., one type must be
+    a subclass of all other types (the most derived type).
+
+    Args:
+        state_types: Set of state types to analyze.
+
+    Returns:
+        The most derived type in the inheritance hierarchy.
+
+    Raises:
+        ValueError: If types are not in a compatible inheritance hierarchy.
+    """
+    type_list = list(state_types)
+
+    if len(type_list) == 1:
+        return type_list[0]
+
+    # Find the most derived type - it should be a subclass of all others
+    most_derived: Type[BaseModel] | None = None
+
+    for candidate in type_list:
+        is_most_derived = True
+        for other in type_list:
+            if other is candidate:
+                continue
+            # candidate must be a subclass of other (or equal to it)
+            if not issubclass(candidate, other):
+                is_most_derived = False
+                break
+        if is_most_derived:
+            most_derived = candidate
+            break
+
+    if most_derived is None:
+        # No single type is a subclass of all others - incompatible hierarchy
+        raise ValueError(
+            "Multiple state types are not in a compatible inheritance hierarchy. "
+            "All state types must share a common inheritance chain. Found: "
+            + ", ".join([st.__name__ for st in state_types])
+        )
+
+    return most_derived
