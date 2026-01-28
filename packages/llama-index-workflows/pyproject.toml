@@ -53,4 +53,5 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 
 [tool.uv.build-backend]
-module-name = "workflows"
+module-name = ["workflows", "llama_agents.workflows"]
+namespace = true
