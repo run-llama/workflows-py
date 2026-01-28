@@ -280,7 +280,7 @@ def ResourceConfig(
     description: str | None = None,
 ) -> _ResourceConfig:
     """
-    Wrapper for a _ResourceConfig.
+    Create a config-backed resource that loads a Pydantic model from a JSON file.
 
     Args:
         config_file: JSON file where the configuration is stored.
@@ -290,6 +290,37 @@ def ResourceConfig(
 
     Returns:
         _ResourceConfig: A configured resource representation.
+
+    Example:
+        ```python
+        from typing import Annotated
+        from pydantic import BaseModel
+        from workflows import Workflow, step
+        from workflows.events import StartEvent, StopEvent
+        from workflows.resource import ResourceConfig
+
+
+        class ClassifierConfig(BaseModel):
+            categories: list[str]
+            threshold: float
+
+
+        class MyWorkflow(Workflow):
+            @step
+            async def classify(
+                self,
+                ev: StartEvent,
+                config: Annotated[
+                    ClassifierConfig,
+                    ResourceConfig(
+                        config_file="classifier.json",
+                        label="Classifier",
+                        description="Classification categories and threshold",
+                    ),
+                ],
+            ) -> StopEvent:
+                return StopEvent(result=config.categories)
+        ```
     """
     return _ResourceConfig(
         config_file=config_file,

@@ -1,7 +1,7 @@
 ---
 title: Agent Data (Python)
 sidebar:
-  order: 21
+  order: 31
 ---
 :::caution
 Cloud deployments of LlamaAgents are now in beta preview and broadly available for feedback. You can try them out locally or deploy to LlamaCloud and send us feedback with the in-app button.
