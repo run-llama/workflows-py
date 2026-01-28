@@ -95,7 +95,7 @@ class DocumentClassifier(Workflow):
 ### Parameters
 
 - `config_file`: Path to the JSON file containing the configuration.
-- `path_selector`: Optional JSON path to extract a nested value (e.g., `"settings.classifier"`).
+- `path_selector`: Optional "." delimited JSON path to extract a nested value from the json in the config file (e.g., `"settings.classifier"`).
 - `label`: Optional display name for workflow visualizations.
 - `description`: Optional description for workflow visualizations.
 
