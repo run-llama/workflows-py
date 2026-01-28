@@ -1,5 +1,18 @@
 # llama-index-workflows
 
+## 2.14.0
+
+### Minor Changes
+
+- 2900f58: Support state type inheritance in workflows
+
+### Patch Changes
+
+- 3a23363: Update debugger assets
+
+  - JavaScript: https://cdn.jsdelivr.net/npm/@llamaindex/workflow-debugger@0.2.15/dist/app.js
+  - CSS: https://cdn.jsdelivr.net/npm/@llamaindex/workflow-debugger@0.2.15/dist/app.css
+
 ## 2.13.1
 
 ### Patch Changes

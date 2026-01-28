@@ -1,5 +1,11 @@
 # llama-index-utils-workflow
 
+## 0.8.1
+
+### Patch Changes
+
+- 0e826b1: Added in the utility function draw_all_possible_flows_nested_mermaid. This draws the possible flows (not execution) of nested workflows
+
 ## 0.8.0
 
 ### Minor Changes
