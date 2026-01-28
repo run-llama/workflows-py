@@ -4,34 +4,25 @@ sidebar:
   order: 10
 ---
 
-Agent Builder is a natural language interface for creating document workflows in LlamaCloud. Describe what you want to extract from your documents in plain English, watch as an AI coding agent generates a complete workflow, and deploy it with a single click.
+Agent Builder is a natural language interface for creating document workflows in LlamaCloud. Describe what you want to extract from your documents in plain English, and an AI coding agent generates a complete workflow you can deploy with a few clicks. The generated code is yours. It's a real Python project in your GitHub repository that you can customize, extend, or deploy on your own infrastructure.
 
-<!-- Screenshot placeholder: Agent Builder landing page with chat interface -->
+![Agent Builder UI](./assets/agent-builder.jpg)
 
 ## How It Works
 
-Agent Builder uses an AI coding agent to transform your descriptions into working document pipelines:
+Agent Builder transforms your descriptions into working document pipelines:
 
 1. **Describe** your extraction needs in plain English
-2. **Watch** as the AI generates your workflow in real-time
-3. **Review** the visual workflow graph showing each step
-4. **Deploy** to LlamaCloud with one click
+2. **Review** the generated workflow code and visual graph
+3. **Deploy** to LlamaCloud, or take the code and run it on your own infrastructure
 
-### The Workflow Visualization
-
-As the agent builds your workflow, you'll see a visual graph that shows exactly what your pipeline does. Each node represents a step—parsing documents, classifying them, extracting data, or validating results.
-
-<!-- Screenshot placeholder: Workflow visualization sidebar showing a multi-step pipeline with nodes for parse, classify, and extract -->
-
-This visualization is the core output of Agent Builder. It makes the abstract concrete: instead of reading code, you see your pipeline as a flowchart you can understand at a glance.
-
-The agent understands LlamaCloud services and their configuration. You can ask it to adjust extraction schemas, change classification rules, or modify any aspect of your workflow through conversation.
+The agent understands LlamaCloud services and can configure extraction schemas, classification rules, and multi-step pipelines through conversation.
 
 ## Building Your First Workflow
 
 ### Start a New Session
 
-From the LlamaCloud dashboard, navigate to **Agents** and click **Start Building**. This opens Agent Builder's chat interface where you'll describe your workflow.
+From the LlamaCloud dashboard, navigate to **Agents** and click **Start Building**. This opens the chat interface where you'll describe your workflow.
 
 ### Describe What You Want
 
@@ -47,17 +38,7 @@ The agent will ask clarifying questions if it needs more detail about your requi
 
 ### Watch Your Workflow Take Shape
 
-As the agent works, you'll see:
-
-- **Real-time activity** showing files being created and modified
-- **The workflow visualization** updating as steps are added
-- **Explanations** of what's being built and why
-
-The visualization shows your complete pipeline—you can see how documents flow through parsing, classification, extraction, and any validation steps.
-
-### Review and Iterate
-
-Once generation completes, review the workflow visualization. You can continue chatting to refine it:
+As the agent works, you'll see real-time activity showing files being created and modified, along with a visual graph of the pipeline steps. Once generation completes, you can continue chatting to refine it:
 
 - Adjust the extraction schema to capture additional fields
 - Add validation rules to check extracted data
@@ -76,8 +57,6 @@ Deployment requires a GitHub account. Your workflow code will be stored in a Git
 
 ### Step 1: Connect GitHub
 
-<!-- Screenshot placeholder: GitHub OAuth authorization step -->
-
 Click **Connect GitHub** to authorize LlamaCloud to access your GitHub account. This uses standard GitHub OAuth and allows LlamaCloud to create repositories on your behalf.
 
 ### Step 2: Create or Select a Repository
@@ -89,8 +68,8 @@ Choose where to store your workflow code:
 
 ### Step 3: Install the LlamaCloud GitHub App
 
-:::caution
-This is a separate step from OAuth. The GitHub App grants LlamaCloud's deployment infrastructure access to your repository.
+:::info
+This is a separate step from GitHub user authentication. The GitHub App grants LlamaCloud's deployment infrastructure access to your organization or repository.
 :::
 
 You'll be prompted to install the **LlamaCloud GitHub App** on your repository. This grants LlamaCloud permission to:
@@ -98,7 +77,7 @@ You'll be prompted to install the **LlamaCloud GitHub App** on your repository. 
 - Read your repository contents
 - Deploy updates when you push changes
 
-**Why both OAuth and the GitHub App?** OAuth lets you authorize actions as yourself (like creating repositories). The GitHub App lets LlamaCloud's deployment infrastructure access your repo independently to build and deploy your workflow.
+**Why both OAuth and the GitHub App?** OAuth lets you authorize actions as yourself (like creating repositories). The GitHub App lets LlamaCloud's deployment infrastructure autonomously access your repo independently to build and deploy your workflow.
 
 ### Step 4: Configure and Deploy
 
@@ -121,7 +100,7 @@ Once deployment status shows **Running**, your workflow is ready to use:
 
 ### Customizing Your Workflow Code
 
-Your workflow is a real Python project in your GitHub repository. You can customize it beyond what the chat interface provides:
+Your workflow is a real Python project using the open-source [Workflows](/python/llamaagents/workflows/index) framework. You can customize it beyond what the chat interface provides:
 
 1. Clone the repository locally
 2. Edit the workflow code directly
@@ -147,10 +126,3 @@ From the LlamaCloud dashboard, you can:
 - **Delete** deployments you no longer need
 
 For full deployment management details, see [Click-to-Deploy](/python/llamaagents/llamactl/click-to-deploy).
-
-## Next Steps
-
-- [LlamaExtract](/python/cloud/llamaextract/getting_started) — Learn about extraction schemas and configuration
-- [LlamaClassify](/python/cloud/llamaclassify/getting_started) — Understand document classification
-- [Agent Workflows](/python/llamaagents/workflows/) — Deep dive into workflow architecture
-- [Configuration Reference](/python/llamaagents/llamactl/configuration-reference) — Project structure and settings
