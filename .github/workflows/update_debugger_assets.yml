@@ -48,8 +48,8 @@ jobs:
 
       - name: Create changeset for patch version
         run: |
-          # Create a changeset file with a unique name
-          CHANGESET_FILE=".changeset/update-debugger-assets-$(date +%s).md"
+          # Use a deterministic filename so multiple updates accumulate into one changelog entry
+          CHANGESET_FILE=".changeset/update-debugger-assets.md"
           cat > "$CHANGESET_FILE" << 'EOF'
           ---
           "llama-index-workflows": patch
