@@ -34,9 +34,12 @@ dependencies = [
   "typing-extensions>=4.6.0"
 ]
 
+# backward compatibility, for when these were embedded.
+# Optionals are now just an alias to additionally install
+# a less pinned version of the client/server packages.
 [project.optional-dependencies]
-server = ["starlette>=0.39.0", "uvicorn>=0.32.0"]
-client = ["httpx>=0.28.1,<1"]
+server = ["llama-index-workflows-server>=0.1.0,<1.0.0"]
+client = ["llama-index-workflows-client>=0.1.0,<1.0.0"]
 
 [tool.hatch.envs.server]
 features = ["server"]
@@ -50,4 +53,5 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 
 [tool.uv.build-backend]
-module-name = "workflows"
+module-name = ["workflows", "llama_agents.workflows"]
+namespace = true

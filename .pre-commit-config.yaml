@@ -34,6 +34,7 @@ repos:
     rev: v1.15.0
     hooks:
       - id: mypy
+        exclude: ^packages/(llama-index-workflows-server|llama-index-workflows-client|llama-index-utils-workflow|workflows-dev)/tests/
         additional_dependencies:
           [
             "types-Deprecated",
