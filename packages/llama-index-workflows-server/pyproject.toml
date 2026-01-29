@@ -1,0 +1,26 @@
+[build-system]
+requires = ["uv_build>=0.9.6,<0.10.0"]
+build-backend = "uv_build"
+
+[project]
+name = "llama-index-workflows-server"
+version = "0.1.0"
+description = "HTTP server for deploying and serving LlamaIndex workflows as web services"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+  "llama-index-workflows>=2.12.0,<3.0.0",
+  "llama-index-workflows-client>=0.1.0,<0.2.0",
+  "starlette>=0.39.0",
+  "uvicorn>=0.32.0"
+]
+
+[project.scripts]
+llama-index-workflows-server = "llama_agents.server.__main__:run_server"
+
+[tool.uv.build-backend]
+module-name = "llama_agents.server"
+
+[tool.uv.sources]
+llama-index-workflows = {workspace = true}
+llama-index-workflows-client = {workspace = true}

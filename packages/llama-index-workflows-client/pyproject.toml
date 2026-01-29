@@ -1,0 +1,20 @@
+[build-system]
+requires = ["uv_build>=0.9.6,<0.10.0"]
+build-backend = "uv_build"
+
+[project]
+name = "llama-index-workflows-client"
+version = "0.1.0"
+description = "HTTP client for connecting to and interacting with LlamaIndex workflow servers"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+  "httpx>=0.28.1,<1",
+  "llama-index-workflows>=2.12.0,<3.0.0"
+]
+
+[tool.uv.build-backend]
+module-name = "llama_agents.client"
+
+[tool.uv.sources]
+llama-index-workflows = {workspace = true}

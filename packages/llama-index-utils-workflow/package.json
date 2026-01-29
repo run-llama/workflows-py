@@ -3,5 +3,8 @@
   "version": "0.8.0",
   "private": false,
   "license": "MIT",
-  "scripts": {}
+  "scripts": {},
+  "dependencies": {
+    "llama-index-workflows": "workspace:*"
+  }
 }

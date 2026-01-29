@@ -25,6 +25,14 @@ root = "packages/llama-index-workflows"
 pythonVersion = "3.9"
 
 [[tool.basedpyright.executionEnvironments]]
+root = "packages/llama-index-workflows-client"
+pythonVersion = "3.9"
+
+[[tool.basedpyright.executionEnvironments]]
+root = "packages/llama-index-workflows-server"
+pythonVersion = "3.9"
+
+[[tool.basedpyright.executionEnvironments]]
 root = "packages/llama-index-utils-workflow"
 pythonVersion = "3.9"
 
@@ -39,9 +47,21 @@ pythonVersion = "3.13"
 [[tool.basedpyright.executionEnvironments]]
 root = "examples"
 pythonVersion = "3.14"
+reportMissingImports = false
 
 [tool.coverage.run]
 omit = ["**/tests/*"]
+
+[tool.mypy]
+explicit_package_bases = true
+exclude = [
+  "packages/llama-index-workflows-server/tests/",
+  "packages/llama-index-workflows-client/tests/",
+  "packages/llama-index-utils-workflow/tests/",
+  "packages/workflows-dev/tests/",
+  "packages/llama-index-workflows/src/llama_agents/",
+  "packages/llama-index-workflows/tests/test_llama_agents_alias.py"
+]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
@@ -75,19 +95,24 @@ select = [
 "__main__.py" = ["T201"]
 
 [tool.ty.src]
-exclude = ["**/uv.lock", "**/.gitignore"]
+# Exclude llama_agents.workflows alias (dynamic import aliasing not understood by static analyzers)
+exclude = ["**/uv.lock", "**/.gitignore", "**/llama_agents/workflows/**", "**/test_llama_agents_alias.py"]
 
 [tool.uv.sources]
 llama-index-workflows = {workspace = true}
 llama-index-utils-workflow = {workspace = true}
-workflows-dev = {workspace = true}
 llama-index-integration-tests = {workspace = true}
+llama-index-workflows-client = {workspace = true}
+llama-index-workflows-server = {workspace = true}
+workflows-dev = {workspace = true}
 
 [tool.uv.workspace]
 members = [
+  "docs/api_docs",
   "packages/llama-index-workflows",
   "packages/llama-index-utils-workflow",
   "packages/workflows-dev",
   "packages/llama-index-integration-tests",
-  "docs/api_docs"
+  "packages/llama-index-workflows-client",
+  "packages/llama-index-workflows-server"
 ]

@@ -1,9 +1,9 @@
 import asyncio
 
+from llama_agents.server import WorkflowServer
 from workflows import Workflow, step
 from workflows.context import Context
 from workflows.events import Event, StartEvent, StopEvent
-from workflows.server import WorkflowServer
 
 
 class StreamEvent(Event):

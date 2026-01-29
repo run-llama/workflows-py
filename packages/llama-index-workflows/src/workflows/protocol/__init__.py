@@ -1,73 +1,36 @@
-from __future__ import annotations
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 LlamaIndex Inc.
+"""Re-export protocol types from the optional llama-index-workflows-client package."""
 
-from typing import Any, Literal
+import warnings
 
-from pydantic import BaseModel, Field
+warnings.warn(
+    "Importing from 'workflows.protocol' is deprecated. "
+    "Install 'llama-index-workflows-client' and use "
+    "'from llama_agents.client.protocol import ...' instead.",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
-from workflows.protocol.serializable_events import EventEnvelopeWithMetadata
-from workflows.representation import WorkflowGraph
-
-# Shared protocol types between client and server
-
-# Mirrors server.store Status
-Status = Literal["running", "completed", "failed", "cancelled"]
-
-
-def is_status_completed(status: Status) -> bool:
-    return status in {"completed", "failed", "cancelled"}
-
-
-class HandlerData(BaseModel):
-    handler_id: str
-    workflow_name: str
-    run_id: str | None
-    error: str | None
-    result: EventEnvelopeWithMetadata | None
-    status: Status
-    started_at: str
-    updated_at: str | None
-    completed_at: str | None
-
-
-class HandlersListResponse(BaseModel):
-    handlers: list[HandlerData]
-
-
-class HealthResponse(BaseModel):
-    status: Literal["healthy"]
-    loaded_workflows: int = Field(
-        description="Number of workflow handlers currently loaded in memory"
+try:
+    from llama_agents.client.protocol import (
+        CancelHandlerResponse,
+        HandlerData,
+        HandlersListResponse,
+        HealthResponse,
+        SendEventResponse,
+        Status,
+        WorkflowEventsListResponse,
+        WorkflowGraphResponse,
+        WorkflowSchemaResponse,
+        WorkflowsListResponse,
+        is_status_completed,
     )
-    active_workflows: int = Field(
-        description="Number of workflow handlers that are active (not idle)"
-    )
-    idle_workflows: int = Field(description="Number of workflow handlers that are idle")
-
-
-class WorkflowsListResponse(BaseModel):
-    workflows: list[str]
-
-
-class SendEventResponse(BaseModel):
-    status: Literal["sent"]
-
-
-class CancelHandlerResponse(BaseModel):
-    status: Literal["deleted", "cancelled"]
-
-
-class WorkflowSchemaResponse(BaseModel):
-    start: dict[str, Any]
-    stop: dict[str, Any]
-
-
-class WorkflowEventsListResponse(BaseModel):
-    events: list[dict[str, Any]]
-
-
-class WorkflowGraphResponse(BaseModel):
-    graph: WorkflowGraph
-
+except ImportError as e:
+    raise ImportError(
+        "workflows.protocol requires the 'client' extra. "
+        "Install with: pip install 'llama-index-workflows[client]'"
+    ) from e
 
 __all__ = [
     "Status",

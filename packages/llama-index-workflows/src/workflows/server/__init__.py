@@ -1,13 +1,30 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 LlamaIndex Inc.
+"""Re-export server components from the optional llama-index-workflows-server package."""
 
-from .abstract_workflow_store import (
-    AbstractWorkflowStore,
-    HandlerQuery,
-    PersistentHandler,
+import warnings
+
+warnings.warn(
+    "Importing from 'workflows.server' is deprecated. "
+    "Install 'llama-index-workflows-server' and use "
+    "'from llama_agents.server import ...' instead.",
+    DeprecationWarning,
+    stacklevel=2,
 )
-from .server import WorkflowServer
-from .sqlite.sqlite_workflow_store import SqliteWorkflowStore
+
+try:
+    from llama_agents.server import (
+        AbstractWorkflowStore,
+        HandlerQuery,
+        PersistentHandler,
+        SqliteWorkflowStore,
+        WorkflowServer,
+    )
+except ImportError as e:
+    raise ImportError(
+        "workflows.server requires the 'server' extra. "
+        "Install with: pip install 'llama-index-workflows[server]'"
+    ) from e
 
 __all__ = [
     "WorkflowServer",
