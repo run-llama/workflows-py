@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 LlamaIndex Inc.
+# pyright: reportMissingImports=false
 """Tests that the llama_agents.workflows alias resolves correctly."""
 
 from __future__ import annotations

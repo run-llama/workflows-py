@@ -57,7 +57,9 @@ exclude = [
   "packages/llama-index-workflows-server/tests/",
   "packages/llama-index-workflows-client/tests/",
   "packages/llama-index-utils-workflow/tests/",
-  "packages/workflows-dev/tests/"
+  "packages/workflows-dev/tests/",
+  "packages/llama-index-workflows/src/llama_agents/",
+  "packages/llama-index-workflows/tests/test_llama_agents_alias.py"
 ]
 
 [tool.pytest.ini_options]
@@ -92,7 +94,8 @@ select = [
 "__main__.py" = ["T201"]
 
 [tool.ty.src]
-exclude = ["**/uv.lock", "**/.gitignore"]
+# Exclude llama_agents.workflows alias (dynamic import aliasing not understood by static analyzers)
+exclude = ["**/uv.lock", "**/.gitignore", "**/llama_agents/workflows/**", "**/test_llama_agents_alias.py"]
 
 [tool.uv.sources]
 llama-index-workflows = {workspace = true}

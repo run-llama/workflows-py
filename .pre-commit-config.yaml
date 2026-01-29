@@ -34,7 +34,7 @@ repos:
     rev: v1.15.0
     hooks:
       - id: mypy
-        exclude: ^packages/(llama-index-workflows-server|llama-index-workflows-client|llama-index-utils-workflow|workflows-dev)/tests/
+        exclude: ^packages/(llama-index-workflows-server|llama-index-workflows-client|llama-index-utils-workflow|workflows-dev|llama-index-integration-tests)/tests/|^packages/llama-index-workflows/src/llama_agents/|^packages/llama-index-workflows/tests/test_llama_agents_alias\.py
         additional_dependencies:
           [
             "types-Deprecated",
@@ -53,7 +53,6 @@ repos:
             --ignore-missing-imports,
             --python-version=3.11,
           ]
-        exclude: ^packages/(llama-index-utils-workflow|llama-index-integration-tests)/tests/
 
   - repo: https://github.com/DetachHead/basedpyright-pre-commit-mirror
     rev: 1.31.1

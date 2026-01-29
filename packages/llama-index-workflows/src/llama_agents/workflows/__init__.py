@@ -10,19 +10,16 @@ from __future__ import annotations
 
 import importlib
 import sys
-from importlib.abc import MetaPathFinder
+from importlib.abc import Loader, MetaPathFinder
 from importlib.machinery import ModuleSpec
 from types import ModuleType
-from typing import TYPE_CHECKING, Sequence
-
-if TYPE_CHECKING:
-    from importlib.abc import Loader
+from typing import Sequence
 
 _ALIAS_PREFIX = "llama_agents.workflows"
 _REAL_PREFIX = "workflows"
 
 
-class _AliasLoader:
+class _AliasLoader(Loader):
     """Loader that returns an already-imported module from sys.modules."""
 
     def __init__(self, real_name: str) -> None:
@@ -67,5 +64,5 @@ if not any(isinstance(f, _AliasFinder) for f in sys.meta_path):
     sys.meta_path.append(_AliasFinder())
 
 # Re-export everything from the real workflows package
-from workflows import *  # noqa: F403
-from workflows import __all__  # noqa: F401
+from workflows import *  # noqa: E402, F403
+from workflows import __all__  # noqa: E402, F401
