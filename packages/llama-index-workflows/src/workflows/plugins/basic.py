@@ -25,6 +25,9 @@ from workflows.runtime.types.plugin import (
     Runtime,
     SnapshottableAdapter,
     V2RuntimeCompatibilityShim,
+    WaitResult,
+    WaitResultTick,
+    WaitResultTimeout,
 )
 from workflows.runtime.types.step_function import (
     as_step_worker_functions,
@@ -91,20 +94,31 @@ class InternalAsyncioAdapter(InternalRunAdapter, SnapshottableAdapter):
     def init_state(self) -> BrokerState:
         return self._queues.init_state
 
-    async def wait_receive(self) -> WorkflowTick:
-        return await self._queues.receive_queue.get()
-
     async def write_to_event_stream(self, event: Event) -> None:
         self._queues.publish_queue.put_nowait(event)
 
     async def get_now(self) -> float:
         return time.monotonic()
 
-    async def sleep(self, seconds: float) -> None:
-        await asyncio.sleep(seconds)
-
     async def send_event(self, tick: WorkflowTick) -> None:
         self._queues.receive_queue.put_nowait(tick)
+
+    async def wait_receive(
+        self,
+        timeout_seconds: float | None = None,
+    ) -> WaitResult:
+        """Wait for tick with optional timeout using asyncio primitives."""
+        try:
+            if timeout_seconds is None:
+                tick = await self._queues.receive_queue.get()
+            else:
+                tick = await asyncio.wait_for(
+                    self._queues.receive_queue.get(),
+                    timeout=timeout_seconds,
+                )
+            return WaitResultTick(tick=tick)
+        except asyncio.TimeoutError:
+            return WaitResultTimeout()
 
     def on_tick(self, tick: WorkflowTick) -> None:
         self._queues.ticks.append(tick)
@@ -148,9 +162,6 @@ class ExternalAsyncioAdapter(
                 yield item
                 if isinstance(item, StopEvent):
                     break
-
-    async def close(self) -> None:
-        pass
 
     def on_tick(self, tick: WorkflowTick) -> None:
         self._queues.ticks.append(tick)

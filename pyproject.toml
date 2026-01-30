@@ -45,6 +45,10 @@ root = "packages/llama-index-integration-tests"
 pythonVersion = "3.13"
 
 [[tool.basedpyright.executionEnvironments]]
+root = "packages/llama-index-workflows-dbos"
+pythonVersion = "3.10"
+
+[[tool.basedpyright.executionEnvironments]]
 root = "examples"
 pythonVersion = "3.14"
 reportMissingImports = false
@@ -65,6 +69,17 @@ exclude = [
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "module"
+asyncio_default_test_loop_scope = "module"
+filterwarnings = [
+  "ignore:WorkflowHandler\\..* is deprecated:DeprecationWarning",
+  "ignore:is_running called from within a step:DeprecationWarning",
+  "ignore:__package__ != __spec__\\.parent:DeprecationWarning",
+  "ignore:The `__fields__` attribute is deprecated:DeprecationWarning",
+  "ignore:The `__fields_set__` attribute is deprecated:DeprecationWarning",
+  "ignore:Accessing the 'model_:DeprecationWarning",
+  "ignore:websockets\\.:DeprecationWarning"
+]
 
 [tool.ruff.lint]
 select = [

@@ -16,7 +16,9 @@ from typing import (
     AsyncGenerator,
     Coroutine,
     Generator,
+    Literal,
     Protocol,
+    Union,
 )
 
 if TYPE_CHECKING:
@@ -34,6 +36,24 @@ from workflows.runtime.types.ticks import TickCancelRun, WorkflowTick
 _current_runtime: ContextVar[Runtime | None] = ContextVar(
     "current_runtime", default=None
 )
+
+
+@dataclass
+class WaitResultTick:
+    """Result containing a received tick."""
+
+    tick: WorkflowTick
+    type: Literal["tick"] = "tick"
+
+
+@dataclass
+class WaitResultTimeout:
+    """Result indicating timeout expiration."""
+
+    type: Literal["timeout"] = "timeout"
+
+
+WaitResult = Union[WaitResultTick, WaitResultTimeout]
 
 
 @dataclass
@@ -73,17 +93,6 @@ class InternalRunAdapter(ABC):
         ...
 
     @abstractmethod
-    async def wait_receive(self) -> WorkflowTick:
-        """
-        Wait for the next tick from the mailbox.
-
-        Called from inside the workflow control loop to receive the next tick
-        event that was sent via the external adapter's send_event().
-        This method blocks until a tick is available.
-        """
-        ...
-
-    @abstractmethod
     async def write_to_event_stream(self, event: Event) -> None:
         """
         Publish an event to external listeners.
@@ -105,18 +114,6 @@ class InternalRunAdapter(ABC):
         ...
 
     @abstractmethod
-    async def sleep(self, seconds: float) -> None:
-        """
-        Sleep for a given number of seconds with durability support.
-
-        Called from within the workflow control loop. For durable runtimes,
-        this integrates with the host runtime to allow workflow suspension
-        and resumption. Note that other tasks in the control loop may still
-        run simultaneously during the sleep.
-        """
-        ...
-
-    @abstractmethod
     async def send_event(self, tick: WorkflowTick) -> None:
         """
         Send a tick into the workflow's own mailbox from within the control loop.
@@ -126,6 +123,40 @@ class InternalRunAdapter(ABC):
         received by wait_receive() on the next iteration.
         """
         ...
+
+    @abstractmethod
+    async def wait_receive(
+        self,
+        timeout_seconds: float | None = None,
+    ) -> WaitResult:
+        """
+        Wait for next tick OR timeout expiration.
+
+        This is the primary method for the control loop to wait for events.
+        It combines receiving ticks and timeout handling into a single
+        deterministic operation.
+
+        Args:
+            timeout_seconds: Max time to wait. None means wait indefinitely.
+
+        Returns:
+            WaitResultTick if a tick was received
+            WaitResultTimeout if timeout expired before receiving tick
+
+        This is a DURABLE operation for durable runtimes:
+        - On replay, already-elapsed time is accounted for
+        - If timeout already expired in previous run, returns immediately
+        """
+        ...
+
+    async def close(self) -> None:
+        """
+        Signal shutdown to wake any blocked wait operations.
+
+        Called during cleanup to allow the adapter to exit gracefully.
+        Default is no-op. DBOS adapter sends a shutdown signal to wake blocked recv.
+        """
+        pass
 
     def get_state_store(self) -> InMemoryStateStore[Any] | None:
         """
@@ -186,7 +217,6 @@ class ExternalRunAdapter(ABC):
         """
         ...
 
-    @abstractmethod
     async def close(self) -> None:
         """
         Clean up adapter resources.
@@ -195,7 +225,7 @@ class ExternalRunAdapter(ABC):
         resources held by this adapter (e.g., close streams, release locks).
         """
 
-        ...
+        pass
 
     @abstractmethod
     async def get_result(self) -> StopEvent:
@@ -256,8 +286,7 @@ class Runtime(ABC):
     Abstract base class for workflow execution runtimes.
 
     Runtimes control how workflows are registered, launched, and executed.
-    The default BasicRuntime uses asyncio; other runtimes can add durability
-    or distributed execution.
+    The default BasicRuntime uses asyncio; Other's plug into their own durability and distributed execution models.
 
     Lifecycle:
     1. Create runtime instance
@@ -284,7 +313,7 @@ class Runtime(ABC):
         Register a workflow with the runtime.
 
         Called at launch() time for each tracked workflow. Runtimes can
-        wrap the control_loop and steps with their own decorators or handlers.
+        wrap the control_loop and steps to fit in their registration/decoration model.
 
         Returns RegisteredWorkflow with wrapped functions
         """
@@ -298,7 +327,7 @@ class Runtime(ABC):
         init_state: BrokerState,
         start_event: StartEvent | None = None,
         serialized_state: dict[str, Any] | None = None,
-        serializer: "BaseSerializer | None" = None,
+        serializer: BaseSerializer | None = None,
     ) -> ExternalRunAdapter:
         """
         Launch a workflow run.
@@ -343,10 +372,7 @@ class Runtime(ABC):
         """
         Launch the runtime and register all tracked workflows.
 
-        For BasicRuntime, this is a no-op. Other runtimes may wrap workflows
-        with decorators and initialize backend connections.
-
-        Must be called before running workflows.
+        For many runtime's, this must be called before running workflows.
         """
         pass
 
@@ -363,7 +389,7 @@ class Runtime(ABC):
         Track a workflow instance for registration at launch time.
 
         Called by Workflow.__init__ to register with the runtime.
-        Override in runtimes that need to track workflows for deferred registration.
+        Override in runtimes that need to track workflows.
         Default implementation is a no-op.
         """
         pass

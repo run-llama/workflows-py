@@ -413,6 +413,9 @@ class Workflow(metaclass=WorkflowMeta):
         # Validate the workflow
         self._validate()
 
+        # Extract run_id before passing remaining kwargs to start event
+        run_id = kwargs.pop("run_id", None)
+
         # If a previous context is provided, pass its serialized form
         ctx = ctx if ctx is not None else Context(self)
         # TODO(v3) - remove dependency on is running for choosing whether to send a StartEvent.
@@ -422,7 +425,9 @@ class Workflow(metaclass=WorkflowMeta):
             if ctx.is_running
             else self._get_start_event_instance(start_event, **kwargs)
         )
-        return ctx._workflow_run(workflow=self, start_event=start_event_instance)
+        return ctx._workflow_run(
+            workflow=self, start_event=start_event_instance, run_id=run_id
+        )
 
     def _validate_resource_configs(self) -> list[str]:
         """Validate all resource configs (including nested ones) by loading them."""
