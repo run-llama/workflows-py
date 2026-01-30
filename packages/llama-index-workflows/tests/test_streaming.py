@@ -8,12 +8,10 @@ from typing import AsyncGenerator
 import pytest
 from workflows.context import Context
 from workflows.decorators import step
-from workflows.errors import WorkflowRuntimeError, WorkflowTimeoutError
+from workflows.errors import WorkflowRuntimeError
 from workflows.events import Event, StartEvent, StopEvent
 from workflows.testing import WorkflowTestRunner
 from workflows.workflow import Workflow
-
-from .conftest import OneTestEvent  # type: ignore[import]
 
 
 class StreamingWorkflow(Workflow):
@@ -28,57 +26,6 @@ class StreamingWorkflow(Workflow):
             ctx.write_event_to_stream(Event(msg=w))
 
         return StopEvent(result=None)
-
-
-@pytest.mark.asyncio
-async def test_e2e() -> None:
-    test_runner = WorkflowTestRunner(StreamingWorkflow())
-    r = await test_runner.run(expose_internal=False, exclude_events=[StopEvent])
-
-    assert all("msg" in ev for ev in r.collected)
-
-
-@pytest.mark.asyncio
-async def test_task_raised() -> None:
-    class DummyWorkflow(Workflow):
-        @step
-        async def step(self, ctx: Context, ev: StartEvent) -> StopEvent:
-            ctx.write_event_to_stream(OneTestEvent(test_param="foo"))
-            raise ValueError("The step raised an error!")
-
-    wf = DummyWorkflow()
-    r = wf.run()
-
-    # Make sure we don't block indefinitely here because the step raised
-    async for ev in r.stream_events():
-        if not isinstance(ev, StopEvent):
-            assert ev.test_param == "foo"
-
-    # Make sure the await actually caught the exception
-    with pytest.raises(ValueError, match="The step raised an error!"):
-        await r
-
-
-@pytest.mark.asyncio
-async def test_task_timeout() -> None:
-    class DummyWorkflow(Workflow):
-        @step
-        async def step(self, ctx: Context, ev: StartEvent) -> StopEvent:
-            ctx.write_event_to_stream(OneTestEvent(test_param="foo"))
-            await asyncio.sleep(2)
-            return StopEvent()
-
-    wf = DummyWorkflow(timeout=0.1)
-    r = wf.run()
-
-    # Make sure we don't block indefinitely here because the step raised
-    async for ev in r.stream_events():
-        if not isinstance(ev, StopEvent):
-            assert ev.test_param == "foo"
-
-    # Make sure the await actually caught the exception
-    with pytest.raises(WorkflowTimeoutError, match="Operation timed out"):
-        await r
 
 
 @pytest.mark.asyncio

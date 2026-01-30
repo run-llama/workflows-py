@@ -394,7 +394,8 @@ async def test_wait_for_multiple_events_in_workflow() -> None:
             )
 
     result = await handler
-    assert result == ["foo", "bar"]
+    # Order is non-deterministic since waiters run concurrently
+    assert sorted(result) == ["bar", "foo"]
     assert not handler.ctx.is_running
 
     # serialize and resume
@@ -414,7 +415,8 @@ async def test_wait_for_multiple_events_in_workflow() -> None:
             )
 
     result = await handler
-    assert result == ["fizz", "buzz"]
+    # Order is non-deterministic since waiters run concurrently
+    assert sorted(result) == ["buzz", "fizz"]
 
 
 @pytest.mark.asyncio
