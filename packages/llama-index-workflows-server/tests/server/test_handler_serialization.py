@@ -5,16 +5,60 @@ from __future__ import annotations
 import asyncio
 import json
 from datetime import datetime, timezone
+from typing import AsyncGenerator
 from unittest.mock import MagicMock
 
 import pytest
 from llama_agents.client.protocol import HandlerData
 from llama_agents.server.memory_workflow_store import MemoryWorkflowStore
 from llama_agents.server.server import _WorkflowHandler
-from tests.runtime.conftest import MockRunAdapter
 from workflows.events import Event, StopEvent
 from workflows.handler import WorkflowHandler
+from workflows.runtime.types.plugin import ExternalRunAdapter
+from workflows.runtime.types.ticks import WorkflowTick
 from workflows.workflow import Workflow
+
+
+class MockRunAdapter(ExternalRunAdapter):
+    """Minimal mock adapter for testing."""
+
+    def __init__(self, run_id: str) -> None:
+        self._run_id = run_id
+        self._result: asyncio.Future[StopEvent] = asyncio.Future()
+
+    @property
+    def run_id(self) -> str:
+        return self._run_id
+
+    @property
+    def is_running(self) -> bool:
+        return not self._result.done()
+
+    async def get_result(self) -> StopEvent:
+        return await self._result
+
+    def get_result_or_none(self) -> StopEvent | None:
+        if self._result.done() and not self._result.cancelled():
+            return self._result.result()
+        return None
+
+    async def stream_published_events(self) -> AsyncGenerator[Event, None]:
+        result = await self._result
+        yield result
+
+    def abort(self) -> None:
+        if not self._result.done():
+            self._result.cancel()
+
+    def set_result(self, result: StopEvent) -> None:
+        if not self._result.done():
+            self._result.set_result(result)
+
+    async def send_event(self, tick: WorkflowTick) -> None:
+        pass
+
+    async def close(self) -> None:
+        pass
 
 
 class MyStopEvent(StopEvent):
