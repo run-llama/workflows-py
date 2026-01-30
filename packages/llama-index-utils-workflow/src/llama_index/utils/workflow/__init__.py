@@ -5,7 +5,6 @@ from __future__ import annotations
 import ast
 import inspect
 import json
-import sys
 import textwrap
 from typing import Any, Callable, Dict, List, Tuple, Union, cast
 
@@ -526,7 +525,7 @@ def _extract_execution_graph(
 def _get_workflow_classes_from_step(method_callable: Callable | Any) -> list[str]:
     """
     Finds classes instantiated within a method that inherit from Workflow.
-    Resolves names against the method's module namespace.
+    Resolves names against the method's actual global namespace.
     """
     if method_callable is None:
         return []
@@ -538,15 +537,12 @@ def _get_workflow_classes_from_step(method_callable: Callable | Any) -> list[str
         clean_source = textwrap.dedent(source)
         tree = ast.parse(clean_source)
 
-        # Get the module where the step is defined to look up names
-        module_name = getattr(method_callable, "__module__", None)
-
-        # Add this guard:
-        if not isinstance(module_name, str):
-            return []
-
-        module = sys.modules.get(module_name)
-        if not module:
+        # Use __globals__ to get the actual namespace where the function was defined.
+        # This is more robust than sys.modules.get(module_name) because it works
+        # correctly when multiple modules have the same name (e.g., multiple
+        # conftest.py files in different packages during test collection).
+        func_globals = getattr(method_callable, "__globals__", None)
+        if not func_globals:
             return []
 
         for node in ast.walk(tree):
@@ -561,8 +557,8 @@ def _get_workflow_classes_from_step(method_callable: Callable | Any) -> list[str
                 else:
                     continue
 
-                # Look up the name in the module's namespace
-                obj = getattr(module, class_name, None)
+                # Look up the name in the function's actual global namespace
+                obj = func_globals.get(class_name)
 
                 # Robust check: Is it a class, and is it a Workflow subclass?
                 if (
@@ -688,9 +684,16 @@ def _get_nested_workflow_representation(
 
             for nested_wf_classname in nested_wf_classnames:
                 try:
-                    module_name = step_method.__module__
-                    module = sys.modules.get(module_name) or sys.modules.get("__main__")
-                    wf_class = getattr(module, nested_wf_classname)
+                    # Use __globals__ to get the class from the actual namespace
+                    # where the step method was defined. This handles cases where
+                    # multiple modules share the same name (e.g., conftest.py).
+                    func_globals = getattr(step_method, "__globals__", {})
+                    wf_class = func_globals.get(nested_wf_classname)
+                    if wf_class is None:
+                        raise LookupError(
+                            f"Could not find workflow class '{nested_wf_classname}' "
+                            f"in step method's namespace"
+                        )
 
                     child_instance = wf_class()
                     child_graph = _get_workflow_representation(child_instance)
