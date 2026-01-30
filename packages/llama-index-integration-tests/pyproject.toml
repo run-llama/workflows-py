@@ -55,3 +55,4 @@ filterwarnings = [
 
 [tool.uv.sources]
 llama-index-workflows = {workspace = true}
+llama-index-workflows-dbos = {workspace = true}

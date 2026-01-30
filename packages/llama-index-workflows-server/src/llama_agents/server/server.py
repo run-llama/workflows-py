@@ -40,6 +40,7 @@ from starlette.routing import Route
 from starlette.schemas import SchemaGenerator
 from starlette.staticfiles import StaticFiles
 from workflows import Context, Workflow
+from workflows.errors import WorkflowRuntimeError
 from workflows.events import (
     Event,
     InternalDispatchEvent,
@@ -1762,33 +1763,41 @@ class _WorkflowHandler:
         with instrument_tags({"handler_id": self.handler_id}):
             await self.checkpoint()
             self._on_finish = on_finish
-            async for event in self.run_handler.stream_events(expose_internal=True):
-                # Track idle state transitions and manage release timer
-                if isinstance(event, WorkflowIdleEvent):
-                    self.mark_idle()
-                elif isinstance(event, UnhandledEvent):
-                    self.mark_idle()
-                elif (
-                    isinstance(event, StepStateChanged)
-                    and event.step_state == StepState.RUNNING
-                ):
-                    self.mark_active()
+            try:
+                async for event in self.run_handler.stream_events(expose_internal=True):
+                    # Track idle state transitions and manage release timer
+                    if isinstance(event, WorkflowIdleEvent):
+                        self.mark_idle()
+                    elif isinstance(event, UnhandledEvent):
+                        self.mark_idle()
+                    elif (
+                        isinstance(event, StepStateChanged)
+                        and event.step_state == StepState.RUNNING
+                    ):
+                        self.mark_active()
 
-                if (  # Watch for a specific internal event that signals the step is complete
-                    isinstance(event, StepStateChanged)
-                    and event.step_state == StepState.NOT_RUNNING
-                ):
-                    state = (
-                        self.run_handler.ctx.to_dict() if self.run_handler.ctx else None
-                    )
-                    if state is None:
-                        logger.warning(
-                            f"Context state is None for handler {self.handler_id}. This is not expected."
+                    if (  # Watch for a specific internal event that signals the step is complete
+                        isinstance(event, StepStateChanged)
+                        and event.step_state == StepState.NOT_RUNNING
+                    ):
+                        state = (
+                            self.run_handler.ctx.to_dict()
+                            if self.run_handler.ctx
+                            else None
                         )
-                        continue
-                    await self.checkpoint()
+                        if state is None:
+                            logger.warning(
+                                f"Context state is None for handler {self.handler_id}. This is not expected."
+                            )
+                            continue
+                        await self.checkpoint()
 
-                self.queue.put_nowait(event)
+                    self.queue.put_nowait(event)
+            except WorkflowRuntimeError:
+                # Stream was already consumed - this can happen during handler
+                # cancellation when run_handler is cancelled before this task.
+                # This is benign; we'll proceed to cleanup.
+                pass
 
             # Workflow is completing - cancel any pending release timer
             self._cancel_idle_release_timer()
@@ -1826,6 +1835,7 @@ class _WorkflowHandler:
         Converts the queue to an async generator while the workflow is still running, and there are still events.
         For better or worse, multiple consumers will compete for events
         """
+        queue_get_task: asyncio.Task[Event] | None = None
 
         try:
             while not self.queue.empty() or (
@@ -1836,9 +1846,7 @@ class _WorkflowHandler:
                     available_events.append(self.queue.get_nowait())
                 for event in available_events:
                     yield event
-                queue_get_task: asyncio.Task[Event] = asyncio.create_task(
-                    self.queue.get()
-                )
+                queue_get_task = asyncio.create_task(self.queue.get())
                 task_waitable = self.task
                 done, pending = await asyncio.wait(
                     {queue_get_task, task_waitable}
@@ -1848,10 +1856,22 @@ class _WorkflowHandler:
                 )
                 if queue_get_task in done:
                     yield await queue_get_task
+                    queue_get_task = None
                 else:  # otherwise task completed, so nothing else will be published to the queue
                     queue_get_task.cancel()
+                    queue_get_task = None
                     break
         finally:
+            # Cancel any pending queue.get() task to prevent orphaned tasks from
+            # consuming events after the consumer disconnects.
+            if queue_get_task is not None:
+                if not queue_get_task.done():
+                    queue_get_task.cancel()
+                    try:
+                        await queue_get_task
+                    except asyncio.CancelledError:
+                        pass
+
             if self._on_finish is not None and self.run_handler.done():
                 # clean up the resources if the stream has been consumed
                 await self._on_finish()
