@@ -4,11 +4,12 @@
 from __future__ import annotations
 
 import asyncio
+import heapq
 import logging
 import time
 import traceback
 from dataclasses import replace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from workflows.decorators import R
 from workflows.errors import (
@@ -47,6 +48,7 @@ from workflows.runtime.types.internal_state import (
 )
 from workflows.runtime.types.plugin import (
     InternalRunAdapter,
+    WaitResultTick,
     as_snapshottable_adapter,
     get_current_run,
 )
@@ -70,6 +72,26 @@ from workflows.runtime.types.ticks import (
 )
 from workflows.workflow import Workflow
 
+
+class _DelayedTick:
+    """Sentinel class representing a tick that should be scheduled after a delay."""
+
+    def __init__(self, tick: WorkflowTick, delay: float) -> None:
+        self.tick = tick
+        self.delay = delay
+
+
+async def _single_pull(adapter: InternalRunAdapter) -> WorkflowTick | None:
+    """Single-iteration pull: calls wait_receive once and returns the tick.
+
+    Returns None if timeout (shouldn't happen with unbounded wait).
+    """
+    wait_result = await adapter.wait_receive(None)
+    if isinstance(wait_result, WaitResultTick):
+        return wait_result.tick
+    return None
+
+
 if TYPE_CHECKING:
     from workflows.context.context import Context
     from workflows.runtime.types.step_function import StepWorkerFunction
@@ -82,6 +104,11 @@ class _ControlLoopRunner:
     """
     Private class to encapsulate the async control loop runtime state and behavior.
     Keeps the pure transformation functions at module level for testability.
+
+    This control loop uses a sequential, deterministic design:
+    - Scheduled wakeups are tracked in a heap (for timeouts/delays)
+    - External events come via wait_receive
+    - No concurrent timeout tasks, ensuring deterministic DBOS function_id ordering
     """
 
     def __init__(
@@ -97,33 +124,47 @@ class _ControlLoopRunner:
         self.context = context
         self.step_workers = step_workers
         self.state = init_state
-        self.workers: list[asyncio.Task] = []
-        self.queue: asyncio.Queue[WorkflowTick] = asyncio.Queue()
+        self.worker_tasks: set[asyncio.Task[TickStepResult]] = set()
+        # Transient tick buffer - drained synchronously at start of each loop iteration
+        self.tick_buffer: list[WorkflowTick] = []
+        # Pending items to be processed (from rehydration or delayed ticks)
         for tick in self.state.rehydrate_with_ticks():
-            self.queue.put_nowait(tick)
+            self.tick_buffer.append(tick)
+        # Scheduled wakeups: heap of (wakeup_time, tick) tuples
+        self.scheduled_wakeups: list[tuple[float, WorkflowTick]] = []
         self.snapshot_adapter = as_snapshottable_adapter(adapter)
 
-    async def wait_for_tick(self) -> WorkflowTick:
-        """Wait for the next tick from the internal queue."""
-        return await self.queue.get()
+    def schedule_tick(self, tick: WorkflowTick, at_time: float) -> None:
+        """Schedule a tick to be processed at a specific time."""
+        heapq.heappush(self.scheduled_wakeups, (at_time, tick))
 
-    def queue_tick(self, tick: WorkflowTick, delay: float | None = None) -> None:
-        """Queue a tick event for processing, optionally after a delay."""
-        if delay:
+    def next_wakeup_timeout(self, now: float) -> float | None:
+        """Calculate timeout until next scheduled wakeup.
 
-            async def _delayed_queue() -> None:
-                await self.adapter.sleep(delay)
-                self.queue.put_nowait(tick)
+        Returns None if no scheduled wakeups, otherwise returns
+        the number of seconds until the next scheduled tick is due.
+        """
+        if not self.scheduled_wakeups:
+            return None
+        next_time, _ = self.scheduled_wakeups[0]
+        return max(0, next_time - now)
 
-            task = asyncio.create_task(_delayed_queue())
-            self.workers.append(task)
-        else:
-            self.queue.put_nowait(tick)
+    def pop_due_ticks(self, now: float) -> list[WorkflowTick]:
+        """Pop all ticks that are due (scheduled time <= now)."""
+        due = []
+        while self.scheduled_wakeups and self.scheduled_wakeups[0][0] <= now:
+            _, tick = heapq.heappop(self.scheduled_wakeups)
+            due.append(tick)
+        return due
 
     def run_worker(self, command: CommandRunWorker) -> None:
-        """Run a worker for a step function."""
+        """Run a worker for a step function.
 
-        async def _run_worker() -> None:
+        Step workers run concurrently as asyncio tasks. When they complete,
+        they return TickStepResult for the main loop to process via asyncio.wait.
+        """
+
+        async def _run_worker() -> TickStepResult:
             try:
                 worker = next(
                     (
@@ -146,46 +187,43 @@ class _ControlLoopRunner:
                     event=command.event,
                     workflow=self.workflow,
                 )
-                self.queue_tick(
-                    TickStepResult(
-                        step_name=command.step_name,
-                        worker_id=command.id,
-                        event=command.event,
-                        result=result,
-                    )
+                # Return result for main loop to process
+                return TickStepResult(
+                    step_name=command.step_name,
+                    worker_id=command.id,
+                    event=command.event,
+                    result=result,
                 )
             except Exception as e:
                 logger.error("error running step worker function: %s", e, exc_info=True)
-                self.queue_tick(
-                    TickStepResult(
-                        step_name=command.step_name,
-                        worker_id=command.id,
-                        event=command.event,
-                        result=[
-                            StepWorkerFailed(
-                                exception=e, failed_at=await self.adapter.get_now()
-                            )
-                        ],
-                    )
+                return TickStepResult(
+                    step_name=command.step_name,
+                    worker_id=command.id,
+                    event=command.event,
+                    result=[
+                        StepWorkerFailed(
+                            exception=e, failed_at=await self.adapter.get_now()
+                        )
+                    ],
                 )
-                raise e
 
         task = asyncio.create_task(_run_worker())
-        task.add_done_callback(lambda _: self.workers.remove(task))
-        self.workers.append(task)
+        self.worker_tasks.add(task)
 
     async def process_command(self, command: WorkflowCommand) -> None | StopEvent:
         """Process a single command returned from tick reduction."""
         if isinstance(command, CommandQueueEvent):
-            self.queue_tick(
-                TickAddEvent(
-                    event=command.event,
-                    step_name=command.step_name,
-                    attempts=command.attempts,
-                    first_attempt_at=command.first_attempt_at,
-                ),
-                delay=command.delay,
+            event = TickAddEvent(
+                event=command.event,
+                step_name=command.step_name,
+                attempts=command.attempts,
+                first_attempt_at=command.first_attempt_at,
             )
+            if command.delay is not None and command.delay > 0:
+                now = await self.adapter.get_now()
+                self.schedule_tick(event, at_time=now + command.delay)
+            else:
+                self.tick_buffer.append(event)
             return None
         elif isinstance(command, CommandRunWorker):
             self.run_worker(command)
@@ -207,24 +245,36 @@ class _ControlLoopRunner:
 
     async def cleanup_tasks(self) -> None:
         """Cancel and cleanup all running worker tasks."""
+        # Signal adapter to stop waiting (wakes blocked DBOS.recv)
         try:
-            for worker in self.workers:
-                worker.cancel()
+            await self.adapter.close()
         except Exception:
             pass
+
+        # Cancel worker tasks
+        for task in self.worker_tasks:
+            task.cancel()
+
         try:
-            await asyncio.wait_for(
-                asyncio.gather(*self.workers, return_exceptions=True),
-                timeout=0.5,
-            )
+            if self.worker_tasks:
+                await asyncio.wait_for(
+                    asyncio.gather(*self.worker_tasks, return_exceptions=True),
+                    timeout=0.5,
+                )
         except Exception:
             pass
+
+        self.worker_tasks.clear()
 
     async def run(
         self, start_event: Event | None = None, start_with_timeout: bool = True
     ) -> StopEvent:
         """
         Run the control loop until completion.
+
+        This uses a sequential, deterministic design that combines timeout
+        handling with event waiting in a single operation, ensuring
+        deterministic DBOS function_id ordering for replay.
 
         Args:
             start_event: Optional initial event to process
@@ -234,28 +284,22 @@ class _ControlLoopRunner:
             The final StopEvent from the workflow
         """
 
-        # Start external event listener
-        async def _pull() -> None:
-            while True:
-                tick = await self.adapter.wait_receive()
-                self.queue_tick(tick)
-
-        self.workers.append(asyncio.create_task(_pull()))
-
-        # Queue initial event and timeout
+        # Queue initial event
         if start_event is not None:
-            self.queue_tick(TickAddEvent(event=start_event))
+            self.tick_buffer.append(TickAddEvent(event=start_event))
 
+        start = await self.adapter.get_now()
+        # Schedule workflow timeout if configured
         if start_with_timeout and self.workflow._timeout is not None:
-            self.queue_tick(
+            # Get initial time
+            timeout_time = start + self.workflow._timeout
+            self.schedule_tick(
                 TickTimeout(timeout=self.workflow._timeout),
-                delay=self.workflow._timeout,
+                at_time=timeout_time,
             )
 
         # Resume any in-progress work
-        self.state, commands = rewind_in_progress(
-            self.state, await self.adapter.get_now()
-        )
+        self.state, commands = rewind_in_progress(self.state, start)
         for command in commands:
             try:
                 await self.process_command(command)
@@ -263,34 +307,126 @@ class _ControlLoopRunner:
                 await self.cleanup_tasks()
                 raise
 
+        # Initialize pull task (single-iteration)
+        pull_task: asyncio.Task[WorkflowTick | None] | None = None
+
         # Main event loop
         try:
             while True:
-                tick = await self.wait_for_tick()
-                try:
-                    self.state, commands = _reduce_tick(
-                        tick, self.state, await self.adapter.get_now()
-                    )
-                except Exception:
-                    await self.cleanup_tasks()
-                    logger.error(
-                        "Unexpected error in internal control loop of workflow. This shouldn't happen. ",
-                        exc_info=True,
-                    )
-                    raise
-                if self.snapshot_adapter is not None:
-                    self.snapshot_adapter.on_tick(tick)
-                for command in commands:
-                    try:
-                        result = await self.process_command(command)
-                    except Exception:
-                        await self.cleanup_tasks()
-                        raise
+                # Yield to let fire-and-forget tasks run (e.g., ctx.send_event)
+                await asyncio.sleep(0)
 
+                # Get current time
+                now = await self.adapter.get_now()
+
+                was_buffered = bool(self.tick_buffer)
+                # Drain and process buffered ticks first (from rehydration, queue_tick, etc.)
+                while self.tick_buffer:
+                    tick = self.tick_buffer.pop(0)
+                    result = await self._process_tick(tick)
                     if result is not None:
                         return result
+
+                # Calculate timeout for next scheduled wakeup
+                if was_buffered:
+                    now = await self.adapter.get_now()
+                timeout = self.next_wakeup_timeout(now)
+
+                # Ensure pull_task exists
+                if pull_task is None:
+                    pull_task = asyncio.create_task(_single_pull(self.adapter))
+
+                # Gather all tasks to wait on
+                all_tasks: set[asyncio.Task[Any]] = {pull_task, *self.worker_tasks}
+
+                # Wait for first completion (with timeout for scheduled wakeups)
+                done, _ = await asyncio.wait(
+                    all_tasks,
+                    timeout=timeout,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+
+                if not done:
+                    # Timeout - process scheduled ticks
+                    now = await self.adapter.get_now()
+                    for due_tick in self.pop_due_ticks(now):
+                        self.tick_buffer.append(due_tick)
+                    continue
+
+                # Process completed tasks - workers first, then pull_task.
+                # This ensures AddWaiter results are processed before incoming
+                # events that might match those waiters.
+
+                # First, process all worker results
+                for task in done:
+                    if task is not pull_task:
+                        self.worker_tasks.discard(task)
+                        try:
+                            tick_result = task.result()
+                        except asyncio.CancelledError:
+                            continue
+                        except Exception:
+                            logger.exception(
+                                "Worker task failed unexpectedly", exc_info=True
+                            )
+                            continue
+                        self.tick_buffer.append(tick_result)
+
+                # Then, process pull_task result
+                if pull_task in done:
+                    try:
+                        pull_tick = pull_task.result()
+                    except asyncio.CancelledError:
+                        pull_task = None
+                    except Exception:
+                        logger.exception("Pull task failed", exc_info=True)
+                        pull_task = (
+                            None  # asyncio.create_task(_single_pull(self.adapter))
+                        )
+                    else:
+                        pull_task = (
+                            None  # asyncio.create_task(_single_pull(self.adapter))
+                        )
+                        if pull_tick is not None:
+                            self.tick_buffer.append(pull_tick)
+
         finally:
+            # Cancel pull task if running
+            if pull_task is not None:
+                pull_task.cancel()
+                try:
+                    await pull_task
+                except (asyncio.CancelledError, Exception):
+                    pass
             await self.cleanup_tasks()
+
+    async def _process_tick(self, tick: WorkflowTick) -> StopEvent | None:
+        """Process a single tick and return StopEvent if workflow completes."""
+        try:
+            start = await self.adapter.get_now()
+            self.state, commands = _reduce_tick(tick, self.state, start)
+        except Exception:
+            await self.cleanup_tasks()
+            logger.error(
+                "Unexpected error in internal control loop of workflow. This shouldn't happen. ",
+                exc_info=True,
+            )
+            raise
+
+        if self.snapshot_adapter is not None:
+            self.snapshot_adapter.on_tick(tick)
+
+        for command in commands:
+            try:
+                result = await self.process_command(command)
+            except Exception:
+                await self.cleanup_tasks()
+                raise
+
+            if result is not None:
+                return result
+
+        return None
 
 
 async def control_loop(
