@@ -1,5 +1,24 @@
 # llama-index-workflows
 
+## 2.14.0
+
+### Minor Changes
+
+- 73c1254: refactor: expand runtime plugin architecture
+
+  - Refactoring to better support alternate distributed backends
+  - Some `Context` methods may now raise errors if used in an unexpected context
+  - `WorkflowHandler` is no longer a future. Retains compatibility methods for main use cases (exception, cancel, etc)
+
+- 2900f58: Support state type inheritance in workflows
+
+### Patch Changes
+
+- 6fdc45c: Update debugger assets
+
+  - JavaScript: https://cdn.jsdelivr.net/npm/@llamaindex/workflow-debugger@0.2.15/dist/app.js
+  - CSS: https://cdn.jsdelivr.net/npm/@llamaindex/workflow-debugger@0.2.15/dist/app.css
+
 ## 2.13.1
 
 ### Patch Changes
