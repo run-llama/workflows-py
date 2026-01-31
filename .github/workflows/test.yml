@@ -79,6 +79,22 @@ jobs:
         env:
           COVERALLS_REPO_TOKEN: ${{ secrets.COVERALLS_REPO_TOKEN }}
 
+  test-docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install uv and set the python version
+        uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.14"
+          enable-cache: true
+
+      - name: Run Docker tests (integration-tests)
+        run: uv run --all-extras --directory packages/llama-index-integration-tests --package llama-index-integration-tests -- pytest -m docker
+
   coveralls-finish:
     needs: test
     runs-on: ubuntu-latest

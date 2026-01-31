@@ -149,7 +149,7 @@ class DBOSRuntime(Runtime):
             workflow=workflow, workflow_run_fn=_dbos_control_loop, steps=wrapped_steps
         )
 
-    def _get_sql_engine(self) -> "Engine":
+    def _get_sql_engine(self) -> Engine:
         """Get the SQLAlchemy engine from DBOS for state storage.
 
         Uses DBOS's app database if configured, otherwise falls back to sys database.
@@ -333,7 +333,7 @@ class DBOSRuntime(Runtime):
 
 # State stores by run_id
 # TODO: Add cleanup mechanism for completed workflows
-_dbos_state_stores: dict[str, "StateStore[Any]"] = {}
+_dbos_state_stores: dict[str, StateStore[Any]] = {}
 
 
 _IO_STREAM_PUBLISHED_EVENTS_NAME = "published_events"

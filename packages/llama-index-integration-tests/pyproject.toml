@@ -28,6 +28,11 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "module"
 asyncio_default_test_loop_scope = "module"
 testpaths = ["tests"]
+# Skip docker tests by default - run with `pytest -m docker` to include them
+addopts = "-m 'not docker'"
+markers = [
+  "docker: marks tests as requiring Docker (testcontainers/PostgreSQL)"
+]
 filterwarnings = [
   # Ignore internal testcontainers deprecation warning (fixed in their code, just noisy)
   "ignore:The @wait_container_is_ready decorator is deprecated:DeprecationWarning"

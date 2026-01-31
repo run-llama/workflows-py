@@ -82,7 +82,7 @@ class MyState(BaseModel):
 
 
 @pytest.fixture(scope="module")
-def postgres_container() -> Generator["PostgresContainer", None, None]:
+def postgres_container() -> Generator[PostgresContainer, None, None]:
     """Module-scoped PostgreSQL container for state store tests.
 
     Requires Docker to be running.
@@ -95,7 +95,7 @@ def postgres_container() -> Generator["PostgresContainer", None, None]:
 
 @pytest.fixture(scope="module")
 def postgres_engine(
-    postgres_container: "PostgresContainer",
+    postgres_container: PostgresContainer,
 ) -> Generator[Engine, None, None]:
     """Module-scoped PostgreSQL engine for state store tests."""
     # Get connection URL and convert to use psycopg (psycopg3) driver
@@ -130,7 +130,7 @@ def _get_store_params() -> list[Any]:
     return [
         pytest.param("in_memory", id="in_memory"),
         pytest.param("sqlite", id="sqlite"),
-        pytest.param("postgres", id="postgres"),
+        pytest.param("postgres", marks=pytest.mark.docker, id="postgres"),
     ]
 
 
@@ -461,6 +461,7 @@ async def test_sqlite_custom_state_persistence(sqlite_engine: Engine) -> None:
 # -- PostgreSQL-Specific Tests --
 
 
+@pytest.mark.docker
 @pytest.mark.asyncio
 async def test_postgres_persistence(postgres_engine: Engine) -> None:
     """Test that PostgreSQL state persists across store instances."""
@@ -477,6 +478,7 @@ async def test_postgres_persistence(postgres_engine: Engine) -> None:
     assert result == "persistent_value"
 
 
+@pytest.mark.docker
 @pytest.mark.asyncio
 async def test_postgres_isolation(postgres_engine: Engine) -> None:
     """Test that different run_ids have isolated state."""
@@ -490,6 +492,7 @@ async def test_postgres_isolation(postgres_engine: Engine) -> None:
     assert await store2.get("key") == "value2"
 
 
+@pytest.mark.docker
 @pytest.mark.asyncio
 async def test_postgres_concurrent_edits(postgres_engine: Engine) -> None:
     """Test concurrent edit_state calls are serialized correctly with FOR UPDATE."""
@@ -511,6 +514,7 @@ async def test_postgres_concurrent_edits(postgres_engine: Engine) -> None:
     assert result == 5
 
 
+@pytest.mark.docker
 @pytest.mark.asyncio
 async def test_postgres_custom_state_persistence(postgres_engine: Engine) -> None:
     """Test that custom typed state persists correctly."""
@@ -544,6 +548,7 @@ async def test_postgres_custom_state_persistence(postgres_engine: Engine) -> Non
     assert state.my_obj.name == "persisted"
 
 
+@pytest.mark.docker
 @pytest.mark.asyncio
 async def test_postgres_uses_dbos_schema(postgres_engine: Engine) -> None:
     """Test that PostgresStateStore uses the 'dbos' schema by default."""

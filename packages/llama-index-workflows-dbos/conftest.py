@@ -29,7 +29,7 @@ TEST_DBOS_CONFIG_INLINE = """\
 def make_test_dbos_config(
     name: str,
     db_path: Path,
-) -> "DBOSConfig":
+) -> DBOSConfig:
     """Create a DBOS config for testing with sensible defaults (SQLite backend).
 
     Args:

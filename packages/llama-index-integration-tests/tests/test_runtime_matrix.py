@@ -3,14 +3,13 @@
 All workflow classes are defined at module level so they can be registered with
 DBOS once at module initialization time, avoiding repeated init/destroy cycles.
 
-Note: The dbos-postgres variant requires Docker to be available. Tests will be
-skipped if Docker is not running or if the PostgreSQL container cannot start.
+Note: The dbos-postgres variant requires Docker to be available and is marked
+with the 'docker' pytest marker. Run with `pytest -m docker` to include it.
 """
 
 from __future__ import annotations
 
 import asyncio
-import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, AsyncGenerator, Generator, Union
 
@@ -40,27 +39,26 @@ if TYPE_CHECKING:
 
 
 def _get_runtime_params() -> list[Any]:
-    """Get runtime parameters based on environment configuration.
+    """Get runtime parameters for the test matrix.
 
-    DBOS is a singleton, so we can only test one DBOS backend per run:
-    - Default: basic + dbos (SQLite)
-    - TEST_DBOS_POSTGRES=1: basic + dbos-postgres (PostgreSQL via testcontainers)
+    Includes:
+    - basic: BasicRuntime (fast, no dependencies)
+    - dbos: DBOSRuntime with SQLite backend (fast, no Docker)
+    - dbos-postgres: DBOSRuntime with PostgreSQL backend (requires Docker)
 
-    The dbos-postgres variant requires Docker to be running.
+    Note: The dbos-postgres variant is marked with the 'docker' marker and
+    requires Docker to be running. It only runs when explicitly requested
+    via `pytest -m docker`.
     """
-    params: list[Any] = [
+    return [
         pytest.param("basic", id="basic"),
+        pytest.param("dbos", id="dbos"),
+        pytest.param("dbos-postgres", marks=pytest.mark.docker, id="dbos-postgres"),
     ]
-    # DBOS is a singleton - can only use one backend per test run
-    if os.environ.get("TEST_DBOS_POSTGRES", "").lower() in ("1", "true", "yes"):
-        params.append(pytest.param("dbos-postgres", id="dbos-postgres"))
-    else:
-        params.append(pytest.param("dbos", id="dbos"))
-    return params
 
 
 @pytest.fixture(scope="module")
-def postgres_container() -> Generator["PostgresContainer", None, None]:
+def postgres_container() -> Generator[PostgresContainer, None, None]:
     """Module-scoped PostgreSQL container for DBOS tests.
 
     This fixture is only used when dbos-postgres runtime is requested.
@@ -94,7 +92,7 @@ def dbos_runtime_sqlite(
 
 @pytest.fixture(scope="module")
 def dbos_runtime_postgres(
-    postgres_container: "PostgresContainer",
+    postgres_container: PostgresContainer,
 ) -> Generator[DBOSRuntime, None, None]:
     """Module-scoped DBOS runtime with PostgreSQL backend."""
     connection_url = postgres_container.get_connection_url()

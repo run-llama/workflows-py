@@ -205,7 +205,7 @@ class SqlStateStore(ABC, Generic[MODEL_T]):
         ...
 
     @abstractmethod
-    def _lock_row_for_update(self, conn: "Connection") -> dict[str, Any] | None:
+    def _lock_row_for_update(self, conn: Connection) -> dict[str, Any] | None:
         """Lock the row for this run_id and return its data.
 
         Uses database-specific locking:
@@ -281,7 +281,7 @@ class SqlStateStore(ABC, Generic[MODEL_T]):
 
             return self._deserialize_state(row[0], row[1], row[2])
 
-    def _save_state_sync(self, state: MODEL_T, conn: "Connection") -> None:
+    def _save_state_sync(self, state: MODEL_T, conn: Connection) -> None:
         """Save state to database synchronously within an existing connection."""
         now = _utc_now()
         state_json = self._serialize_state(state)
@@ -294,7 +294,7 @@ class SqlStateStore(ABC, Generic[MODEL_T]):
     @abstractmethod
     def _upsert_state(
         self,
-        conn: "Connection",
+        conn: Connection,
         state_json: str,
         state_type_name: str,
         state_module: str,
@@ -531,7 +531,7 @@ class SqlStateStore(ABC, Generic[MODEL_T]):
         cls,
         serialized_state: dict[str, Any],
         serializer: BaseSerializer,
-    ) -> "SqlStateStore[Any]":
+    ) -> SqlStateStore[Any]:
         """Restore a state store from serialized metadata.
 
         Note: The engine must be set separately after restoration.
@@ -690,7 +690,7 @@ class PostgresStateStore(SqlStateStore[MODEL_T]):
                     f"Created table {self._schema}.{self.TABLE_NAME} for workflow state"
                 )
 
-    def _lock_row_for_update(self, conn: "Connection") -> dict[str, Any] | None:
+    def _lock_row_for_update(self, conn: Connection) -> dict[str, Any] | None:
         """Lock the row using SELECT ... FOR UPDATE."""
         result = conn.execute(
             text(
@@ -716,7 +716,7 @@ class PostgresStateStore(SqlStateStore[MODEL_T]):
 
     def _upsert_state(
         self,
-        conn: "Connection",
+        conn: Connection,
         state_json: str,
         state_type_name: str,
         state_module: str,
@@ -827,7 +827,7 @@ class SqliteStateStore(SqlStateStore[MODEL_T]):
                 )
                 logger.info(f"Created table {self.TABLE_NAME} for workflow state")
 
-    def _lock_row_for_update(self, conn: "Connection") -> dict[str, Any] | None:
+    def _lock_row_for_update(self, conn: Connection) -> dict[str, Any] | None:
         """Lock using SQLite's exclusive transaction (BEGIN EXCLUSIVE).
 
         SQLite doesn't support SELECT FOR UPDATE, but the exclusive transaction
@@ -858,7 +858,7 @@ class SqliteStateStore(SqlStateStore[MODEL_T]):
 
     def _upsert_state(
         self,
-        conn: "Connection",
+        conn: Connection,
         state_json: str,
         state_type_name: str,
         state_module: str,
@@ -893,7 +893,7 @@ class SqliteStateStore(SqlStateStore[MODEL_T]):
         cls,
         serialized_state: dict[str, Any],
         serializer: BaseSerializer,
-    ) -> "SqliteStateStore[Any]":
+    ) -> SqliteStateStore[Any]:
         """Restore a SQLite state store from serialized metadata.
 
         Note: The engine must be set separately after restoration.
