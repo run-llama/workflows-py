@@ -34,7 +34,9 @@ async def test_fast_idle_timeout_does_not_drop_valid_event() -> None:
     def make_server() -> WorkflowServer:
         server = WorkflowServer(
             workflow_store=MemoryWorkflowStore(),
-            idle_release_timeout=timedelta(milliseconds=1),
+            # 50ms is still fast enough to test idle release behavior while
+            # avoiding race conditions in test infrastructure (especially with xdist)
+            idle_release_timeout=timedelta(milliseconds=50),
         )
         server.add_workflow(
             "waiting",

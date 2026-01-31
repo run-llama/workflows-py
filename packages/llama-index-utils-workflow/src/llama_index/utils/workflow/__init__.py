@@ -15,6 +15,7 @@ from llama_index.core.agent.workflow import (
 from llama_index.core.tools import AsyncBaseTool, BaseTool
 from pyvis.network import Network
 from workflows import Workflow
+from workflows.context.external_context import ExternalContext
 from workflows.events import (
     Event,
     StartEvent,
@@ -54,15 +55,15 @@ def _get_node_color(node: WorkflowGraphNode) -> str:
     elif node.node_type == "resource_config":
         return "#B2DFDB"  # Light teal for resource configs
     elif node.node_type == "event":
-        if node.is_subclass_of("StartEvent"):
+        if node.is_subclass_of("StartEvent"):  # type: ignore[possibly-missing-attribute]
             return "#E27AFF"  # Pink for start events
-        elif node.is_subclass_of("StopEvent"):
+        elif node.is_subclass_of("StopEvent"):  # type: ignore[possibly-missing-attribute]
             return "#FFA07A"  # Orange for stop events
         return "#90EE90"  # Light green for other events
     elif node.node_type == "agent":
-        if node.is_subclass_of("ReActAgent"):
+        if node.is_subclass_of("ReActAgent"):  # type: ignore[possibly-missing-attribute]
             return "#E27AFF"
-        elif node.is_subclass_of("CodeActAgent"):
+        elif node.is_subclass_of("CodeActAgent"):  # type: ignore[possibly-missing-attribute]
             return "#66ccff"
         return "#90EE90"
     elif node.node_type == "tool":
@@ -197,15 +198,15 @@ def _get_mermaid_css_class(node: WorkflowGraphNode) -> str:
     elif node.node_type == "resource_config":
         return "resourceConfigStyle"
     elif node.node_type == "event":
-        if node.is_subclass_of("StartEvent"):
+        if node.is_subclass_of("StartEvent"):  # type: ignore[possibly-missing-attribute]
             return "startEventStyle"
-        elif node.is_subclass_of("StopEvent"):
+        elif node.is_subclass_of("StopEvent"):  # type: ignore[possibly-missing-attribute]
             return "stopEventStyle"
         return "defaultEventStyle"
     elif node.node_type == "agent":
-        if node.is_subclass_of("ReActAgent"):
+        if node.is_subclass_of("ReActAgent"):  # type: ignore[possibly-missing-attribute]
             return "reactAgentStyle"
-        elif node.is_subclass_of("CodeActAgent"):
+        elif node.is_subclass_of("CodeActAgent"):  # type: ignore[possibly-missing-attribute]
             return "codeActAgentStyle"
         return "defaultAgentStyle"
     elif node.node_type == "tool":
@@ -462,10 +463,12 @@ def _extract_execution_graph(
     handler: WorkflowHandler, max_label_length: int | None = None
 ) -> Tuple[Dict[str, Tuple[str, str, type | None]], List[Tuple[str, str]]]:
     """Helper to extract nodes and edges from the workflow handler's tick log."""
-    if handler.ctx is None or handler.ctx._broker_run is None:
-        raise ValueError("No context/run info in this handler. Has it been run yet?")
 
-    ticks: List[WorkflowTick] = handler.ctx._broker_run._tick_log
+    ticks: List[WorkflowTick] = []
+    if handler.ctx is not None:
+        face = handler.ctx._face
+        if isinstance(face, ExternalContext):
+            ticks = face._tick_log
     nodes: Dict[str, Tuple[str, str, type | None]] = {}
     edges: List[Tuple[str, str]] = []
     event_node_by_identity: Dict[int, str] = {}

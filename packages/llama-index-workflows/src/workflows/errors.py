@@ -32,3 +32,13 @@ class WorkflowConfigurationError(Exception):
 
 class ContextSerdeError(Exception):
     """Raised when serializing/deserializing a `Context` fails."""
+
+
+class ContextStateError(Exception):
+    """Raised when a context method is called in the wrong state.
+
+    Context transitions between three states:
+    - PreContext: Before workflow starts (configuration)
+    - ExternalContext: During run, for handler/external code
+    - InternalContext: During run, for step execution
+    """
