@@ -32,6 +32,57 @@ if TYPE_CHECKING:
 MAX_DEPTH = 1000
 
 
+def traverse_path_step(obj: Any, segment: str) -> Any:
+    """Follow one segment into obj (dict key, list index, or attribute).
+
+    Args:
+        obj: The object to traverse into.
+        segment: The path segment (dict key, list index, or attribute name).
+
+    Returns:
+        The value at the given segment.
+
+    Raises:
+        KeyError, IndexError, AttributeError: If the segment doesn't exist.
+    """
+    if isinstance(obj, dict):
+        return obj[segment]
+
+    # Attempt list/tuple index
+    try:
+        idx = int(segment)
+        return obj[idx]
+    except (ValueError, TypeError, IndexError):
+        pass
+
+    # Fallback to attribute access (Pydantic models, normal objects)
+    return getattr(obj, segment)
+
+
+def assign_path_step(obj: Any, segment: str, value: Any) -> None:
+    """Assign value to segment of obj (dict key, list index, or attribute).
+
+    Args:
+        obj: The object to assign into.
+        segment: The path segment (dict key, list index, or attribute name).
+        value: The value to assign.
+    """
+    if isinstance(obj, dict):
+        obj[segment] = value
+        return
+
+    # Attempt list/tuple index assignment
+    try:
+        idx = int(segment)
+        obj[idx] = value
+        return
+    except (ValueError, TypeError, IndexError):
+        pass
+
+    # Fallback to attribute assignment
+    setattr(obj, segment, value)
+
+
 # Only warn once about unserializable keys
 class UnserializableKeyWarning(Warning):
     pass
@@ -370,7 +421,7 @@ class InMemoryStateStore(Generic[MODEL_T]):
             try:
                 value: Any = self._state
                 for segment in segments:
-                    value = self._traverse_step(value, segment)
+                    value = traverse_path_step(value, segment)
             except Exception:
                 if default is not Ellipsis:
                     return default
@@ -406,15 +457,15 @@ class InMemoryStateStore(Generic[MODEL_T]):
             # Navigate/create intermediate segments
             for segment in segments[:-1]:
                 try:
-                    current = self._traverse_step(current, segment)
+                    current = traverse_path_step(current, segment)
                 except (KeyError, AttributeError, IndexError, TypeError):
                     # Create intermediate object and assign it
                     intermediate: Any = {}
-                    self._assign_step(current, segment, intermediate)
+                    assign_path_step(current, segment, intermediate)
                     current = intermediate
 
             # Assign the final value
-            self._assign_step(current, segments[-1], value)
+            assign_path_step(current, segments[-1], value)
 
     async def clear(self) -> None:
         """Reset the state to its type defaults.
@@ -427,38 +478,6 @@ class InMemoryStateStore(Generic[MODEL_T]):
             await self.set_state(self._state.__class__())
         except ValidationError:
             raise ValueError("State must have defaults for all fields")
-
-    def _traverse_step(self, obj: Any, segment: str) -> Any:
-        """Follow one segment into *obj* (dict key, list index, or attribute)."""
-        if isinstance(obj, dict):
-            return obj[segment]
-
-        # attempt list/tuple index
-        try:
-            idx = int(segment)
-            return obj[idx]
-        except (ValueError, TypeError, IndexError):
-            pass
-
-        # fallback to attribute access (Pydantic models, normal objects)
-        return getattr(obj, segment)
-
-    def _assign_step(self, obj: Any, segment: str, value: Any) -> None:
-        """Assign *value* to *segment* of *obj* (dict key, list index, or attribute)."""
-        if isinstance(obj, dict):
-            obj[segment] = value
-            return
-
-        # attempt list/tuple index assignment
-        try:
-            idx = int(segment)
-            obj[idx] = value
-            return
-        except (ValueError, TypeError, IndexError):
-            pass
-
-        # fallback to attribute assignment
-        setattr(obj, segment, value)
 
 
 def infer_state_type(workflow: "Workflow") -> type[BaseModel]:
