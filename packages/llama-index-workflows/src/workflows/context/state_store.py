@@ -81,6 +81,10 @@ class StateStore(Protocol[MODEL_T]):
     while maintaining API compatibility with the default
     [InMemoryStateStore][workflows.context.state_store.InMemoryStateStore].
 
+    For remote state stores, `to_dict`/`from_dict` should serialize non-secret
+    connection info (e.g., URL, table name) rather than the full state contents,
+    since the actual state lives in the external service.
+
     See Also:
         - [InMemoryStateStore][workflows.context.state_store.InMemoryStateStore]
         - [Context.store][workflows.context.context.Context.store]
@@ -130,10 +134,10 @@ class InMemoryStateStore(Generic[MODEL_T]):
     """
     Default in-memory implementation of the [StateStore][workflows.context.state_store.StateStore] protocol.
 
-    This async, type-safe state manager holds a single Pydantic model instance
-    representing global workflow state. When the generic parameter is omitted,
-    it defaults to [DictState][workflows.context.state_store.DictState] for
-    flexible, dictionary-like usage.
+    Holds a single Pydantic model instance representing global workflow state.
+    When the generic parameter is omitted, it defaults to
+    [DictState][workflows.context.state_store.DictState] for flexible,
+    dictionary-like usage.
 
     Thread-safety is ensured with an internal `asyncio.Lock`. Consumers can
     either perform atomic reads/writes via `get_state` and `set_state`, or make
