@@ -1,5 +1,5 @@
 ---
-"llama-index-workflows": patch
+"llama-index-workflows": minor
 ---
 
 Replace InMemoryStateStore types with a corresponding StateStore protocol
