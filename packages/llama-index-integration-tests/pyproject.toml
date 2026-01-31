@@ -8,6 +8,7 @@ dev = [
   "pytest-asyncio>=0.24.0",
   "pytest-cov>=7.0.0",
   "pytest-timeout>=2.3.1",
+  "pytest-xdist>=3.8.0",
   "testcontainers[postgres]>=4.0.0"
 ]
 
@@ -23,13 +24,20 @@ dependencies = [
   "llama-index-workflows-dbos"
 ]
 
+[tool.coverage.run]
+source = [
+  "workflows",
+  "llama_agents"
+]
+omit = ["**/tests/*"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "module"
 asyncio_default_test_loop_scope = "module"
 testpaths = ["tests"]
 # Skip docker tests by default - run with `pytest -m docker` to include them
-addopts = "-m 'not docker'"
+addopts = "-nauto --timeout=10 -m 'not docker'"
 markers = [
   "docker: marks tests as requiring Docker (testcontainers/PostgreSQL)"
 ]
