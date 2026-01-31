@@ -7,10 +7,11 @@ particularly around run_id matching and state store availability.
 from __future__ import annotations
 
 import asyncio
+import os
 from typing import Any, Generator
 
 import pytest
-from conftest import make_test_dbos_config
+from conftest import make_test_dbos_config, make_test_dbos_postgres_config
 from dbos import DBOS, DBOSConfig
 from llama_agents.runtime.dbos import (
     DBOSRuntime,
@@ -27,10 +28,32 @@ from workflows.workflow import Workflow
 
 
 @pytest.fixture(scope="module")
-def dbos_config(tmp_path_factory: pytest.TempPathFactory) -> DBOSConfig:
-    """Create DBOS config with a fresh database."""
-    db_file = tmp_path_factory.mktemp("dbos") / "dbos_debug_test.sqlite3"
-    return make_test_dbos_config("workflows-py-dbos-debug", db_file)
+def dbos_config(
+    request: pytest.FixtureRequest,
+    tmp_path_factory: pytest.TempPathFactory,
+) -> Generator[DBOSConfig, None, None]:
+    """Create DBOS config with a fresh database.
+
+    Uses PostgreSQL if DBOS_TEST_POSTGRES=1 or test is marked with @pytest.mark.postgres,
+    otherwise uses SQLite (default).
+    """
+    use_postgres = (
+        os.environ.get("DBOS_TEST_POSTGRES", "").lower() in ("1", "true", "yes")
+        or request.node.get_closest_marker("postgres") is not None
+    )
+
+    if use_postgres:
+        from py_pglite import PGliteManager
+
+        manager = PGliteManager()
+        manager.start()
+        try:
+            yield make_test_dbos_postgres_config("workflows-py-dbos-debug", manager)
+        finally:
+            manager.stop()
+    else:
+        db_file = tmp_path_factory.mktemp("dbos") / "dbos_debug_test.sqlite3"
+        yield make_test_dbos_config("workflows-py-dbos-debug", db_file)
 
 
 @pytest.fixture(scope="module")
