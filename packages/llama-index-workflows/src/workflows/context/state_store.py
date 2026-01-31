@@ -7,7 +7,16 @@ import asyncio
 import functools
 import warnings
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any, AsyncGenerator, Generic, Type
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    AsyncContextManager,
+    AsyncGenerator,
+    Generic,
+    Protocol,
+    Type,
+    runtime_checkable,
+)
 
 from pydantic import BaseModel, ValidationError
 from typing_extensions import TypeVar
@@ -59,14 +68,72 @@ class DictState(DictLikeModel):
 MODEL_T = TypeVar("MODEL_T", bound=BaseModel, default=DictState)  # type: ignore
 
 
+@runtime_checkable
+class StateStore(Protocol[MODEL_T]):
+    """Protocol defining the async state store interface.
+
+    State stores hold a single Pydantic model instance representing global
+    workflow state. Implementations must be async-safe and support both
+    atomic operations and transactional edits.
+
+    This protocol enables runtime plugins to provide custom state store
+    implementations (e.g., backed by databases, Redis, or external services)
+    while maintaining API compatibility with the default
+    [InMemoryStateStore][workflows.context.state_store.InMemoryStateStore].
+
+    See Also:
+        - [InMemoryStateStore][workflows.context.state_store.InMemoryStateStore]
+        - [Context.store][workflows.context.context.Context.store]
+    """
+
+    state_type: Type[MODEL_T]
+
+    async def get_state(self) -> MODEL_T:
+        """Return a copy of the current state model."""
+        ...
+
+    async def set_state(self, state: MODEL_T) -> None:
+        """Replace or merge into the current state model."""
+        ...
+
+    async def get(self, path: str, default: Any = ...) -> Any:
+        """Get a nested value using dot-separated paths."""
+        ...
+
+    async def set(self, path: str, value: Any) -> None:
+        """Set a nested value using dot-separated paths."""
+        ...
+
+    async def clear(self) -> None:
+        """Reset the state to its type defaults."""
+        ...
+
+    def edit_state(self) -> AsyncContextManager[MODEL_T]:
+        """Edit state transactionally under a lock."""
+        ...
+
+    def to_dict(self, serializer: "BaseSerializer") -> dict[str, Any]:
+        """Serialize state for persistence."""
+        ...
+
+    @classmethod
+    def from_dict(
+        cls,
+        serialized_state: dict[str, Any],
+        serializer: "BaseSerializer",
+    ) -> "StateStore[MODEL_T]":
+        """Restore state from serialized payload."""
+        ...
+
+
 class InMemoryStateStore(Generic[MODEL_T]):
     """
-    Async, in-memory, type-safe state manager for workflows.
+    Default in-memory implementation of the [StateStore][workflows.context.state_store.StateStore] protocol.
 
-    This store holds a single Pydantic model instance representing global
-    workflow state. When the generic parameter is omitted, it defaults to
-    [DictState][workflows.context.state_store.DictState] for flexible,
-    dictionary-like usage.
+    This async, type-safe state manager holds a single Pydantic model instance
+    representing global workflow state. When the generic parameter is omitted,
+    it defaults to [DictState][workflows.context.state_store.DictState] for
+    flexible, dictionary-like usage.
 
     Thread-safety is ensured with an internal `asyncio.Lock`. Consumers can
     either perform atomic reads/writes via `get_state` and `set_state`, or make
