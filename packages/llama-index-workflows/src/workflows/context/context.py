@@ -488,7 +488,10 @@ class Context(Generic[MODEL_T]):
         elif isinstance(self._face, ExternalContext):
             self._face.send_event(message, step)
         else:
-            _warn_send_event_before_start()
+            raise ContextStateError(
+                "send_event() called before workflow started. "
+                "Call workflow.run() first."
+            )
 
     async def wait_for_event(
         self,
@@ -675,14 +678,5 @@ def _warn_cancel_before_start() -> None:
 def _warn_cancel_in_step() -> None:
     warnings.warn(
         "cancel() called from within a step; use send_event() instead.",
-        stacklevel=3,
-    )
-
-
-@functools.lru_cache(maxsize=1)
-def _warn_send_event_before_start() -> None:
-    warnings.warn(
-        "send_event() called before workflow started; event will be dropped. "
-        "Call workflow.run() first.",
         stacklevel=3,
     )

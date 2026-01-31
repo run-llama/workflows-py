@@ -15,7 +15,6 @@ from workflows.context.context import (
     _warn_cancel_in_step,
     _warn_get_result,
     _warn_is_running_in_step,
-    _warn_send_event_before_start,
 )
 from workflows.context.external_context import ExternalContext
 from workflows.context.state_store import DictState, InMemoryStateStore
@@ -590,13 +589,12 @@ async def test_cancel_before_start_warns(workflow: Workflow) -> None:
 
 
 @pytest.mark.asyncio
-async def test_send_event_before_start_warns(workflow: Workflow) -> None:
-    """Sending event before run() should emit warning about dropped event."""
-    # Clear the lru_cache to ensure warning fires
-    _warn_send_event_before_start.cache_clear()
-
+async def test_send_event_before_start_raises(workflow: Workflow) -> None:
+    """Sending event before run() should raise ContextStateError."""
     ctx = Context(workflow)
-    with pytest.warns(UserWarning, match="send_event.*called before workflow started"):
+    with pytest.raises(
+        ContextStateError, match="send_event.*called before workflow started"
+    ):
         ctx.send_event(Event())
 
 
