@@ -42,7 +42,7 @@ from workflows.types import RunResultT
 from workflows.utils import _nanoid as nanoid
 
 from .serializers import BaseSerializer, JsonSerializer
-from .state_store import MODEL_T, InMemoryStateStore
+from .state_store import MODEL_T, StateStore
 
 if TYPE_CHECKING:  # pragma: no cover
     from workflows import Workflow
@@ -80,9 +80,9 @@ class Context(Generic[MODEL_T]):
 
     Attributes:
         is_running (bool): Whether the workflow is currently running.
-        store (InMemoryStateStore[MODEL_T]): Type-safe, async state store shared
+        store (StateStore[MODEL_T]): Type-safe, async state store shared
             across steps. See also
-            [InMemoryStateStore][workflows.context.state_store.InMemoryStateStore].
+            [StateStore][workflows.context.state_store.StateStore].
 
     Examples:
         Basic usage inside a step:
@@ -311,16 +311,16 @@ class Context(Generic[MODEL_T]):
             _warn_cancel_in_step()
 
     @property
-    def store(self) -> InMemoryStateStore[MODEL_T]:
+    def store(self) -> StateStore[MODEL_T]:
         """Typed, process-local state store shared across steps.
 
         If no state was initialized yet, a default
         [DictState][workflows.context.state_store.DictState] store is created.
 
         Returns:
-            InMemoryStateStore[MODEL_T]: The state store instance.
+            StateStore[MODEL_T]: The state store instance.
         """
-        return self._face.store  # type: ignore[return-value]
+        return self._face.store
 
     def to_dict(self, serializer: BaseSerializer | None = None) -> dict[str, Any]:
         """Serialize the context to a JSON-serializable dict.

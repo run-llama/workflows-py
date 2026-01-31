@@ -8,7 +8,11 @@ from pydantic import ValidationError
 
 from workflows.context.context_types import MODEL_T, SerializedContext
 from workflows.context.serializers import BaseSerializer, JsonSerializer
-from workflows.context.state_store import InMemoryStateStore, infer_state_type
+from workflows.context.state_store import (
+    InMemoryStateStore,
+    StateStore,
+    infer_state_type,
+)
 from workflows.errors import ContextSerdeError
 from workflows.runtime.types.internal_state import BrokerState
 
@@ -61,7 +65,7 @@ class PreContext(Generic[MODEL_T]):
         self._init_snapshot = previous_context_parsed
 
     @property
-    def store(self) -> InMemoryStateStore[MODEL_T]:
+    def store(self) -> StateStore[MODEL_T]:
         """Lazily-created staging store for pre-run state access.
 
         For fresh contexts, the state type is inferred from workflow step
