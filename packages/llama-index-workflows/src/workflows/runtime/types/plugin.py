@@ -21,10 +21,11 @@ from typing import (
     Union,
 )
 
+from workflows.context.state_store import StateStore
+
 if TYPE_CHECKING:
     from workflows.context.context import Context
     from workflows.context.serializers import BaseSerializer
-    from workflows.context.state_store import StateStore
     from workflows.runtime.types.internal_state import BrokerState
     from workflows.runtime.types.step_function import StepWorkerFunction
     from workflows.workflow import Workflow
@@ -158,7 +159,7 @@ class InternalRunAdapter(ABC):
         """
         pass
 
-    def get_state_store(self) -> "StateStore[Any] | None":
+    def get_state_store(self) -> StateStore[Any] | None:
         """
         Get the state store for this workflow run.
 
@@ -240,7 +241,7 @@ class ExternalRunAdapter(ABC):
         """
         await self.send_event(TickCancelRun())
 
-    def get_state_store(self) -> "StateStore[Any] | None":
+    def get_state_store(self) -> StateStore[Any] | None:
         """
         Get the state store for this workflow run.
 
