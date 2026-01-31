@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING, Any, AsyncGenerator, Coroutine, Generic, cast
+from typing import TYPE_CHECKING, Any, AsyncGenerator, Coroutine, Generic
 
 from typing_extensions import TypeVar
 
 from workflows.context.context_types import MODEL_T
 from workflows.context.serializers import JsonSerializer
-from workflows.context.state_store import InMemoryStateStore
+from workflows.context.state_store import StateStore
 from workflows.errors import WorkflowRuntimeError
 from workflows.events import StopEvent
 from workflows.runtime.types.internal_state import BrokerState
@@ -104,12 +104,12 @@ class ExternalContext(Generic[MODEL_T, RunResultT]):
         return new_state
 
     @property
-    def store(self) -> InMemoryStateStore[MODEL_T]:
+    def store(self) -> StateStore[MODEL_T]:
         """Access workflow state store."""
         state_store = self._external_adapter.get_state_store()
         if state_store is None:
             raise RuntimeError("State store not available from adapter")
-        return cast(InMemoryStateStore[MODEL_T], state_store)
+        return state_store  # type: ignore[return-value]
 
     def send_event(self, message: Event, step: str | None = None) -> None:
         """Send an event into the workflow."""

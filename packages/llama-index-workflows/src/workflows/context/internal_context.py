@@ -8,7 +8,7 @@ from collections import Counter, defaultdict
 from typing import TYPE_CHECKING, Any, Coroutine, Generic, Type, TypeVar, cast
 
 from workflows.context.context_types import MODEL_T
-from workflows.context.state_store import InMemoryStateStore
+from workflows.context.state_store import StateStore
 from workflows.errors import WorkflowRuntimeError
 from workflows.runtime.types.results import (
     AddCollectedEvent,
@@ -91,12 +91,12 @@ class InternalContext(Generic[MODEL_T]):
             )
 
     @property
-    def store(self) -> InMemoryStateStore[MODEL_T]:
+    def store(self) -> StateStore[MODEL_T]:
         """Access workflow state store."""
         state_store = self._internal_adapter.get_state_store()
         if state_store is None:
             raise RuntimeError("State store not available from adapter")
-        return cast(InMemoryStateStore[MODEL_T], state_store)
+        return state_store  # type: ignore[return-value]
 
     def collect_events(
         self,
