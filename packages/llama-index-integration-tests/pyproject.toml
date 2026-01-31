@@ -23,8 +23,10 @@ dependencies = [
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-asyncio_default_fixture_loop_scope = "function"
+asyncio_default_fixture_loop_scope = "module"
+asyncio_default_test_loop_scope = "module"
 testpaths = ["tests"]
 
 [tool.uv.sources]
 llama-index-workflows = {workspace = true}
+llama-index-workflows-dbos = {workspace = true}

@@ -278,13 +278,16 @@ async def test_control_loop_with_external_event(
 
 
 @pytest.mark.asyncio
-async def test_control_loop_timeout(test_plugin: MockRunAdapter) -> None:
+async def test_control_loop_timeout(
+    test_plugin_with_time_machine: tuple[MockRunAdapter, time_machine.Coordinates],
+) -> None:
     """
     Test that workflow timeout raises WorkflowTimeoutError and publishes WorkflowTimedOutEvent.
 
     When a workflow times out, a WorkflowTimedOutEvent should be published to the stream
     to inform consumers about the timeout before the exception is raised.
     """
+    test_plugin, _ = test_plugin_with_time_machine
 
     class SlowWorkflow(Workflow):
         @step
