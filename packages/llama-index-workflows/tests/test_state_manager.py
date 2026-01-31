@@ -1,196 +1,48 @@
-from typing import Any, Type, Union, cast
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 LlamaIndex Inc.
+
+"""Minimal unit tests for InMemoryStateStore.
+
+Full state store protocol tests are in the integration test package
+(llama-index-integration-tests/tests/test_state_store_matrix.py),
+which tests InMemoryStateStore alongside SqliteStateStore.
+
+These tests provide fast feedback during development of the base package.
+"""
+
+from __future__ import annotations
 
 import pytest
-from pydantic import (
-    BaseModel,
-    ConfigDict,
-    ValidationError,
-    field_serializer,
-    field_validator,
-)
-from workflows.context.serializers import BaseSerializer, JsonSerializer
 from workflows.context.state_store import DictState, InMemoryStateStore
 
 
-class MyRandomObject:
-    def __init__(self, name: str):
-        self.name = name
+@pytest.mark.asyncio
+async def test_in_memory_state_store_smoke() -> None:
+    """Smoke test for basic InMemoryStateStore functionality."""
+    store: InMemoryStateStore[DictState] = InMemoryStateStore(DictState())
 
+    # Basic get/set
+    await store.set("name", "test")
+    assert await store.get("name") == "test"
 
-class PydanticObject(BaseModel):
-    name: str
+    # Nested path
+    await store.set("nested", {"key": "value"})
+    assert await store.get("nested.key") == "value"
 
+    # Default on missing
+    assert await store.get("missing", default=None) is None
 
-class MyState(BaseModel):
-    model_config = ConfigDict(
-        arbitrary_types_allowed=True,
-        validate_assignment=True,
-        strict=True,
-    )
-
-    my_obj: MyRandomObject
-    pydantic_obj: PydanticObject
-    name: str
-    age: int
-
-    @field_serializer("my_obj", when_used="always")
-    def serialize_my_obj(self, my_obj: MyRandomObject) -> str:
-        return my_obj.name
-
-    @field_validator("my_obj", mode="before")
-    @classmethod
-    def deserialize_my_obj(cls, v: Union[str, MyRandomObject]) -> MyRandomObject:
-        if isinstance(v, MyRandomObject):
-            return v
-        if isinstance(v, str):
-            return MyRandomObject(v)
-
-        raise ValueError(f"Invalid type for my_obj: {type(v)}")
-
-
-class MyUnserializableState(BaseModel):
-    serializer_type: Type[BaseSerializer]
-    test_data: dict[str, Any]
-
-
-@pytest.fixture
-def default_state_manager() -> InMemoryStateStore[DictState]:
-    return InMemoryStateStore(DictState())
-
-
-@pytest.fixture
-def custom_state_manager() -> InMemoryStateStore[MyState]:
-    return InMemoryStateStore(
-        MyState(
-            my_obj=MyRandomObject("llama-index"),
-            pydantic_obj=PydanticObject(name="llama-index"),
-            name="John",
-            age=30,
-        )
-    )
-
-
-@pytest.fixture
-def unser_custom_state_manager() -> InMemoryStateStore[MyUnserializableState]:
-    return InMemoryStateStore(
-        MyUnserializableState(
-            serializer_type=type(JsonSerializer()), test_data={"test": 1, "data": 2}
-        )
-    )
+    # Clear
+    await store.clear()
+    assert await store.get("name", default=None) is None
 
 
 @pytest.mark.asyncio
-async def test_state_manager_defaults(
-    default_state_manager: InMemoryStateStore[DictState],
-) -> None:
-    assert (
-        await default_state_manager.get_state()
-    ).model_dump_json() == DictState().model_dump_json()
+async def test_in_memory_edit_state() -> None:
+    """Test edit_state context manager."""
+    store: InMemoryStateStore[DictState] = InMemoryStateStore(DictState())
 
-    await default_state_manager.set("name", "John")
-    await default_state_manager.set("age", 30)
+    async with store.edit_state() as state:
+        state["counter"] = 1
 
-    assert await default_state_manager.get("name") == "John"
-    assert await default_state_manager.get("age") == 30
-
-    await default_state_manager.set("nested", {"a": "b"})
-    assert await default_state_manager.get("nested.a") == "b"
-
-    await default_state_manager.set("nested.a", "c")
-    assert await default_state_manager.get("nested.a") == "c"
-
-    full_state = await default_state_manager.get_state()
-    assert full_state.name == "John"
-    assert full_state.age == 30
-    assert full_state.nested["a"] == "c"
-
-
-@pytest.mark.asyncio
-async def test_default_state_manager_serialization(
-    default_state_manager: InMemoryStateStore[DictState],
-) -> None:
-    assert (
-        await default_state_manager.get_state()
-    ).model_dump() == DictState().model_dump()
-
-    await default_state_manager.set("name", "John")
-    await default_state_manager.set("age", 30)
-
-    assert await default_state_manager.get("name") == "John"
-    assert await default_state_manager.get("age") == 30
-
-    data = default_state_manager.to_dict(JsonSerializer())
-    new_state_manager: InMemoryStateStore[DictState] = InMemoryStateStore.from_dict(
-        data, JsonSerializer()
-    )
-
-    assert await new_state_manager.get("name") == "John"
-    assert await new_state_manager.get("age") == 30
-
-
-@pytest.mark.asyncio
-async def test_custom_state_manager(
-    custom_state_manager: InMemoryStateStore[MyState],
-) -> None:
-    assert (await custom_state_manager.get_state()).model_dump(mode="json") == MyState(
-        my_obj=MyRandomObject("llama-index"),
-        pydantic_obj=PydanticObject(name="llama-index"),
-        name="John",
-        age=30,
-    ).model_dump(mode="json")
-
-    await custom_state_manager.set("name", "Jane")
-    await custom_state_manager.set("age", 25)
-
-    assert await custom_state_manager.get("name") == "Jane"
-    assert await custom_state_manager.get("age") == 25
-
-    full_state = await custom_state_manager.get_state()
-    assert isinstance(full_state, MyState)
-    assert full_state.name == "Jane"
-    assert full_state.age == 25
-    assert full_state.my_obj.name == "llama-index"
-    assert full_state.pydantic_obj.name == "llama-index"
-
-    # Ensure pydantic is providing type safety
-    with pytest.raises(ValidationError):
-        await custom_state_manager.set("age", "30")
-
-    with pytest.raises(AttributeError):
-        await custom_state_manager.set("age.nested", "llama-index")
-
-
-@pytest.mark.asyncio
-async def test_state_manager_custom_serialization(
-    custom_state_manager: InMemoryStateStore[MyState],
-) -> None:
-    await custom_state_manager.set("name", "Jane")
-    await custom_state_manager.set("age", 25)
-
-    assert await custom_state_manager.get("name") == "Jane"
-    assert await custom_state_manager.get("age") == 25
-
-    data = custom_state_manager.to_dict(JsonSerializer())
-    new_state_manager: InMemoryStateStore[MyState] = cast(
-        InMemoryStateStore[MyState],
-        InMemoryStateStore.from_dict(data, JsonSerializer()),
-    )
-
-    assert await new_state_manager.get("name") == "Jane"
-    assert await new_state_manager.get("age") == 25
-
-    assert (await new_state_manager.get("my_obj")).name == "llama-index"
-
-    state = await new_state_manager.get_state()
-    assert state.pydantic_obj.name == "llama-index"
-
-
-@pytest.mark.asyncio
-async def test_state_manager_clear() -> None:
-    state_manager = InMemoryStateStore(DictState())
-    await state_manager.set("name", "Jane")
-    await state_manager.set("age", 25)
-
-    await state_manager.clear()
-    assert await state_manager.get("name", default=None) is None
-    assert await state_manager.get("age", default=None) is None
+    assert await store.get("counter") == 1

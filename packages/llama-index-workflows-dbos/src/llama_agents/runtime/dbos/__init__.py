@@ -13,11 +13,11 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass
-from typing import Any, AsyncGenerator
+from typing import TYPE_CHECKING, Any, AsyncGenerator
 
 from llama_index_instrumentation.dispatcher import active_instrument_tags
 from workflows.context.serializers import BaseSerializer
-from workflows.context.state_store import InMemoryStateStore
+from workflows.context.state_store import StateStore
 from workflows.events import Event, StartEvent, StopEvent
 from workflows.runtime.types.internal_state import BrokerState
 from workflows.runtime.types.plugin import (
@@ -39,6 +39,16 @@ from workflows.runtime.workflow_tracker import WorkflowTracker
 from workflows.workflow import Workflow
 
 from dbos import DBOS, SetWorkflowID
+
+from .sql_state_store import (
+    PostgresStateStore,
+    SqliteStateStore,
+    SqlStateStore,
+    create_state_store,
+)
+
+if TYPE_CHECKING:
+    from sqlalchemy.engine import Engine
 
 logger = logging.getLogger(__name__)
 
@@ -75,6 +85,9 @@ class DBOSRuntime(Runtime):
 
     Workflows are registered at launch() time with stable names,
     enabling distributed workers and recovery.
+
+    State is persisted to the database using SQL state stores,
+    enabling state recovery across process restarts.
     """
 
     def __init__(self, polling_interval_sec: float = 1.0) -> None:
@@ -82,6 +95,8 @@ class DBOSRuntime(Runtime):
         self._dbos_launched = False
         self._tasks: list[asyncio.Task[None]] = []
         self._polling_interval_sec = polling_interval_sec
+        self._sql_engine: Engine | None = None
+        self._migrations_run = False
 
     def _track_task(self, task: asyncio.Task[None]) -> None:
         self._tasks.append(task)
@@ -134,6 +149,52 @@ class DBOSRuntime(Runtime):
             workflow=workflow, workflow_run_fn=_dbos_control_loop, steps=wrapped_steps
         )
 
+    def _get_sql_engine(self) -> "Engine":
+        """Get the SQLAlchemy engine from DBOS for state storage.
+
+        Uses DBOS's app database if configured, otherwise falls back to sys database.
+
+        Returns:
+            SQLAlchemy Engine for state storage.
+
+        Raises:
+            RuntimeError: If no database is available.
+        """
+        if self._sql_engine is not None:
+            return self._sql_engine
+
+        from dbos._dbos import _get_dbos_instance
+
+        dbos = _get_dbos_instance()
+
+        # Try app database first, fall back to system database
+        app_db = dbos._app_db
+        if app_db is not None:
+            self._sql_engine = app_db.engine
+            return self._sql_engine
+
+        # Fall back to system database
+        sys_db = dbos._sys_db
+        self._sql_engine = sys_db.engine
+        return self._sql_engine
+
+    def _run_state_store_migrations(self) -> None:
+        """Run migrations for SQL state stores.
+
+        Called once at launch() time to create the workflow_state table.
+        """
+        if self._migrations_run:
+            return
+
+        from .sql_state_store import create_state_store
+
+        engine = self._get_sql_engine()
+        # Create a temporary store to trigger migrations
+        temp_store = create_state_store(run_id="_migration_check", engine=engine)
+        temp_store._ensure_initialized()
+        self._migrations_run = True
+        logger.info("SQL state store migrations completed")
+
     def run_workflow(
         self,
         run_id: str,
@@ -144,13 +205,15 @@ class DBOSRuntime(Runtime):
         serializer: BaseSerializer | None = None,
         adapter_state: dict[str, Any] | None = None,
     ) -> ExternalRunAdapter:
-        """Set up a workflow run. Currently only creates state store.
+        """Set up a workflow run with SQL-backed state storage.
 
-        Note: Execution is still managed by the broker for now. This will
-        change as we refactor to have the runtime fully own execution.
+        State is persisted to the database, enabling recovery across
+        process restarts and distributed execution.
         """
         from workflows.context.serializers import JsonSerializer
-        from workflows.context.state_store import InMemoryStateStore, infer_state_type
+        from workflows.context.state_store import infer_state_type
+
+        from .sql_state_store import create_state_store
 
         if not self._dbos_launched:
             raise RuntimeError(
@@ -163,17 +226,20 @@ class DBOSRuntime(Runtime):
                 "DBOSRuntime workflows must be registered before running. Did you forget to call runtime.launch()?"
             )
 
-        # TODO: Actually have a distributed interface for the state store instead of this sad sorry pretending
-        # Create state store from serialized state or infer type from workflow
+        # Create SQL state store for durable state persistence
         active_serializer = serializer or JsonSerializer()
-        if serialized_state:
-            state_store = InMemoryStateStore.from_dict(
-                serialized_state, active_serializer
-            )
-        else:
-            # Infer state type from workflow step configs
-            state_type = infer_state_type(registered.workflow)
-            state_store = InMemoryStateStore(state_type())
+        engine = self._get_sql_engine()
+
+        # Infer state type from workflow step configs
+        state_type = infer_state_type(registered.workflow)
+
+        # Create SQL state store
+        state_store = create_state_store(
+            run_id=run_id,
+            engine=engine,
+            state_type=state_type,
+            serializer=active_serializer,
+        )
         _dbos_state_stores[run_id] = state_store
 
         async def _run_workflow() -> None:
@@ -222,6 +288,7 @@ class DBOSRuntime(Runtime):
         Launch DBOS and register all tracked workflows.
 
         Must be called before running any workflows.
+        Runs SQL state store migrations to create the workflow_state table.
         """
         if self._dbos_launched:
             return  # Already launched
@@ -242,6 +309,9 @@ class DBOSRuntime(Runtime):
         DBOS.launch()
         self._dbos_launched = True
 
+        # Run SQL state store migrations after DBOS is launched
+        self._run_state_store_migrations()
+
     def destroy(self, destroy_dbos: bool = True) -> None:
         """Clean up DBOS runtime resources.
 
@@ -252,6 +322,8 @@ class DBOSRuntime(Runtime):
         """
         self._tracker.clear()
         self._dbos_launched = False
+        self._sql_engine = None
+        self._migrations_run = False
         for task in self._tasks:
             if not task.done():
                 task.cancel()
@@ -261,7 +333,7 @@ class DBOSRuntime(Runtime):
 
 # State stores by run_id
 # TODO: Add cleanup mechanism for completed workflows
-_dbos_state_stores: dict[str, "InMemoryStateStore[Any]"] = {}
+_dbos_state_stores: dict[str, "StateStore[Any]"] = {}
 
 
 _IO_STREAM_PUBLISHED_EVENTS_NAME = "published_events"
@@ -369,7 +441,7 @@ class InternalDBOSAdapter(InternalRunAdapter):
             ),
         )
 
-    def get_state_store(self) -> "InMemoryStateStore[Any] | None":
+    def get_state_store(self) -> "StateStore[Any] | None":
         return _dbos_state_stores.get(self._run_id)
 
 
@@ -430,4 +502,8 @@ __all__ = [
     "InternalDBOSAdapter",
     "ExternalDBOSAdapter",
     "_dbos_state_stores",
+    "SqlStateStore",
+    "PostgresStateStore",
+    "SqliteStateStore",
+    "create_state_store",
 ]

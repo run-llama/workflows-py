@@ -1,14 +1,18 @@
-"""Runtime matrix tests - testing workflows against both BasicRuntime and DBOSRuntime.
+"""Runtime matrix tests - testing workflows against BasicRuntime and DBOSRuntime.
 
 All workflow classes are defined at module level so they can be registered with
 DBOS once at module initialization time, avoiding repeated init/destroy cycles.
+
+Note: The dbos-postgres variant requires Docker to be available. Tests will be
+skipped if Docker is not running or if the PostgreSQL container cannot start.
 """
 
 from __future__ import annotations
 
 import asyncio
+import os
 from pathlib import Path
-from typing import AsyncGenerator, Generator, Union
+from typing import TYPE_CHECKING, Any, AsyncGenerator, Generator, Union
 
 import pytest
 from dbos import DBOS, DBOSConfig
@@ -29,14 +33,50 @@ from workflows.runtime.types.plugin import Runtime
 from workflows.testing import WorkflowTestRunner
 from workflows.workflow import Workflow
 
+if TYPE_CHECKING:
+    from testcontainers.postgres import PostgresContainer
+
 # -- Fixtures --
 
 
+def _get_runtime_params() -> list[Any]:
+    """Get runtime parameters based on environment configuration.
+
+    DBOS is a singleton, so we can only test one DBOS backend per run:
+    - Default: basic + dbos (SQLite)
+    - TEST_DBOS_POSTGRES=1: basic + dbos-postgres (PostgreSQL via testcontainers)
+
+    The dbos-postgres variant requires Docker to be running.
+    """
+    params: list[Any] = [
+        pytest.param("basic", id="basic"),
+    ]
+    # DBOS is a singleton - can only use one backend per test run
+    if os.environ.get("TEST_DBOS_POSTGRES", "").lower() in ("1", "true", "yes"):
+        params.append(pytest.param("dbos-postgres", id="dbos-postgres"))
+    else:
+        params.append(pytest.param("dbos", id="dbos"))
+    return params
+
+
 @pytest.fixture(scope="module")
-def dbos_runtime(
+def postgres_container() -> Generator["PostgresContainer", None, None]:
+    """Module-scoped PostgreSQL container for DBOS tests.
+
+    This fixture is only used when dbos-postgres runtime is requested.
+    Requires Docker to be running.
+    """
+    from testcontainers.postgres import PostgresContainer
+
+    with PostgresContainer("postgres:16", driver=None) as postgres:
+        yield postgres
+
+
+@pytest.fixture(scope="module")
+def dbos_runtime_sqlite(
     tmp_path_factory: pytest.TempPathFactory,
 ) -> Generator[DBOSRuntime, None, None]:
-    """Module-scoped DBOS runtime - initialized and launched once."""
+    """Module-scoped DBOS runtime with SQLite backend."""
     db_file: Path = tmp_path_factory.mktemp("dbos") / "dbos_test.sqlite3"
     system_db_url: str = f"sqlite+pysqlite:///{db_file}?check_same_thread=false"
     config: DBOSConfig = {
@@ -52,20 +92,36 @@ def dbos_runtime(
         runtime.destroy()
 
 
-@pytest.fixture(
-    params=[
-        pytest.param("basic", id="basic"),
-        pytest.param("dbos", id="dbos"),
-    ]
-)
+@pytest.fixture(scope="module")
+def dbos_runtime_postgres(
+    postgres_container: "PostgresContainer",
+) -> Generator[DBOSRuntime, None, None]:
+    """Module-scoped DBOS runtime with PostgreSQL backend."""
+    connection_url = postgres_container.get_connection_url()
+    config: DBOSConfig = {
+        "name": "wf-dbos-pg-test",  # Must be <= 30 chars
+        "system_database_url": connection_url,
+        "run_admin_server": False,
+    }
+    DBOS(config=config)
+    runtime = DBOSRuntime(polling_interval_sec=0.01)
+    try:
+        yield runtime
+    finally:
+        runtime.destroy()
+
+
+@pytest.fixture(params=_get_runtime_params())
 async def runtime(
     request: pytest.FixtureRequest,
-    dbos_runtime: DBOSRuntime,
 ) -> AsyncGenerator[Runtime, None]:
     """Yield an unlaunched runtime.
 
-    For DBOS, returns the module-scoped runtime (already created, not yet launched).
-    Each test must call runtime.launch() after creating workflows.
+    For DBOS variants, returns the module-scoped runtime (already created, not yet
+    launched). Each test must call runtime.launch() after creating workflows.
+
+    Note: Only one DBOS variant can be used per test run since DBOS is a singleton.
+    Use TEST_DBOS_POSTGRES=1 to run with PostgreSQL instead of the default SQLite.
     """
     if request.param == "basic":
         rt = BasicRuntime()
@@ -74,7 +130,11 @@ async def runtime(
         finally:
             rt.destroy()
     elif request.param == "dbos":
-        yield dbos_runtime
+        dbos_rt: DBOSRuntime = request.getfixturevalue("dbos_runtime_sqlite")
+        yield dbos_rt
+    elif request.param == "dbos-postgres":
+        dbos_rt = request.getfixturevalue("dbos_runtime_postgres")
+        yield dbos_rt
 
 
 # -- Shared event types --
@@ -532,3 +592,82 @@ async def test_streaming_task_timeout(runtime: Runtime) -> None:
 
     with pytest.raises(WorkflowTimeoutError, match="Operation timed out"):
         await r
+
+
+# -- Workflow State Tests --
+
+
+class StatefulWorkflow(Workflow):
+    """Workflow that accumulates state across steps."""
+
+    @step
+    async def step1(self, ctx: Context, ev: StartEvent) -> OneTestEvent:
+        await ctx.store.set("step1_ran", True)
+        await ctx.store.set("counter", 1)
+        return OneTestEvent()
+
+    @step
+    async def step2(self, ctx: Context, ev: OneTestEvent) -> StopEvent:
+        await ctx.store.set("step2_ran", True)
+        counter = await ctx.store.get("counter")
+        await ctx.store.set("counter", counter + 1)
+        final_counter = await ctx.store.get("counter")
+        return StopEvent(result={"counter": final_counter})
+
+
+class NestedStateWorkflow(Workflow):
+    """Workflow that uses nested state paths."""
+
+    @step
+    async def process(self, ctx: Context, ev: StartEvent) -> StopEvent:
+        await ctx.store.set("user", {"name": "Alice", "profile": {"level": 1}})
+        await ctx.store.set("user.profile.level", 2)
+        level = await ctx.store.get("user.profile.level")
+        name = await ctx.store.get("user.name")
+        return StopEvent(result={"name": name, "level": level})
+
+
+@pytest.mark.asyncio
+async def test_workflow_state_basic(runtime: Runtime) -> None:
+    """Test basic state operations within a workflow."""
+    wf = CounterWorkflow(runtime=runtime)
+    runtime.launch()
+    result = await WorkflowTestRunner(wf).run()
+    assert result.result == 1
+
+
+@pytest.mark.asyncio
+async def test_workflow_state_across_steps(runtime: Runtime) -> None:
+    """Test state persistence across multiple workflow steps."""
+    wf = StatefulWorkflow(runtime=runtime)
+    runtime.launch()
+    result = await WorkflowTestRunner(wf).run()
+    assert result.result == {"counter": 2}
+
+
+@pytest.mark.asyncio
+async def test_workflow_nested_state(runtime: Runtime) -> None:
+    """Test nested state path access within workflows."""
+    wf = NestedStateWorkflow(runtime=runtime)
+    runtime.launch()
+    result = await WorkflowTestRunner(wf).run()
+    assert result.result == {"name": "Alice", "level": 2}
+
+
+@pytest.mark.asyncio
+async def test_workflow_state_multiple_runs(runtime: Runtime) -> None:
+    """Test that each workflow run has isolated state."""
+    wf = CounterWorkflow(runtime=runtime)
+    runtime.launch()
+    runner = WorkflowTestRunner(wf)
+
+    # Run multiple times - each should start fresh
+    results = await asyncio.gather(
+        runner.run(),
+        runner.run(),
+        runner.run(),
+    )
+
+    # Each run should have counter=1 (not accumulating)
+    for r in results:
+        assert r.result == 1

@@ -7,7 +7,8 @@ dev = [
   "pytest>=8.4.2",
   "pytest-asyncio>=0.24.0",
   "pytest-cov>=7.0.0",
-  "pytest-timeout>=2.3.1"
+  "pytest-timeout>=2.3.1",
+  "testcontainers[postgres]>=4.0.0"
 ]
 
 [project]
@@ -27,6 +28,10 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "module"
 asyncio_default_test_loop_scope = "module"
 testpaths = ["tests"]
+filterwarnings = [
+  # Ignore internal testcontainers deprecation warning (fixed in their code, just noisy)
+  "ignore:The @wait_container_is_ready decorator is deprecated:DeprecationWarning"
+]
 
 [tool.uv.sources]
 llama-index-workflows = {workspace = true}
