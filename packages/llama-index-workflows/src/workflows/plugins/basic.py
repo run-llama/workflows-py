@@ -14,7 +14,11 @@ from typing import Any, AsyncGenerator, Generator
 from llama_index_instrumentation.dispatcher import active_instrument_tags
 
 from workflows.context.serializers import BaseSerializer, JsonSerializer
-from workflows.context.state_store import InMemoryStateStore, infer_state_type
+from workflows.context.state_store import (
+    InMemoryStateStore,
+    StateStore,
+    infer_state_type,
+)
 from workflows.errors import WorkflowRuntimeError
 from workflows.events import Event, StartEvent, StopEvent
 from workflows.runtime.types.internal_state import BrokerState
@@ -52,7 +56,7 @@ class AsyncioAdapterQueues:
         self,
         run_id: str,
         init_state: BrokerState,
-        state_store: InMemoryStateStore[Any] | None = None,
+        state_store: StateStore[Any] | None = None,
     ):
         self.run_id = run_id
         self.init_state = init_state
@@ -126,7 +130,7 @@ class InternalAsyncioAdapter(InternalRunAdapter, SnapshottableAdapter):
     def replay(self) -> list[WorkflowTick]:
         return self._queues.ticks
 
-    def get_state_store(self) -> InMemoryStateStore[Any] | None:
+    def get_state_store(self) -> StateStore[Any] | None:
         return self._queues.state_store
 
 
@@ -169,7 +173,7 @@ class ExternalAsyncioAdapter(
     def replay(self) -> list[WorkflowTick]:
         return self._queues.ticks
 
-    def get_state_store(self) -> InMemoryStateStore[Any] | None:
+    def get_state_store(self) -> StateStore[Any] | None:
         return self._queues.state_store
 
     async def get_result(self) -> StopEvent:
