@@ -133,6 +133,8 @@ class _ControlLoopRunner:
         # Scheduled wakeups: heap of (wakeup_time, tick) tuples
         self.scheduled_wakeups: list[tuple[float, WorkflowTick]] = []
         self.snapshot_adapter = as_snapshottable_adapter(adapter)
+        # Pull task sequence counter for deterministic journaling
+        self._pull_sequence = 0
 
     def schedule_tick(self, tick: WorkflowTick, at_time: float) -> None:
         """Schedule a tick to be processed at a specific time."""
@@ -208,6 +210,8 @@ class _ControlLoopRunner:
                 )
 
         task = asyncio.create_task(_run_worker())
+        # Tag with stable identifier for deterministic journaling
+        task.worker_key = (command.step_name, command.id)  # type: ignore[attr-defined]
         self.worker_tasks.add(task)
 
     async def process_command(self, command: WorkflowCommand) -> None | StopEvent:
@@ -335,60 +339,52 @@ class _ControlLoopRunner:
                 # Ensure pull_task exists
                 if pull_task is None:
                     pull_task = asyncio.create_task(_single_pull(self.adapter))
+                    # Tag with stable identifier for deterministic journaling
+                    pull_task.worker_key = ("__pull__", self._pull_sequence)  # type: ignore[attr-defined]
+                    self._pull_sequence += 1
 
                 # Gather all tasks to wait on
                 all_tasks: set[asyncio.Task[Any]] = {pull_task, *self.worker_tasks}
 
-                # Wait for first completion (with timeout for scheduled wakeups)
-                done, _ = await asyncio.wait(
-                    all_tasks,
-                    timeout=timeout,
-                    return_when=asyncio.FIRST_COMPLETED,
+                # Wait for next task completion (adapter controls ordering for replay)
+                completed_task = await self.adapter.wait_for_next_task(
+                    all_tasks, timeout
                 )
 
-                if not done:
+                if completed_task is None:
                     # Timeout - process scheduled ticks
                     now = await self.adapter.get_now()
                     for due_tick in self.pop_due_ticks(now):
                         self.tick_buffer.append(due_tick)
                     continue
 
-                # Process completed tasks - workers first, then pull_task.
-                # This ensures AddWaiter results are processed before incoming
-                # events that might match those waiters.
-
-                # First, process all worker results
-                for task in done:
-                    if task is not pull_task:
-                        self.worker_tasks.discard(task)
-                        try:
-                            tick_result = task.result()
-                        except asyncio.CancelledError:
-                            continue
-                        except Exception:
-                            logger.exception(
-                                "Worker task failed unexpectedly", exc_info=True
-                            )
-                            continue
-                        self.tick_buffer.append(tick_result)
-
-                # Then, process pull_task result
-                if pull_task in done:
+                # Process the single completed task
+                if completed_task is pull_task:
+                    # Pull task completed
                     try:
-                        pull_tick = pull_task.result()
+                        pull_tick = completed_task.result()
                     except asyncio.CancelledError:
                         pull_task = None
                     except Exception:
                         logger.exception("Pull task failed", exc_info=True)
-                        pull_task = (
-                            None  # asyncio.create_task(_single_pull(self.adapter))
-                        )
+                        pull_task = None
                     else:
-                        pull_task = (
-                            None  # asyncio.create_task(_single_pull(self.adapter))
-                        )
+                        pull_task = None
                         if pull_tick is not None:
                             self.tick_buffer.append(pull_tick)
+                else:
+                    # Worker task completed
+                    self.worker_tasks.discard(completed_task)
+                    try:
+                        tick_result = completed_task.result()
+                    except asyncio.CancelledError:
+                        pass
+                    except Exception:
+                        logger.exception(
+                            "Worker task failed unexpectedly", exc_info=True
+                        )
+                    else:
+                        self.tick_buffer.append(tick_result)
 
         finally:
             # Cancel pull task if running

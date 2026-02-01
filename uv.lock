@@ -11,7 +11,6 @@ resolution-markers = [
 members = [
     "docs",
     "llama-agents-workspace",
-    "llama-index-integration-tests",
     "llama-index-utils-workflow",
     "llama-index-workflows",
     "llama-index-workflows-client",
@@ -1646,37 +1645,6 @@ wheels = [
 ]
 
 [[package]]
-name = "llama-index-integration-tests"
-version = "0.1.0"
-source = { editable = "packages/llama-index-integration-tests" }
-dependencies = [
-    { name = "llama-index-core" },
-    { name = "llama-index-workflows" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-    { name = "pytest-cov" },
-    { name = "pytest-timeout" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "llama-index-core", specifier = ">=0.14.13" },
-    { name = "llama-index-workflows", editable = "packages/llama-index-workflows" },
-]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "pytest", specifier = ">=8.4.2" },
-    { name = "pytest-asyncio", specifier = ">=0.24.0" },
-    { name = "pytest-cov", specifier = ">=7.0.0" },
-    { name = "pytest-timeout", specifier = ">=2.3.1" },
-]
-
-[[package]]
 name = "llama-index-utils-workflow"
 version = "0.8.0"
 source = { editable = "packages/llama-index-utils-workflow" }
@@ -1692,6 +1660,8 @@ dev = [
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-cov" },
+    { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
 ]
 
 [package.metadata]
@@ -1707,6 +1677,8 @@ dev = [
     { name = "pytest", specifier = ">=8.4.2" },
     { name = "pytest-asyncio", specifier = ">=1.0.0" },
     { name = "pytest-cov", specifier = ">=6.1.1" },
+    { name = "pytest-timeout", specifier = ">=2.4.0" },
+    { name = "pytest-xdist", specifier = ">=3.8.0" },
 ]
 
 [[package]]
@@ -4523,6 +4495,8 @@ dependencies = [
 dev = [
     { name = "pytest" },
     { name = "pytest-cov" },
+    { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
     { name = "ty" },
 ]
 
@@ -4540,6 +4514,8 @@ requires-dist = [
 dev = [
     { name = "pytest", specifier = ">=8.4.2" },
     { name = "pytest-cov", specifier = ">=7.0.0" },
+    { name = "pytest-timeout", specifier = ">=2.4.0" },
+    { name = "pytest-xdist", specifier = ">=3.8.0" },
     { name = "ty", specifier = ">=0.0.1,<0.0.9" },
 ]
 

@@ -1,15 +1,21 @@
-"""Runtime matrix tests - testing workflows against both BasicRuntime and DBOSRuntime.
+"""Runtime matrix tests - testing workflows against BasicRuntime and DBOSRuntime.
 
 All workflow classes are defined at module level so they can be registered with
 DBOS once at module initialization time, avoiding repeated init/destroy cycles.
+
+Note: The dbos-postgres variant requires Docker to be available and is marked
+with the 'docker' pytest marker. Run with `pytest -m docker` to include it.
 """
 
 from __future__ import annotations
 
 import asyncio
-from typing import AsyncGenerator, Optional, Union
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, AsyncGenerator, Generator, Union
 
 import pytest
+from dbos import DBOS, DBOSConfig
+from llama_agents.runtime.dbos import DBOSRuntime
 from pydantic import Field
 from workflows.context import Context
 from workflows.decorators import step
@@ -26,21 +32,94 @@ from workflows.runtime.types.plugin import Runtime
 from workflows.testing import WorkflowTestRunner
 from workflows.workflow import Workflow
 
+if TYPE_CHECKING:
+    from testcontainers.postgres import PostgresContainer
+
 # -- Fixtures --
 
 
-@pytest.fixture(
-    params=[
+def _get_runtime_params() -> list[Any]:
+    """Get runtime parameters for the test matrix.
+
+    Includes:
+    - basic: BasicRuntime (fast, no dependencies)
+    - dbos: DBOSRuntime with SQLite backend (fast, no Docker)
+    - dbos-postgres: DBOSRuntime with PostgreSQL backend (requires Docker)
+
+    Note: The dbos-postgres variant is marked with the 'docker' marker and
+    requires Docker to be running. It only runs when explicitly requested
+    via `pytest -m docker`.
+    """
+    return [
         pytest.param("basic", id="basic"),
+        pytest.param("dbos", id="dbos"),
+        pytest.param("dbos-postgres", marks=pytest.mark.docker, id="dbos-postgres"),
     ]
-)
+
+
+@pytest.fixture(scope="module")
+def postgres_container() -> Generator[PostgresContainer, None, None]:
+    """Module-scoped PostgreSQL container for DBOS tests.
+
+    This fixture is only used when dbos-postgres runtime is requested.
+    Requires Docker to be running.
+    """
+    from testcontainers.postgres import PostgresContainer
+
+    with PostgresContainer("postgres:16", driver=None) as postgres:
+        yield postgres
+
+
+@pytest.fixture(scope="module")
+def dbos_runtime_sqlite(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> Generator[DBOSRuntime, None, None]:
+    """Module-scoped DBOS runtime with SQLite backend."""
+    db_file: Path = tmp_path_factory.mktemp("dbos") / "dbos_test.sqlite3"
+    system_db_url: str = f"sqlite+pysqlite:///{db_file}?check_same_thread=false"
+    config: DBOSConfig = {
+        "name": "workflows-py-dbostest",
+        "system_database_url": system_db_url,
+        "run_admin_server": False,
+    }
+    DBOS(config=config)
+    runtime = DBOSRuntime(polling_interval_sec=0.01)
+    try:
+        yield runtime
+    finally:
+        runtime.destroy()
+
+
+@pytest.fixture(scope="module")
+def dbos_runtime_postgres(
+    postgres_container: PostgresContainer,
+) -> Generator[DBOSRuntime, None, None]:
+    """Module-scoped DBOS runtime with PostgreSQL backend."""
+    connection_url = postgres_container.get_connection_url()
+    config: DBOSConfig = {
+        "name": "wf-dbos-pg-test",  # Must be <= 30 chars
+        "system_database_url": connection_url,
+        "run_admin_server": False,
+    }
+    DBOS(config=config)
+    runtime = DBOSRuntime(polling_interval_sec=0.01)
+    try:
+        yield runtime
+    finally:
+        runtime.destroy()
+
+
+@pytest.fixture(params=_get_runtime_params())
 async def runtime(
     request: pytest.FixtureRequest,
 ) -> AsyncGenerator[Runtime, None]:
     """Yield an unlaunched runtime.
 
-    For DBOS, returns the module-scoped runtime (already created, not yet launched).
-    Each test must call runtime.launch() after creating workflows.
+    For DBOS variants, returns the module-scoped runtime (already created, not yet
+    launched). Each test must call runtime.launch() after creating workflows.
+
+    Note: Only one DBOS variant can be used per test run since DBOS is a singleton.
+    Use TEST_DBOS_POSTGRES=1 to run with PostgreSQL instead of the default SQLite.
     """
     if request.param == "basic":
         rt = BasicRuntime()
@@ -48,6 +127,12 @@ async def runtime(
             yield rt
         finally:
             rt.destroy()
+    elif request.param == "dbos":
+        dbos_rt: DBOSRuntime = request.getfixturevalue("dbos_runtime_sqlite")
+        yield dbos_rt
+    elif request.param == "dbos-postgres":
+        dbos_rt = request.getfixturevalue("dbos_runtime_postgres")
+        yield dbos_rt
 
 
 # -- Shared event types --
@@ -340,55 +425,69 @@ async def test_workflow_step_send_event(runtime: Runtime) -> None:
 
 @pytest.mark.asyncio
 async def test_workflow_num_workers(runtime: Runtime) -> None:
-    signal = asyncio.Event()
+    """Test that num_workers limits concurrent step executions.
+
+    This test verifies that:
+    1. A step with num_workers=5 can process up to 5 events concurrently
+    2. All 5 workers can run simultaneously (they synchronize to prove concurrency)
+    3. The workflow completes successfully with all events processed
+    """
+    num_workers = 5
+    num_events = 10
+    # Track max concurrent executions
     lock = asyncio.Lock()
-    counter = 0
+    current_workers = 0
+    max_concurrent = 0
+    # Barrier to ensure all workers reach this point before any proceed
+    barrier_count = 0
+    barrier_event = asyncio.Event()
 
-    async def await_count(count: int) -> None:
-        nonlocal counter
-        async with lock:
-            counter += 1
-            if counter == count:
-                signal.set()
-                return
-        await signal.wait()
-
-    class LocalNumWorkersWorkflow(Workflow):
+    class NumWorkersWorkflow(Workflow):
         @step
-        async def original_step(
-            self, ctx: Context, ev: StartEvent
-        ) -> Union[OneTestEvent, LastEvent]:
-            await ctx.store.set("num_to_collect", 3)
-            # Send test4 first to ensure it's pulled from receive_queue
-            # before test_step workers complete. Events are pulled one per
-            # iteration, so ordering in receive_queue determines delivery order.
-            ctx.send_event(AnotherTestEvent(another_test_param="test4"))
-            ctx.send_event(OneTestEvent(test_param="test1"))
-            ctx.send_event(OneTestEvent(test_param="test2"))
-            ctx.send_event(OneTestEvent(test_param="test3"))
-            return LastEvent()
+        async def fan_out(self, ctx: Context, ev: StartEvent) -> OneTestEvent:
+            # Send more events than num_workers to test queuing
+            for i in range(num_events):
+                ctx.send_event(OneTestEvent(test_param=str(i)))
+            return None  # type: ignore
 
-        @step(num_workers=3)
-        async def test_step(self, ev: OneTestEvent) -> AnotherTestEvent:
-            await await_count(3)
+        @step(num_workers=num_workers)
+        async def worker_step(self, ev: OneTestEvent) -> AnotherTestEvent:
+            nonlocal current_workers, max_concurrent, barrier_count
+
+            async with lock:
+                current_workers += 1
+                max_concurrent = max(max_concurrent, current_workers)
+                barrier_count += 1
+                if barrier_count == num_workers:
+                    # All workers have arrived, release them
+                    barrier_event.set()
+
+            # Wait for all workers to arrive (proves concurrency)
+            await barrier_event.wait()
+
+            async with lock:
+                current_workers -= 1
+
             return AnotherTestEvent(another_test_param=ev.test_param)
 
         @step
-        async def final_step(
-            self, ctx: Context, ev: Union[AnotherTestEvent, LastEvent]
-        ) -> Optional[StopEvent]:
-            n = await ctx.store.get("num_to_collect")
-            events = ctx.collect_events(ev, [AnotherTestEvent] * n)
+        async def collect_step(
+            self, ctx: Context, ev: AnotherTestEvent
+        ) -> StopEvent | None:
+            events = ctx.collect_events(ev, [AnotherTestEvent] * num_events)
             if events is None:
                 return None
-            return StopEvent(result=[ev.another_test_param for ev in events])
+            return StopEvent(result=[e.another_test_param for e in events])
 
-    workflow = LocalNumWorkersWorkflow(timeout=10, runtime=runtime)
+    workflow = NumWorkersWorkflow(timeout=10, runtime=runtime)
     runtime.launch()
     r = await WorkflowTestRunner(workflow).run()
 
-    assert "test4" in set(r.result)
-    assert len({"test1", "test2", "test3"} - set(r.result)) == 1
+    # Verify all events were processed
+    assert len(r.result) == num_events
+    assert set(r.result) == {str(i) for i in range(num_events)}
+    # Verify we achieved the expected concurrency (all 5 workers ran together)
+    assert max_concurrent == num_workers
 
 
 @pytest.mark.asyncio
@@ -491,3 +590,82 @@ async def test_streaming_task_timeout(runtime: Runtime) -> None:
 
     with pytest.raises(WorkflowTimeoutError, match="Operation timed out"):
         await r
+
+
+# -- Workflow State Tests --
+
+
+class StatefulWorkflow(Workflow):
+    """Workflow that accumulates state across steps."""
+
+    @step
+    async def step1(self, ctx: Context, ev: StartEvent) -> OneTestEvent:
+        await ctx.store.set("step1_ran", True)
+        await ctx.store.set("counter", 1)
+        return OneTestEvent()
+
+    @step
+    async def step2(self, ctx: Context, ev: OneTestEvent) -> StopEvent:
+        await ctx.store.set("step2_ran", True)
+        counter = await ctx.store.get("counter")
+        await ctx.store.set("counter", counter + 1)
+        final_counter = await ctx.store.get("counter")
+        return StopEvent(result={"counter": final_counter})
+
+
+class NestedStateWorkflow(Workflow):
+    """Workflow that uses nested state paths."""
+
+    @step
+    async def process(self, ctx: Context, ev: StartEvent) -> StopEvent:
+        await ctx.store.set("user", {"name": "Alice", "profile": {"level": 1}})
+        await ctx.store.set("user.profile.level", 2)
+        level = await ctx.store.get("user.profile.level")
+        name = await ctx.store.get("user.name")
+        return StopEvent(result={"name": name, "level": level})
+
+
+@pytest.mark.asyncio
+async def test_workflow_state_basic(runtime: Runtime) -> None:
+    """Test basic state operations within a workflow."""
+    wf = CounterWorkflow(runtime=runtime)
+    runtime.launch()
+    result = await WorkflowTestRunner(wf).run()
+    assert result.result == 1
+
+
+@pytest.mark.asyncio
+async def test_workflow_state_across_steps(runtime: Runtime) -> None:
+    """Test state persistence across multiple workflow steps."""
+    wf = StatefulWorkflow(runtime=runtime)
+    runtime.launch()
+    result = await WorkflowTestRunner(wf).run()
+    assert result.result == {"counter": 2}
+
+
+@pytest.mark.asyncio
+async def test_workflow_nested_state(runtime: Runtime) -> None:
+    """Test nested state path access within workflows."""
+    wf = NestedStateWorkflow(runtime=runtime)
+    runtime.launch()
+    result = await WorkflowTestRunner(wf).run()
+    assert result.result == {"name": "Alice", "level": 2}
+
+
+@pytest.mark.asyncio
+async def test_workflow_state_multiple_runs(runtime: Runtime) -> None:
+    """Test that each workflow run has isolated state."""
+    wf = CounterWorkflow(runtime=runtime)
+    runtime.launch()
+    runner = WorkflowTestRunner(wf)
+
+    # Run multiple times - each should start fresh
+    results = await asyncio.gather(
+        runner.run(),
+        runner.run(),
+        runner.run(),
+    )
+
+    # Each run should have counter=1 (not accumulating)
+    for r in results:
+        assert r.result == 1

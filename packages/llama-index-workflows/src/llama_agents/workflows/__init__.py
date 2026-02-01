@@ -64,5 +64,5 @@ if not any(isinstance(f, _AliasFinder) for f in sys.meta_path):
     sys.meta_path.append(_AliasFinder())
 
 # Re-export everything from the real workflows package
-from workflows import *  # noqa: E402, F403  # pyright: ignore[reportWildcardImportFromLibrary]
+from workflows import *  # noqa: E402, F403
 from workflows import __all__  # noqa: E402, F401

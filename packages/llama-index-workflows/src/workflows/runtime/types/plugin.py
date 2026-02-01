@@ -6,6 +6,7 @@ A runtime interface to switch out a broker runtime (external library or service 
 
 from __future__ import annotations
 
+import asyncio
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
@@ -167,6 +168,34 @@ class InternalRunAdapter(ABC):
         Default implementation returns None.
         """
         return None
+
+    async def wait_for_next_task(
+        self,
+        tasks: set[asyncio.Task[Any]],
+        timeout: float | None = None,
+    ) -> asyncio.Task[Any] | None:
+        """Wait for and return the next task that should complete.
+
+        Args:
+            tasks: Set of active tasks (workers + pull)
+            timeout: Timeout in seconds, None for no timeout
+
+        Returns:
+            The completed task, or None on timeout.
+
+        IMPORTANT: Must return at most ONE task per call.
+
+        Default implementation uses asyncio.wait(FIRST_COMPLETED).
+        DBOS overrides to coordinate based on journal for deterministic replay.
+        """
+        if not tasks:
+            return None
+        done, _ = await asyncio.wait(
+            tasks,
+            timeout=timeout,
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        return done.pop() if done else None
 
 
 class ExternalRunAdapter(ABC):
