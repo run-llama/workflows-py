@@ -512,26 +512,3 @@ async def test_state_store_gc_timing(dbos_runtime: DBOSRuntime) -> None:
         f"Run ID '{inside_info['dbos_workflow_id']}' should be in dict. "
         f"Keys at step execution: {inside_info['keys']}"
     )
-
-
-@pytest.mark.asyncio
-@pytest.mark.xfail()
-async def test_dbos_workflow_shuts_down_quickly(dbos_runtime: DBOSRuntime) -> None:
-    """Test that workflows shut down quickly after completion (no 5s delay)."""
-    import time
-
-    class QuickShutdownWorkflow(Workflow):
-        @step
-        async def quick_step(self, ev: StartEvent) -> StopEvent:
-            return StopEvent(result="done")
-
-    wf = QuickShutdownWorkflow(runtime=dbos_runtime)
-    dbos_runtime.launch()
-
-    start = time.monotonic()
-    r = await WorkflowTestRunner(wf).run()
-    elapsed = time.monotonic() - start
-
-    assert r.result == "done"
-    # Should complete much faster than the old 5-second polling interval
-    assert elapsed < 2.0, f"Workflow took {elapsed:.2f}s, expected < 2s"

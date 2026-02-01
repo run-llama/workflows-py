@@ -458,6 +458,84 @@ class SqlStateStore(Generic[MODEL_T]):
             except Exception:
                 raise
 
+    async def load_raw(self, key: str) -> str | None:
+        """Load raw JSON string by key.
+
+        This is used for journal storage, separate from the main state model.
+
+        Args:
+            key: The key to load (used as run_id in the table)
+
+        Returns:
+            The raw JSON string if found, None otherwise
+        """
+
+        def _load() -> str | None:
+            self._ensure_initialized()
+            with self.engine.connect() as conn:
+                result = conn.execute(
+                    select(self._table.c.state_json).where(self._table.c.run_id == key)
+                )
+                row = result.fetchone()
+                return row[0] if row else None
+
+        return await self._run_sync(_load)
+
+    async def save_raw(self, key: str, data: str) -> None:
+        """Save raw JSON string by key (upsert).
+
+        This is used for journal storage, separate from the main state model.
+
+        Args:
+            key: The key to save (used as run_id in the table)
+            data: The raw JSON string to save
+        """
+
+        def _save_with_conn() -> None:
+            self._ensure_initialized()
+            now = _utc_now()
+            with self.engine.begin() as conn:
+                # Inline upsert to avoid swapping run_id
+                if self._is_postgres:
+                    stmt = pg_insert(self._table).values(
+                        run_id=key,
+                        state_json=data,
+                        state_type="journal",
+                        state_module="builtin",
+                        created_at=now,
+                        updated_at=now,
+                    )
+                    stmt = stmt.on_conflict_do_update(
+                        index_elements=["run_id"],
+                        set_={
+                            "state_json": stmt.excluded.state_json,
+                            "updated_at": stmt.excluded.updated_at,
+                        },
+                    )
+                    conn.execute(stmt)
+                else:
+                    # SQLite upsert
+                    conn.execute(
+                        text(f"""
+                            INSERT INTO {self._table_ref}
+                                (run_id, state_json, state_type, state_module, created_at, updated_at)
+                            VALUES (:run_id, :state_json, :state_type, :state_module, :created_at, :updated_at)
+                            ON CONFLICT (run_id) DO UPDATE SET
+                                state_json = excluded.state_json,
+                                updated_at = excluded.updated_at
+                        """),  # noqa: S608
+                        {
+                            "run_id": key,
+                            "state_json": data,
+                            "state_type": "journal",
+                            "state_module": "builtin",
+                            "created_at": now.isoformat(),
+                            "updated_at": now.isoformat(),
+                        },
+                    )
+
+        await self._run_sync(_save_with_conn)
+
     def to_dict(self, serializer: BaseSerializer) -> dict[str, Any]:
         """Serialize state store metadata for persistence."""
         return {

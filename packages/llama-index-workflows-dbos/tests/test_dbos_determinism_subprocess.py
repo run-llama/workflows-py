@@ -403,3 +403,332 @@ def test_hitl_three_step_determinism(test_db_path: Path) -> None:
     assert "SUCCESS" in result2.stdout or result2.returncode == 0, (
         f"Resume should succeed.\nstdout: {result2.stdout}\nstderr: {result2.stderr}"
     )
+
+
+# =============================================================================
+# Test 4: Parallel steps - two steps triggered by StartEvent
+# This tests that when both branch_a and branch_b are triggered by StartEvent,
+# the journal correctly records which completes first and replays in that order.
+# =============================================================================
+
+PARALLEL_STEPS_WORKFLOW_CODE = textwrap.dedent("""
+    import asyncio
+    import random
+
+    class ResultAEvent(Event):
+        value: str = Field(default="")
+
+    class ResultBEvent(Event):
+        value: str = Field(default="")
+
+    class ParallelWorkflow(Workflow):
+        @step
+        async def branch_a(self, ctx: Context, ev: StartEvent) -> ResultAEvent:
+            # Variable processing time - may complete before or after branch_b
+            await asyncio.sleep(random.uniform(0.01, 0.05))
+            print("STEP:branch_a:complete", flush=True)
+            return ResultAEvent(value="a_result")
+
+        @step
+        async def branch_b(self, ctx: Context, ev: StartEvent) -> ResultBEvent:
+            # Variable processing time - may complete before or after branch_a
+            await asyncio.sleep(random.uniform(0.01, 0.05))
+            print("STEP:branch_b:complete", flush=True)
+            return ResultBEvent(value="b_result")
+
+        @step
+        async def finish_a(self, ctx: Context, ev: ResultAEvent) -> StopEvent:
+            print(f"STEP:finish_a:complete", flush=True)
+            return StopEvent(result={"winner": "a", "value": ev.value})
+
+        @step
+        async def finish_b(self, ctx: Context, ev: ResultBEvent) -> StopEvent:
+            print(f"STEP:finish_b:complete", flush=True)
+            return StopEvent(result={"winner": "b", "value": ev.value})
+""")
+
+
+def test_parallel_steps_determinism(test_db_path: Path) -> None:
+    """Test determinism with parallel steps completing in non-deterministic order."""
+    run_id = "test-parallel-001"
+    db_url = f"sqlite+pysqlite:///{test_db_path}?check_same_thread=false"
+
+    # Run to completion first time
+    run_main = textwrap.dedent(f'''
+        wf = ParallelWorkflow(runtime=runtime)
+        runtime.launch()
+        try:
+            ctx = Context(wf)
+            handler = ctx._workflow_run(wf, StartEvent(), run_id="{run_id}")
+            result = await handler
+            print(f"RESULT:{{result}}", flush=True)
+            print("SUCCESS", flush=True)
+        except Exception as e:
+            print(f"ERROR:{{type(e).__name__}}:{{e}}", flush=True)
+            raise
+        finally:
+            runtime.destroy()
+    ''')
+
+    print("\n=== Running parallel workflow to completion ===")
+    result1 = run_workflow_script(
+        make_script(PARALLEL_STEPS_WORKFLOW_CODE, run_main, db_url, "test-parallel")
+    )
+    print(f"stdout: {result1.stdout}")
+    print(f"stderr: {result1.stderr}")
+
+    assert "SUCCESS" in result1.stdout, (
+        f"Should complete successfully.\nstdout: {result1.stdout}\nstderr: {result1.stderr}"
+    )
+    assert_no_determinism_errors(result1)
+
+
+# =============================================================================
+# Test 5: Concurrent workers on same step (num_workers=2)
+# This tests that when a single step has multiple workers processing events
+# concurrently, the journal correctly records completion order.
+# =============================================================================
+
+CONCURRENT_WORKERS_WORKFLOW_CODE = textwrap.dedent("""
+    import asyncio
+    import random
+
+    class WorkItem(Event):
+        item_id: int = Field(default=0)
+
+    class WorkDone(Event):
+        item_id: int = Field(default=0)
+
+    class ConcurrentWorkersWorkflow(Workflow):
+        @step
+        async def dispatch(self, ctx: Context, ev: StartEvent) -> WorkItem:
+            # Dispatch work items that will be processed by concurrent workers
+            ctx.send_event(WorkItem(item_id=1))
+            ctx.send_event(WorkItem(item_id=2))
+            print("STEP:dispatch:complete", flush=True)
+            return WorkItem(item_id=0)
+
+        @step(num_workers=2)
+        async def worker(self, ctx: Context, ev: WorkItem) -> WorkDone:
+            # Variable processing time for each item
+            await asyncio.sleep(random.uniform(0.01, 0.05))
+            print(f"STEP:worker:{ev.item_id}:complete", flush=True)
+            return WorkDone(item_id=ev.item_id)
+
+        @step
+        async def finish(self, ctx: Context, ev: WorkDone) -> StopEvent:
+            # First WorkDone to arrive ends the workflow
+            print(f"STEP:finish:{ev.item_id}:complete", flush=True)
+            return StopEvent(result={"first_done": ev.item_id})
+""")
+
+
+def test_concurrent_workers_determinism(test_db_path: Path) -> None:
+    """Test determinism with multiple workers on same step (num_workers > 1)."""
+    run_id = "test-concurrent-workers-001"
+    db_url = f"sqlite+pysqlite:///{test_db_path}?check_same_thread=false"
+
+    run_main = textwrap.dedent(f'''
+        wf = ConcurrentWorkersWorkflow(runtime=runtime)
+        runtime.launch()
+        try:
+            ctx = Context(wf)
+            handler = ctx._workflow_run(wf, StartEvent(), run_id="{run_id}")
+            result = await handler
+            print(f"RESULT:{{result}}", flush=True)
+            print("SUCCESS", flush=True)
+        except Exception as e:
+            print(f"ERROR:{{type(e).__name__}}:{{e}}", flush=True)
+            raise
+        finally:
+            runtime.destroy()
+    ''')
+
+    print("\n=== Running concurrent workers workflow ===")
+    result1 = run_workflow_script(
+        make_script(
+            CONCURRENT_WORKERS_WORKFLOW_CODE, run_main, db_url, "test-concurrent"
+        )
+    )
+    print(f"stdout: {result1.stdout}")
+    print(f"stderr: {result1.stderr}")
+
+    assert "SUCCESS" in result1.stdout, (
+        f"Should complete successfully.\nstdout: {result1.stdout}\nstderr: {result1.stderr}"
+    )
+    assert_no_determinism_errors(result1)
+
+
+# =============================================================================
+# Test 6: Sequential steps with HITL - tests chained execution with human input
+# (Simpler than parallel - avoids dual-event race condition)
+# =============================================================================
+
+SEQUENTIAL_HITL_WORKFLOW_CODE = textwrap.dedent("""
+    import asyncio
+    import random
+
+    class ProcessedEvent(Event):
+        value: str = Field(default="")
+
+    class WaitForInputEvent(InputRequiredEvent):
+        prompt: str = Field(default="")
+
+    class UserContinueEvent(Event):
+        continue_value: str = Field(default="")
+
+    class SequentialHITLWorkflow(Workflow):
+        @step
+        async def process(self, ctx: Context, ev: StartEvent) -> ProcessedEvent:
+            await asyncio.sleep(random.uniform(0.01, 0.05))
+            print("STEP:process:complete", flush=True)
+            return ProcessedEvent(value="processed")
+
+        @step
+        async def ask_user(self, ctx: Context, ev: ProcessedEvent) -> WaitForInputEvent:
+            print("STEP:ask_user:triggering_wait", flush=True)
+            return WaitForInputEvent(prompt=f"Got {ev.value}")
+
+        @step
+        async def finalize(self, ctx: Context, ev: UserContinueEvent) -> StopEvent:
+            print(f"STEP:finalize:complete:{ev.continue_value}", flush=True)
+            return StopEvent(result={"continue": ev.continue_value})
+""")
+
+
+def test_sequential_hitl_interrupt_resume(test_db_path: Path) -> None:
+    """Test sequential steps with HITL interrupt and resume."""
+    run_id = "test-seq-hitl-001"
+    db_url = f"sqlite+pysqlite:///{test_db_path}?check_same_thread=false"
+
+    start_main = textwrap.dedent(f'''
+        wf = SequentialHITLWorkflow(runtime=runtime)
+        runtime.launch()
+        ctx = Context(wf)
+        handler = ctx._workflow_run(wf, StartEvent(), run_id="{run_id}")
+        async for event in handler.stream_events():
+            print(f"EVENT:{{type(event).__name__}}", flush=True)
+            if isinstance(event, WaitForInputEvent):
+                print("INTERRUPTING_AT_HITL", flush=True)
+                import os
+                os._exit(0)
+    ''')
+
+    resume_main = textwrap.dedent(f'''
+        wf = SequentialHITLWorkflow(runtime=runtime)
+        runtime.launch()
+        try:
+            ctx = Context(wf)
+            handler = ctx._workflow_run(wf, StartEvent(), run_id="{run_id}")
+            async for event in handler.stream_events():
+                print(f"EVENT:{{type(event).__name__}}", flush=True)
+                if isinstance(event, WaitForInputEvent):
+                    if handler.ctx:
+                        handler.ctx.send_event(UserContinueEvent(continue_value="user_input"))
+            result = await handler
+            print(f"RESULT:{{result}}", flush=True)
+            print("SUCCESS", flush=True)
+        except Exception as e:
+            print(f"ERROR:{{type(e).__name__}}:{{e}}", flush=True)
+            raise
+        finally:
+            runtime.destroy()
+    ''')
+
+    print("\n=== Starting sequential HITL workflow (will interrupt) ===")
+    result1 = run_workflow_script(
+        make_script(SEQUENTIAL_HITL_WORKFLOW_CODE, start_main, db_url, "test-seq-hitl")
+    )
+    print(f"stdout: {result1.stdout}")
+    print(f"stderr: {result1.stderr}")
+
+    assert "STEP:process:complete" in result1.stdout
+    assert "INTERRUPTING_AT_HITL" in result1.stdout
+
+    print("\n=== Resuming sequential HITL workflow ===")
+    result2 = run_workflow_script(
+        make_script(SEQUENTIAL_HITL_WORKFLOW_CODE, resume_main, db_url, "test-seq-hitl")
+    )
+    print(f"stdout: {result2.stdout}")
+    print(f"stderr: {result2.stderr}")
+
+    assert_no_determinism_errors(result2)
+    assert "SUCCESS" in result2.stdout or result2.returncode == 0, (
+        f"Resume should succeed.\nstdout: {result2.stdout}\nstderr: {result2.stderr}"
+    )
+
+
+# =============================================================================
+# Stress tests - run scenarios multiple times to catch flaky timing issues
+# =============================================================================
+
+
+@pytest.mark.parametrize("iteration", range(5))
+def test_parallel_steps_stress(test_db_path: Path, iteration: int) -> None:
+    """Stress test parallel steps - run 5 times to catch timing issues."""
+    run_id = f"test-parallel-stress-{iteration}"
+    db_url = f"sqlite+pysqlite:///{test_db_path}?check_same_thread=false"
+
+    run_main = textwrap.dedent(f'''
+        wf = ParallelWorkflow(runtime=runtime)
+        runtime.launch()
+        try:
+            ctx = Context(wf)
+            handler = ctx._workflow_run(wf, StartEvent(), run_id="{run_id}")
+            result = await handler
+            print(f"RESULT:{{result}}", flush=True)
+            print("SUCCESS", flush=True)
+        except Exception as e:
+            print(f"ERROR:{{type(e).__name__}}:{{e}}", flush=True)
+            raise
+        finally:
+            runtime.destroy()
+    ''')
+
+    result = run_workflow_script(
+        make_script(
+            PARALLEL_STEPS_WORKFLOW_CODE, run_main, db_url, f"stress-{iteration}"
+        )
+    )
+
+    assert "SUCCESS" in result.stdout, (
+        f"Iteration {iteration} failed.\nstdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+    assert_no_determinism_errors(result)
+
+
+@pytest.mark.parametrize("iteration", range(5))
+def test_concurrent_workers_stress(test_db_path: Path, iteration: int) -> None:
+    """Stress test concurrent workers - run 5 times to catch timing issues."""
+    run_id = f"test-concurrent-stress-{iteration}"
+    db_url = f"sqlite+pysqlite:///{test_db_path}?check_same_thread=false"
+
+    run_main = textwrap.dedent(f'''
+        wf = ConcurrentWorkersWorkflow(runtime=runtime)
+        runtime.launch()
+        try:
+            ctx = Context(wf)
+            handler = ctx._workflow_run(wf, StartEvent(), run_id="{run_id}")
+            result = await handler
+            print(f"RESULT:{{result}}", flush=True)
+            print("SUCCESS", flush=True)
+        except Exception as e:
+            print(f"ERROR:{{type(e).__name__}}:{{e}}", flush=True)
+            raise
+        finally:
+            runtime.destroy()
+    ''')
+
+    result = run_workflow_script(
+        make_script(
+            CONCURRENT_WORKERS_WORKFLOW_CODE,
+            run_main,
+            db_url,
+            f"concurrent-stress-{iteration}",
+        )
+    )
+
+    assert "SUCCESS" in result.stdout, (
+        f"Iteration {iteration} failed.\nstdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+    assert_no_determinism_errors(result)

@@ -10,6 +10,7 @@ with durable execution backed by DBOS.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from dataclasses import dataclass
@@ -349,11 +350,16 @@ class InternalDBOSAdapter(InternalRunAdapter):
     - write_to_event_stream publishes events via DBOS streams
     - get_now returns a durable timestamp
     - close sends shutdown signal to wake blocked recv
+    - wait_for_next_task coordinates task completion ordering for deterministic replay
     """
 
     def __init__(self, run_id: str) -> None:
         self._run_id = run_id
         self._closed = False
+        # Journal state for deterministic task ordering
+        self._journal_key = f"{run_id}-journal"
+        self._completion_journal: list[list[str | int]] | None = None  # Lazy loaded
+        self._replay_index: int = 0
 
     @property
     def run_id(self) -> str:
@@ -443,6 +449,117 @@ class InternalDBOSAdapter(InternalRunAdapter):
 
     def get_state_store(self) -> "StateStore[Any] | None":
         return _dbos_state_stores.get(self._run_id)
+
+    def _get_state_store_for_journal(self) -> SqlStateStore[Any] | None:
+        """Get the SQL state store for journal operations."""
+        store = _dbos_state_stores.get(self._run_id)
+        if store is not None and isinstance(store, SqlStateStore):
+            return store
+        return None
+
+    async def _load_journal(self) -> list[list[str | int]]:
+        """Load journal from state store, or empty list if fresh run."""
+        if self._completion_journal is not None:
+            return self._completion_journal
+
+        store = self._get_state_store_for_journal()
+        if store is None:
+            self._completion_journal = []
+        else:
+            data = await store.load_raw(self._journal_key)
+            self._completion_journal = json.loads(data) if data else []
+
+        journal = self._completion_journal
+        assert journal is not None  # Assigned above
+        return journal
+
+    async def _record_completion(self, worker_key: tuple[str, int]) -> None:
+        """Append completion to journal and persist."""
+        journal = await self._load_journal()
+        journal.append(list(worker_key))
+
+        store = self._get_state_store_for_journal()
+        if store is not None:
+            await store.save_raw(self._journal_key, json.dumps(journal))
+
+    async def wait_for_next_task(
+        self,
+        tasks: set[asyncio.Task[Any]],
+        timeout: float | None = None,
+    ) -> asyncio.Task[Any] | None:
+        """Wait for and return the next task that should complete.
+
+        During replay, waits for the specific task that completed in the original run.
+        During fresh execution, waits for any task and records the completion order.
+
+        Args:
+            tasks: Set of active tasks (workers + pull)
+            timeout: Timeout in seconds, None for no timeout
+
+        Returns:
+            The completed task, or None on timeout.
+        """
+        if not tasks:
+            return None
+
+        journal = await self._load_journal()
+        is_replay = self._replay_index < len(journal)
+
+        if is_replay:
+            # Replay mode: wait for specific task
+            expected_key = tuple(journal[self._replay_index])
+
+            # Find the task with matching key
+            target_task = None
+            for task in tasks:
+                task_key = getattr(task, "worker_key", None)
+                if task_key == expected_key:
+                    target_task = task
+                    break
+
+            if target_task is None:
+                # Expected task not in set yet.
+                # This can happen during replay when the control loop hasn't
+                # spawned the expected task yet. In this case, we need to let
+                # the control loop continue processing to spawn more tasks.
+                #
+                # Return the first completed task (likely pull_task) so the
+                # control loop can process it and potentially spawn the task
+                # we're waiting for.
+                done, _ = await asyncio.wait(
+                    tasks, timeout=timeout, return_when=asyncio.FIRST_COMPLETED
+                )
+                if not done:
+                    return None
+
+                # Return the completed task but DON'T record it or advance replay_index
+                # The control loop will process this and call us again
+                return done.pop()
+
+            # Wait specifically for this task
+            try:
+                await asyncio.wait_for(asyncio.shield(target_task), timeout=timeout)
+            except asyncio.TimeoutError:
+                return None
+
+            self._replay_index += 1
+            return target_task
+
+        else:
+            # Fresh execution: wait for first, record it
+            done, _ = await asyncio.wait(
+                tasks, timeout=timeout, return_when=asyncio.FIRST_COMPLETED
+            )
+            if not done:
+                return None
+
+            completed = done.pop()
+            worker_key = getattr(completed, "worker_key", ("__unknown__", 0))
+
+            # Record to journal
+            await self._record_completion(worker_key)
+
+            return completed
 
 
 class ExternalDBOSAdapter(ExternalRunAdapter):
