@@ -71,7 +71,7 @@ exclude = [
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "module"
 asyncio_default_test_loop_scope = "module"
-addopts = "-nauto --timeout=10 -m 'not docker'"
+addopts = "-nauto --timeout=10 -m 'not docker' --ignore=packages/llama-index-workflows-dbos --ignore=packages/llama-index-integration-tests"
 markers = [
   "docker: marks tests as requiring Docker (testcontainers/PostgreSQL)"
 ]
@@ -120,20 +120,20 @@ exclude = ["**/uv.lock", "**/.gitignore", "**/llama_agents/workflows/**", "**/te
 [tool.uv.sources]
 llama-index-workflows = {workspace = true}
 llama-index-utils-workflow = {workspace = true}
-llama-index-integration-tests = {workspace = true}
 llama-index-workflows-client = {workspace = true}
 llama-index-workflows-server = {workspace = true}
-llama-index-workflows-dbos = {workspace = true}
 workflows-dev = {workspace = true}
 
 [tool.uv.workspace]
+exclude = [
+  "packages/llama-index-workflows-dbos",
+  "packages/llama-index-integration-tests"
+]
 members = [
   "docs/api_docs",
   "packages/llama-index-workflows",
   "packages/llama-index-utils-workflow",
   "packages/workflows-dev",
-  "packages/llama-index-integration-tests",
   "packages/llama-index-workflows-client",
-  "packages/llama-index-workflows-server",
-  "packages/llama-index-workflows-dbos"
+  "packages/llama-index-workflows-server"
 ]

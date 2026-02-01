@@ -4,12 +4,14 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
+  "basedpyright>=1.31.1",
   "pytest>=8.4.2",
   "pytest-asyncio>=0.24.0",
   "pytest-cov>=7.0.0",
   "pytest-timeout>=2.3.1",
   "pytest-xdist>=3.8.0",
-  "testcontainers[postgres]>=4.0.0"
+  "testcontainers[postgres]>=4.0.0",
+  "ty>=0.0.1,<0.0.9"
 ]
 
 [project]
@@ -23,6 +25,10 @@ dependencies = [
   "llama-index-workflows",
   "llama-index-workflows-dbos"
 ]
+
+[tool.basedpyright]
+typeCheckingMode = "standard"
+pythonVersion = "3.10"
 
 [tool.coverage.run]
 source = [
@@ -47,5 +53,5 @@ filterwarnings = [
 ]
 
 [tool.uv.sources]
-llama-index-workflows = {workspace = true}
-llama-index-workflows-dbos = {workspace = true}
+llama-index-workflows = {path = "../llama-index-workflows", editable = true}
+llama-index-workflows-dbos = {path = "../llama-index-workflows-dbos", editable = true}

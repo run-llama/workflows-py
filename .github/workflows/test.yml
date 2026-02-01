@@ -40,6 +40,8 @@ jobs:
             python-version: "3.9"
           # Integration tests on 3.14 run in test-docker job with cross-package coverage
           - package: llama-index-integration-tests
+            python-version: "3.9"
+          - package: llama-index-integration-tests
             python-version: "3.14"
         include:
           - package: llama-index-workflows
@@ -66,7 +68,9 @@ jobs:
 
       - name: Run tests
         if: matrix.python-version != env.COV_PYTHON_VERSION
-        run: uv run --all-extras --directory ${{ matrix.package_dir }} --package ${{ matrix.package }} -- pytest -nauto --timeout=10
+        run: |
+          uv sync --python ${{ matrix.python-version }} --all-extras --directory ${{ matrix.package_dir }} --package ${{ matrix.package }}
+          uv run --python ${{ matrix.python-version }} --all-extras --directory ${{ matrix.package_dir }} --package ${{ matrix.package }} -- pytest -nauto --timeout=10
 
       - name: Run tests with coverage
         if: matrix.python-version == env.COV_PYTHON_VERSION

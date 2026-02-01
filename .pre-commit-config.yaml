@@ -28,12 +28,35 @@ repos:
       - id: ty
         name: ty
         language: system
-        entry: uv run ty check packages
+        entry: uv run ty check packages/llama-index-workflows packages/llama-index-workflows-client packages/llama-index-workflows-server packages/llama-index-utils-workflow packages/workflows-dev
+        pass_filenames: false
+      - id: ty-dbos
+        name: ty (dbos)
+        language: system
+        entry: uv run --directory packages/llama-index-workflows-dbos ty check .
+        pass_filenames: false
+      - id: ty-integration-tests
+        name: ty (integration-tests)
+        language: system
+        entry: uv run --directory packages/llama-index-integration-tests ty check .
         pass_filenames: false
   - repo: https://github.com/DetachHead/basedpyright-pre-commit-mirror
     rev: 1.31.1
     hooks:
       - id: basedpyright
+        exclude: ^packages/llama-index-workflows-dbos/|^packages/llama-index-integration-tests/
+  - repo: local
+    hooks:
+      - id: basedpyright-dbos
+        name: basedpyright (dbos)
+        language: system
+        entry: uv run --directory packages/llama-index-workflows-dbos basedpyright
+        pass_filenames: false
+      - id: basedpyright-integration-tests
+        name: basedpyright (integration-tests)
+        language: system
+        entry: uv run --directory packages/llama-index-integration-tests basedpyright
+        pass_filenames: false
 
   - repo: https://github.com/codespell-project/codespell
     rev: v2.3.0
