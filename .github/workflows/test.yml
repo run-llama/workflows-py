@@ -69,12 +69,12 @@ jobs:
       - name: Run tests
         if: matrix.python-version != env.COV_PYTHON_VERSION
         run: |
-          uv sync --python ${{ matrix.python-version }} --all-extras --directory ${{ matrix.package_dir }} --package ${{ matrix.package }}
-          uv run --python ${{ matrix.python-version }} --all-extras --directory ${{ matrix.package_dir }} --package ${{ matrix.package }} -- pytest -nauto --timeout=10
+          uv sync --python ${{ matrix.python-version }} --all-extras --directory ${{ matrix.package_dir }}
+          uv run --python ${{ matrix.python-version }} --all-extras --directory ${{ matrix.package_dir }} -- pytest -nauto --timeout=10
 
       - name: Run tests with coverage
         if: matrix.python-version == env.COV_PYTHON_VERSION
-        run: uv run --all-extras --directory ${{ matrix.package_dir }} --package ${{ matrix.package }} -- pytest -nauto --timeout=10 --cov=src --cov-report=xml
+        run: uv run --all-extras --directory ${{ matrix.package_dir }} -- pytest -nauto --timeout=10 --cov=src --cov-report=xml
 
       - name: Report Coveralls
         if: matrix.python-version == env.COV_PYTHON_VERSION
@@ -100,10 +100,10 @@ jobs:
           enable-cache: true
 
       - name: Run non-Docker tests with coverage
-        run: uv run --all-extras --directory packages/llama-index-integration-tests --package llama-index-integration-tests -- pytest -nauto --timeout=10 -m "not docker" --cov --cov-report=
+        run: uv run --all-extras --directory packages/llama-index-integration-tests -- pytest -nauto --timeout=10 -m "not docker" --cov --cov-report=
 
       - name: Run Docker tests with coverage (append)
-        run: uv run --all-extras --directory packages/llama-index-integration-tests --package llama-index-integration-tests -- pytest -nauto --timeout=10 -m docker --cov --cov-append --cov-report=xml
+        run: uv run --all-extras --directory packages/llama-index-integration-tests -- pytest -nauto --timeout=10 -m docker --cov --cov-append --cov-report=xml
 
       - name: Report Coveralls
         uses: coverallsapp/github-action@v2
