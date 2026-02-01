@@ -103,7 +103,8 @@ jobs:
         run: uv run --all-extras --directory packages/llama-index-integration-tests -- pytest -nauto --timeout=10 -m "not docker" --cov --cov-report=
 
       - name: Run Docker tests with coverage (append)
-        run: uv run --all-extras --directory packages/llama-index-integration-tests -- pytest -nauto --timeout=10 -m docker --cov --cov-append --cov-report=xml
+        # Use longer timeout for Docker tests since container startup can take 30-60s in CI
+        run: uv run --all-extras --directory packages/llama-index-integration-tests -- pytest -nauto --timeout=120 -m docker --cov --cov-append --cov-report=xml
 
       - name: Report Coveralls
         uses: coverallsapp/github-action@v2
