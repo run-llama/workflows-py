@@ -17,9 +17,7 @@ dev = [
   "structlog>=25.5.0",
   "starlette>=0.39.0",
   "uvicorn>=0.32.0",
-  "time-machine>=2.19.0,<3.0.0",
-  "viztracer>=1.0.4",
-  "pyinstrument>=5.1.2"
+  "time-machine>=2.19.0,<3.0.0"
 ]
 
 [project]
