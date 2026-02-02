@@ -128,8 +128,34 @@ def test_pytest_errors_on_unknown_package(
         result = runner.invoke(cli, ["pytest", "-p", "unknown-pkg"])
 
         assert result.exit_code == 1
-        assert "Unknown package(s): unknown-pkg" in result.output
-        assert "Available packages: real-pkg" in result.output
+        assert "No packages matched: unknown-pkg" in result.output
+        assert "Available: real-pkg" in result.output
+
+
+@pytest.mark.parametrize(
+    "pkg_names,filters,expected_matches",
+    [
+        (["pkg-foo", "pkg-foo-client", "pkg-bar"], ["foo"], 2),  # substring
+        (["foo", "foo-client"], ["foo"], 1),  # exact takes precedence
+        (["foo", "foo-client", "bar"], ["foo", "bar"], 2),  # mixed
+    ],
+    ids=["substring", "exact", "mixed"],
+)
+def test_pytest_package_filter_matching(
+    runner: CliRunner,
+    create_pkg: Callable[[str], PackageInfo],
+    pkg_names: list[str],
+    filters: list[str],
+    expected_matches: int,
+) -> None:
+    pkgs = [create_pkg(n) for n in pkg_names]
+    filter_args = [arg for f in filters for arg in ["-p", f]]
+
+    with patch("dev_cli.commands.pytest_cmd.discover_test_packages", return_value=pkgs):
+        with patch("dev_cli.commands.pytest_cmd.subprocess.run") as mock_run:
+            mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
+            runner.invoke(cli, ["pytest", *filter_args])
+            assert mock_run.call_count == expected_matches * 2  # sync + pytest per pkg
 
 
 def test_pytest_passes_args_through(

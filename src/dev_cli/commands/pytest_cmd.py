@@ -318,7 +318,7 @@ def run_tests_with_rich_progress(
     "-p",
     "packages",
     multiple=True,
-    help="Run tests only for specified package(s). Can be used multiple times.",
+    help="Filter packages by substring match. Can be used multiple times.",
 )
 @click.option(
     "--parallel",
@@ -339,11 +339,10 @@ def pytest_cmd(
     Any additional arguments after -- are passed through to pytest.
 
     Examples:
-        dev pytest                      # Run all tests (10 parallel)
-        dev pytest -v                   # Verbose: show all output
-        dev pytest -j 1                 # Run sequentially
-        dev pytest -- -v --tb=short     # Pass -v to pytest itself
-        dev pytest -p llama-index-workflows  # Specific package
+        dev pytest                  # Run all tests
+        dev pytest -p workflows     # Packages matching "workflows"
+        dev pytest -p server client # Multiple filters
+        dev pytest -- -k test_name  # Pass args to pytest
     """
     repo_root = Path(__file__).parents[3]
     all_packages = discover_test_packages(repo_root)
@@ -353,15 +352,22 @@ def pytest_cmd(
         sys.exit(0)
 
     # Filter to specified packages if provided
+    # Per filter: exact match takes precedence, otherwise substring match
     if packages:
         available_names = {p.name for p in all_packages}
-        requested = set(packages)
-        unknown = requested - available_names
-        if unknown:
-            click.echo(f"Unknown package(s): {', '.join(sorted(unknown))}", err=True)
-            click.echo(f"Available packages: {', '.join(sorted(available_names))}")
+        matched: set[str] = set()
+        for filt in packages:
+            if filt in available_names:
+                # Exact match - only add this one
+                matched.add(filt)
+            else:
+                # Substring match
+                matched.update(p.name for p in all_packages if filt in p.name)
+        target_packages = [p for p in all_packages if p.name in matched]
+        if not target_packages:
+            click.echo(f"No packages matched: {', '.join(packages)}", err=True)
+            click.echo(f"Available: {', '.join(sorted(available_names))}")
             sys.exit(1)
-        target_packages = [p for p in all_packages if p.name in requested]
     else:
         target_packages = all_packages
 

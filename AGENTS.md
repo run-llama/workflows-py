@@ -13,24 +13,24 @@ This is the LlamaIndex Workflows library - an event-driven, async-first framewor
 ## Development Commands
 
 ### Testing
+
+Use the `dev` CLI to run tests:
+
 ```bash
-# Run all tests
-uv run --directory packages/llama-index-workflows pytest
+# Run all package tests
+uv run dev
 
-# Run tests with coverage
-uv run --directory packages/llama-index-workflows pytest --cov=src/workflows --cov-report=html
+# Filter by substring match
+uv run dev -p workflows
+uv run dev -p server -p client
 
-# Run specific test files
-uv run --directory packages/llama-index-workflows pytest tests/test_server.py tests/test_server_utils.py
-
-# Run tests in verbose mode
-uv run --directory packages/llama-index-workflows pytest -v
+# Pass pytest args after --
+uv run dev -- -k test_name
 ```
 
 ### Linting & Formatting
 ```bash
-# Run pre-commit hooks
-uv run --directory packages/llama-index-workflows pre-commit run -a
+uv run pre-commit run -a
 ```
 
 ## Project Structure
@@ -46,7 +46,7 @@ uv run --directory packages/llama-index-workflows pre-commit run -a
 - **WorkflowServer** - HTTP server for serving workflows as web services
 
 ## Notes for Claude
-- Always run tests after making changes: `uv run --directory packages/llama-index-workflows pytest`
+- Always run tests after making changes: `uv run dev`
 - Never use classes for tests, only use pytest functions
 - Always annotate with types function arguments and return values
 - The project uses async/await extensively
@@ -62,17 +62,11 @@ Make sure to install uv as the package manager. Development commands rely on it.
 curl -fsSL https://astral.sh/uv/install.sh | sh
 ```
 
-Always run test tests and pre-commit commands before committing. They run very fast and are not verbose.
-
-Tests:
+Always run tests and pre-commit before committing:
 
 ```bash
-uv run --directory packages/llama-index-workflows pytest -nauto --timeout=1
-```
-
-Linting, typechecking, and formatting:
-```bash
-uv run --directory packages/llama-index-workflows pre-commit run -a
+uv run dev
+uv run pre-commit run -a
 ```
 
 ## Testing Patterns

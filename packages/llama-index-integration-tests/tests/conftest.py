@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, List, Protocol, Union
+from typing import Any, Callable, Generator, List, Protocol, Union
 
 import pytest
 from llama_index.core.agent.workflow import (
@@ -17,6 +17,8 @@ from llama_index_integration_tests.helpers import (
     make_text_response,
     response_generator_from_list,
 )
+from sqlalchemy.engine import Engine
+from testcontainers.postgres import PostgresContainer
 
 
 class WorkflowFactory(Protocol):
@@ -132,3 +134,39 @@ def create_simple_workflow(agent_type: str) -> SimpleWorkflowFactory:
         )
 
     return _create  # type: ignore[return-value]
+
+
+# -- Docker/PostgreSQL Fixtures --
+
+
+@pytest.fixture(scope="module")
+def postgres_container() -> Generator[PostgresContainer, None, None]:
+    """Module-scoped PostgreSQL container for integration tests.
+
+    Requires Docker to be running. Used by tests marked with @pytest.mark.docker.
+    """
+    with PostgresContainer("postgres:16", driver=None) as postgres:
+        yield postgres
+
+
+@pytest.fixture(scope="module")
+def postgres_engine(
+    postgres_container: PostgresContainer,
+) -> Generator[Engine, None, None]:
+    """Module-scoped PostgreSQL engine for integration tests."""
+    from sqlalchemy import create_engine
+
+    # Get connection URL and convert to use psycopg (psycopg3) driver
+    connection_url = postgres_container.get_connection_url()
+    # Replace postgresql:// or postgresql+psycopg2:// with postgresql+psycopg://
+    if "postgresql+psycopg2://" in connection_url:
+        connection_url = connection_url.replace(
+            "postgresql+psycopg2://", "postgresql+psycopg://"
+        )
+    elif connection_url.startswith("postgresql://"):
+        connection_url = connection_url.replace(
+            "postgresql://", "postgresql+psycopg://", 1
+        )
+    engine = create_engine(connection_url)
+    yield engine
+    engine.dispose()
