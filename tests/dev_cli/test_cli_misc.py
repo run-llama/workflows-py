@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-# Copyright (c) 2025 Anthropic
+# Copyright (c) 2026 LlamaIndex Inc.
 """Tests for miscellaneous CLI commands (tag-metadata, update-index-html)."""
 
 from __future__ import annotations

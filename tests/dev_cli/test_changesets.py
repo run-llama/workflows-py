@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: MIT
-# Copyright (c) 2025 Anthropic
+# Copyright (c) 2026 LlamaIndex Inc.
 from __future__ import annotations
 
 import json
