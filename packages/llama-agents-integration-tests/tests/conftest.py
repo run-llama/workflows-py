@@ -5,6 +5,10 @@ from __future__ import annotations
 from typing import Any, Callable, Generator, List, Protocol, Union
 
 import pytest
+from llama_agents_integration_tests.helpers import (
+    make_text_response,
+    response_generator_from_list,
+)
 from llama_index.core.agent.workflow import (
     AgentWorkflow,
     FunctionAgent,
@@ -13,10 +17,6 @@ from llama_index.core.agent.workflow import (
 from llama_index.core.base.llms.types import ChatMessage
 from llama_index.core.llms.mock import MockFunctionCallingLLM
 from llama_index.core.tools import BaseTool
-from llama_index_integration_tests.helpers import (
-    make_text_response,
-    response_generator_from_list,
-)
 from sqlalchemy.engine import Engine
 from testcontainers.postgres import PostgresContainer
 

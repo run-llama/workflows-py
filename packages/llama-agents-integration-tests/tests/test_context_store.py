@@ -6,7 +6,7 @@ access from within tool functions.
 """
 
 from conftest import WorkflowFactory
-from llama_index_integration_tests.helpers import (
+from llama_agents_integration_tests.helpers import (
     make_text_response,
     make_tool_call_response,
 )

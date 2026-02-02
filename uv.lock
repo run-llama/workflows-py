@@ -13,8 +13,8 @@ members = [
     "docs",
     "llama-agents-client",
     "llama-agents-dev",
+    "llama-agents-integration-tests",
     "llama-agents-server",
-    "llama-index-integration-tests",
     "llama-index-utils-workflow",
     "llama-index-workflows",
 ]
@@ -1677,6 +1677,52 @@ dev = [
 ]
 
 [[package]]
+name = "llama-agents-integration-tests"
+version = "0.1.0"
+source = { editable = "packages/llama-agents-integration-tests" }
+dependencies = [
+    { name = "llama-index-core" },
+    { name = "llama-index-workflows" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "basedpyright" },
+    { name = "psycopg", version = "3.2.13", source = { registry = "https://pypi.org/simple" }, extra = ["binary"], marker = "python_full_version < '3.10'" },
+    { name = "psycopg", version = "3.3.2", source = { registry = "https://pypi.org/simple" }, extra = ["binary"], marker = "python_full_version >= '3.10'" },
+    { name = "pytest" },
+    { name = "pytest-asyncio" },
+    { name = "pytest-cov" },
+    { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
+    { name = "sqlalchemy" },
+    { name = "testcontainers", version = "4.13.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.9.2'" },
+    { name = "testcontainers", version = "4.13.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.9.2' and python_full_version < '3.10'" },
+    { name = "testcontainers", version = "4.14.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+    { name = "ty" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "llama-index-core", specifier = ">=0.14.13" },
+    { name = "llama-index-workflows", editable = "packages/llama-index-workflows" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "basedpyright", specifier = ">=1.31.1" },
+    { name = "psycopg", extras = ["binary"], specifier = ">=3.2.0" },
+    { name = "pytest", specifier = ">=8.4.2" },
+    { name = "pytest-asyncio", specifier = ">=0.24.0" },
+    { name = "pytest-cov", specifier = ">=7.0.0" },
+    { name = "pytest-timeout", specifier = ">=2.3.1" },
+    { name = "pytest-xdist", specifier = ">=3.8.0" },
+    { name = "sqlalchemy", specifier = ">=2.0.0" },
+    { name = "testcontainers", extras = ["postgres"], specifier = ">=4.0.0" },
+    { name = "ty", specifier = ">=0.0.1,<0.0.9" },
+]
+
+[[package]]
 name = "llama-agents-server"
 version = "0.1.0"
 source = { editable = "packages/llama-agents-server" }
@@ -1771,52 +1817,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/af/b9/a7a74de6d8aacf4be329329495983d78d96b1a6e69b6d9fcf4a233febd4b/llama_index_instrumentation-0.4.2.tar.gz", hash = "sha256:dc4957b64da0922060690e85a6be9698ac08e34e0f69e90b01364ddec4f3de7f", size = 46146, upload-time = "2025-10-13T20:44:48.85Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/40/54/df8063b0441242e250e03d1e31ebde5dffbe24e1af32b025cb1a4544150c/llama_index_instrumentation-0.4.2-py3-none-any.whl", hash = "sha256:b4989500e6454059ab3f3c4a193575d47ab1fadb730c2e8f2b962649ae88b70b", size = 15411, upload-time = "2025-10-13T20:44:47.685Z" },
-]
-
-[[package]]
-name = "llama-index-integration-tests"
-version = "0.1.0"
-source = { editable = "packages/llama-index-integration-tests" }
-dependencies = [
-    { name = "llama-index-core" },
-    { name = "llama-index-workflows" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "basedpyright" },
-    { name = "psycopg", version = "3.2.13", source = { registry = "https://pypi.org/simple" }, extra = ["binary"], marker = "python_full_version < '3.10'" },
-    { name = "psycopg", version = "3.3.2", source = { registry = "https://pypi.org/simple" }, extra = ["binary"], marker = "python_full_version >= '3.10'" },
-    { name = "pytest" },
-    { name = "pytest-asyncio" },
-    { name = "pytest-cov" },
-    { name = "pytest-timeout" },
-    { name = "pytest-xdist" },
-    { name = "sqlalchemy" },
-    { name = "testcontainers", version = "4.13.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.9.2'" },
-    { name = "testcontainers", version = "4.13.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.9.2' and python_full_version < '3.10'" },
-    { name = "testcontainers", version = "4.14.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
-    { name = "ty" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "llama-index-core", specifier = ">=0.14.13" },
-    { name = "llama-index-workflows", editable = "packages/llama-index-workflows" },
-]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "basedpyright", specifier = ">=1.31.1" },
-    { name = "psycopg", extras = ["binary"], specifier = ">=3.2.0" },
-    { name = "pytest", specifier = ">=8.4.2" },
-    { name = "pytest-asyncio", specifier = ">=0.24.0" },
-    { name = "pytest-cov", specifier = ">=7.0.0" },
-    { name = "pytest-timeout", specifier = ">=2.3.1" },
-    { name = "pytest-xdist", specifier = ">=3.8.0" },
-    { name = "sqlalchemy", specifier = ">=2.0.0" },
-    { name = "testcontainers", extras = ["postgres"], specifier = ">=4.0.0" },
-    { name = "ty", specifier = ">=0.0.1,<0.0.9" },
 ]
 
 [[package]]
