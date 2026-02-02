@@ -1736,6 +1736,8 @@ dev = [
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-cov" },
+    { name = "pytest-timeout" },
+    { name = "pytest-xdist" },
 ]
 
 [package.metadata]
@@ -1751,6 +1753,8 @@ dev = [
     { name = "pytest", specifier = ">=8.4.2" },
     { name = "pytest-asyncio", specifier = ">=1.0.0" },
     { name = "pytest-cov", specifier = ">=6.1.1" },
+    { name = "pytest-timeout", specifier = ">=2.4.0" },
+    { name = "pytest-xdist", specifier = ">=3.8.0" },
 ]
 
 [[package]]
