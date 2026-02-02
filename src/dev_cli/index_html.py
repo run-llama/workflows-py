@@ -17,7 +17,8 @@ CSS_PATTERN = re.compile(r'<link\s+rel="stylesheet"\s+crossorigin\s+href="[^"]*"
 def default_index_path() -> Path:
     """Return the default path to the debugger index.html file."""
     return (
-        Path(__file__).resolve().parents[3]
+        Path(__file__).resolve().parents[2]
+        / "packages"
         / "llama-index-workflows"
         / "src"
         / "workflows"

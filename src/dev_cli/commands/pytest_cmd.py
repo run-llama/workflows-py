@@ -11,6 +11,7 @@ import subprocess
 import sys
 import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, as_completed, wait
+from dataclasses import dataclass
 from pathlib import Path
 
 import click
@@ -19,6 +20,34 @@ from rich.live import Live
 from rich.spinner import Spinner
 from rich.table import Table
 from rich.text import Text
+
+if sys.version_info >= (3, 11):
+    import tomllib
+else:
+    import tomli as tomllib
+
+
+@dataclass
+class PackageInfo:
+    """A package with tests to run."""
+
+    path: Path
+    name: str
+
+    @classmethod
+    def from_path(cls, path: Path) -> PackageInfo:
+        """Create a PackageInfo from a directory path, reading name from pyproject.toml."""
+        pyproject_path = path / "pyproject.toml"
+        if pyproject_path.exists():
+            try:
+                data = tomllib.loads(pyproject_path.read_text(encoding="utf-8"))
+                name = data.get("project", {}).get("name", path.name)
+            except Exception:
+                name = path.name
+        else:
+            name = path.name
+        return cls(path=path, name=name)
+
 
 # Regex to strip ANSI escape codes from text
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
@@ -117,30 +146,36 @@ def extract_failed_test_names(stdout: str) -> list[tuple[str, str | None]]:
     return failed_tests
 
 
-def discover_test_packages(repo_root: Path) -> list[Path]:
+def discover_test_packages(repo_root: Path) -> list[PackageInfo]:
     """Discover packages that contain a tests/ directory.
 
-    Returns a sorted list of package directory paths.
+    Returns a sorted list of PackageInfo objects, including the repo root
+    if it has tests. Package names are read from pyproject.toml.
     """
-    packages_dir = repo_root / "packages"
-    if not packages_dir.exists():
-        return []
+    packages: list[PackageInfo] = []
 
-    packages = []
-    for item in packages_dir.iterdir():
-        if item.is_dir() and (item / "tests").is_dir():
-            packages.append(item)
+    # Check repo root for tests (e.g., tests/dev_cli/)
+    root_tests = repo_root / "tests"
+    if root_tests.is_dir() and any(root_tests.iterdir()):
+        packages.append(PackageInfo.from_path(repo_root))
+
+    # Check packages/ directory
+    packages_dir = repo_root / "packages"
+    if packages_dir.exists():
+        for item in packages_dir.iterdir():
+            if item.is_dir() and (item / "tests").is_dir():
+                packages.append(PackageInfo.from_path(item))
 
     return sorted(packages, key=lambda p: p.name)
 
 
 def run_package_tests(
-    pkg: Path, pytest_args: tuple[str, ...]
+    pkg: PackageInfo, pytest_args: tuple[str, ...]
 ) -> dict[str, bool | str | float]:
     """Run pytest for a single package and return the results.
 
     Args:
-        pkg: Path to the package directory.
+        pkg: The PackageInfo to run tests for.
         pytest_args: Additional arguments to pass to pytest.
 
     Returns:
@@ -156,7 +191,7 @@ def run_package_tests(
     start_time = time.time()
 
     # Ensure dependencies are installed before running tests (--inexact to only add, not remove)
-    sync_cmd = ["uv", "sync", "--directory", str(pkg), "--inexact"]
+    sync_cmd = ["uv", "sync", "--directory", str(pkg.path), "--inexact"]
     sync_result = subprocess.run(sync_cmd, capture_output=True, text=True, env=env)
     if sync_result.returncode != 0:
         duration = time.time() - start_time
@@ -167,7 +202,7 @@ def run_package_tests(
             "duration": duration,
         }
 
-    cmd = ["uv", "run", "--directory", str(pkg), "pytest", *pytest_args]
+    cmd = ["uv", "run", "--directory", str(pkg.path), "pytest", *pytest_args]
     result = subprocess.run(cmd, capture_output=True, text=True, env=env)
     duration = time.time() - start_time
     return {
@@ -179,7 +214,7 @@ def run_package_tests(
 
 
 def _render_progress_table(
-    packages: list[Path],
+    packages: list[PackageInfo],
     results: dict[str, dict[str, bool | str | float]],
     start_times: dict[str, float],
     spinners: dict[str, Spinner],
@@ -191,29 +226,28 @@ def _render_progress_table(
     table.add_column("time", justify="right", width=10)
 
     for pkg in packages:
-        name = pkg.name
-        if name in results:
-            success = results[name]["success"]
-            duration = results[name]["duration"]
+        if pkg.name in results:
+            success = results[pkg.name]["success"]
+            duration = results[pkg.name]["duration"]
             status: Text | Spinner = (
                 Text("PASSED", style="green")
                 if success
                 else Text("FAILED", style="red")
             )
             time_str = f"({duration:.1f}s)"
-        elif name in start_times:
-            elapsed = time.time() - start_times[name]
-            status = spinners.get(name, Spinner("dots", style="yellow"))
+        elif pkg.name in start_times:
+            elapsed = time.time() - start_times[pkg.name]
+            status = spinners.get(pkg.name, Spinner("dots", style="yellow"))
             time_str = f"({elapsed:.1f}s)"
         else:
             status = Text("pending", style="dim")
             time_str = ""
-        table.add_row(name, status, time_str)
+        table.add_row(pkg.name, status, time_str)
     return table
 
 
 def run_tests_with_rich_progress(
-    packages: list[Path],
+    packages: list[PackageInfo],
     pytest_args: tuple[str, ...],
     max_workers: int,
 ) -> dict[str, dict[str, bool | str | float]]:
@@ -223,7 +257,7 @@ def run_tests_with_rich_progress(
     packages, and elapsed time.
 
     Args:
-        packages: List of package paths to test.
+        packages: List of PackageInfo objects to test.
         pytest_args: Additional arguments to pass to pytest.
         max_workers: Maximum number of parallel workers.
 
@@ -305,13 +339,13 @@ def pytest_cmd(
     Any additional arguments after -- are passed through to pytest.
 
     Examples:
-        workflows-dev pytest                      # Run all tests (10 parallel)
-        workflows-dev pytest -v                   # Verbose: show all output
-        workflows-dev pytest -j 1                 # Run sequentially
-        workflows-dev pytest -- -v --tb=short     # Pass -v to pytest itself
-        workflows-dev pytest -p llama-index-workflows  # Specific package
+        dev pytest                      # Run all tests (10 parallel)
+        dev pytest -v                   # Verbose: show all output
+        dev pytest -j 1                 # Run sequentially
+        dev pytest -- -v --tb=short     # Pass -v to pytest itself
+        dev pytest -p llama-index-workflows  # Specific package
     """
-    repo_root = Path(__file__).parents[5]
+    repo_root = Path(__file__).parents[3]
     all_packages = discover_test_packages(repo_root)
 
     if not all_packages:

@@ -9,7 +9,8 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 from conftest import commit_and_tag
-from workflows_dev.cli import cli
+
+from dev_cli.cli import cli
 
 
 @pytest.fixture

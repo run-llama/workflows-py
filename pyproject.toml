@@ -1,18 +1,36 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 [dependency-groups]
 dev = [
+  "pytest>=8.4.2",
+  "pytest-cov>=7.0.0",
+  "pytest-timeout>=2.4.0",
   "pytest-xdist>=3.8.0",
   "ruff>=0.14.5",
-  "ty>=0.0.1,<0.0.9",
-  "workflows-dev"
+  "ty>=0.0.1,<0.0.9"
 ]
 
 [project]
-name = "llama-agents-workspace"
+name = "llama-agents-dev"
 version = "0.1.0"
 description = "Monorepo workspace for the LlamaIndex Workflows packages."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.9"
+dependencies = [
+  "click>=8.1.7",
+  "httpx>=0.28.1",
+  "packaging>=24.1",
+  "pydantic>=2.12.3",
+  "rich>=14.0.0",
+  "tomlkit>=0.13.3",
+  "tomli>=2.3.0"
+]
+
+[project.scripts]
+dev = "dev_cli:main"
 
 [tool.basedpyright]
 typeCheckingMode = "standard"
@@ -34,7 +52,7 @@ root = "packages/llama-index-utils-workflow"
 pythonVersion = "3.9"
 
 [[tool.basedpyright.executionEnvironments]]
-root = "packages/workflows-dev"
+root = "src/dev_cli"
 pythonVersion = "3.14"
 
 [[tool.basedpyright.executionEnvironments]]
@@ -49,16 +67,26 @@ reportMissingImports = false
 [tool.coverage.run]
 omit = ["**/tests/*"]
 
+[tool.hatch.build.targets.wheel]
+packages = ["src/dev_cli"]
+
 [tool.mypy]
 explicit_package_bases = true
 exclude = [
   "packages/llama-index-workflows-server/tests/",
   "packages/llama-index-workflows-client/tests/",
   "packages/llama-index-utils-workflow/tests/",
-  "packages/workflows-dev/tests/",
+  "tests/dev_cli/",
   "packages/llama-index-workflows/src/llama_agents/",
   "packages/llama-index-workflows/tests/test_llama_agents_alias.py"
 ]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "module"
+asyncio_default_test_loop_scope = "module"
+testpaths = ["tests/dev_cli"]
+addopts = "-nauto --timeout=10"
 
 [tool.ruff.lint]
 select = [
@@ -85,6 +113,11 @@ select = [
   "UP007",
   "UP045"
 ]
+"tests/dev_cli/**/*" = [
+  "T201",
+  "UP007",
+  "UP045"
+]
 "*.ipynb" = ["T201", "ANN001", "ANN002", "ANN003"]
 "__main__.py" = ["T201"]
 
@@ -98,7 +131,6 @@ llama-index-utils-workflow = {workspace = true}
 llama-index-workflows = {workspace = true}
 llama-index-workflows-client = {workspace = true}
 llama-index-workflows-server = {workspace = true}
-workflows-dev = {workspace = true}
 
 [tool.uv.workspace]
 members = [
@@ -107,6 +139,5 @@ members = [
   "packages/llama-index-utils-workflow",
   "packages/llama-index-workflows",
   "packages/llama-index-workflows-client",
-  "packages/llama-index-workflows-server",
-  "packages/workflows-dev"
+  "packages/llama-index-workflows-server"
 ]

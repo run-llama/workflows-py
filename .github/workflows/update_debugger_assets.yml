@@ -42,7 +42,7 @@ jobs:
 
       - name: Update index.html
         run: >
-          uv run --package workflows-dev workflows-dev update-index-html
+          uv run dev update-index-html
           --js-url "${{ steps.payload.outputs.js_url }}"
           --css-url "${{ steps.payload.outputs.css_url }}"
 

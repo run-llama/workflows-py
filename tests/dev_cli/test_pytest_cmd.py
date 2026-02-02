@@ -14,8 +14,10 @@ from unittest.mock import Mock, patch
 import pytest
 from click.testing import CliRunner
 from conftest import is_sync_call, sync_success
-from workflows_dev.cli import cli
-from workflows_dev.commands.pytest_cmd import (
+
+from dev_cli.cli import cli
+from dev_cli.commands.pytest_cmd import (
+    PackageInfo,
     _render_progress_table,
     discover_test_packages,
     extract_failed_test_names,
@@ -41,14 +43,14 @@ def packages_dir(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def create_pkg(packages_dir: Path) -> Callable[[str], Path]:
+def create_pkg(packages_dir: Path) -> Callable[[str], PackageInfo]:
     """Factory to create a package with tests subdirectory."""
 
-    def _create(name: str) -> Path:
+    def _create(name: str) -> PackageInfo:
         pkg = packages_dir / name
         pkg.mkdir()
         (pkg / "tests").mkdir()
-        return pkg
+        return PackageInfo(path=pkg, name=name)
 
     return _create
 
@@ -56,10 +58,11 @@ def create_pkg(packages_dir: Path) -> Callable[[str], Path]:
 # --- discover_test_packages tests ---
 
 
-def test_discover_finds_packages_with_tests(
-    packages_dir: Path, create_pkg: Callable[[str], Path]
-) -> None:
-    create_pkg("pkg-with-tests")
+def test_discover_finds_packages_with_tests(packages_dir: Path) -> None:
+    # Create package with tests manually (not using create_pkg fixture)
+    pkg = packages_dir / "pkg-with-tests"
+    pkg.mkdir()
+    (pkg / "tests").mkdir()
     # Package without tests
     (packages_dir / "pkg-without-tests").mkdir()
 
@@ -68,11 +71,11 @@ def test_discover_finds_packages_with_tests(
     assert result[0].name == "pkg-with-tests"
 
 
-def test_discover_returns_sorted_list(
-    packages_dir: Path, create_pkg: Callable[[str], Path]
-) -> None:
+def test_discover_returns_sorted_list(packages_dir: Path) -> None:
     for name in ["zebra-pkg", "alpha-pkg", "middle-pkg"]:
-        create_pkg(name)
+        pkg = packages_dir / name
+        pkg.mkdir()
+        (pkg / "tests").mkdir()
 
     result = discover_test_packages(packages_dir.parent)
     assert [p.name for p in result] == ["alpha-pkg", "middle-pkg", "zebra-pkg"]
@@ -94,16 +97,16 @@ def test_pytest_help(runner: CliRunner) -> None:
 
 
 def test_pytest_filters_by_package(
-    runner: CliRunner, packages_dir: Path, create_pkg: Callable[[str], Path]
+    runner: CliRunner, packages_dir: Path, create_pkg: Callable[[str], PackageInfo]
 ) -> None:
-    create_pkg("pkg-a")
-    create_pkg("pkg-b")
+    pkg_a = create_pkg("pkg-a")
+    pkg_b = create_pkg("pkg-b")
 
     with patch(
-        "workflows_dev.commands.pytest_cmd.discover_test_packages",
-        return_value=[packages_dir / "pkg-a", packages_dir / "pkg-b"],
+        "dev_cli.commands.pytest_cmd.discover_test_packages",
+        return_value=[pkg_a, pkg_b],
     ):
-        with patch("workflows_dev.commands.pytest_cmd.subprocess.run") as mock_run:
+        with patch("dev_cli.commands.pytest_cmd.subprocess.run") as mock_run:
             mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
             runner.invoke(cli, ["pytest", "-p", "pkg-a"])
 
@@ -114,13 +117,13 @@ def test_pytest_filters_by_package(
 
 
 def test_pytest_errors_on_unknown_package(
-    runner: CliRunner, packages_dir: Path, create_pkg: Callable[[str], Path]
+    runner: CliRunner, packages_dir: Path, create_pkg: Callable[[str], PackageInfo]
 ) -> None:
-    create_pkg("real-pkg")
+    real_pkg = create_pkg("real-pkg")
 
     with patch(
-        "workflows_dev.commands.pytest_cmd.discover_test_packages",
-        return_value=[packages_dir / "real-pkg"],
+        "dev_cli.commands.pytest_cmd.discover_test_packages",
+        return_value=[real_pkg],
     ):
         result = runner.invoke(cli, ["pytest", "-p", "unknown-pkg"])
 
@@ -130,15 +133,15 @@ def test_pytest_errors_on_unknown_package(
 
 
 def test_pytest_passes_args_through(
-    runner: CliRunner, packages_dir: Path, create_pkg: Callable[[str], Path]
+    runner: CliRunner, packages_dir: Path, create_pkg: Callable[[str], PackageInfo]
 ) -> None:
-    create_pkg("my-pkg")
+    my_pkg = create_pkg("my-pkg")
 
     with patch(
-        "workflows_dev.commands.pytest_cmd.discover_test_packages",
-        return_value=[packages_dir / "my-pkg"],
+        "dev_cli.commands.pytest_cmd.discover_test_packages",
+        return_value=[my_pkg],
     ):
-        with patch("workflows_dev.commands.pytest_cmd.subprocess.run") as mock_run:
+        with patch("dev_cli.commands.pytest_cmd.subprocess.run") as mock_run:
             mock_run.return_value = Mock(returncode=0)
             runner.invoke(cli, ["pytest", "--", "-v", "--tb=short", "-k", "test_foo"])
 
@@ -150,20 +153,15 @@ def test_pytest_passes_args_through(
 
 
 def test_pytest_continues_on_failure(
-    runner: CliRunner, packages_dir: Path, create_pkg: Callable[[str], Path]
+    runner: CliRunner, packages_dir: Path, create_pkg: Callable[[str], PackageInfo]
 ) -> None:
-    for name in ["pkg-a", "pkg-b", "pkg-c"]:
-        create_pkg(name)
+    pkgs = [create_pkg(name) for name in ["pkg-a", "pkg-b", "pkg-c"]]
 
     with patch(
-        "workflows_dev.commands.pytest_cmd.discover_test_packages",
-        return_value=[
-            packages_dir / "pkg-a",
-            packages_dir / "pkg-b",
-            packages_dir / "pkg-c",
-        ],
+        "dev_cli.commands.pytest_cmd.discover_test_packages",
+        return_value=pkgs,
     ):
-        with patch("workflows_dev.commands.pytest_cmd.subprocess.run") as mock_run:
+        with patch("dev_cli.commands.pytest_cmd.subprocess.run") as mock_run:
             mock_run.side_effect = [
                 sync_success(),
                 Mock(returncode=1, stdout="", stderr=""),
@@ -181,16 +179,15 @@ def test_pytest_continues_on_failure(
 
 
 def test_pytest_shows_summary(
-    runner: CliRunner, packages_dir: Path, create_pkg: Callable[[str], Path]
+    runner: CliRunner, packages_dir: Path, create_pkg: Callable[[str], PackageInfo]
 ) -> None:
-    for name in ["pkg-a", "pkg-b"]:
-        create_pkg(name)
+    pkgs = [create_pkg(name) for name in ["pkg-a", "pkg-b"]]
 
     with patch(
-        "workflows_dev.commands.pytest_cmd.discover_test_packages",
-        return_value=[packages_dir / "pkg-a", packages_dir / "pkg-b"],
+        "dev_cli.commands.pytest_cmd.discover_test_packages",
+        return_value=pkgs,
     ):
-        with patch("workflows_dev.commands.pytest_cmd.subprocess.run") as mock_run:
+        with patch("dev_cli.commands.pytest_cmd.subprocess.run") as mock_run:
             mock_run.return_value = Mock(returncode=0)
             result = runner.invoke(cli, ["pytest"])
 
@@ -204,17 +201,16 @@ def test_pytest_shows_summary(
 
 
 def test_pytest_quiet_mode_hides_streaming_output(
-    runner: CliRunner, packages_dir: Path, create_pkg: Callable[[str], Path]
+    runner: CliRunner, packages_dir: Path, create_pkg: Callable[[str], PackageInfo]
 ) -> None:
     """Quiet mode (default) shows compact progress, not full pytest output."""
-    for name in ["pkg-a", "pkg-b"]:
-        create_pkg(name)
+    pkgs = [create_pkg(name) for name in ["pkg-a", "pkg-b"]]
 
     with patch(
-        "workflows_dev.commands.pytest_cmd.discover_test_packages",
-        return_value=[packages_dir / "pkg-a", packages_dir / "pkg-b"],
+        "dev_cli.commands.pytest_cmd.discover_test_packages",
+        return_value=pkgs,
     ):
-        with patch("workflows_dev.commands.pytest_cmd.subprocess.run") as mock_run:
+        with patch("dev_cli.commands.pytest_cmd.subprocess.run") as mock_run:
             mock_run.return_value = Mock(
                 returncode=0,
                 stdout="collected 5 items\ntest_foo.py::test_one PASSED\n",
@@ -229,17 +225,16 @@ def test_pytest_quiet_mode_hides_streaming_output(
 
 
 def test_pytest_verbose_shows_streaming_output(
-    runner: CliRunner, packages_dir: Path, create_pkg: Callable[[str], Path]
+    runner: CliRunner, packages_dir: Path, create_pkg: Callable[[str], PackageInfo]
 ) -> None:
     """Verbose mode shows full pytest output AND aggregate summary."""
-    for name in ["pkg-a", "pkg-b"]:
-        create_pkg(name)
+    pkgs = [create_pkg(name) for name in ["pkg-a", "pkg-b"]]
 
     with patch(
-        "workflows_dev.commands.pytest_cmd.discover_test_packages",
-        return_value=[packages_dir / "pkg-a", packages_dir / "pkg-b"],
+        "dev_cli.commands.pytest_cmd.discover_test_packages",
+        return_value=pkgs,
     ):
-        with patch("workflows_dev.commands.pytest_cmd.subprocess.run") as mock_run:
+        with patch("dev_cli.commands.pytest_cmd.subprocess.run") as mock_run:
             mock_run.return_value = Mock(
                 returncode=0,
                 stdout="collected 5 items\ntest_foo.py::test_one PASSED\n",
@@ -254,11 +249,10 @@ def test_pytest_verbose_shows_streaming_output(
 
 
 def test_pytest_failure_recap_always_shown(
-    runner: CliRunner, packages_dir: Path, create_pkg: Callable[[str], Path]
+    runner: CliRunner, packages_dir: Path, create_pkg: Callable[[str], PackageInfo]
 ) -> None:
     """Failure recap is shown in both quiet and verbose modes."""
-    for name in ["pkg-a", "pkg-b"]:
-        create_pkg(name)
+    pkgs = [create_pkg(name) for name in ["pkg-a", "pkg-b"]]
 
     failure_output = (
         "collected 3 items\n"
@@ -268,11 +262,11 @@ def test_pytest_failure_recap_always_shown(
     )
 
     with patch(
-        "workflows_dev.commands.pytest_cmd.discover_test_packages",
-        return_value=[packages_dir / "pkg-a", packages_dir / "pkg-b"],
+        "dev_cli.commands.pytest_cmd.discover_test_packages",
+        return_value=pkgs,
     ):
         for verbose_flag in [[], ["--verbose"]]:
-            with patch("workflows_dev.commands.pytest_cmd.subprocess.run") as mock_run:
+            with patch("dev_cli.commands.pytest_cmd.subprocess.run") as mock_run:
                 mock_run.side_effect = [
                     sync_success(),
                     Mock(returncode=0, stdout="all tests passed\n", stderr=""),
@@ -290,11 +284,10 @@ def test_pytest_failure_recap_always_shown(
 
 
 def test_pytest_runs_parallel_by_default(
-    runner: CliRunner, packages_dir: Path, create_pkg: Callable[[str], Path]
+    runner: CliRunner, packages_dir: Path, create_pkg: Callable[[str], PackageInfo]
 ) -> None:
     """Tests run in parallel by default - verified by concurrent execution."""
-    for name in ["pkg-a", "pkg-b", "pkg-c"]:
-        create_pkg(name)
+    pkgs = [create_pkg(name) for name in ["pkg-a", "pkg-b", "pkg-c"]]
 
     started_count = 0
     started_lock = threading.Lock()
@@ -331,15 +324,11 @@ def test_pytest_runs_parallel_by_default(
         return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
 
     with patch(
-        "workflows_dev.commands.pytest_cmd.discover_test_packages",
-        return_value=[
-            packages_dir / "pkg-a",
-            packages_dir / "pkg-b",
-            packages_dir / "pkg-c",
-        ],
+        "dev_cli.commands.pytest_cmd.discover_test_packages",
+        return_value=pkgs,
     ):
         with patch(
-            "workflows_dev.commands.pytest_cmd.subprocess.run",
+            "dev_cli.commands.pytest_cmd.subprocess.run",
             side_effect=mock_subprocess_run,
         ):
             result = runner.invoke(cli, ["pytest"])
@@ -355,11 +344,10 @@ def test_pytest_runs_parallel_by_default(
 
 
 def test_pytest_parallel_one_runs_sequentially(
-    runner: CliRunner, packages_dir: Path, create_pkg: Callable[[str], Path]
+    runner: CliRunner, packages_dir: Path, create_pkg: Callable[[str], PackageInfo]
 ) -> None:
     """--parallel 1 runs packages one at a time."""
-    for name in ["pkg-a", "pkg-b", "pkg-c"]:
-        create_pkg(name)
+    pkgs = [create_pkg(name) for name in ["pkg-a", "pkg-b", "pkg-c"]]
 
     call_order: list[str] = []
     lock = threading.Lock()
@@ -396,15 +384,11 @@ def test_pytest_parallel_one_runs_sequentially(
         return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
 
     with patch(
-        "workflows_dev.commands.pytest_cmd.discover_test_packages",
-        return_value=[
-            packages_dir / "pkg-a",
-            packages_dir / "pkg-b",
-            packages_dir / "pkg-c",
-        ],
+        "dev_cli.commands.pytest_cmd.discover_test_packages",
+        return_value=pkgs,
     ):
         with patch(
-            "workflows_dev.commands.pytest_cmd.subprocess.run",
+            "dev_cli.commands.pytest_cmd.subprocess.run",
             side_effect=mock_subprocess_run,
         ):
             result = runner.invoke(cli, ["pytest", "--parallel", "1"])
@@ -418,11 +402,10 @@ def test_pytest_parallel_one_runs_sequentially(
 
 
 def test_pytest_parallel_handles_mixed_results(
-    runner: CliRunner, packages_dir: Path, create_pkg: Callable[[str], Path]
+    runner: CliRunner, packages_dir: Path, create_pkg: Callable[[str], PackageInfo]
 ) -> None:
     """Parallel execution handles mixed passed/failed results correctly."""
-    for name in ["pkg-pass-1", "pkg-fail", "pkg-pass-2"]:
-        create_pkg(name)
+    pkgs = [create_pkg(name) for name in ["pkg-fail", "pkg-pass-1", "pkg-pass-2"]]
 
     completed: list[str] = []
     lock = threading.Lock()
@@ -454,15 +437,11 @@ def test_pytest_parallel_handles_mixed_results(
         return subprocess.CompletedProcess(args=cmd, returncode=0, stdout="", stderr="")
 
     with patch(
-        "workflows_dev.commands.pytest_cmd.discover_test_packages",
-        return_value=[
-            packages_dir / "pkg-fail",
-            packages_dir / "pkg-pass-1",
-            packages_dir / "pkg-pass-2",
-        ],
+        "dev_cli.commands.pytest_cmd.discover_test_packages",
+        return_value=pkgs,
     ):
         with patch(
-            "workflows_dev.commands.pytest_cmd.subprocess.run",
+            "dev_cli.commands.pytest_cmd.subprocess.run",
             side_effect=mock_subprocess_run,
         ):
             result = runner.invoke(cli, ["pytest"])
@@ -633,10 +612,9 @@ def test_extract_failed_names_handles_ansi_codes() -> None:
 
 
 def test_pytest_summary_appears_last(
-    runner: CliRunner, packages_dir: Path, create_pkg: Callable[[str], Path]
+    runner: CliRunner, packages_dir: Path, create_pkg: Callable[[str], PackageInfo]
 ) -> None:
-    for name in ["pkg-a", "pkg-b"]:
-        create_pkg(name)
+    pkgs = [create_pkg(name) for name in ["pkg-a", "pkg-b"]]
 
     failure_output = (
         "test_foo.py::test_failing FAILED\n"
@@ -647,10 +625,10 @@ def test_pytest_summary_appears_last(
     )
 
     with patch(
-        "workflows_dev.commands.pytest_cmd.discover_test_packages",
-        return_value=[packages_dir / "pkg-a", packages_dir / "pkg-b"],
+        "dev_cli.commands.pytest_cmd.discover_test_packages",
+        return_value=pkgs,
     ):
-        with patch("workflows_dev.commands.pytest_cmd.subprocess.run") as mock_run:
+        with patch("dev_cli.commands.pytest_cmd.subprocess.run") as mock_run:
             mock_run.side_effect = [
                 sync_success(),
                 Mock(returncode=0, stdout="all tests passed\n", stderr=""),
@@ -666,9 +644,9 @@ def test_pytest_summary_appears_last(
 
 
 def test_pytest_extracts_failures_not_full_output(
-    runner: CliRunner, packages_dir: Path, create_pkg: Callable[[str], Path]
+    runner: CliRunner, packages_dir: Path, create_pkg: Callable[[str], PackageInfo]
 ) -> None:
-    create_pkg("pkg-a")
+    pkg_a = create_pkg("pkg-a")
 
     failure_output = (
         "============================= test session starts ==============================\n"
@@ -685,10 +663,10 @@ def test_pytest_extracts_failures_not_full_output(
     )
 
     with patch(
-        "workflows_dev.commands.pytest_cmd.discover_test_packages",
-        return_value=[packages_dir / "pkg-a"],
+        "dev_cli.commands.pytest_cmd.discover_test_packages",
+        return_value=[pkg_a],
     ):
-        with patch("workflows_dev.commands.pytest_cmd.subprocess.run") as mock_run:
+        with patch("dev_cli.commands.pytest_cmd.subprocess.run") as mock_run:
             mock_run.return_value = Mock(returncode=1, stdout=failure_output, stderr="")
             result = runner.invoke(cli, ["pytest"])
 
@@ -699,9 +677,9 @@ def test_pytest_extracts_failures_not_full_output(
 
 
 def test_pytest_shows_failed_test_names_at_end(
-    runner: CliRunner, packages_dir: Path, create_pkg: Callable[[str], Path]
+    runner: CliRunner, packages_dir: Path, create_pkg: Callable[[str], PackageInfo]
 ) -> None:
-    create_pkg("pkg-a")
+    pkg_a = create_pkg("pkg-a")
 
     failure_output = (
         "=================================== FAILURES ===================================\n"
@@ -712,10 +690,10 @@ def test_pytest_shows_failed_test_names_at_end(
     )
 
     with patch(
-        "workflows_dev.commands.pytest_cmd.discover_test_packages",
-        return_value=[packages_dir / "pkg-a"],
+        "dev_cli.commands.pytest_cmd.discover_test_packages",
+        return_value=[pkg_a],
     ):
-        with patch("workflows_dev.commands.pytest_cmd.subprocess.run") as mock_run:
+        with patch("dev_cli.commands.pytest_cmd.subprocess.run") as mock_run:
             mock_run.return_value = Mock(returncode=1, stdout=failure_output, stderr="")
             result = runner.invoke(cli, ["pytest"])
 
@@ -730,7 +708,7 @@ def test_pytest_shows_failed_test_names_at_end(
 
 
 def test_render_progress_table_pending(
-    packages_dir: Path, create_pkg: Callable[[str], Path]
+    packages_dir: Path, create_pkg: Callable[[str], PackageInfo]
 ) -> None:
     from rich.spinner import Spinner
 
@@ -744,7 +722,7 @@ def test_render_progress_table_pending(
 
 
 def test_render_progress_table_running(
-    packages_dir: Path, create_pkg: Callable[[str], Path]
+    packages_dir: Path, create_pkg: Callable[[str], PackageInfo]
 ) -> None:
     from rich.spinner import Spinner
 
@@ -758,7 +736,7 @@ def test_render_progress_table_running(
 
 
 def test_render_progress_table_completed(
-    packages_dir: Path, create_pkg: Callable[[str], Path]
+    packages_dir: Path, create_pkg: Callable[[str], PackageInfo]
 ) -> None:
     from rich.spinner import Spinner
 
@@ -776,11 +754,11 @@ def test_render_progress_table_completed(
 
 
 def test_run_tests_with_rich_progress_returns_results(
-    packages_dir: Path, create_pkg: Callable[[str], Path]
+    packages_dir: Path, create_pkg: Callable[[str], PackageInfo]
 ) -> None:
     pkg = create_pkg("pkg-a")
 
-    with patch("workflows_dev.commands.pytest_cmd.run_package_tests") as mock_run:
+    with patch("dev_cli.commands.pytest_cmd.run_package_tests") as mock_run:
         mock_run.return_value = {
             "success": True,
             "stdout": "tests passed",
@@ -795,13 +773,13 @@ def test_run_tests_with_rich_progress_returns_results(
 
 
 def test_run_tests_with_rich_progress_multiple(
-    packages_dir: Path, create_pkg: Callable[[str], Path]
+    packages_dir: Path, create_pkg: Callable[[str], PackageInfo]
 ) -> None:
     packages = [create_pkg(name) for name in ["pkg-a", "pkg-b", "pkg-c"]]
     call_count = 0
 
     def mock_run(
-        pkg: Path, pytest_args: tuple[str, ...]
+        pkg: PackageInfo, pytest_args: tuple[str, ...]
     ) -> dict[str, bool | str | float]:
         nonlocal call_count
         call_count += 1
@@ -812,9 +790,7 @@ def test_run_tests_with_rich_progress_multiple(
             "duration": 1.0,
         }
 
-    with patch(
-        "workflows_dev.commands.pytest_cmd.run_package_tests", side_effect=mock_run
-    ):
+    with patch("dev_cli.commands.pytest_cmd.run_package_tests", side_effect=mock_run):
         results = run_tests_with_rich_progress(packages, (), max_workers=3)
 
         assert call_count == 3
@@ -827,21 +803,19 @@ def test_run_tests_with_rich_progress_multiple(
 
 
 def test_pytest_verbose_does_not_use_rich(
-    runner: CliRunner, packages_dir: Path, create_pkg: Callable[[str], Path]
+    runner: CliRunner, packages_dir: Path, create_pkg: Callable[[str], PackageInfo]
 ) -> None:
     """--verbose uses simple output, not rich progress."""
-    create_pkg("pkg-a")
+    pkg_a = create_pkg("pkg-a")
 
     with patch(
-        "workflows_dev.commands.pytest_cmd.discover_test_packages",
-        return_value=[packages_dir / "pkg-a"],
+        "dev_cli.commands.pytest_cmd.discover_test_packages",
+        return_value=[pkg_a],
     ):
         with patch(
-            "workflows_dev.commands.pytest_cmd.run_tests_with_rich_progress"
+            "dev_cli.commands.pytest_cmd.run_tests_with_rich_progress"
         ) as mock_rich:
-            with patch(
-                "workflows_dev.commands.pytest_cmd.subprocess.run"
-            ) as mock_subprocess:
+            with patch("dev_cli.commands.pytest_cmd.subprocess.run") as mock_subprocess:
                 mock_subprocess.return_value = Mock(
                     returncode=0, stdout="passed\n", stderr=""
                 )
@@ -852,21 +826,19 @@ def test_pytest_verbose_does_not_use_rich(
 
 
 def test_pytest_skips_rich_when_not_tty(
-    runner: CliRunner, packages_dir: Path, create_pkg: Callable[[str], Path]
+    runner: CliRunner, packages_dir: Path, create_pkg: Callable[[str], PackageInfo]
 ) -> None:
     """Rich progress is NOT used when stdout is not a TTY."""
-    create_pkg("pkg-a")
+    pkg_a = create_pkg("pkg-a")
 
     with patch(
-        "workflows_dev.commands.pytest_cmd.discover_test_packages",
-        return_value=[packages_dir / "pkg-a"],
+        "dev_cli.commands.pytest_cmd.discover_test_packages",
+        return_value=[pkg_a],
     ):
         with patch(
-            "workflows_dev.commands.pytest_cmd.run_tests_with_rich_progress"
+            "dev_cli.commands.pytest_cmd.run_tests_with_rich_progress"
         ) as mock_rich:
-            with patch(
-                "workflows_dev.commands.pytest_cmd.subprocess.run"
-            ) as mock_subprocess:
+            with patch("dev_cli.commands.pytest_cmd.subprocess.run") as mock_subprocess:
                 mock_subprocess.return_value = Mock(
                     returncode=0, stdout="passed", stderr=""
                 )

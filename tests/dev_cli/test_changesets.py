@@ -8,7 +8,8 @@ from unittest.mock import Mock, patch
 from urllib.error import HTTPError
 
 import pytest
-from workflows_dev.changesets import (
+
+from dev_cli.changesets import (
     PackageJson,
     PyProjectContainer,
     current_version,

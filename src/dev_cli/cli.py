@@ -1,9 +1,10 @@
 # SPDX-FileCopyrightText: 2025 LlamaIndex Authors
 # SPDX-License-Identifier: MIT
-"""CLI entry point for workflows-dev."""
+"""CLI entry point for dev."""
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import click
@@ -12,10 +13,41 @@ from . import gha, git_utils, index_html, versioning
 from .commands.changesets_cmd import changeset_publish, changeset_version
 from .commands.pytest_cmd import pytest_cmd
 
+# Known subcommands for argument injection
+_KNOWN_SUBCOMMANDS = {
+    "pytest",
+    "changeset-version",
+    "changeset-publish",
+    "compute-tag-metadata",
+    "update-index-html",
+}
+
+
+def _maybe_inject_pytest_subcommand() -> None:
+    """Inject 'pytest' subcommand if no known subcommand is present.
+
+    This enables `dev -k test_foo` to work as shorthand for `dev pytest -k test_foo`.
+    """
+    if len(sys.argv) < 2:
+        # No args: `dev` -> `dev pytest`
+        sys.argv.insert(1, "pytest")
+        return
+
+    # Check if first arg is a known subcommand or --help
+    first_arg = sys.argv[1]
+    if first_arg in _KNOWN_SUBCOMMANDS or first_arg in ("--help", "-h"):
+        return
+
+    # Not a known subcommand, inject pytest
+    sys.argv.insert(1, "pytest")
+
 
 @click.group()
 def cli() -> None:
-    """Developer tooling for the workflows repository."""
+    """Developer tooling for the llama-agents repository.
+
+    Run without a subcommand to execute pytest across all packages.
+    """
 
 
 @cli.command("compute-tag-metadata")

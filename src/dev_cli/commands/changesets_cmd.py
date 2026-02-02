@@ -23,7 +23,7 @@ def changeset_version() -> None:
     - If a pyproject is updated, run `uv sync` in the root directory to update the lock file.
     """
     # Ensure we're at the repo root
-    repo_root = Path(__file__).parents[5]
+    repo_root = Path(__file__).parents[3]
     os.chdir(repo_root)
 
     # First, run changeset version to update all package.json files
@@ -51,7 +51,7 @@ def changeset_version() -> None:
 def changeset_publish(tag: bool, dry_run: bool) -> None:
     """Publish all packages."""
     # move to the root
-    os.chdir(Path(__file__).parents[5])
+    os.chdir(Path(__file__).parents[3])
 
     changesets.maybe_publish_pypi(dry_run)
 

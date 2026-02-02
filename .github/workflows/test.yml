@@ -21,20 +21,9 @@ jobs:
           [
             llama-index-workflows,
             llama-index-utils-workflow,
-            workflows-dev,
             llama-index-integration-tests,
           ]
         exclude:
-          - package: workflows-dev
-            python-version: "3.9"
-          - package: workflows-dev
-            python-version: "3.10"
-          - package: workflows-dev
-            python-version: "3.11"
-          - package: workflows-dev
-            python-version: "3.12"
-          - package: workflows-dev
-            python-version: "3.13"
           # Integration tests on 3.14 run in test-docker job with cross-package coverage
           - package: llama-index-integration-tests
             python-version: "3.9"
@@ -45,8 +34,6 @@ jobs:
             package_dir: packages/llama-index-workflows
           - package: llama-index-utils-workflow
             package_dir: packages/llama-index-utils-workflow
-          - package: workflows-dev
-            package_dir: packages/workflows-dev
           - package: llama-index-integration-tests
             package_dir: packages/llama-index-integration-tests
 
@@ -110,8 +97,26 @@ jobs:
         env:
           COVERALLS_REPO_TOKEN: ${{ secrets.COVERALLS_REPO_TOKEN }}
 
+  test-dev-cli:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install uv and set the python version
+        uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.14"
+          enable-cache: true
+
+      - name: Run dev_cli tests
+        run: |
+          uv sync
+          uv run pytest tests/dev_cli -nauto --timeout=10
+
   coveralls-finish:
-    needs: [test, test-docker]
+    needs: [test, test-docker, test-dev-cli]
     runs-on: ubuntu-latest
     if: github.repository == 'run-llama/workflows-py'
     steps:

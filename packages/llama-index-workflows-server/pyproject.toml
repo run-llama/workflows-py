@@ -18,6 +18,13 @@ dependencies = [
 [project.scripts]
 llama-index-workflows-server = "llama_agents.server.__main__:run_server"
 
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "module"
+asyncio_default_test_loop_scope = "module"
+testpaths = ["tests"]
+addopts = "-nauto --timeout=10"
+
 [tool.uv.build-backend]
 module-name = "llama_agents.server"
 
