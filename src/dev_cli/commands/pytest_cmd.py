@@ -201,6 +201,7 @@ def run_package_tests(
         duration = time.time() - start_time
         return {
             "success": False,
+            "no_tests": False,
             "stdout": sync_result.stdout,
             "stderr": f"uv sync failed:\n{sync_result.stderr}",
             "duration": duration,
@@ -209,10 +210,12 @@ def run_package_tests(
     cmd = ["uv", "run", "--directory", str(pkg.path), "pytest", *pytest_args]
     result = subprocess.run(cmd, capture_output=True, text=True, env=env)
     duration = time.time() - start_time
-    # Exit code 0 = success, exit code 5 = no tests collected (also success)
-    success = result.returncode in (0, 5)
+    # Exit code 0 = success, exit code 5 = no tests collected (not a failure)
+    no_tests = result.returncode == 5
+    success = result.returncode == 0 or no_tests
     return {
         "success": success,
+        "no_tests": no_tests,
         "stdout": result.stdout,
         "stderr": result.stderr,
         "duration": duration,
@@ -233,13 +236,14 @@ def _render_progress_table(
 
     for pkg in packages:
         if pkg.name in results:
-            success = results[pkg.name]["success"]
-            duration = results[pkg.name]["duration"]
-            status: Text | Spinner = (
-                Text("PASSED", style="green")
-                if success
-                else Text("FAILED", style="red")
-            )
+            result_data = results[pkg.name]
+            duration = result_data["duration"]
+            if result_data.get("no_tests"):
+                status: Text | Spinner = Text("NO TESTS", style="yellow")
+            elif result_data["success"]:
+                status = Text("PASSED", style="green")
+            else:
+                status = Text("FAILED", style="red")
             time_str = f"({duration:.1f}s)"
         elif pkg.name in start_times:
             elapsed = time.time() - start_times[pkg.name]
@@ -410,19 +414,21 @@ def pytest_cmd(
                         click.echo(result_data["stderr"], nl=False, err=True)
                 else:
                     # Compact progress line (for non-TTY output)
-                    status = (
-                        click.style("PASSED", fg="green")
-                        if result_data["success"]
-                        else click.style("FAILED", fg="red")
-                    )
+                    if result_data.get("no_tests"):
+                        status = click.style("NO TESTS", fg="yellow")
+                    elif result_data["success"]:
+                        status = click.style("PASSED", fg="green")
+                    else:
+                        status = click.style("FAILED", fg="red")
                     click.echo(
                         f"[{idx}/{total}] {pkg.name}... {status} "
                         f"({result_data['duration']:.1f}s)"
                     )
 
     # Print summary
-    passed = sum(1 for v in results.values() if v["success"])
-    failed = len(results) - passed
+    passed = sum(1 for v in results.values() if v["success"] and not v.get("no_tests"))
+    no_tests = sum(1 for v in results.values() if v.get("no_tests"))
+    failed = len(results) - passed - no_tests
 
     # Print failures section first (after progress), before summary
     if failed:
@@ -448,11 +454,12 @@ def pytest_cmd(
 
     max_name_len = max(len(name) for name in results)
     for name, result_data in results.items():
-        status = (
-            click.style("PASSED", fg="green")
-            if result_data["success"]
-            else click.style("FAILED", fg="red")
-        )
+        if result_data.get("no_tests"):
+            status = click.style("NO TESTS", fg="yellow")
+        elif result_data["success"]:
+            status = click.style("PASSED", fg="green")
+        else:
+            status = click.style("FAILED", fg="red")
         click.echo(f"{name.ljust(max_name_len)}  {status}")
 
     click.echo("=" * 50)
@@ -461,6 +468,8 @@ def pytest_cmd(
         summary_parts.append(click.style(f"{failed} failed", fg="red"))
     if passed:
         summary_parts.append(click.style(f"{passed} passed", fg="green"))
+    if no_tests:
+        summary_parts.append(click.style(f"{no_tests} no tests", fg="yellow"))
     click.echo(", ".join(summary_parts))
 
     # Show failed test names at the very end for quick reference
