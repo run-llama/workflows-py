@@ -7,7 +7,9 @@ dev = [
   "pre-commit>=4.3.0",
   "pytest>=8.4.2",
   "pytest-asyncio>=1.0.0",
-  "pytest-cov>=6.1.1"
+  "pytest-cov>=6.1.1",
+  "pytest-timeout>=2.4.0",
+  "pytest-xdist>=3.8.0"
 ]
 
 [project]
@@ -22,6 +24,13 @@ dependencies = [
   "llama-index-workflows>=2.13.0,<3.0.0",
   "pyvis>=0.3.2"
 ]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "module"
+asyncio_default_test_loop_scope = "module"
+testpaths = ["tests"]
+addopts = "-nauto --timeout=10"
 
 [tool.uv.build-backend]
 module-name = "llama_index.utils.workflow"

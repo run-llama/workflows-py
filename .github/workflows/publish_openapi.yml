@@ -39,7 +39,7 @@ jobs:
       - name: Compute release metadata
         id: metadata
         run: >
-          uv run --package workflows-dev workflows-dev compute-tag-metadata
+          uv run dev compute-tag-metadata
           --tag "${{ env.TARGET_TAG }}"
           --output "$GITHUB_OUTPUT"
 

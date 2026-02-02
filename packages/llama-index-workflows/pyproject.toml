@@ -41,6 +41,11 @@ dependencies = [
 server = ["llama-index-workflows-server>=0.1.0,<1.0.0"]
 client = ["llama-index-workflows-client>=0.1.0,<1.0.0"]
 
+[tool.basedpyright]
+exclude = ["**/.venv", "**/node_modules", "**/.uv"]
+# Python 3.14 beta has stdlib changes that basedpyright doesn't understand yet
+ignore = ["**/cpython-3.14*/**"]
+
 [tool.hatch.envs.server]
 features = ["server"]
 dependencies = ["pyyaml>=6.0.2"]
@@ -50,7 +55,10 @@ openapi = "python -m workflows.server.server --output openapi.json"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "module"
+asyncio_default_test_loop_scope = "module"
 testpaths = ["tests"]
+addopts = "-nauto --timeout=10"
 
 [tool.uv.build-backend]
 module-name = ["workflows", "llama_agents.workflows"]

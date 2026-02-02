@@ -4,10 +4,16 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
+  "basedpyright>=1.31.1",
+  "psycopg[binary]>=3.2.0",
   "pytest>=8.4.2",
   "pytest-asyncio>=0.24.0",
   "pytest-cov>=7.0.0",
-  "pytest-timeout>=2.3.1"
+  "pytest-timeout>=2.3.1",
+  "pytest-xdist>=3.8.0",
+  "sqlalchemy>=2.0.0",
+  "testcontainers[postgres]>=4.0.0",
+  "ty>=0.0.1,<0.0.9"
 ]
 
 [project]
@@ -21,10 +27,31 @@ dependencies = [
   "llama-index-workflows"
 ]
 
+[tool.basedpyright]
+typeCheckingMode = "standard"
+pythonVersion = "3.10"
+
+[tool.coverage.run]
+source = [
+  "workflows",
+  "llama_agents"
+]
+omit = ["**/tests/*"]
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-asyncio_default_fixture_loop_scope = "function"
+asyncio_default_fixture_loop_scope = "module"
+asyncio_default_test_loop_scope = "module"
 testpaths = ["tests"]
+# Skip docker tests by default - run with `pytest -m docker` to include them
+addopts = "-nauto --timeout=60 -m 'not docker'"
+markers = [
+  "docker: marks tests as requiring Docker (testcontainers/PostgreSQL)"
+]
+filterwarnings = [
+  # Ignore internal testcontainers deprecation warning (fixed in their code, just noisy)
+  "ignore:The @wait_container_is_ready decorator is deprecated:DeprecationWarning"
+]
 
 [tool.uv.sources]
 llama-index-workflows = {workspace = true}

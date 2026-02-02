@@ -2,6 +2,14 @@
 requires = ["uv_build>=0.9.6,<0.10.0"]
 build-backend = "uv_build"
 
+[dependency-groups]
+dev = [
+  "pytest>=8.4.2",
+  "pytest-asyncio>=1.0.0",
+  "pytest-timeout>=2.4.0",
+  "pytest-xdist>=3.8.0"
+]
+
 [project]
 name = "llama-index-workflows-client"
 version = "0.1.0"
@@ -12,6 +20,13 @@ dependencies = [
   "httpx>=0.28.1,<1",
   "llama-index-workflows>=2.12.0,<3.0.0"
 ]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "module"
+asyncio_default_test_loop_scope = "module"
+testpaths = ["tests"]
+addopts = "-nauto --timeout=10"
 
 [tool.uv.build-backend]
 module-name = "llama_agents.client"

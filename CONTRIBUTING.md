@@ -47,10 +47,18 @@ uv run pre-commit install
 
 ## Run tests
 
-Tests are run with `pytest`. You can run them with:
+Use the `dev` CLI to run tests across packages:
 
 ```bash
-uv run pytest
+# Run all package tests
+uv run dev
+
+# Filter by substring match
+uv run dev -p workflows
+uv run dev -p server -p client
+
+# Pass pytest args after --
+uv run dev -- -k test_name
 ```
 
 Generally, all features should be covered by robust tests. If you are adding a new feature or fixing a bug, please add tests for it.
