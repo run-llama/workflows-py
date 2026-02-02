@@ -11,12 +11,10 @@ Run with: pytest -m docker
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Generator
+from typing import Generator
 
 import pytest
-
-if TYPE_CHECKING:
-    from testcontainers.postgres import PostgresContainer
+from testcontainers.postgres import PostgresContainer
 
 
 @pytest.fixture(scope="module")
