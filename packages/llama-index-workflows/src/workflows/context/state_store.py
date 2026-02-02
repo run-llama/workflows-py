@@ -13,12 +13,13 @@ from typing import (
     AsyncContextManager,
     AsyncGenerator,
     Generic,
+    Literal,
     Protocol,
     Type,
     runtime_checkable,
 )
 
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, ValidationError, model_validator
 from typing_extensions import TypeVar
 
 from workflows.decorators import StepConfig
@@ -30,6 +31,165 @@ if TYPE_CHECKING:
     from workflows.workflow import Workflow
 
 MAX_DEPTH = 1000
+
+
+class InMemorySerializedState(BaseModel):
+    """Serialized state containing actual data (from InMemoryStateStore)."""
+
+    store_type: Literal["in_memory"] = "in_memory"
+    state_type: str = "DictState"
+    state_module: str = "workflows.context.state_store"
+    state_data: Any = (
+        None  # {"_data": {...}} for DictState, serialized string for typed
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def default_store_type(cls, data: dict[str, Any]) -> dict[str, Any]:
+        """Default missing store_type to 'in_memory' for backwards compatibility."""
+        if isinstance(data, dict) and "store_type" not in data:
+            data = {**data, "store_type": "in_memory"}
+        return data
+
+
+def parse_in_memory_state(
+    data: dict[str, Any],
+) -> InMemorySerializedState:
+    """Parse raw dict into InMemorySerializedState.
+
+    Args:
+        data: Serialized state payload from InMemoryStateStore.to_dict().
+
+    Returns:
+        InMemorySerializedState if the format is recognized.
+
+    Raises:
+        ValueError: If store_type is not 'in_memory' or missing.
+    """
+    store_type = data.get("store_type")
+
+    if store_type == "in_memory" or store_type is None:
+        # Backwards compat: missing store_type = InMemory
+        return InMemorySerializedState.model_validate(data)
+    else:
+        raise ValueError(
+            f"Cannot parse store_type '{store_type}' as InMemorySerializedState. "
+            "Use the appropriate store's from_dict() method."
+        )
+
+
+def serialize_dict_state_data(
+    state: DictState,
+    serializer: BaseSerializer,
+    known_unserializable_keys: tuple[str, ...] = (),
+) -> dict[str, Any]:
+    """Serialize DictState items to {"_data": {...}} format.
+
+    Args:
+        state: The DictState to serialize.
+        serializer: Strategy for encoding values.
+        known_unserializable_keys: Keys to skip with warning if they fail to serialize.
+
+    Returns:
+        Dict with {"_data": {...}} structure containing serialized values.
+
+    Raises:
+        ValueError: If serialization fails for a non-known-unserializable key.
+    """
+    serialized_data = {}
+    for key, value in state.items():
+        try:
+            serialized_data[key] = serializer.serialize(value)
+        except Exception as e:
+            if key in known_unserializable_keys:
+                warnings.warn(
+                    f"Skipping serialization of known unserializable key: {key} -- "
+                    "This is expected but will require this item to be set manually after deserialization.",
+                    category=UnserializableKeyWarning,
+                )
+                continue
+            raise ValueError(f"Failed to serialize state value for key {key}: {e}")
+    return {"_data": serialized_data}
+
+
+def create_in_memory_payload(
+    state: BaseModel,
+    serializer: BaseSerializer,
+    known_unserializable_keys: tuple[str, ...] = (),
+) -> InMemorySerializedState:
+    """Create InMemorySerializedState from any state model.
+
+    Args:
+        state: The Pydantic model to serialize (DictState or typed model).
+        serializer: Strategy for encoding values.
+        known_unserializable_keys: Keys to skip with warning (DictState only).
+
+    Returns:
+        InMemorySerializedState containing the serialized data.
+    """
+    if isinstance(state, DictState):
+        state_data = serialize_dict_state_data(
+            state, serializer, known_unserializable_keys
+        )
+    else:
+        state_data = serializer.serialize(state)
+
+    return InMemorySerializedState(
+        state_type=type(state).__name__,
+        state_module=type(state).__module__,
+        state_data=state_data,
+    )
+
+
+def traverse_path_step(obj: Any, segment: str) -> Any:
+    """Follow one segment into obj (dict key, list index, or attribute).
+
+    Args:
+        obj: The object to traverse into.
+        segment: The path segment (dict key, list index, or attribute name).
+
+    Returns:
+        The value at the given segment.
+
+    Raises:
+        KeyError, IndexError, AttributeError: If the segment doesn't exist.
+    """
+    if isinstance(obj, dict):
+        return obj[segment]
+
+    # Attempt list/tuple index
+    try:
+        idx = int(segment)
+        return obj[idx]
+    except (ValueError, TypeError, IndexError):
+        pass
+
+    # Fallback to attribute access (Pydantic models, normal objects)
+    return getattr(obj, segment)
+
+
+def assign_path_step(obj: Any, segment: str, value: Any) -> None:
+    """Assign value to segment of obj (dict key, list index, or attribute).
+
+    Args:
+        obj: The object to assign into.
+        segment: The path segment (dict key, list index, or attribute name).
+        value: The value to assign.
+    """
+    if isinstance(obj, dict):
+        obj[segment] = value
+        return
+
+    # Attempt list/tuple index assignment
+    try:
+        idx = int(segment)
+        obj[idx] = value
+        return
+    except (ValueError, TypeError, IndexError):
+        pass
+
+    # Fallback to attribute assignment
+    setattr(obj, segment, value)
 
 
 # Only warn once about unserializable keys
@@ -254,38 +414,10 @@ class InMemoryStateStore(Generic[MODEL_T]):
             dict[str, Any]: A payload suitable for
             [from_dict][workflows.context.state_store.InMemoryStateStore.from_dict].
         """
-        # Special handling for DictState - serialize each item in _data
-        if isinstance(self._state, DictState):
-            serialized_data = {}
-            for key, value in self._state.items():
-                try:
-                    serialized_data[key] = serializer.serialize(value)
-                except Exception as e:
-                    if key in self.known_unserializable_keys:
-                        warnings.warn(
-                            f"Skipping serialization of known unserializable key: {key} -- "
-                            "This is expected but will require this item to be set manually after deserialization.",
-                            category=UnserializableKeyWarning,
-                        )
-                        continue
-                    raise ValueError(
-                        f"Failed to serialize state value for key {key}: {e}"
-                    )
-
-            return {
-                "state_data": {"_data": serialized_data},
-                "state_type": type(self._state).__name__,
-                "state_module": type(self._state).__module__,
-            }
-        else:
-            # For regular Pydantic models, rely on pydantic's serialization
-            serialized_state = serializer.serialize(self._state)
-
-            return {
-                "state_data": serialized_state,
-                "state_type": type(self._state).__name__,
-                "state_module": type(self._state).__module__,
-            }
+        payload = create_in_memory_payload(
+            self._state, serializer, self.known_unserializable_keys
+        )
+        return payload.model_dump()
 
     @classmethod
     def from_dict(
@@ -300,31 +432,17 @@ class InMemoryStateStore(Generic[MODEL_T]):
 
         Returns:
             InMemoryStateStore[MODEL_T]: A store with the reconstructed model.
+
+        Raises:
+            ValueError: If the payload is not in_memory format.
         """
         if not serialized_state:
-            # Return a default DictState manager
             return cls(DictState())  # type: ignore
 
-        state_data = serialized_state.get("state_data", {})
-        state_type = serialized_state.get("state_type", "DictState")
+        # Validate it's in_memory format (raises ValueError if not)
+        parse_in_memory_state(serialized_state)
 
-        # Deserialize the state data
-        if state_type == "DictState":
-            # Special handling for DictState - deserialize each item in _data
-            _data_serialized = state_data.get("_data", {})
-            deserialized_data = {}
-            for key, value in _data_serialized.items():
-                try:
-                    deserialized_data[key] = serializer.deserialize(value)
-                except Exception as e:
-                    raise ValueError(
-                        f"Failed to deserialize state value for key {key}: {e}"
-                    )
-
-            state_instance = DictState(_data=deserialized_data)
-        else:
-            state_instance = serializer.deserialize(state_data)
-
+        state_instance = deserialize_state_from_dict(serialized_state, serializer)
         return cls(state_instance)  # type: ignore
 
     @asynccontextmanager
@@ -370,7 +488,7 @@ class InMemoryStateStore(Generic[MODEL_T]):
             try:
                 value: Any = self._state
                 for segment in segments:
-                    value = self._traverse_step(value, segment)
+                    value = traverse_path_step(value, segment)
             except Exception:
                 if default is not Ellipsis:
                     return default
@@ -406,15 +524,15 @@ class InMemoryStateStore(Generic[MODEL_T]):
             # Navigate/create intermediate segments
             for segment in segments[:-1]:
                 try:
-                    current = self._traverse_step(current, segment)
+                    current = traverse_path_step(current, segment)
                 except (KeyError, AttributeError, IndexError, TypeError):
                     # Create intermediate object and assign it
                     intermediate: Any = {}
-                    self._assign_step(current, segment, intermediate)
+                    assign_path_step(current, segment, intermediate)
                     current = intermediate
 
             # Assign the final value
-            self._assign_step(current, segments[-1], value)
+            assign_path_step(current, segments[-1], value)
 
     async def clear(self) -> None:
         """Reset the state to its type defaults.
@@ -428,37 +546,42 @@ class InMemoryStateStore(Generic[MODEL_T]):
         except ValidationError:
             raise ValueError("State must have defaults for all fields")
 
-    def _traverse_step(self, obj: Any, segment: str) -> Any:
-        """Follow one segment into *obj* (dict key, list index, or attribute)."""
-        if isinstance(obj, dict):
-            return obj[segment]
 
-        # attempt list/tuple index
-        try:
-            idx = int(segment)
-            return obj[idx]
-        except (ValueError, TypeError, IndexError):
-            pass
+def deserialize_state_from_dict(
+    serialized_state: dict[str, Any], serializer: "BaseSerializer"
+) -> BaseModel:
+    """Deserialize state from a serialized payload.
 
-        # fallback to attribute access (Pydantic models, normal objects)
-        return getattr(obj, segment)
+    This is the inverse of InMemoryStateStore.to_dict(). It handles both
+    DictState (with per-key serialization) and typed Pydantic models.
 
-    def _assign_step(self, obj: Any, segment: str, value: Any) -> None:
-        """Assign *value* to *segment* of *obj* (dict key, list index, or attribute)."""
-        if isinstance(obj, dict):
-            obj[segment] = value
-            return
+    Args:
+        serialized_state: The payload from to_dict(), containing state_data,
+            state_type, and state_module.
+        serializer: Strategy to decode stored values.
 
-        # attempt list/tuple index assignment
-        try:
-            idx = int(segment)
-            obj[idx] = value
-            return
-        except (ValueError, TypeError, IndexError):
-            pass
+    Returns:
+        The deserialized state model instance.
 
-        # fallback to attribute assignment
-        setattr(obj, segment, value)
+    Raises:
+        ValueError: If deserialization fails for any key.
+    """
+    state_data = serialized_state.get("state_data", {})
+    state_type_name = serialized_state.get("state_type", "DictState")
+
+    if state_type_name == "DictState":
+        _data_serialized = state_data.get("_data", {})
+        deserialized_data = {}
+        for key, value in _data_serialized.items():
+            try:
+                deserialized_data[key] = serializer.deserialize(value)
+            except Exception as e:
+                raise ValueError(
+                    f"Failed to deserialize state value for key {key}: {e}"
+                )
+        return DictState(_data=deserialized_data)
+    else:
+        return serializer.deserialize(state_data)
 
 
 def infer_state_type(workflow: "Workflow") -> type[BaseModel]:

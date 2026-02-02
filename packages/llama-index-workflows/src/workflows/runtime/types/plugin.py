@@ -6,6 +6,7 @@ A runtime interface to switch out a broker runtime (external library or service 
 
 from __future__ import annotations
 
+import asyncio
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
@@ -22,6 +23,7 @@ from typing import (
 )
 
 from workflows.context.state_store import StateStore
+from workflows.runtime.types.named_task import NamedTask
 
 if TYPE_CHECKING:
     from workflows.context.context import Context
@@ -167,6 +169,46 @@ class InternalRunAdapter(ABC):
         Default implementation returns None.
         """
         return None
+
+    async def wait_for_next_task(
+        self,
+        task_set: list[NamedTask],
+        timeout: float | None = None,
+    ) -> asyncio.Task[Any] | None:
+        """Wait for and return the next task that should complete.
+
+        Args:
+            task_set: List of NamedTasks with stable string keys for identification.
+                      The order indicates priority - first items should be returned first
+                      when multiple tasks complete simultaneously.
+            timeout: Timeout in seconds, None for no timeout
+
+        Returns:
+            The completed task, or None on timeout.
+
+        IMPORTANT: Must return at most ONE task per call.
+
+        Default implementation uses asyncio.wait(FIRST_COMPLETED) and returns
+        the highest-priority completed task (workers before pull).
+        DBOS overrides to coordinate based on journal for deterministic replay,
+        using the stable keys from NamedTask to identify tasks.
+        """
+        tasks = NamedTask.all_tasks(task_set)
+        if not tasks:
+            return None
+        done, _ = await asyncio.wait(
+            tasks,
+            timeout=timeout,
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if not done:
+            return None
+        # Return the highest-priority completed task (first in task_set order)
+        for named_task in task_set:
+            if named_task.task in done:
+                return named_task.task
+        # Fallback (shouldn't happen)
+        return done.pop()
 
 
 class ExternalRunAdapter(ABC):
@@ -347,12 +389,14 @@ class Runtime(ABC):
         ...
 
     @abstractmethod
-    def get_internal_adapter(self) -> InternalRunAdapter:
+    def get_internal_adapter(self, workflow: "Workflow") -> InternalRunAdapter:
         """
         Get the internal adapter for a workflow run.
 
-        Called on each workflow.run() to instantiate an interface for the workflow run internals to communicite with the runtime.
-        The workflow run must be derived from the runtime set context.
+        Called on each workflow.run() to instantiate an interface for the workflow run internals to communicate with the runtime.
+
+        Args:
+            workflow: The workflow instance being run. Used by runtimes to access workflow metadata (e.g., state type).
         """
         ...
 

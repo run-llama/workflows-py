@@ -187,7 +187,7 @@ def create_workflow_run_function(
         registered = workflow._runtime.get_or_register(workflow)
         # Set run_id context before creating internal context
         internal_ctx = Context._create_internal(workflow=workflow)
-        internal_adapter = workflow._runtime.get_internal_adapter()
+        internal_adapter = workflow._runtime.get_internal_adapter(workflow)
         with instrument_tags(tags):
             # defer execution to make sure the task can be captured and passed
             # to the handler as async exception, protecting against exceptions from before_start

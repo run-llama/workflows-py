@@ -205,7 +205,7 @@ class Context(Generic[MODEL_T]):
 
         Requires a current run context (via with_current_run_id) to be set.
         """
-        internal_adapter = workflow._runtime.get_internal_adapter()
+        internal_adapter = workflow._runtime.get_internal_adapter(workflow)
         new_ctx = cast(Context[MODEL_T], object.__new__(cls))
         new_ctx._face = cast(
             InternalContext[MODEL_T],
@@ -276,6 +276,7 @@ class Context(Generic[MODEL_T]):
                 pre.init_snapshot, workflow, pre._serializer
             )
 
+            # TODO(v3) - make this async
             external_adapter = workflow._runtime.run_workflow(
                 run_id=run_id,
                 workflow=workflow,

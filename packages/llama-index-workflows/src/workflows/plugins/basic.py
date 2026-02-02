@@ -9,7 +9,10 @@ import time
 import weakref
 from contextlib import asynccontextmanager, contextmanager
 from contextvars import ContextVar
-from typing import Any, AsyncGenerator, Generator
+from typing import TYPE_CHECKING, Any, AsyncGenerator, Generator
+
+if TYPE_CHECKING:
+    from workflows.workflow import Workflow
 
 from llama_index_instrumentation.dispatcher import active_instrument_tags
 
@@ -296,7 +299,7 @@ class BasicRuntime(Runtime):
             queues.complete = task
             return self.get_external_adapter(run_id)
 
-    def get_internal_adapter(self) -> InternalRunAdapter:
+    def get_internal_adapter(self, workflow: Workflow) -> InternalRunAdapter:
         run_id = get_current_run_id()
         if run_id is None:
             raise RuntimeError(
@@ -319,11 +322,13 @@ _current_run_id: ContextVar[str | None] = ContextVar("current_run_id", default=N
 
 
 def get_current_run_id() -> str | None:
+    """Get the current run ID, if set."""
     return _current_run_id.get()
 
 
 @contextmanager
 def setting_run_id(run_id: str) -> Generator[None, None, None]:
+    """Set the current run ID for the duration of the block."""
     token = _current_run_id.set(run_id)
     try:
         yield

@@ -146,16 +146,8 @@ async def test_workflow_step_send_event_to_None() -> None:
 async def test_workflow_step_returning_bogus() -> None:
     class TestWorkflow(Workflow):
         @step
-        async def step1(self, ctx: Context, ev: StartEvent) -> OneTestEvent:
+        async def step1(self, ctx: Context, ev: StartEvent) -> StopEvent:
             return "foo"  # type:ignore
-
-        @step
-        async def step2(self, ctx: Context, ev: StartEvent) -> OneTestEvent:
-            return OneTestEvent()
-
-        @step
-        async def step3(self, ev: OneTestEvent) -> StopEvent:
-            return StopEvent(result="step2")
 
     with pytest.raises(
         WorkflowRuntimeError,

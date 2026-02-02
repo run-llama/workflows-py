@@ -51,7 +51,7 @@ class MockRuntime(Runtime):
             steps=as_step_worker_functions(workflow),
         )
 
-    def get_internal_adapter(self) -> InternalRunAdapter:
+    def get_internal_adapter(self, workflow: Workflow) -> InternalRunAdapter:
         run_id = get_current_run_id() or self._current_run_id or "test"
         if run_id not in self._adapters:
             self._adapters[run_id] = MockRunAdapter(run_id)
