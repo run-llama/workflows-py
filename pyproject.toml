@@ -1,12 +1,9 @@
-[build-system]
-requires = ["uv_build>=0.9.10,<0.10.0"]
-build-backend = "uv_build"
-
 [dependency-groups]
 dev = [
   "pytest-xdist>=3.8.0",
   "ruff>=0.14.5",
-  "ty>=0.0.1,<0.0.9"
+  "ty>=0.0.1,<0.0.9",
+  "workflows-dev"
 ]
 
 [project]
@@ -63,9 +60,6 @@ exclude = [
   "packages/llama-index-workflows/tests/test_llama_agents_alias.py"
 ]
 
-[tool.pytest.ini_options]
-asyncio_mode = "auto"
-
 [tool.ruff.lint]
 select = [
   # default flake8 rules
@@ -99,9 +93,9 @@ select = [
 exclude = ["**/uv.lock", "**/.gitignore", "**/llama_agents/workflows/**", "**/test_llama_agents_alias.py"]
 
 [tool.uv.sources]
-llama-index-workflows = {workspace = true}
-llama-index-utils-workflow = {workspace = true}
 llama-index-integration-tests = {workspace = true}
+llama-index-utils-workflow = {workspace = true}
+llama-index-workflows = {workspace = true}
 llama-index-workflows-client = {workspace = true}
 llama-index-workflows-server = {workspace = true}
 workflows-dev = {workspace = true}
@@ -109,10 +103,10 @@ workflows-dev = {workspace = true}
 [tool.uv.workspace]
 members = [
   "docs/api_docs",
-  "packages/llama-index-workflows",
-  "packages/llama-index-utils-workflow",
-  "packages/workflows-dev",
   "packages/llama-index-integration-tests",
+  "packages/llama-index-utils-workflow",
+  "packages/llama-index-workflows",
   "packages/llama-index-workflows-client",
-  "packages/llama-index-workflows-server"
+  "packages/llama-index-workflows-server",
+  "packages/workflows-dev"
 ]

@@ -35,6 +35,11 @@ jobs:
             python-version: "3.12"
           - package: workflows-dev
             python-version: "3.13"
+          # Integration tests on 3.14 run in test-docker job with cross-package coverage
+          - package: llama-index-integration-tests
+            python-version: "3.9"
+          - package: llama-index-integration-tests
+            python-version: "3.14"
         include:
           - package: llama-index-workflows
             package_dir: packages/llama-index-workflows
@@ -58,11 +63,13 @@ jobs:
 
       - name: Run tests
         if: matrix.python-version != env.COV_PYTHON_VERSION
-        run: uv run --all-extras --directory ${{ matrix.package_dir }} -- pytest
+        run: |
+          uv sync --python ${{ matrix.python-version }} --all-extras --directory ${{ matrix.package_dir }}
+          uv run --python ${{ matrix.python-version }} --all-extras --directory ${{ matrix.package_dir }} -- pytest -nauto --timeout=10
 
       - name: Run tests with coverage
         if: matrix.python-version == env.COV_PYTHON_VERSION
-        run: uv run --all-extras --directory ${{ matrix.package_dir }} -- pytest --cov=src --cov-report=xml
+        run: uv run --all-extras --directory ${{ matrix.package_dir }} -- pytest -nauto --timeout=10 --cov=src --cov-report=xml
 
       - name: Report Coveralls
         if: matrix.python-version == env.COV_PYTHON_VERSION
@@ -74,8 +81,37 @@ jobs:
         env:
           COVERALLS_REPO_TOKEN: ${{ secrets.COVERALLS_REPO_TOKEN }}
 
+  test-docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install uv and set the python version
+        uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.14"
+          enable-cache: true
+
+      - name: Run non-Docker tests with coverage
+        run: uv run --all-extras --directory packages/llama-index-integration-tests -- pytest -nauto --timeout=10 -m "not docker" --cov --cov-report=
+
+      - name: Run Docker tests with coverage (append)
+        # Use longer timeout for Docker tests since container startup can take 30-60s in CI
+        run: uv run --all-extras --directory packages/llama-index-integration-tests -- pytest -nauto --timeout=120 -m docker --cov --cov-append --cov-report=xml
+
+      - name: Report Coveralls
+        uses: coverallsapp/github-action@v2
+        with:
+          file: packages/llama-index-integration-tests/coverage.xml
+          flag-name: llama-index-integration-tests
+          parallel: true
+        env:
+          COVERALLS_REPO_TOKEN: ${{ secrets.COVERALLS_REPO_TOKEN }}
+
   coveralls-finish:
-    needs: test
+    needs: [test, test-docker]
     runs-on: ubuntu-latest
     if: github.repository == 'run-llama/workflows-py'
     steps:

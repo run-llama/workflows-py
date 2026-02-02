@@ -84,3 +84,10 @@ We use **pytest** with idiomatic pytest patterns. Follow these guidelines:
 - **Prefer Real Objects Over Mocks**: Use simple dataclasses and real objects directly when available rather than mocking them. Only mock external dependencies or things that are truly difficult to instantiate.
 - **DRY Test Setup**: Do not repeat patches or setup code. Create reusable abstractions—fixtures, helper functions, or module-level constants—that can be shared across tests. Tests can easily be overwhelmed with setup; start from a rich suite of testing utilities to enable many small, expressive tests.
 - **Simple Testing Utilities**: Testing utilities should be basic—just functions, fixtures, and global variables. Avoid over-engineering test infrastructure.
+
+## Coding Style
+
+- Always use `from __future__ import annotations` at the top of each test file. Never use string annotations.
+- Include the standard SPDX license header at the top of each test file.
+- Comments are useful, but avoid fluff.
+- Never use inline imports unless required to prevent circular dependencies.
