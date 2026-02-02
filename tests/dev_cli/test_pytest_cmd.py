@@ -44,12 +44,13 @@ def packages_dir(tmp_path: Path) -> Path:
 
 @pytest.fixture
 def create_pkg(packages_dir: Path) -> Callable[[str], PackageInfo]:
-    """Factory to create a package with tests subdirectory."""
+    """Factory to create a package with tests subdirectory and pyproject.toml."""
 
     def _create(name: str) -> PackageInfo:
         pkg = packages_dir / name
         pkg.mkdir()
         (pkg / "tests").mkdir()
+        (pkg / "pyproject.toml").write_text(f'[project]\nname = "{name}"\n')
         return PackageInfo(path=pkg, name=name)
 
     return _create
@@ -59,12 +60,19 @@ def create_pkg(packages_dir: Path) -> Callable[[str], PackageInfo]:
 
 
 def test_discover_finds_packages_with_tests(packages_dir: Path) -> None:
-    # Create package with tests manually (not using create_pkg fixture)
+    # Create package with tests and pyproject.toml
     pkg = packages_dir / "pkg-with-tests"
     pkg.mkdir()
     (pkg / "tests").mkdir()
-    # Package without tests
-    (packages_dir / "pkg-without-tests").mkdir()
+    (pkg / "pyproject.toml").write_text('[project]\nname = "pkg-with-tests"\n')
+    # Package without tests (but with pyproject.toml)
+    no_tests = packages_dir / "pkg-without-tests"
+    no_tests.mkdir()
+    (no_tests / "pyproject.toml").write_text('[project]\nname = "pkg-without-tests"\n')
+    # Package with tests but no pyproject.toml (should be ignored)
+    orphan = packages_dir / "orphan-pkg"
+    orphan.mkdir()
+    (orphan / "tests").mkdir()
 
     result = discover_test_packages(packages_dir.parent)
     assert len(result) == 1
@@ -76,6 +84,7 @@ def test_discover_returns_sorted_list(packages_dir: Path) -> None:
         pkg = packages_dir / name
         pkg.mkdir()
         (pkg / "tests").mkdir()
+        (pkg / "pyproject.toml").write_text(f'[project]\nname = "{name}"\n')
 
     result = discover_test_packages(packages_dir.parent)
     assert [p.name for p in result] == ["alpha-pkg", "middle-pkg", "zebra-pkg"]

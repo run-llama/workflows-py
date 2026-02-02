@@ -160,10 +160,14 @@ def discover_test_packages(repo_root: Path) -> list[PackageInfo]:
         packages.append(PackageInfo.from_path(repo_root))
 
     # Check packages/ directory
+    # Only include directories with both tests/ and pyproject.toml
+    # (empty dirs may linger after package removal because git doesn't track empty dirs)
     packages_dir = repo_root / "packages"
     if packages_dir.exists():
         for item in packages_dir.iterdir():
-            if item.is_dir() and (item / "tests").is_dir():
+            has_tests = item.is_dir() and (item / "tests").is_dir()
+            has_pyproject = (item / "pyproject.toml").is_file()
+            if has_tests and has_pyproject:
                 packages.append(PackageInfo.from_path(item))
 
     return sorted(packages, key=lambda p: p.name)
@@ -205,8 +209,10 @@ def run_package_tests(
     cmd = ["uv", "run", "--directory", str(pkg.path), "pytest", *pytest_args]
     result = subprocess.run(cmd, capture_output=True, text=True, env=env)
     duration = time.time() - start_time
+    # Exit code 0 = success, exit code 5 = no tests collected (also success)
+    success = result.returncode in (0, 5)
     return {
-        "success": result.returncode == 0,
+        "success": success,
         "stdout": result.stdout,
         "stderr": result.stderr,
         "duration": duration,
