@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: 2025 LlamaIndex Authors
+# SPDX-FileCopyrightText: 2026 LlamaIndex Authors
 # SPDX-License-Identifier: MIT
 """CLI entry point for dev."""
 

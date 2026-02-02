@@ -22,6 +22,7 @@ jobs:
             llama-index-workflows,
             llama-index-utils-workflow,
             llama-index-integration-tests,
+            llama-agents-dev,
           ]
         exclude:
           # Integration tests on 3.14 run in test-docker job with cross-package coverage
@@ -29,6 +30,17 @@ jobs:
             python-version: "3.9"
           - package: llama-index-integration-tests
             python-version: "3.14"
+          # Dev CLI only needs to run on 3.14
+          - package: llama-agents-dev
+            python-version: "3.9"
+          - package: llama-agents-dev
+            python-version: "3.10"
+          - package: llama-agents-dev
+            python-version: "3.11"
+          - package: llama-agents-dev
+            python-version: "3.12"
+          - package: llama-agents-dev
+            python-version: "3.13"
         include:
           - package: llama-index-workflows
             package_dir: packages/llama-index-workflows
@@ -36,6 +48,8 @@ jobs:
             package_dir: packages/llama-index-utils-workflow
           - package: llama-index-integration-tests
             package_dir: packages/llama-index-integration-tests
+          - package: llama-agents-dev
+            package_dir: .
 
     steps:
       - uses: actions/checkout@v4
@@ -52,11 +66,11 @@ jobs:
         if: matrix.python-version != env.COV_PYTHON_VERSION
         run: |
           uv sync --python ${{ matrix.python-version }} --all-extras --directory ${{ matrix.package_dir }}
-          uv run --python ${{ matrix.python-version }} --all-extras --directory ${{ matrix.package_dir }} -- pytest -nauto --timeout=10
+          uv run --python ${{ matrix.python-version }} --all-extras --directory ${{ matrix.package_dir }} -- pytest
 
       - name: Run tests with coverage
         if: matrix.python-version == env.COV_PYTHON_VERSION
-        run: uv run --all-extras --directory ${{ matrix.package_dir }} -- pytest -nauto --timeout=10 --cov=src --cov-report=xml
+        run: uv run --all-extras --directory ${{ matrix.package_dir }} -- pytest --cov=src --cov-report=xml
 
       - name: Report Coveralls
         if: matrix.python-version == env.COV_PYTHON_VERSION
@@ -82,11 +96,11 @@ jobs:
           enable-cache: true
 
       - name: Run non-Docker tests with coverage
-        run: uv run --all-extras --directory packages/llama-index-integration-tests -- pytest -nauto --timeout=10 -m "not docker" --cov --cov-report=
+        run: uv run --all-extras --directory packages/llama-index-integration-tests -- pytest -m "not docker" --cov --cov-report=
 
       - name: Run Docker tests with coverage (append)
         # Use longer timeout for Docker tests since container startup can take 30-60s in CI
-        run: uv run --all-extras --directory packages/llama-index-integration-tests -- pytest -nauto --timeout=120 -m docker --cov --cov-append --cov-report=xml
+        run: uv run --all-extras --directory packages/llama-index-integration-tests -- pytest --timeout=120 -m docker --cov --cov-append --cov-report=xml
 
       - name: Report Coveralls
         uses: coverallsapp/github-action@v2
@@ -97,26 +111,8 @@ jobs:
         env:
           COVERALLS_REPO_TOKEN: ${{ secrets.COVERALLS_REPO_TOKEN }}
 
-  test-dev-cli:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Install uv and set the python version
-        uses: astral-sh/setup-uv@v6
-        with:
-          python-version: "3.14"
-          enable-cache: true
-
-      - name: Run dev_cli tests
-        run: |
-          uv sync
-          uv run pytest tests/dev_cli -nauto --timeout=10
-
   coveralls-finish:
-    needs: [test, test-docker, test-dev-cli]
+    needs: [test, test-docker]
     runs-on: ubuntu-latest
     if: github.repository == 'run-llama/workflows-py'
     steps:
