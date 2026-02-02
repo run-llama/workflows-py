@@ -21,14 +21,16 @@ jobs:
           [
             llama-index-workflows,
             llama-index-utils-workflow,
-            llama-index-integration-tests,
+            llama-agents-integration-tests,
             llama-agents-dev,
+            llama-agents-client,
+            llama-agents-server,
           ]
         exclude:
           # Integration tests on 3.14 run in test-docker job with cross-package coverage
-          - package: llama-index-integration-tests
+          - package: llama-agents-integration-tests
             python-version: "3.9"
-          - package: llama-index-integration-tests
+          - package: llama-agents-integration-tests
             python-version: "3.14"
           # Dev CLI only needs to run on 3.14
           - package: llama-agents-dev
@@ -46,10 +48,14 @@ jobs:
             package_dir: packages/llama-index-workflows
           - package: llama-index-utils-workflow
             package_dir: packages/llama-index-utils-workflow
-          - package: llama-index-integration-tests
-            package_dir: packages/llama-index-integration-tests
+          - package: llama-agents-integration-tests
+            package_dir: packages/llama-agents-integration-tests
           - package: llama-agents-dev
             package_dir: .
+          - package: llama-agents-client
+            package_dir: packages/llama-agents-client
+          - package: llama-agents-server
+            package_dir: packages/llama-agents-server
 
     steps:
       - uses: actions/checkout@v4
@@ -96,17 +102,17 @@ jobs:
           enable-cache: true
 
       - name: Run non-Docker tests with coverage
-        run: uv run --all-extras --directory packages/llama-index-integration-tests -- pytest -m "not docker" --cov --cov-report=
+        run: uv run --all-extras --directory packages/llama-agents-integration-tests -- pytest -m "not docker" --cov --cov-report=
 
       - name: Run Docker tests with coverage (append)
         # Use longer timeout for Docker tests since container startup can take 30-60s in CI
-        run: uv run --all-extras --directory packages/llama-index-integration-tests -- pytest --timeout=120 -m docker --cov --cov-append --cov-report=xml
+        run: uv run --all-extras --directory packages/llama-agents-integration-tests -- pytest --timeout=120 -m docker --cov --cov-append --cov-report=xml
 
       - name: Report Coveralls
         uses: coverallsapp/github-action@v2
         with:
-          file: packages/llama-index-integration-tests/coverage.xml
-          flag-name: llama-index-integration-tests
+          file: packages/llama-agents-integration-tests/coverage.xml
+          flag-name: llama-agents-integration-tests
           parallel: true
         env:
           COVERALLS_REPO_TOKEN: ${{ secrets.COVERALLS_REPO_TOKEN }}

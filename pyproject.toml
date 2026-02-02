@@ -41,11 +41,11 @@ root = "packages/llama-index-workflows"
 pythonVersion = "3.9"
 
 [[tool.basedpyright.executionEnvironments]]
-root = "packages/llama-index-workflows-client"
+root = "packages/llama-agents-client"
 pythonVersion = "3.9"
 
 [[tool.basedpyright.executionEnvironments]]
-root = "packages/llama-index-workflows-server"
+root = "packages/llama-agents-server"
 pythonVersion = "3.9"
 
 [[tool.basedpyright.executionEnvironments]]
@@ -57,7 +57,7 @@ root = "src/dev_cli"
 pythonVersion = "3.14"
 
 [[tool.basedpyright.executionEnvironments]]
-root = "packages/llama-index-integration-tests"
+root = "packages/llama-agents-integration-tests"
 pythonVersion = "3.13"
 
 [[tool.basedpyright.executionEnvironments]]
@@ -74,8 +74,8 @@ packages = ["src/dev_cli"]
 [tool.mypy]
 explicit_package_bases = true
 exclude = [
-  "packages/llama-index-workflows-server/tests/",
-  "packages/llama-index-workflows-client/tests/",
+  "packages/llama-agents-server/tests/",
+  "packages/llama-agents-client/tests/",
   "packages/llama-index-utils-workflow/tests/",
   "tests/dev_cli/",
   "packages/llama-index-workflows/src/llama_agents/",
@@ -127,18 +127,18 @@ select = [
 exclude = ["**/uv.lock", "**/.gitignore", "**/llama_agents/workflows/**", "**/test_llama_agents_alias.py"]
 
 [tool.uv.sources]
-llama-index-integration-tests = {workspace = true}
+llama-agents-integration-tests = {workspace = true}
 llama-index-utils-workflow = {workspace = true}
 llama-index-workflows = {workspace = true}
-llama-index-workflows-client = {workspace = true}
-llama-index-workflows-server = {workspace = true}
+llama-agents-client = {workspace = true}
+llama-agents-server = {workspace = true}
 
 [tool.uv.workspace]
 members = [
   "docs/api_docs",
-  "packages/llama-index-integration-tests",
+  "packages/llama-agents-integration-tests",
   "packages/llama-index-utils-workflow",
   "packages/llama-index-workflows",
-  "packages/llama-index-workflows-client",
-  "packages/llama-index-workflows-server"
+  "packages/llama-agents-client",
+  "packages/llama-agents-server"
 ]

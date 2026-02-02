@@ -17,7 +17,7 @@ dev = [
 ]
 
 [project]
-name = "llama-index-integration-tests"
+name = "llama-agents-integration-tests"
 version = "0.1.0"
 description = "Integration tests for llama-index-core workflow abstractions against the workflows package"
 readme = "README.md"

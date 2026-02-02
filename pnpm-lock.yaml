@@ -87,6 +87,21 @@ importers:
         specifier: ^7.0.0
         version: 7.0.0(typedoc@0.28.15(typescript@5.9.3))
 
+  packages/llama-agents-client:
+    dependencies:
+      llama-index-workflows:
+        specifier: workspace:*
+        version: link:../llama-index-workflows
+
+  packages/llama-agents-server:
+    dependencies:
+      llama-agents-client:
+        specifier: workspace:*
+        version: link:../llama-agents-client
+      llama-index-workflows:
+        specifier: workspace:*
+        version: link:../llama-index-workflows
+
   packages/llama-index-utils-workflow:
     dependencies:
       llama-index-workflows:
@@ -94,21 +109,6 @@ importers:
         version: link:../llama-index-workflows
 
   packages/llama-index-workflows: {}
-
-  packages/llama-index-workflows-client:
-    dependencies:
-      llama-index-workflows:
-        specifier: workspace:*
-        version: link:../llama-index-workflows
-
-  packages/llama-index-workflows-server:
-    dependencies:
-      llama-index-workflows:
-        specifier: workspace:*
-        version: link:../llama-index-workflows
-      llama-index-workflows-client:
-        specifier: workspace:*
-        version: link:../llama-index-workflows-client
 
 packages:
 
