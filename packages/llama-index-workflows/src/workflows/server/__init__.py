@@ -1,12 +1,12 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 LlamaIndex Inc.
-"""Re-export server components from the optional llama-index-workflows-server package."""
+"""Re-export server components from the optional llama-agents-server package."""
 
 import warnings
 
 warnings.warn(
     "Importing from 'workflows.server' is deprecated. "
-    "Install 'llama-index-workflows-server' and use "
+    "Install 'llama-agents-server' and use "
     "'from llama_agents.server import ...' instead.",
     DeprecationWarning,
     stacklevel=2,

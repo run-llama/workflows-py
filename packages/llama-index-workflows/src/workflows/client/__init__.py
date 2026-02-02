@@ -1,12 +1,12 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 LlamaIndex Inc.
-"""Re-export client components from the optional llama-index-workflows-client package."""
+"""Re-export client components from the optional llama-agents-client package."""
 
 import warnings
 
 warnings.warn(
     "Importing from 'workflows.client' is deprecated. "
-    "Install 'llama-index-workflows-client' and use "
+    "Install 'llama-agents-client' and use "
     "'from llama_agents.client import ...' instead.",
     DeprecationWarning,
     stacklevel=2,

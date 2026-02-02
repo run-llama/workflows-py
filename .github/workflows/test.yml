@@ -23,6 +23,8 @@ jobs:
             llama-index-utils-workflow,
             llama-index-integration-tests,
             llama-agents-dev,
+            llama-agents-client,
+            llama-agents-server,
           ]
         exclude:
           # Integration tests on 3.14 run in test-docker job with cross-package coverage
@@ -50,6 +52,10 @@ jobs:
             package_dir: packages/llama-index-integration-tests
           - package: llama-agents-dev
             package_dir: .
+          - package: llama-agents-client
+            package_dir: packages/llama-agents-client
+          - package: llama-agents-server
+            package_dir: packages/llama-agents-server
 
     steps:
       - uses: actions/checkout@v4

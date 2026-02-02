@@ -1,11 +1,11 @@
 {
-  "name": "llama-index-workflows-server",
+  "name": "llama-agents-server",
   "version": "0.1.0",
   "private": false,
   "license": "MIT",
   "scripts": {},
   "dependencies": {
     "llama-index-workflows": "workspace:*",
-    "llama-index-workflows-client": "workspace:*"
+    "llama-agents-client": "workspace:*"
   }
 }

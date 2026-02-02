@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 LlamaIndex Inc.
-"""Re-export sqlite components from the optional llama-index-workflows-server package."""
+"""Re-export sqlite components from the optional llama-agents-server package."""
 
 try:
     from llama_agents.server.sqlite.sqlite_workflow_store import SqliteWorkflowStore

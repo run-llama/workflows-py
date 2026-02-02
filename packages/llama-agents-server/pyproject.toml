@@ -4,22 +4,29 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
+  "pyyaml>=6.0.2",
   "pytest>=8.4.2",
   "pytest-asyncio>=1.0.0",
   "pytest-timeout>=2.4.0",
-  "pytest-xdist>=3.8.0"
+  "pytest-xdist>=3.8.0",
+  "time-machine>=2.19.0,<3.0.0"
 ]
 
 [project]
-name = "llama-index-workflows-client"
+name = "llama-agents-server"
 version = "0.1.0"
-description = "HTTP client for connecting to and interacting with LlamaIndex workflow servers"
+description = "HTTP server for deploying and serving LlamaIndex workflows as web services"
 readme = "README.md"
 requires-python = ">=3.9"
 dependencies = [
-  "httpx>=0.28.1,<1",
-  "llama-index-workflows>=2.12.0,<3.0.0"
+  "llama-index-workflows>=2.12.0,<3.0.0",
+  "llama-agents-client>=0.1.0,<0.2.0",
+  "starlette>=0.39.0",
+  "uvicorn>=0.32.0"
 ]
+
+[project.scripts]
+llama-agents-server = "llama_agents.server.__main__:run_server"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
@@ -29,7 +36,8 @@ testpaths = ["tests"]
 addopts = "-nauto --timeout=10"
 
 [tool.uv.build-backend]
-module-name = "llama_agents.client"
+module-name = "llama_agents.server"
 
 [tool.uv.sources]
 llama-index-workflows = {workspace = true}
+llama-agents-client = {workspace = true}
