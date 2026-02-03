@@ -170,6 +170,16 @@ class InternalRunAdapter(ABC):
         """
         return None
 
+    async def finalize_step(self) -> None:
+        """
+        Called after a step function completes to perform any adapter-specific cleanup.
+
+        This is called after all background tasks spawned during the step have completed.
+        Adapters can override to perform additional finalization (e.g., flush buffers,
+        sync state). Default is no-op.
+        """
+        pass
+
     async def wait_for_next_task(
         self,
         task_set: list[NamedTask],

@@ -80,6 +80,19 @@ class InternalContext(Generic[MODEL_T]):
             worker.cancel()
         self._workers.clear()
 
+    async def _finalize_step(self) -> None:
+        """Await all background tasks and finalize the step.
+
+        Called after a step function completes to ensure all fire-and-forget
+        operations (e.g., write_event_to_stream, send_event) complete before
+        returning control to the control loop. This prevents non-deterministic
+        ordering of durable operations on replay.
+        """
+        workers = self._workers[:]
+        if workers:
+            await asyncio.gather(*workers, return_exceptions=True)
+        await self._internal_adapter.finalize_step()
+
     @staticmethod
     def _get_step_ctx(fn: str) -> StepWorkerContext:
         """Get the current step worker context. Raises if not in a step."""

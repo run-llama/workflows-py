@@ -151,6 +151,8 @@ def as_step_worker_function(func: Callable[P, Awaitable[R]]) -> StepWorkerFuncti
                 returns.return_values.append(
                     StepWorkerFailed(exception=e, failed_at=time.time())
                 )
+
+            await internal_context._finalize_step()
             return returns.return_values
         finally:
             try:

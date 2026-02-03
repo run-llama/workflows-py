@@ -563,6 +563,15 @@ class Context(Generic[MODEL_T]):
         """
         self._require_internal(fn="write_event_to_stream").write_event_to_stream(ev)
 
+    async def _finalize_step(self) -> None:
+        """Finalize step execution by awaiting background tasks.
+
+        Called after a step function completes to ensure all fire-and-forget
+        operations (e.g., write_event_to_stream, send_event) complete before
+        returning control to the control loop.
+        """
+        await self._require_internal(fn="_finalize_step")._finalize_step()
+
     def get_result(self) -> RunResultT:
         """Return the final result of the workflow run.
 
