@@ -1,0 +1,279 @@
+# SPDX-License-Identifier: MIT
+
+name: "Auto-Fix PR Manager"
+description: "Creates fix PRs and manages PR comments for auto-fix workflows"
+
+inputs:
+  app-id:
+    description: "GitHub App ID for authentication"
+    required: true
+  private-key:
+    description: "GitHub App private key for authentication"
+    required: true
+  add-paths:
+    description: "Paths to add to the fix PR (newline-separated)"
+    required: true
+  check-name:
+    description: "Human-readable name for the check (e.g., 'Frontend Lint', 'Backend Lint', 'Frontend SDK')"
+    required: true
+  fix-command:
+    description: "Command to run to fix issues (shown in comment, e.g., 'pnpm lint:fix')"
+    required: true
+  fix-branch-name:
+    description: "Branch name for the fix PR. Defaults to 'chore/fix-{check-name-slug}-{pr-number}'"
+    required: false
+  commit-message:
+    description: "Commit message for the fix PR. Defaults to 'chore: auto-fix {check-name} issues'"
+    required: false
+  pr-title:
+    description: "Title for the fix PR. Defaults to 'chore: fix {check-name} for #{pr-number}'"
+    required: false
+  pr-body:
+    description: "Body for the fix PR (markdown). Auto-generated if not provided."
+    required: false
+  comment-marker:
+    description: "Unique marker ID to identify comments. Defaults to slugified check-name."
+    required: false
+  warning-title:
+    description: "Title for the warning comment. Defaults to '{check-name} Fix Required'"
+    required: false
+  warning-body:
+    description: "Body text for the warning comment. Auto-generated if not provided."
+    required: false
+  success-title:
+    description: "Title for the success comment. Defaults to '{check-name} Check Passed'"
+    required: false
+  success-body:
+    description: "Body text for the success comment. Auto-generated if not provided."
+    required: false
+
+outputs:
+  fix-pr-number:
+    description: "PR number of the fix PR (if created)"
+    value: ${{ steps.create-pr.outputs.pull-request-number }}
+  fix-pr-url:
+    description: "URL of the fix PR (if created)"
+    value: ${{ steps.create-pr.outputs.pull-request-url }}
+  comment-id:
+    description: "ID of the comment that was created or updated"
+    value: ${{ steps.find-comment.outputs.comment_id }}
+  action-taken:
+    description: "What action was taken: 'created', 'updated-warning', 'updated-success', or 'none'"
+    value: ${{ steps.manage-comment.outputs.action_taken }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Check if PR context
+      id: context
+      shell: bash
+      run: |
+        if [ -n "${{ github.event.pull_request.number }}" ]; then
+          echo "is_pr=true" >> $GITHUB_OUTPUT
+        else
+          echo "is_pr=false" >> $GITHUB_OUTPUT
+          echo "Not a PR context - skipping fix PR creation"
+        fi
+
+    - name: Generate GitHub App token
+      id: app-token
+      if: steps.context.outputs.is_pr == 'true'
+      uses: actions/create-github-app-token@v1
+      with:
+        app-id: ${{ inputs.app-id }}
+        private-key: ${{ inputs.private-key }}
+        owner: ${{ github.repository_owner }}
+
+    - name: Compute defaults
+      id: defaults
+      if: steps.context.outputs.is_pr == 'true'
+      shell: bash
+      env:
+        CHECK_NAME: ${{ inputs.check-name }}
+        FIX_COMMAND: ${{ inputs.fix-command }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        ADD_PATHS: ${{ inputs.add-paths }}
+        INPUT_FIX_BRANCH: ${{ inputs.fix-branch-name }}
+        INPUT_COMMIT_MSG: ${{ inputs.commit-message }}
+        INPUT_PR_TITLE: ${{ inputs.pr-title }}
+        INPUT_PR_BODY: ${{ inputs.pr-body }}
+        INPUT_COMMENT_MARKER: ${{ inputs.comment-marker }}
+        INPUT_WARNING_TITLE: ${{ inputs.warning-title }}
+        INPUT_WARNING_BODY: ${{ inputs.warning-body }}
+        INPUT_SUCCESS_TITLE: ${{ inputs.success-title }}
+        INPUT_SUCCESS_BODY: ${{ inputs.success-body }}
+      run: |
+        # Create a slug from the check name (e.g., "Frontend Lint" -> "frontend-lint")
+        CHECK_SLUG=$(echo "$CHECK_NAME" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g' | sed 's/--*/-/g' | sed 's/^-//' | sed 's/-$//')
+
+        # Set defaults
+        FIX_BRANCH="${INPUT_FIX_BRANCH:-chore/fix-${CHECK_SLUG}-${PR_NUMBER}}"
+        COMMIT_MSG="${INPUT_COMMIT_MSG:-chore: auto-fix ${CHECK_NAME} issues}"
+        PR_TITLE="${INPUT_PR_TITLE:-chore: fix ${CHECK_NAME} for #${PR_NUMBER}}"
+        COMMENT_MARKER="${INPUT_COMMENT_MARKER:-${CHECK_SLUG}}"
+        WARNING_TITLE="${INPUT_WARNING_TITLE:-${CHECK_NAME} Fix Required}"
+        SUCCESS_TITLE="${INPUT_SUCCESS_TITLE:-${CHECK_NAME} Check Passed}"
+        SUCCESS_BODY="${INPUT_SUCCESS_BODY:-All ${CHECK_NAME} checks passed.}"
+        WARNING_BODY="${INPUT_WARNING_BODY:-Issues were detected that can be auto-fixed.
+
+        **To fix locally:** Run \`${FIX_COMMAND}\` before committing.}"
+
+        # Generate PR body if not provided
+        if [ -z "$INPUT_PR_BODY" ]; then
+          PR_BODY="## Summary
+        Auto-fix ${CHECK_NAME} issues.
+
+        This PR was automatically created because issues were detected that can be auto-fixed.
+
+        ## Changed files
+        - \`${ADD_PATHS}\`
+
+        ## How to avoid this
+        Run \`${FIX_COMMAND}\` before committing.
+
+        ---
+        *Auto-generated for #${PR_NUMBER}*"
+        else
+          PR_BODY="$INPUT_PR_BODY"
+        fi
+
+        # Write outputs using heredocs for multiline content
+        {
+          echo "fix-branch=${FIX_BRANCH}"
+          echo "commit-message=${COMMIT_MSG}"
+          echo "pr-title=${PR_TITLE}"
+          echo "comment-marker=${COMMENT_MARKER}"
+          echo "warning-title=${WARNING_TITLE}"
+          echo "success-title=${SUCCESS_TITLE}"
+        } >> $GITHUB_OUTPUT
+
+        # Use heredocs for multiline outputs
+        {
+          echo "pr-body<<EOFPRBODY"
+          echo "$PR_BODY"
+          echo "EOFPRBODY"
+        } >> $GITHUB_OUTPUT
+
+        {
+          echo "warning-body<<EOFWARN"
+          echo "$WARNING_BODY"
+          echo "EOFWARN"
+        } >> $GITHUB_OUTPUT
+
+        {
+          echo "success-body<<EOFSUCCESS"
+          echo "$SUCCESS_BODY"
+          echo "EOFSUCCESS"
+        } >> $GITHUB_OUTPUT
+
+    - name: Create PR with changes
+      id: create-pr
+      if: steps.context.outputs.is_pr == 'true'
+      uses: peter-evans/create-pull-request@v6
+      with:
+        token: ${{ steps.app-token.outputs.token }}
+        commit-message: ${{ steps.defaults.outputs.commit-message }}
+        title: ${{ steps.defaults.outputs.pr-title }}
+        body: ${{ steps.defaults.outputs.pr-body }}
+        branch: ${{ steps.defaults.outputs.fix-branch }}
+        base: ${{ github.head_ref }}
+        add-paths: ${{ inputs.add-paths }}
+        labels: |
+          chore
+          automated pr
+        delete-branch: true
+
+    - name: Find existing bot comment
+      id: find-comment
+      if: steps.context.outputs.is_pr == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        COMMENT_MARKER: ${{ steps.defaults.outputs.comment-marker }}
+      run: |
+        # Use a unique HTML comment marker to identify our comments
+        # This is much more reliable than searching for text content
+        MARKER="<!-- pr-fix-comment:${COMMENT_MARKER} -->"
+
+        # Find existing comment by searching for the exact marker
+        COMMENT_ID=$(gh api "repos/${{ github.repository }}/issues/${PR_NUMBER}/comments" \
+          --jq ".[] | select(.body | startswith(\"${MARKER}\")) | .id" | head -1)
+        echo "comment_id=$COMMENT_ID" >> $GITHUB_OUTPUT
+        echo "marker=$MARKER" >> $GITHUB_OUTPUT
+
+    - name: Close fix PR if no longer needed
+      if: steps.context.outputs.is_pr == 'true' && !steps.create-pr.outputs.pull-request-number
+      shell: bash
+      env:
+        GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        FIX_PR_BRANCH: ${{ steps.defaults.outputs.fix-branch }}
+      run: |
+        FIX_PR=$(gh pr list --head "${FIX_PR_BRANCH}" --json number --jq '.[0].number')
+        if [ -n "$FIX_PR" ]; then
+          echo "Closing fix PR #$FIX_PR as changes are no longer needed"
+          gh pr close "$FIX_PR" --delete-branch --comment "Closing this PR as the issue is now resolved in the original PR."
+        fi
+
+    - name: Manage PR comment
+      id: manage-comment
+      if: steps.context.outputs.is_pr == 'true'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        PR_NUMBER: ${{ github.event.pull_request.number }}
+        EXISTING_COMMENT_ID: ${{ steps.find-comment.outputs.comment_id }}
+        COMMENT_MARKER: ${{ steps.find-comment.outputs.marker }}
+        FIX_PR_CREATED: ${{ steps.create-pr.outputs.pull-request-number != '' }}
+        FIX_PR_URL: ${{ steps.create-pr.outputs.pull-request-url }}
+        WARNING_TITLE: ${{ steps.defaults.outputs.warning-title }}
+        WARNING_BODY: ${{ steps.defaults.outputs.warning-body }}
+        SUCCESS_TITLE: ${{ steps.defaults.outputs.success-title }}
+        SUCCESS_BODY: ${{ steps.defaults.outputs.success-body }}
+      run: |
+        if [ "$FIX_PR_CREATED" = "true" ]; then
+          # Fix PR was created - post or update warning comment
+          COMMENT_BODY="${COMMENT_MARKER}
+        ⚠️ **${WARNING_TITLE}**
+
+        ${WARNING_BODY}
+
+        **Action needed:** Merge this PR into your branch: ${FIX_PR_URL}"
+
+          if [ -n "$EXISTING_COMMENT_ID" ]; then
+            echo "Updating existing comment $EXISTING_COMMENT_ID with warning"
+            gh api "repos/${{ github.repository }}/issues/comments/${EXISTING_COMMENT_ID}" \
+              -X PATCH -f body="$COMMENT_BODY"
+            echo "action_taken=updated-warning" >> $GITHUB_OUTPUT
+          else
+            echo "Creating new warning comment"
+            gh pr comment "$PR_NUMBER" --body "$COMMENT_BODY"
+            echo "action_taken=created" >> $GITHUB_OUTPUT
+          fi
+        else
+          # No fix PR needed - update existing comment to success (if exists)
+          if [ -n "$EXISTING_COMMENT_ID" ]; then
+            echo "Updating comment to indicate issue is resolved"
+            COMMENT_BODY="${COMMENT_MARKER}
+        ✅ **${SUCCESS_TITLE}**
+
+        ${SUCCESS_BODY}"
+
+            gh api "repos/${{ github.repository }}/issues/comments/${EXISTING_COMMENT_ID}" \
+              -X PATCH -f body="$COMMENT_BODY"
+            echo "action_taken=updated-success" >> $GITHUB_OUTPUT
+          else
+            echo "No action needed - no existing comment and check passed"
+            echo "action_taken=none" >> $GITHUB_OUTPUT
+          fi
+        fi
+
+    - name: Fail if changes were needed
+      if: steps.context.outputs.is_pr == 'true' && steps.create-pr.outputs.pull-request-number
+      shell: bash
+      env:
+        FIX_PR_URL: ${{ steps.create-pr.outputs.pull-request-url }}
+        WARNING_TITLE: ${{ steps.defaults.outputs.warning-title }}
+      run: |
+        echo "::error::${WARNING_TITLE}. Please merge the auto-generated PR: ${FIX_PR_URL}"
+        exit 1
