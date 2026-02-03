@@ -74,14 +74,6 @@ from workflows.runtime.types.ticks import (
 from workflows.workflow import Workflow
 
 
-class _DelayedTick:
-    """Sentinel class representing a tick that should be scheduled after a delay."""
-
-    def __init__(self, tick: WorkflowTick, delay: float) -> None:
-        self.tick = tick
-        self.delay = delay
-
-
 async def _single_pull(adapter: InternalRunAdapter) -> WorkflowTick | None:
     """Single-iteration pull: calls wait_receive once and returns the tick.
 
@@ -131,8 +123,11 @@ class _ControlLoopRunner:
         # Pending items to be processed (from rehydration or delayed ticks)
         for tick in self.state.rehydrate_with_ticks():
             self.tick_buffer.append(tick)
-        # Scheduled wakeups: heap of (wakeup_time, tick) tuples
-        self.scheduled_wakeups: list[tuple[float, WorkflowTick]] = []
+        # Scheduled wakeups: heap of (wakeup_time, sequence, tick) tuples
+        # The sequence counter ensures deterministic ordering when timestamps are equal,
+        # avoiding TypeError from comparing WorkflowTick objects that don't implement __lt__
+        self.scheduled_wakeups: list[tuple[float, int, WorkflowTick]] = []
+        self._wakeup_sequence = 0
         self.snapshot_adapter = as_snapshottable_adapter(adapter)
         # Pull task sequence counter for deterministic journaling
         self._pull_sequence = 0
@@ -141,7 +136,9 @@ class _ControlLoopRunner:
 
     def schedule_tick(self, tick: WorkflowTick, at_time: float) -> None:
         """Schedule a tick to be processed at a specific time."""
-        heapq.heappush(self.scheduled_wakeups, (at_time, tick))
+        seq = self._wakeup_sequence
+        self._wakeup_sequence += 1
+        heapq.heappush(self.scheduled_wakeups, (at_time, seq, tick))
 
     def next_wakeup_timeout(self, now: float) -> float | None:
         """Calculate timeout until next scheduled wakeup.
@@ -151,14 +148,14 @@ class _ControlLoopRunner:
         """
         if not self.scheduled_wakeups:
             return None
-        next_time, _ = self.scheduled_wakeups[0]
+        next_time, _, _ = self.scheduled_wakeups[0]
         return max(0, next_time - now)
 
     def pop_due_ticks(self, now: float) -> list[WorkflowTick]:
         """Pop all ticks that are due (scheduled time <= now)."""
         due = []
         while self.scheduled_wakeups and self.scheduled_wakeups[0][0] <= now:
-            _, tick = heapq.heappop(self.scheduled_wakeups)
+            _, _, tick = heapq.heappop(self.scheduled_wakeups)
             due.append(tick)
         return due
 

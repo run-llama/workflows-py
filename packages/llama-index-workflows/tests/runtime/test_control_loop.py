@@ -930,3 +930,84 @@ async def test_control_loop_idle_event_not_emitted_on_completion(
     assert len(idle_events) == 0, (
         "WorkflowIdleEvent should not be emitted when workflow completes normally"
     )
+
+
+@pytest.mark.asyncio
+async def test_simultaneous_retries_with_same_delay(
+    test_plugin_with_time_machine: tuple[MockRunAdapter, time_machine.Coordinates],
+) -> None:
+    """
+    Test that the control loop handles multiple retries scheduled at the same timestamp.
+
+    When two steps both fail and have the same retry delay, they get scheduled
+    at exactly the same timestamp. Without a sequence counter tiebreaker in the
+    heap, Python's heapq would compare WorkflowTick objects directly, causing
+    TypeError since they don't implement __lt__.
+
+    This test uses a CoarseTimeAdapter that rounds timestamps to 1-second precision,
+    ensuring that retries scheduled within the same second will collide.
+    """
+    base_plugin, traveller = test_plugin_with_time_machine
+
+    class CoarseTimeAdapter(MockRunAdapter):
+        """Adapter that rounds get_now() to 1-second precision to force collisions."""
+
+        async def get_now(self) -> float:
+            # Round to nearest second to force timestamp collisions
+            return float(int(time.time()))
+
+    test_plugin = CoarseTimeAdapter(run_id="test", traveller=traveller)
+    test_plugin.set_state_store(InMemoryStateStore(DictState()))
+
+    # Use a delay that's less than 1 second so both retries land on same rounded second
+    retry_delay = 0.01
+
+    class ResultA(Event):
+        pass
+
+    class ResultB(Event):
+        pass
+
+    class TwoStepsFailOnceWorkflow(Workflow):
+        step_a_attempts = 0
+        step_b_attempts = 0
+
+        @step(
+            retry_policy=ConstantDelayRetryPolicy(maximum_attempts=2, delay=retry_delay)
+        )
+        async def step_a(self, ev: StartEvent) -> ResultA:
+            self.step_a_attempts += 1
+            if self.step_a_attempts == 1:
+                raise RuntimeError("step_a fails once")
+            return ResultA()
+
+        @step(
+            retry_policy=ConstantDelayRetryPolicy(maximum_attempts=2, delay=retry_delay)
+        )
+        async def step_b(self, ev: StartEvent) -> ResultB:
+            self.step_b_attempts += 1
+            if self.step_b_attempts == 1:
+                raise RuntimeError("step_b fails once")
+            return ResultB()
+
+        @step
+        async def collector(
+            self, ev: Union[ResultA, ResultB], ctx: Context
+        ) -> Optional[StopEvent]:
+            events = ctx.collect_events(ev, [ResultA, ResultB])
+            if events is None:
+                return None
+            return StopEvent(result="both_succeeded")
+
+    wf = TwoStepsFailOnceWorkflow(timeout=5.0)
+
+    result = await run_control_loop(
+        workflow=wf,
+        start_event=StartEvent(),
+        test_runtime=test_plugin,
+    )
+
+    assert isinstance(result, StopEvent)
+    assert result.result == "both_succeeded"
+    assert wf.step_a_attempts == 2
+    assert wf.step_b_attempts == 2
