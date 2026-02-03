@@ -1608,8 +1608,10 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "llama-agents-server" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
+    { name = "pytest-cov" },
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
 ]
@@ -1622,8 +1624,10 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "llama-agents-server", editable = "packages/llama-agents-server" },
     { name = "pytest", specifier = ">=8.4.2" },
     { name = "pytest-asyncio", specifier = ">=1.0.0" },
+    { name = "pytest-cov", specifier = ">=7.0.0" },
     { name = "pytest-timeout", specifier = ">=2.4.0" },
     { name = "pytest-xdist", specifier = ">=3.8.0" },
 ]
@@ -1713,9 +1717,9 @@ dev = [
     { name = "basedpyright", specifier = ">=1.31.1" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.2.0" },
     { name = "pytest", specifier = ">=8.4.2" },
-    { name = "pytest-asyncio", specifier = ">=0.24.0" },
+    { name = "pytest-asyncio", specifier = ">=1.0.0" },
     { name = "pytest-cov", specifier = ">=7.0.0" },
-    { name = "pytest-timeout", specifier = ">=2.3.1" },
+    { name = "pytest-timeout", specifier = ">=2.4.0" },
     { name = "pytest-xdist", specifier = ">=3.8.0" },
     { name = "sqlalchemy", specifier = ">=2.0.0" },
     { name = "testcontainers", extras = ["postgres"], specifier = ">=4.0.0" },
@@ -1737,6 +1741,7 @@ dependencies = [
 dev = [
     { name = "pytest" },
     { name = "pytest-asyncio" },
+    { name = "pytest-cov" },
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
     { name = "pyyaml" },
@@ -1755,6 +1760,7 @@ requires-dist = [
 dev = [
     { name = "pytest", specifier = ">=8.4.2" },
     { name = "pytest-asyncio", specifier = ">=1.0.0" },
+    { name = "pytest-cov", specifier = ">=7.0.0" },
     { name = "pytest-timeout", specifier = ">=2.4.0" },
     { name = "pytest-xdist", specifier = ">=3.8.0" },
     { name = "pyyaml", specifier = ">=6.0.2" },
@@ -1851,7 +1857,7 @@ dev = [
     { name = "pre-commit", specifier = ">=4.3.0" },
     { name = "pytest", specifier = ">=8.4.2" },
     { name = "pytest-asyncio", specifier = ">=1.0.0" },
-    { name = "pytest-cov", specifier = ">=6.1.1" },
+    { name = "pytest-cov", specifier = ">=7.0.0" },
     { name = "pytest-timeout", specifier = ">=2.4.0" },
     { name = "pytest-xdist", specifier = ">=3.8.0" },
 ]
@@ -1910,9 +1916,9 @@ dev = [
     { name = "httpx", specifier = ">=0.25.0" },
     { name = "packaging", specifier = ">=21.0" },
     { name = "pre-commit", specifier = ">=4.2.0" },
-    { name = "pytest", specifier = ">=8.4.0" },
+    { name = "pytest", specifier = ">=8.4.2" },
     { name = "pytest-asyncio", specifier = ">=1.0.0" },
-    { name = "pytest-cov", specifier = ">=6.1.1" },
+    { name = "pytest-cov", specifier = ">=7.0.0" },
     { name = "pytest-timeout", specifier = ">=2.4.0" },
     { name = "pytest-xdist", specifier = ">=3.8.0" },
     { name = "pyyaml", specifier = ">=6.0.2" },

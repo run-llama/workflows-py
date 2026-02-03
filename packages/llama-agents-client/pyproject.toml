@@ -6,8 +6,10 @@ build-backend = "uv_build"
 dev = [
   "pytest>=8.4.2",
   "pytest-asyncio>=1.0.0",
+  "pytest-cov>=7.0.0",
   "pytest-timeout>=2.4.0",
-  "pytest-xdist>=3.8.0"
+  "pytest-xdist>=3.8.0",
+  "llama-agents-server"
 ]
 
 [project]
