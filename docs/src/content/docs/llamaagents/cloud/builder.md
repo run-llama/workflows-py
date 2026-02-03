@@ -47,6 +47,10 @@ As the agent works, you'll see real-time activity showing files being created an
 
 For details on extraction schemas and configuration, see [LlamaExtract documentation](/python/cloud/llamaextract/getting_started).
 
+:::tip[Experiment Freely]
+Changes you make in the agent session don't automatically update an existing deployment. Your deployed workflow remains stable until you explicitly push the changes to GitHub and redeploy. This means you can experiment with different approaches, test new extraction fields, or iterate on your workflow without affecting production.
+:::
+
 ## Deploying Your Workflow
 
 When you're satisfied with your workflow, click **Deploy** to make it live. The deployment process connects your workflow to GitHub and deploys it to LlamaCloud.
@@ -111,11 +115,16 @@ For details on project structure, see [Configuration Reference](/python/llamaage
 
 ### Updating a Deployment
 
-After pushing code changes to GitHub:
+Deployments are intentionally decoupled from Agent Builder sessions. When you continue chatting with the agent and make changes, those changes are saved to your repository but **won't affect your running deployment** until you explicitly update it.
 
-1. Go to your deployment in LlamaCloud
-2. Click the **...** menu and select **Update Version**
-3. LlamaCloud pulls and deploys your latest code
+To deploy your latest changes:
+
+1. Push your code changes to GitHub (either from Agent Builder or your local clone)
+2. Go to your deployment in LlamaCloud
+3. Click the **...** menu and select **Update Version**
+4. LlamaCloud pulls and deploys your latest code
+
+This separation lets you iterate and experiment in Agent Builder while keeping your production deployment stable.
 
 ### Managing Deployments
 
