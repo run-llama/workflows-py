@@ -236,8 +236,8 @@ def test_inspect_signature_raises_if_not_callable() -> None:
 
 
 # Test that pre-commit auto-fix works on PRs - this is intentionally badly formatted
-def test_precommit_autofix_validation()->None:
-    x=1+2+3
-    y    =    "hello"
-    result=x+    len(y)
-    assert result==11
+def test_precommit_autofix_validation() -> None:
+    x = 1 + 2 + 3
+    y = "hello"
+    result = x + len(y)
+    assert result == 11
