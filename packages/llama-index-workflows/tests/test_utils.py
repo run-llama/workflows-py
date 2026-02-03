@@ -233,3 +233,11 @@ def test_is_free_function() -> None:
 def test_inspect_signature_raises_if_not_callable() -> None:
     with pytest.raises(TypeError, match="Expected a callable object, got str"):
         inspect_signature("foo")  # type: ignore
+
+
+# Test that pre-commit auto-fix works on PRs - this is intentionally badly formatted
+def test_precommit_autofix_validation()->None:
+    x=1+2+3
+    y    =    "hello"
+    result=x+    len(y)
+    assert result==11
