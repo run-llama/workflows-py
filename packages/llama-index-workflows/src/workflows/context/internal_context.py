@@ -8,7 +8,7 @@ from collections import Counter, defaultdict
 from typing import TYPE_CHECKING, Any, Coroutine, Generic, Type, TypeVar, cast
 
 from workflows.context.context_types import MODEL_T
-from workflows.context.state_store import InMemoryStateStore
+from workflows.context.state_store import StateStore
 from workflows.errors import WorkflowRuntimeError
 from workflows.runtime.types.results import (
     AddCollectedEvent,
@@ -80,6 +80,19 @@ class InternalContext(Generic[MODEL_T]):
             worker.cancel()
         self._workers.clear()
 
+    async def _finalize_step(self) -> None:
+        """Await all background tasks and finalize the step.
+
+        Called after a step function completes to ensure all fire-and-forget
+        operations (e.g., write_event_to_stream, send_event) complete before
+        returning control to the control loop. This prevents non-deterministic
+        ordering of durable operations on replay.
+        """
+        workers = self._workers[:]
+        if workers:
+            await asyncio.gather(*workers, return_exceptions=True)
+        await self._internal_adapter.finalize_step()
+
     @staticmethod
     def _get_step_ctx(fn: str) -> StepWorkerContext:
         """Get the current step worker context. Raises if not in a step."""
@@ -91,12 +104,12 @@ class InternalContext(Generic[MODEL_T]):
             )
 
     @property
-    def store(self) -> InMemoryStateStore[MODEL_T]:
+    def store(self) -> StateStore[MODEL_T]:
         """Access workflow state store."""
         state_store = self._internal_adapter.get_state_store()
         if state_store is None:
             raise RuntimeError("State store not available from adapter")
-        return cast(InMemoryStateStore[MODEL_T], state_store)
+        return state_store  # type: ignore[return-value]
 
     def collect_events(
         self,

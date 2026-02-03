@@ -42,7 +42,7 @@ from workflows.types import RunResultT
 from workflows.utils import _nanoid as nanoid
 
 from .serializers import BaseSerializer, JsonSerializer
-from .state_store import MODEL_T, InMemoryStateStore
+from .state_store import MODEL_T, StateStore
 
 if TYPE_CHECKING:  # pragma: no cover
     from workflows import Workflow
@@ -80,9 +80,9 @@ class Context(Generic[MODEL_T]):
 
     Attributes:
         is_running (bool): Whether the workflow is currently running.
-        store (InMemoryStateStore[MODEL_T]): Type-safe, async state store shared
+        store (StateStore[MODEL_T]): Type-safe, async state store shared
             across steps. See also
-            [InMemoryStateStore][workflows.context.state_store.InMemoryStateStore].
+            [StateStore][workflows.context.state_store.StateStore].
 
     Examples:
         Basic usage inside a step:
@@ -205,7 +205,7 @@ class Context(Generic[MODEL_T]):
 
         Requires a current run context (via with_current_run_id) to be set.
         """
-        internal_adapter = workflow._runtime.get_internal_adapter()
+        internal_adapter = workflow._runtime.get_internal_adapter(workflow)
         new_ctx = cast(Context[MODEL_T], object.__new__(cls))
         new_ctx._face = cast(
             InternalContext[MODEL_T],
@@ -276,6 +276,7 @@ class Context(Generic[MODEL_T]):
                 pre.init_snapshot, workflow, pre._serializer
             )
 
+            # TODO(v3) - make this async
             external_adapter = workflow._runtime.run_workflow(
                 run_id=run_id,
                 workflow=workflow,
@@ -311,16 +312,16 @@ class Context(Generic[MODEL_T]):
             _warn_cancel_in_step()
 
     @property
-    def store(self) -> InMemoryStateStore[MODEL_T]:
+    def store(self) -> StateStore[MODEL_T]:
         """Typed, process-local state store shared across steps.
 
         If no state was initialized yet, a default
         [DictState][workflows.context.state_store.DictState] store is created.
 
         Returns:
-            InMemoryStateStore[MODEL_T]: The state store instance.
+            StateStore[MODEL_T]: The state store instance.
         """
-        return self._face.store  # type: ignore[return-value]
+        return self._face.store
 
     def to_dict(self, serializer: BaseSerializer | None = None) -> dict[str, Any]:
         """Serialize the context to a JSON-serializable dict.
@@ -561,6 +562,15 @@ class Context(Generic[MODEL_T]):
             ```
         """
         self._require_internal(fn="write_event_to_stream").write_event_to_stream(ev)
+
+    async def _finalize_step(self) -> None:
+        """Finalize step execution by awaiting background tasks.
+
+        Called after a step function completes to ensure all fire-and-forget
+        operations (e.g., write_event_to_stream, send_event) complete before
+        returning control to the control loop.
+        """
+        await self._require_internal(fn="_finalize_step")._finalize_step()
 
     def get_result(self) -> RunResultT:
         """Return the final result of the workflow run.

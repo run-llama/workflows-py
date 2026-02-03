@@ -17,7 +17,12 @@ from workflows.context.context import (
     _warn_is_running_in_step,
 )
 from workflows.context.external_context import ExternalContext
-from workflows.context.state_store import DictState, InMemoryStateStore
+from workflows.context.serializers import JsonSerializer
+from workflows.context.state_store import (
+    DictState,
+    InMemoryStateStore,
+    deserialize_state_from_dict,
+)
 from workflows.decorators import step
 from workflows.errors import ContextStateError, WorkflowRuntimeError
 from workflows.events import (
@@ -27,7 +32,11 @@ from workflows.events import (
     StartEvent,
     StopEvent,
 )
-from workflows.plugins.basic import AsyncioAdapterQueues, BasicRuntime, setting_run_id
+from workflows.plugins.basic import (
+    AsyncioAdapterQueues,
+    BasicRuntime,
+    setting_run_id,
+)
 from workflows.runtime.types.internal_state import BrokerState
 from workflows.runtime.types.ticks import TickAddEvent
 from workflows.testing import WorkflowTestRunner
@@ -186,19 +195,41 @@ async def test_get_not_found(internal_ctx: Context) -> None:
 
 
 @pytest.mark.asyncio
-async def test_send_event_step_is_none(workflow: Workflow) -> None:
+async def test_send_event_step_is_none() -> None:
+    """Test that external events create TickAddEvent with step_name=None.
+
+    Uses a workflow that waits for the external event so we can verify
+    the tick is logged before the workflow completes.
+    """
     ev = Event(foo="bar")
-    # Create a fresh context and run workflow
-    ctx = Context(workflow)
-    handler = ctx._workflow_run(workflow, start_event=StartEvent())
+
+    class WaitingWorkflow(Workflow):
+        @step
+        async def wait_for_external(self, ctx: Context, ev: StartEvent) -> StopEvent:
+            # Wait for an external Event to arrive
+            result = await ctx.wait_for_event(Event, requirements={"foo": "bar"})
+            return StopEvent(result=result.foo)
+
+    wf = WaitingWorkflow()
+    handler = wf.run()
     try:
+        # Send the external event
         handler.ctx.send_event(ev)
-        await asyncio.sleep(0.01)
-        # handler.ctx is a new external context
         external_face = handler.ctx._face
         assert isinstance(external_face, ExternalContext)
-        replay = external_face._tick_log
-        assert TickAddEvent(event=ev, step_name=None) in replay
+
+        # Wait for event to appear in tick log (up to 1 second)
+        expected_tick = TickAddEvent(event=ev, step_name=None)
+        for _ in range(100):
+            if expected_tick in external_face._tick_log:
+                break
+            await asyncio.sleep(0.01)
+
+        assert expected_tick in external_face._tick_log
+
+        # Let workflow complete
+        result = await handler
+        assert result == "bar"
     finally:
         external_face = handler.ctx._face
         assert isinstance(external_face, ExternalContext)
@@ -394,7 +425,8 @@ async def test_wait_for_multiple_events_in_workflow() -> None:
             )
 
     result = await handler
-    assert result == ["foo", "bar"]
+    # Order is non-deterministic since waiters run concurrently
+    assert sorted(result) == ["bar", "foo"]
     assert not handler.ctx.is_running
 
     # serialize and resume
@@ -414,7 +446,8 @@ async def test_wait_for_multiple_events_in_workflow() -> None:
             )
 
     result = await handler
-    assert result == ["fizz", "buzz"]
+    # Order is non-deterministic since waiters run concurrently
+    assert sorted(result) == ["buzz", "fizz"]
 
 
 @pytest.mark.asyncio
@@ -681,3 +714,191 @@ async def test_get_result_pre_context_raises(workflow: Workflow) -> None:
     with pytest.warns(DeprecationWarning):  # get_result is deprecated
         with pytest.raises(ContextStateError, match="requires a running workflow"):
             ctx.get_result()
+
+
+# ============================================================================
+# deserialize_state_from_dict Tests
+# ============================================================================
+
+
+class TypedTestState(BaseModel):
+    """Typed state for deserialize_state_from_dict testing."""
+
+    counter: int = 0
+    name: str = "default"
+
+
+@pytest.mark.asyncio
+async def test_deserialize_state_from_dict_with_dict_state() -> None:
+    """Test deserializing DictState from to_dict() format."""
+    serializer = JsonSerializer()
+
+    # Create state and serialize it
+    store = InMemoryStateStore(DictState())
+    await store.set("counter", 42)
+    await store.set("name", "test-value")
+    serialized = store.to_dict(serializer)
+
+    # Deserialize
+    result = deserialize_state_from_dict(serialized, serializer)
+
+    assert isinstance(result, DictState)
+    assert result["counter"] == 42
+    assert result["name"] == "test-value"
+
+
+def test_deserialize_state_from_dict_with_typed_state() -> None:
+    """Test deserializing typed Pydantic model from to_dict() format."""
+    serializer = JsonSerializer()
+
+    # Create typed state and serialize it
+    initial = TypedTestState(counter=100, name="typed-test")
+    store = InMemoryStateStore(initial)
+    serialized = store.to_dict(serializer)
+
+    # Deserialize
+    result = deserialize_state_from_dict(serialized, serializer)
+
+    assert isinstance(result, TypedTestState)
+    assert result.counter == 100
+    assert result.name == "typed-test"
+
+
+def test_deserialize_state_from_dict_empty_dict_state() -> None:
+    """Test deserializing empty DictState."""
+    serializer = JsonSerializer()
+
+    serialized = {
+        "state_data": {"_data": {}},
+        "state_type": "DictState",
+        "state_module": "workflows.context.state_store",
+    }
+
+    result = deserialize_state_from_dict(serialized, serializer)
+
+    assert isinstance(result, DictState)
+    assert len(list(result.items())) == 0
+
+
+def test_deserialize_state_from_dict_defaults_to_dict_state() -> None:
+    """Test that missing state_type defaults to DictState."""
+    serializer = JsonSerializer()
+
+    serialized = {"state_data": {"_data": {}}}
+
+    result = deserialize_state_from_dict(serialized, serializer)
+
+    assert isinstance(result, DictState)
+
+
+# ============================================================================
+# Serialized State Format Tests (parse_in_memory_state)
+# ============================================================================
+
+
+def test_parse_in_memory_state_old_format_no_store_type() -> None:
+    """Test that old format (no store_type) parses as InMemorySerializedState."""
+    from workflows.context.state_store import (
+        InMemorySerializedState,
+        parse_in_memory_state,
+    )
+
+    # Old format without store_type field
+    old_format = {
+        "state_type": "DictState",
+        "state_module": "workflows.context.state_store",
+        "state_data": {"_data": {"counter": 42}},
+    }
+
+    result = parse_in_memory_state(old_format)
+
+    assert isinstance(result, InMemorySerializedState)
+    assert result.store_type == "in_memory"
+    assert result.state_type == "DictState"
+    assert result.state_module == "workflows.context.state_store"
+    assert result.state_data == {"_data": {"counter": 42}}
+
+
+def test_parse_in_memory_state_explicit_in_memory() -> None:
+    """Test that explicit store_type='in_memory' parses as InMemorySerializedState."""
+    from workflows.context.state_store import (
+        InMemorySerializedState,
+        parse_in_memory_state,
+    )
+
+    serialized = {
+        "store_type": "in_memory",
+        "state_type": "CustomState",
+        "state_module": "myapp.models",
+        "state_data": {"name": "test", "value": 123},
+    }
+
+    result = parse_in_memory_state(serialized)
+
+    assert isinstance(result, InMemorySerializedState)
+    assert result.store_type == "in_memory"
+    assert result.state_type == "CustomState"
+    assert result.state_module == "myapp.models"
+    assert result.state_data == {"name": "test", "value": 123}
+
+
+def test_parse_in_memory_state_rejects_sql_store_type() -> None:
+    """Test that store_type='sql' raises ValueError."""
+    from workflows.context.state_store import parse_in_memory_state
+
+    serialized = {
+        "store_type": "sql",
+        "run_id": "run-12345",
+        "state_type": "WorkflowState",
+        "state_module": "myapp.states",
+        "schema": "public",
+    }
+
+    with pytest.raises(ValueError, match="Cannot parse store_type 'sql'"):
+        parse_in_memory_state(serialized)
+
+
+def test_parse_in_memory_state_unknown_store_type_raises() -> None:
+    """Test that unknown store_type raises ValueError."""
+    from workflows.context.state_store import parse_in_memory_state
+
+    serialized = {
+        "store_type": "redis",  # Unknown store type
+        "state_type": "SomeState",
+        "state_module": "some.module",
+    }
+
+    with pytest.raises(ValueError, match="Cannot parse store_type 'redis'"):
+        parse_in_memory_state(serialized)
+
+
+# ============================================================================
+# InMemoryStateStore Serialization Tests
+# ============================================================================
+
+
+def test_in_memory_state_store_to_dict_includes_store_type() -> None:
+    """Test that to_dict() includes store_type='in_memory'."""
+    store = InMemoryStateStore(DictState())
+    serializer = JsonSerializer()
+
+    result = store.to_dict(serializer)
+
+    assert result["store_type"] == "in_memory"
+    assert "state_type" in result
+    assert "state_module" in result
+    assert "state_data" in result
+
+
+def test_in_memory_state_store_from_dict_rejects_sql_format() -> None:
+    """Test that from_dict() rejects SQL format with clear error."""
+    sql_format = {
+        "store_type": "sql",
+        "run_id": "run-12345",
+        "state_type": "DictState",
+        "state_module": "workflows.context.state_store",
+    }
+    serializer = JsonSerializer()
+
+    with pytest.raises(ValueError, match="Cannot parse store_type 'sql'"):
+        InMemoryStateStore.from_dict(sql_format, serializer)

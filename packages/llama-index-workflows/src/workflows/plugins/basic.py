@@ -9,12 +9,19 @@ import time
 import weakref
 from contextlib import asynccontextmanager, contextmanager
 from contextvars import ContextVar
-from typing import Any, AsyncGenerator, Generator
+from typing import TYPE_CHECKING, Any, AsyncGenerator, Generator
+
+if TYPE_CHECKING:
+    from workflows.workflow import Workflow
 
 from llama_index_instrumentation.dispatcher import active_instrument_tags
 
 from workflows.context.serializers import BaseSerializer, JsonSerializer
-from workflows.context.state_store import InMemoryStateStore, infer_state_type
+from workflows.context.state_store import (
+    InMemoryStateStore,
+    StateStore,
+    infer_state_type,
+)
 from workflows.errors import WorkflowRuntimeError
 from workflows.events import Event, StartEvent, StopEvent
 from workflows.runtime.types.internal_state import BrokerState
@@ -25,6 +32,9 @@ from workflows.runtime.types.plugin import (
     Runtime,
     SnapshottableAdapter,
     V2RuntimeCompatibilityShim,
+    WaitResult,
+    WaitResultTick,
+    WaitResultTimeout,
 )
 from workflows.runtime.types.step_function import (
     as_step_worker_functions,
@@ -49,7 +59,7 @@ class AsyncioAdapterQueues:
         self,
         run_id: str,
         init_state: BrokerState,
-        state_store: InMemoryStateStore[Any] | None = None,
+        state_store: StateStore[Any] | None = None,
     ):
         self.run_id = run_id
         self.init_state = init_state
@@ -91,20 +101,31 @@ class InternalAsyncioAdapter(InternalRunAdapter, SnapshottableAdapter):
     def init_state(self) -> BrokerState:
         return self._queues.init_state
 
-    async def wait_receive(self) -> WorkflowTick:
-        return await self._queues.receive_queue.get()
-
     async def write_to_event_stream(self, event: Event) -> None:
         self._queues.publish_queue.put_nowait(event)
 
     async def get_now(self) -> float:
         return time.monotonic()
 
-    async def sleep(self, seconds: float) -> None:
-        await asyncio.sleep(seconds)
-
     async def send_event(self, tick: WorkflowTick) -> None:
         self._queues.receive_queue.put_nowait(tick)
+
+    async def wait_receive(
+        self,
+        timeout_seconds: float | None = None,
+    ) -> WaitResult:
+        """Wait for tick with optional timeout using asyncio primitives."""
+        try:
+            if timeout_seconds is None:
+                tick = await self._queues.receive_queue.get()
+            else:
+                tick = await asyncio.wait_for(
+                    self._queues.receive_queue.get(),
+                    timeout=timeout_seconds,
+                )
+            return WaitResultTick(tick=tick)
+        except asyncio.TimeoutError:
+            return WaitResultTimeout()
 
     def on_tick(self, tick: WorkflowTick) -> None:
         self._queues.ticks.append(tick)
@@ -112,7 +133,7 @@ class InternalAsyncioAdapter(InternalRunAdapter, SnapshottableAdapter):
     def replay(self) -> list[WorkflowTick]:
         return self._queues.ticks
 
-    def get_state_store(self) -> InMemoryStateStore[Any] | None:
+    def get_state_store(self) -> StateStore[Any] | None:
         return self._queues.state_store
 
 
@@ -149,16 +170,13 @@ class ExternalAsyncioAdapter(
                 if isinstance(item, StopEvent):
                     break
 
-    async def close(self) -> None:
-        pass
-
     def on_tick(self, tick: WorkflowTick) -> None:
         self._queues.ticks.append(tick)
 
     def replay(self) -> list[WorkflowTick]:
         return self._queues.ticks
 
-    def get_state_store(self) -> InMemoryStateStore[Any] | None:
+    def get_state_store(self) -> StateStore[Any] | None:
         return self._queues.state_store
 
     async def get_result(self) -> StopEvent:
@@ -281,7 +299,7 @@ class BasicRuntime(Runtime):
             queues.complete = task
             return self.get_external_adapter(run_id)
 
-    def get_internal_adapter(self) -> InternalRunAdapter:
+    def get_internal_adapter(self, workflow: Workflow) -> InternalRunAdapter:
         run_id = get_current_run_id()
         if run_id is None:
             raise RuntimeError(
@@ -304,11 +322,13 @@ _current_run_id: ContextVar[str | None] = ContextVar("current_run_id", default=N
 
 
 def get_current_run_id() -> str | None:
+    """Get the current run ID, if set."""
     return _current_run_id.get()
 
 
 @contextmanager
 def setting_run_id(run_id: str) -> Generator[None, None, None]:
+    """Set the current run ID for the duration of the block."""
     token = _current_run_id.set(run_id)
     try:
         yield

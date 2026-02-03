@@ -25,6 +25,9 @@ from workflows.runtime.types.plugin import (
     Runtime,
     SnapshottableAdapter,
     V2RuntimeCompatibilityShim,
+    WaitResult,
+    WaitResultTick,
+    WaitResultTimeout,
 )
 from workflows.runtime.types.step_function import (
     as_step_worker_functions,
@@ -48,7 +51,7 @@ class MockRuntime(Runtime):
             steps=as_step_worker_functions(workflow),
         )
 
-    def get_internal_adapter(self) -> InternalRunAdapter:
+    def get_internal_adapter(self, workflow: Workflow) -> InternalRunAdapter:
         run_id = get_current_run_id() or self._current_run_id or "test"
         if run_id not in self._adapters:
             self._adapters[run_id] = MockRunAdapter(run_id)
@@ -135,9 +138,6 @@ class MockRunAdapter(
         """
         pass
 
-    async def wait_receive(self) -> WorkflowTick:
-        return await self._external_queue.get()
-
     async def write_to_event_stream(self, event: Event) -> None:
         await self._event_stream.put(event)
 
@@ -156,8 +156,29 @@ class MockRunAdapter(
             return time.time()
         return self._current_time
 
-    async def sleep(self, seconds: float) -> None:
-        await asyncio.sleep(seconds)
+    async def wait_receive(
+        self,
+        timeout_seconds: float | None = None,
+    ) -> WaitResult:
+        """Wait for tick with optional timeout.
+
+        When a timeout occurs, advances mock time by the timeout duration
+        to ensure scheduled ticks become due.
+        """
+        try:
+            if timeout_seconds is None:
+                tick = await self._external_queue.get()
+            else:
+                tick = await asyncio.wait_for(
+                    self._external_queue.get(),
+                    timeout=timeout_seconds,
+                )
+            return WaitResultTick(tick=tick)
+        except asyncio.TimeoutError:
+            # Advance mock time when timeout occurs
+            if timeout_seconds is not None:
+                self.advance_time(timeout_seconds)
+            return WaitResultTimeout()
 
     def advance_time(self, seconds: float) -> None:
         if self._traveller is not None:

@@ -6,6 +6,7 @@ A runtime interface to switch out a broker runtime (external library or service 
 
 from __future__ import annotations
 
+import asyncio
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
@@ -16,13 +17,17 @@ from typing import (
     AsyncGenerator,
     Coroutine,
     Generator,
+    Literal,
     Protocol,
+    Union,
 )
+
+from workflows.context.state_store import StateStore
+from workflows.runtime.types.named_task import NamedTask
 
 if TYPE_CHECKING:
     from workflows.context.context import Context
     from workflows.context.serializers import BaseSerializer
-    from workflows.context.state_store import InMemoryStateStore
     from workflows.runtime.types.internal_state import BrokerState
     from workflows.runtime.types.step_function import StepWorkerFunction
     from workflows.workflow import Workflow
@@ -34,6 +39,24 @@ from workflows.runtime.types.ticks import TickCancelRun, WorkflowTick
 _current_runtime: ContextVar[Runtime | None] = ContextVar(
     "current_runtime", default=None
 )
+
+
+@dataclass
+class WaitResultTick:
+    """Result containing a received tick."""
+
+    tick: WorkflowTick
+    type: Literal["tick"] = "tick"
+
+
+@dataclass
+class WaitResultTimeout:
+    """Result indicating timeout expiration."""
+
+    type: Literal["timeout"] = "timeout"
+
+
+WaitResult = Union[WaitResultTick, WaitResultTimeout]
 
 
 @dataclass
@@ -73,17 +96,6 @@ class InternalRunAdapter(ABC):
         ...
 
     @abstractmethod
-    async def wait_receive(self) -> WorkflowTick:
-        """
-        Wait for the next tick from the mailbox.
-
-        Called from inside the workflow control loop to receive the next tick
-        event that was sent via the external adapter's send_event().
-        This method blocks until a tick is available.
-        """
-        ...
-
-    @abstractmethod
     async def write_to_event_stream(self, event: Event) -> None:
         """
         Publish an event to external listeners.
@@ -105,18 +117,6 @@ class InternalRunAdapter(ABC):
         ...
 
     @abstractmethod
-    async def sleep(self, seconds: float) -> None:
-        """
-        Sleep for a given number of seconds with durability support.
-
-        Called from within the workflow control loop. For durable runtimes,
-        this integrates with the host runtime to allow workflow suspension
-        and resumption. Note that other tasks in the control loop may still
-        run simultaneously during the sleep.
-        """
-        ...
-
-    @abstractmethod
     async def send_event(self, tick: WorkflowTick) -> None:
         """
         Send a tick into the workflow's own mailbox from within the control loop.
@@ -127,7 +127,41 @@ class InternalRunAdapter(ABC):
         """
         ...
 
-    def get_state_store(self) -> InMemoryStateStore[Any] | None:
+    @abstractmethod
+    async def wait_receive(
+        self,
+        timeout_seconds: float | None = None,
+    ) -> WaitResult:
+        """
+        Wait for next tick OR timeout expiration.
+
+        This is the primary method for the control loop to wait for events.
+        It combines receiving ticks and timeout handling into a single
+        deterministic operation.
+
+        Args:
+            timeout_seconds: Max time to wait. None means wait indefinitely.
+
+        Returns:
+            WaitResultTick if a tick was received
+            WaitResultTimeout if timeout expired before receiving tick
+
+        This is a DURABLE operation for durable runtimes:
+        - On replay, already-elapsed time is accounted for
+        - If timeout already expired in previous run, returns immediately
+        """
+        ...
+
+    async def close(self) -> None:
+        """
+        Signal shutdown to wake any blocked wait operations.
+
+        Called during cleanup to allow the adapter to exit gracefully.
+        Default is no-op. DBOS adapter sends a shutdown signal to wake blocked recv.
+        """
+        pass
+
+    def get_state_store(self) -> StateStore[Any] | None:
         """
         Get the state store for this workflow run.
 
@@ -135,6 +169,56 @@ class InternalRunAdapter(ABC):
         Default implementation returns None.
         """
         return None
+
+    async def finalize_step(self) -> None:
+        """
+        Called after a step function completes to perform any adapter-specific cleanup.
+
+        This is called after all background tasks spawned during the step have completed.
+        Adapters can override to perform additional finalization (e.g., flush buffers,
+        sync state). Default is no-op.
+        """
+        pass
+
+    async def wait_for_next_task(
+        self,
+        task_set: list[NamedTask],
+        timeout: float | None = None,
+    ) -> asyncio.Task[Any] | None:
+        """Wait for and return the next task that should complete.
+
+        Args:
+            task_set: List of NamedTasks with stable string keys for identification.
+                      The order indicates priority - first items should be returned first
+                      when multiple tasks complete simultaneously.
+            timeout: Timeout in seconds, None for no timeout
+
+        Returns:
+            The completed task, or None on timeout.
+
+        IMPORTANT: Must return at most ONE task per call.
+
+        Default implementation uses asyncio.wait(FIRST_COMPLETED) and returns
+        the highest-priority completed task (workers before pull).
+        DBOS overrides to coordinate based on journal for deterministic replay,
+        using the stable keys from NamedTask to identify tasks.
+        """
+        tasks = NamedTask.all_tasks(task_set)
+        if not tasks:
+            return None
+        done, _ = await asyncio.wait(
+            tasks,
+            timeout=timeout,
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+        if not done:
+            return None
+        # Return the highest-priority completed task (first in task_set order)
+        for named_task in task_set:
+            if named_task.task in done:
+                return named_task.task
+        # Fallback (shouldn't happen)
+        return done.pop()
 
 
 class ExternalRunAdapter(ABC):
@@ -186,7 +270,6 @@ class ExternalRunAdapter(ABC):
         """
         ...
 
-    @abstractmethod
     async def close(self) -> None:
         """
         Clean up adapter resources.
@@ -195,7 +278,7 @@ class ExternalRunAdapter(ABC):
         resources held by this adapter (e.g., close streams, release locks).
         """
 
-        ...
+        pass
 
     @abstractmethod
     async def get_result(self) -> StopEvent:
@@ -210,7 +293,7 @@ class ExternalRunAdapter(ABC):
         """
         await self.send_event(TickCancelRun())
 
-    def get_state_store(self) -> InMemoryStateStore[Any] | None:
+    def get_state_store(self) -> StateStore[Any] | None:
         """
         Get the state store for this workflow run.
 
@@ -256,8 +339,7 @@ class Runtime(ABC):
     Abstract base class for workflow execution runtimes.
 
     Runtimes control how workflows are registered, launched, and executed.
-    The default BasicRuntime uses asyncio; other runtimes can add durability
-    or distributed execution.
+    The default BasicRuntime uses asyncio; Other's plug into their own durability and distributed execution models.
 
     Lifecycle:
     1. Create runtime instance
@@ -284,7 +366,7 @@ class Runtime(ABC):
         Register a workflow with the runtime.
 
         Called at launch() time for each tracked workflow. Runtimes can
-        wrap the control_loop and steps with their own decorators or handlers.
+        wrap the control_loop and steps to fit in their registration/decoration model.
 
         Returns RegisteredWorkflow with wrapped functions
         """
@@ -298,7 +380,7 @@ class Runtime(ABC):
         init_state: BrokerState,
         start_event: StartEvent | None = None,
         serialized_state: dict[str, Any] | None = None,
-        serializer: "BaseSerializer | None" = None,
+        serializer: BaseSerializer | None = None,
     ) -> ExternalRunAdapter:
         """
         Launch a workflow run.
@@ -317,12 +399,14 @@ class Runtime(ABC):
         ...
 
     @abstractmethod
-    def get_internal_adapter(self) -> InternalRunAdapter:
+    def get_internal_adapter(self, workflow: "Workflow") -> InternalRunAdapter:
         """
         Get the internal adapter for a workflow run.
 
-        Called on each workflow.run() to instantiate an interface for the workflow run internals to communicite with the runtime.
-        The workflow run must be derived from the runtime set context.
+        Called on each workflow.run() to instantiate an interface for the workflow run internals to communicate with the runtime.
+
+        Args:
+            workflow: The workflow instance being run. Used by runtimes to access workflow metadata (e.g., state type).
         """
         ...
 
@@ -343,10 +427,7 @@ class Runtime(ABC):
         """
         Launch the runtime and register all tracked workflows.
 
-        For BasicRuntime, this is a no-op. Other runtimes may wrap workflows
-        with decorators and initialize backend connections.
-
-        Must be called before running workflows.
+        For many runtime's, this must be called before running workflows.
         """
         pass
 
@@ -363,7 +444,7 @@ class Runtime(ABC):
         Track a workflow instance for registration at launch time.
 
         Called by Workflow.__init__ to register with the runtime.
-        Override in runtimes that need to track workflows for deferred registration.
+        Override in runtimes that need to track workflows.
         Default implementation is a no-op.
         """
         pass
