@@ -9,13 +9,14 @@ from typing import Any, Optional
 import pytest
 import time_machine
 from httpx import ASGITransport, AsyncClient
+from llama_agents.server._handler import _WorkflowHandler
 from llama_agents.server.abstract_workflow_store import (
     HandlerQuery,
     PersistentHandler,
     Status,
 )
 from llama_agents.server.memory_workflow_store import MemoryWorkflowStore
-from llama_agents.server.server import WorkflowServer, _WorkflowHandler
+from llama_agents.server.server import WorkflowServer
 from server_test_fixtures import async_yield, wait_for_passing
 from workflows import Context, Workflow, step
 from workflows.context.context_types import SerializedContext
@@ -39,7 +40,7 @@ class WaitingWorkflow(Workflow):
 
 
 def get_handler_in_memory(server: WorkflowServer, handler_id: str) -> _WorkflowHandler:
-    wrapper = server._handlers.get(handler_id)
+    wrapper = server._service._handlers.get(handler_id)
     assert wrapper is not None, f"Handler {handler_id} not found in memory"
     return wrapper
 
@@ -49,7 +50,9 @@ def assert_handler_in_memory(server: WorkflowServer, handler_id: str) -> None:
 
 
 def assert_handler_not_in_memory(server: WorkflowServer, handler_id: str) -> None:
-    assert handler_id not in server._handlers, f"Handler {handler_id} still in memory"
+    assert handler_id not in server._service._handlers, (
+        f"Handler {handler_id} still in memory"
+    )
 
 
 def make_server(
@@ -79,8 +82,8 @@ def make_server(
 async def start_waiting_handler(
     server: WorkflowServer, handler_id: str
 ) -> _WorkflowHandler:
-    handler = server._workflows["test"].run()
-    await server._run_workflow_handler(handler_id, "test", handler)
+    handler = server._service._workflows["test"].run()
+    await server._service.run_workflow_handler(handler_id, "test", handler)
     await async_yield(20)
     wrapper = get_handler_in_memory(server, handler_id)
     assert wrapper.idle_since is not None
@@ -214,7 +217,7 @@ async def test_released_workflow_is_reloaded_on_event(
             assert_handler_not_in_memory(server, handler_id)
 
             # Now reload by using _try_reload_handler
-            reloaded, persisted = await server._try_reload_handler(handler_id)
+            reloaded, persisted = await server._service.try_reload_handler(handler_id)
             assert reloaded is not None
             assert_handler_in_memory(server, handler_id)
 
@@ -256,7 +259,7 @@ async def test_idle_release_restores_idle_since_on_reload(
         assert_handler_not_in_memory(server, "idle-restore-1")
 
         # Reload it (simulating an event arriving)
-        wrapper, persisted = await server._try_reload_handler("idle-restore-1")
+        wrapper, persisted = await server._service.try_reload_handler("idle-restore-1")
         assert wrapper is not None
         assert wrapper.idle_since == idle_time
         assert persisted is not None
@@ -276,8 +279,10 @@ async def test_reloaded_idle_workflow_is_released_again(
     async with server.contextmanager():
         # Start a workflow
         handler_id = "reload-idle-test-1"
-        handler = server._workflows["test"].run()
-        wrapper = await server._run_workflow_handler(handler_id, "test", handler)
+        handler = server._service._workflows["test"].run()
+        wrapper = await server._service.run_workflow_handler(
+            handler_id, "test", handler
+        )
 
         async def wrapper_is_idle() -> None:
             assert wrapper.idle_since is not None
@@ -287,7 +292,7 @@ async def test_reloaded_idle_workflow_is_released_again(
         # Reload the workflow (simulating an event arriving) once the handler
         # is released from memory.
         async def reload_from_store() -> tuple[_WorkflowHandler, PersistentHandler]:
-            reloaded, persisted = await server._try_reload_handler(handler_id)
+            reloaded, persisted = await server._service.try_reload_handler(handler_id)
             assert reloaded is not None
             assert persisted is not None
             assert reloaded is not wrapper
@@ -306,7 +311,7 @@ async def test_reloaded_idle_workflow_is_released_again(
         # Wait for the reloaded handler to be released again by observing
         # that a subsequent reload returns a new handler instance.
         async def reload_after_release() -> _WorkflowHandler:
-            reloaded_again, persisted_again = await server._try_reload_handler(
+            reloaded_again, persisted_again = await server._service.try_reload_handler(
                 handler_id
             )
             assert reloaded_again is not None
@@ -317,7 +322,7 @@ async def test_reloaded_idle_workflow_is_released_again(
         reloaded_again = await wait_for_passing(
             reload_after_release, interval=0.01, max_duration=1.5
         )
-        await server._close_handler(reloaded_again)
+        await server._service.close_handler(reloaded_again)
 
 
 @pytest.mark.asyncio
@@ -553,7 +558,7 @@ async def test_try_reload_is_singleton_under_concurrency(
         instances_created: list[object] = []
 
         async def reload_and_track() -> None:
-            wrapper, _ = await server._try_reload_handler(handler_id)
+            wrapper, _ = await server._service.try_reload_handler(handler_id)
             if wrapper is not None:
                 # Track the actual run_handler object identity
                 instances_created.append(id(wrapper.run_handler))
@@ -744,10 +749,10 @@ async def test_release_skips_checkpoint_if_handler_was_reloaded(
 
             # Simulate the scenario where handler was released and then reloaded:
             # Remove old handler from memory
-            server._handlers.pop(handler_id, None)
+            server._service._handlers.pop(handler_id, None)
 
             # Reload the handler (this gets the persisted state)
-            reloaded, persisted = await server._try_reload_handler(handler_id)
+            reloaded, persisted = await server._service.try_reload_handler(handler_id)
             assert reloaded is not None
             assert reloaded is not old_wrapper  # Different instance
             assert persisted is not None
@@ -768,7 +773,7 @@ async def test_release_skips_checkpoint_if_handler_was_reloaded(
             # This simulates a delayed release that happens after reload
             # _release_handler should detect that a different handler is in _handlers
             # and skip the checkpoint
-            await server._release_handler(old_wrapper)
+            await server._service.release_handler(old_wrapper)
 
             # Verify the store still has the correct (new) state
             stored = await memory_store.query(HandlerQuery(handler_id_in=[handler_id]))

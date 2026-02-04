@@ -998,14 +998,14 @@ async def test_post_event_context_not_available(
     )
 
     handler_id = "noctx-1"
-    server._handlers[handler_id] = wrapper  # type: ignore[assignment]
+    server._service._handlers[handler_id] = wrapper  # type: ignore[assignment]
 
     try:
         response = await client.post(f"/events/{handler_id}", json={"event": "{}"})
         assert response.status_code == 500
         assert "Context not available" in response.text
     finally:
-        server._handlers.pop(handler_id, None)
+        server._service._handlers.pop(handler_id, None)
 
 
 @pytest.mark.asyncio
@@ -1271,4 +1271,4 @@ async def test_run_sync_removes_handler_even_with_unconsumed_events(
     assert data["status"] == "completed"
 
     # The synchronous run path should clean up the handler from memory even if events remain
-    assert len(server._handlers) == 0
+    assert len(server._service._handlers) == 0
