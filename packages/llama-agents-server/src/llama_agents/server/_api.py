@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from contextlib import asynccontextmanager
 from importlib.metadata import version
+from pathlib import Path
 from typing import AsyncGenerator, cast
 
 from llama_agents.client.protocol import (
@@ -25,9 +27,13 @@ from llama_agents.client.protocol.serializable_events import (
 )
 from starlette.applications import Starlette
 from starlette.exceptions import HTTPException
+from starlette.middleware import Middleware
+from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, StreamingResponse
+from starlette.routing import Route
 from starlette.schemas import SchemaGenerator
+from starlette.staticfiles import StaticFiles
 from workflows import Context, Workflow
 from workflows.events import InternalDispatchEvent, StartEvent
 from workflows.representation import get_workflow_representation
@@ -43,11 +49,93 @@ from .abstract_workflow_store import (
 logger = logging.getLogger()
 
 
+_DEFAULT_ASSETS_PATH = Path(__file__).parent / "static"
+
+
 class _WorkflowAPI:
-    def __init__(self, service: _WorkflowService) -> None:
+    def __init__(
+        self,
+        service: _WorkflowService,
+        *,
+        middleware: list[Middleware] | None = None,
+        assets_path: Path = _DEFAULT_ASSETS_PATH,
+    ) -> None:
         self._service = service
 
-    def openapi_schema(self, app: Starlette) -> dict:
+        middleware = middleware or [
+            Middleware(
+                CORSMiddleware,  # type: ignore[arg-type]
+                # regex echoes the origin header back, which some browsers require (rather than "*") when credentials are required
+                allow_origin_regex=".*",
+                allow_methods=["*"],
+                allow_headers=["*"],
+                allow_credentials=True,
+            )
+        ]
+
+        @asynccontextmanager
+        async def lifespan(app: Starlette) -> AsyncGenerator[None, None]:
+            await self._service.start()
+            try:
+                yield
+            finally:
+                await self._service.stop()
+
+        self.app = Starlette(
+            routes=self._routes(),
+            middleware=middleware,
+            lifespan=lifespan,
+        )
+        self.app.mount(
+            "/", app=StaticFiles(directory=assets_path, html=True), name="ui"
+        )
+
+    def _routes(self) -> list[Route]:
+        return [
+            Route("/workflows", self._list_workflows, methods=["GET"]),
+            Route("/workflows/{name}/run", self._run_workflow, methods=["POST"]),
+            Route(
+                "/workflows/{name}/run-nowait",
+                self._run_workflow_nowait,
+                methods=["POST"],
+            ),
+            Route(
+                "/workflows/{name}/schema",
+                self._get_events_schema,
+                methods=["GET"],
+            ),
+            Route(
+                "/results/{handler_id}",
+                self._get_workflow_result,
+                methods=["GET"],
+            ),
+            Route("/events/{handler_id}", self._stream_events, methods=["GET"]),
+            Route("/events/{handler_id}", self._post_event, methods=["POST"]),
+            Route("/health", self._health_check, methods=["GET"]),
+            Route("/handlers", self._get_handlers, methods=["GET"]),
+            Route(
+                "/handlers/{handler_id}",
+                self._get_workflow_handler,
+                methods=["GET"],
+            ),
+            Route(
+                "/handlers/{handler_id}/cancel",
+                self._cancel_handler,
+                methods=["POST"],
+            ),
+            Route(
+                "/workflows/{name}/representation",
+                self._get_workflow_representation,
+                methods=["GET"],
+            ),
+            Route(
+                "/workflows/{name}/events",
+                self._list_workflow_events,
+                methods=["GET"],
+            ),
+        ]
+
+    def openapi_schema(self) -> dict:
         gen = SchemaGenerator(
             {
                 "openapi": "3.0.0",
@@ -126,7 +214,7 @@ class _WorkflowAPI:
             }
         )
 
-        return gen.get_schema(app.routes)
+        return gen.get_schema(self.app.routes)
 
     #
     # HTTP endpoints

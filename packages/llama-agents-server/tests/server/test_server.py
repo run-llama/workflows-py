@@ -12,7 +12,7 @@ from workflows.workflow import Workflow
 
 def test_init() -> None:
     server = WorkflowServer()
-    assert len(server._middleware) == 1
+    assert len(server.app.user_middleware) == 1
     assert server._service._workflows == {}
     assert server._service._handlers == {}
 
@@ -20,7 +20,7 @@ def test_init() -> None:
 def test_init_custom_middleware() -> None:
     custom_middleware = [Mock(spec=Middleware)]
     server = WorkflowServer(middleware=custom_middleware)  # type: ignore
-    assert server._middleware == custom_middleware
+    assert server.app.user_middleware == custom_middleware
 
 
 def test_add_workflow(simple_test_workflow: Workflow) -> None:
