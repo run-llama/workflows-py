@@ -13,8 +13,8 @@ from workflows.workflow import Workflow
 def test_init() -> None:
     server = WorkflowServer()
     assert len(server._middleware) == 1
-    assert server._workflows == {}
-    assert server._handlers == {}
+    assert server._service._workflows == {}
+    assert server._service._handlers == {}
 
 
 def test_init_custom_middleware() -> None:
@@ -26,8 +26,8 @@ def test_init_custom_middleware() -> None:
 def test_add_workflow(simple_test_workflow: Workflow) -> None:
     server = WorkflowServer()
     server.add_workflow("test", simple_test_workflow)
-    assert "test" in server._workflows
-    assert server._workflows["test"] == simple_test_workflow
+    assert "test" in server._service._workflows
+    assert server._service._workflows["test"] == simple_test_workflow
 
 
 @pytest.mark.asyncio
@@ -68,7 +68,7 @@ def test_extract_workflow_success(simple_test_workflow: Workflow) -> None:
     mock_request = Mock()
     mock_request.path_params = {"name": "test"}
 
-    assert server._extract_workflow(mock_request).workflow == simple_test_workflow
+    assert server._api._extract_workflow(mock_request).workflow == simple_test_workflow
 
 
 def test_extract_workflow_missing_name() -> None:
@@ -77,7 +77,7 @@ def test_extract_workflow_missing_name() -> None:
     mock_request.path_params = {}
 
     with pytest.raises(Exception) as exc_info:
-        server._extract_workflow(mock_request)
+        server._api._extract_workflow(mock_request)
     assert exc_info.value.status_code == 400  # type: ignore
     assert "name" in exc_info.value.detail  # type: ignore
 
@@ -88,6 +88,6 @@ def test_extract_workflow_not_found() -> None:
     mock_request.path_params = {"name": "nonexistent"}
 
     with pytest.raises(Exception) as exc_info:
-        server._extract_workflow(mock_request)
+        server._api._extract_workflow(mock_request)
     assert exc_info.value.status_code == 404  # type: ignore
     assert "not found" in exc_info.value.detail  # type: ignore

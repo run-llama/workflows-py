@@ -54,13 +54,13 @@ async def test_store_is_updated_on_step_completion(
 
     # Start a workflow through internal runner to exercise persistence updates
     handler_id = "persist-1"
-    handler = server._workflows["test"].run()
-    await server._run_workflow_handler(handler_id, "test", handler)
-    handler = server._handlers[handler_id]
+    handler = server._service._workflows["test"].run()
+    await server._service.run_workflow_handler(handler_id, "test", handler)
+    handler = server._service._handlers[handler_id]
 
     # wait for first step to complete
     async def get_non_internal_event() -> Event:
-        item = await server._handlers[handler_id].queue.get()
+        item = await server._service._handlers[handler_id].queue.get()
         if isinstance(item, InternalDispatchEvent):
             raise ValueError("Internal event received. Try again")
         return item
@@ -77,13 +77,13 @@ async def test_store_is_updated_on_step_completion(
     assert isinstance(persistent.ctx, dict)
 
     # now, validate that the workflow completes when responding
-    handler = server._handlers[handler_id].run_handler
+    handler = server._service._handlers[handler_id].run_handler
     ctx = handler.ctx
     assert ctx is not None
     ctx.send_event(ExternalEvent(response="pong"))
     result = await handler
     # wait for event loop to resolve all tasks
-    task = server._handlers[handler_id].task
+    task = server._service._handlers[handler_id].task
     assert task is not None
     await task
     await asyncio.sleep(0)  # let even loop resolve other waiters on the internal
@@ -114,10 +114,10 @@ async def test_resume_active_handlers_across_server_restart(
     server2.add_workflow("test", simple_test_workflow)
     async with server2.contextmanager():  # start and stop it
         # The handler should be registered under the same id
-        assert handler_id in server2._handlers
+        assert handler_id in server2._service._handlers
 
         # Await its completion through internal result future
-        result = await server2._handlers[handler_id].run_handler
+        result = await server2._service._handlers[handler_id].run_handler
         assert result == "processed: default"
 
 
@@ -154,7 +154,7 @@ async def test_startup_marks_invalid_persisted_context_as_failed(
     server.add_workflow("test", simple_test_workflow)
     async with server.contextmanager():
         # Invalid handler should not be registered
-        assert handler_id not in server._handlers
+        assert handler_id not in server._service._handlers
 
     # After startup attempt, it should be marked as failed in the store
     persisted = memory_store.handlers[handler_id]
@@ -171,15 +171,15 @@ async def test_store_is_updated_on_workflow_failure(
     async with server.contextmanager():
         # Start a workflow through internal runner to exercise persistence updates
         handler_id = "fail-1"
-        handler = server._workflows["error"].run()
-        await server._run_workflow_handler(handler_id, "error", handler)
+        handler = server._service._workflows["error"].run()
+        await server._service.run_workflow_handler(handler_id, "error", handler)
 
         # Await the failure of the handler itself
         with pytest.raises(ValueError, match="Test error"):
             await handler
 
         # Ensure the background streaming task has completed and persisted status
-        task = server._handlers[handler_id].task
+        task = server._service._handlers[handler_id].task
         assert task is not None
         await task
         await asyncio.sleep(0)
@@ -219,11 +219,11 @@ async def test_startup_ignores_unregistered_workflows(
     server = WorkflowServer(workflow_store=memory_store)
     server.add_workflow("test", simple_test_workflow)
     async with server.contextmanager():  # start and stop it
-        assert "unknown-1" not in server._handlers
-        assert "known-1" in server._handlers
+        assert "unknown-1" not in server._service._handlers
+        assert "known-1" in server._service._handlers
 
         # Await completion of the resumed known handler
-        result = await server._handlers["known-1"].run_handler
+        result = await server._service._handlers["known-1"].run_handler
         assert result == "processed: default"
 
 
@@ -268,15 +268,15 @@ async def test_persistence_retries_on_failure(
     async with server.contextmanager():
         # Start a workflow to trigger persistence
         handler_id = "retry-test"
-        handler = server._workflows["test"].run()
-        await server._run_workflow_handler(handler_id, "test", handler)
+        handler = server._service._workflows["test"].run()
+        await server._service.run_workflow_handler(handler_id, "test", handler)
 
         # Wait for workflow completion
-        result = await server._handlers[handler_id].run_handler
+        result = await server._service._handlers[handler_id].run_handler
         assert result == "processed: default"
 
         # Wait for background streaming task to complete, ignoring its expected exception
-        task = server._handlers[handler_id].task
+        task = server._service._handlers[handler_id].task
         try:
             assert task is not None
             await task
@@ -314,15 +314,15 @@ async def test_workflow_cancelled_after_all_retries_fail(
     async with server.contextmanager():
         # Start a workflow to trigger persistence
         handler_id = "cancel-test"
-        handler = server._workflows["test"].run()
+        handler = server._service._workflows["test"].run()
 
         # Should raise HTTPException if persistence fails on initial checkpoint
         with pytest.raises(Exception):
-            await server._run_workflow_handler(handler_id, "test", handler)
+            await server._service.run_workflow_handler(handler_id, "test", handler)
 
         # Verify retry attempts and no registration/persistence on failure
         assert attempts["count"] == 3  # Initial + 2 retries
-        assert handler_id not in server._handlers
+        assert handler_id not in server._service._handlers
         persistent_list = await store.query(HandlerQuery(handler_id_in=[handler_id]))
         assert not persistent_list
 
@@ -404,7 +404,7 @@ async def test_result_for_completed_persisted_handler_without_runtime_registrati
 
     async with server.contextmanager():
         # Ensure the handler is not registered in runtime memory
-        assert handler_id not in server._handlers
+        assert handler_id not in server._service._handlers
 
         # But the API should still return the persisted result
         transport = ASGITransport(app=server.app)
