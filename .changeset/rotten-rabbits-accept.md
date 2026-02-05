@@ -1,5 +1,5 @@
 ---
-"llama-index-workflows-server": patch
+"llama-agents-server": patch
 "llama-index-workflows": patch
 ---
 
