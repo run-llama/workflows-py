@@ -65,6 +65,10 @@ root = "packages/llama-index-workflows-dbos"
 pythonVersion = "3.10"
 
 [[tool.basedpyright.executionEnvironments]]
+root = "packages/llama-agents-server-mcp"
+pythonVersion = "3.10"
+
+[[tool.basedpyright.executionEnvironments]]
 root = "examples"
 pythonVersion = "3.14"
 reportMissingImports = false
@@ -136,6 +140,7 @@ llama-index-utils-workflow = {workspace = true}
 llama-index-workflows = {workspace = true}
 llama-agents-client = {workspace = true}
 llama-agents-server = {workspace = true}
+llama-agents-server-mcp = {workspace = true}
 
 [tool.uv.workspace]
 members = [
@@ -144,5 +149,6 @@ members = [
   "packages/llama-index-utils-workflow",
   "packages/llama-index-workflows",
   "packages/llama-agents-client",
-  "packages/llama-agents-server"
+  "packages/llama-agents-server",
+  "packages/llama-agents-server-mcp"
 ]
