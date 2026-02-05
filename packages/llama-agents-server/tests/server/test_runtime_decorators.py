@@ -4,9 +4,8 @@
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any, AsyncGenerator
-from unittest.mock import AsyncMock, MagicMock, PropertyMock
+from unittest.mock import MagicMock
 
 import pytest
 from llama_agents.server.runtime_decorators import (
@@ -16,18 +15,15 @@ from llama_agents.server.runtime_decorators import (
 )
 from workflows.context.state_store import StateStore
 from workflows.events import Event, StopEvent
-from workflows.runtime.types.named_task import NamedTask
 from workflows.runtime.types.plugin import (
     ExternalRunAdapter,
     InternalRunAdapter,
     RegisteredWorkflow,
     Runtime,
     WaitResult,
-    WaitResultTick,
     WaitResultTimeout,
 )
 from workflows.runtime.types.ticks import TickAddEvent, WorkflowTick
-
 
 # ---------------------------------------------------------------------------
 # Fixtures: concrete stubs of the abstract interfaces
@@ -57,9 +53,7 @@ class StubInternalAdapter(InternalRunAdapter):
     async def send_event(self, tick: WorkflowTick) -> None:
         self.ticks_sent.append(tick)
 
-    async def wait_receive(
-        self, timeout_seconds: float | None = None
-    ) -> WaitResult:
+    async def wait_receive(self, timeout_seconds: float | None = None) -> WaitResult:
         return WaitResultTimeout()
 
     async def close(self) -> None:
