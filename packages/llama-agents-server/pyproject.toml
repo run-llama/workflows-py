@@ -4,6 +4,7 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
+  "hatch>=1.14.1",
   "pyyaml>=6.0.2",
   "pytest>=8.4.2",
   "pytest-asyncio>=1.0.0",
@@ -28,6 +29,12 @@ dependencies = [
 
 [project.scripts]
 llama-agents-server = "llama_agents.server.__main__:run_server"
+
+[tool.hatch.envs.default]
+dependencies = ["pyyaml>=6.0.2"]
+
+[tool.hatch.envs.default.scripts]
+openapi = "python -m llama_agents.server.server --output openapi.json"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

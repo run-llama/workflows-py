@@ -1739,6 +1739,7 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "hatch" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-cov" },
@@ -1758,6 +1759,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "hatch", specifier = ">=1.14.1" },
     { name = "pytest", specifier = ">=8.4.2" },
     { name = "pytest-asyncio", specifier = ">=1.0.0" },
     { name = "pytest-cov", specifier = ">=7.0.0" },
@@ -1883,7 +1885,6 @@ server = [
 
 [package.dev-dependencies]
 dev = [
-    { name = "hatch" },
     { name = "httpx" },
     { name = "packaging" },
     { name = "pre-commit" },
@@ -1912,7 +1913,6 @@ provides-extras = ["server", "client"]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "hatch", specifier = ">=1.14.1" },
     { name = "httpx", specifier = ">=0.25.0" },
     { name = "packaging", specifier = ">=21.0" },
     { name = "pre-commit", specifier = ">=4.2.0" },
