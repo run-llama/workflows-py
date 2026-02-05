@@ -44,16 +44,16 @@ jobs:
           --output "$GITHUB_OUTPUT"
 
       - name: Sync dependencies and build OpenAPI spec
-        working-directory: packages/llama-index-workflows
+        working-directory: packages/llama-agents-server
         run: |
-          uv sync --all-extras
-          uv run hatch run server:openapi
+          uv sync
+          uv run hatch run openapi
 
       - name: Upload OpenAPI to release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.TARGET_TAG }}
-          files: packages/llama-index-workflows/openapi.json
+          files: packages/llama-agents-server/openapi.json
           fail_on_unmatched_files: true
           append_body: false
 
