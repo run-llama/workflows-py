@@ -1,5 +1,27 @@
 # llama-index-utils-workflow
 
+## 0.9.0
+
+### Minor Changes
+
+- 73c1254: refactor: expand runtime plugin architecture
+
+  - Refactoring to better support alternate distributed backends
+  - Some `Context` methods may now raise errors if used in an unexpected context
+  - `WorkflowHandler` is no longer a future. Retains compatibility methods for main use cases (exception, cancel, etc)
+
+### Patch Changes
+
+- db90f89: Separate server/client to their own packages under a llama_agents namespace
+- 33bbd23: Read workflows from globals rather than sys modules to facilitate more robust/correct class loading
+- 0e826b1: Added in the utility function draw_all_possible_flows_nested_mermaid. This draws the possible flows (not execution) of nested workflows
+- Updated dependencies [73c1254]
+- Updated dependencies [45e7614]
+- Updated dependencies [45e7614]
+- Updated dependencies [2900f58]
+- Updated dependencies [6fdc45c]
+  - llama-index-workflows@2.14.0
+
 ## 0.8.0
 
 ### Minor Changes
