@@ -1,5 +1,5 @@
-# SPDX-FileCopyrightText: 2026 LlamaIndex Authors
 # SPDX-License-Identifier: MIT
+# Copyright (c) 2026 LlamaIndex Inc.
 """Pytest command for running tests across packages."""
 
 from __future__ import annotations

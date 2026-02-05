@@ -82,6 +82,14 @@ We use **pytest** with idiomatic pytest patterns. Follow these guidelines:
 ## Coding Style
 
 - Always use `from __future__ import annotations` at the top of each test file. Never use string annotations.
-- Include the standard SPDX license header at the top of each test file.
+- Include the standard SPDX license header at the top of each file:
+  ```python
+  # SPDX-License-Identifier: MIT
+  # Copyright (c) 2026 LlamaIndex Inc.
+  ```
 - Comments are useful, but avoid fluff.
-- Never use inline imports unless required to prevent circular dependencies.
+- Import etiquette
+  - **Never use inline imports**
+  - **Never use `if TYPE_CHECKING` imports**
+  - Exceptions to these rules are made only when there are A) Acceptable circular imports or B) real startup performance issues
+- Only add `__init__.py` `__all__` exports when a file is legitimately needed for public library consumption. Module level imports should not be used internally. For the most part you should never do this unless explicitly requested to do so
