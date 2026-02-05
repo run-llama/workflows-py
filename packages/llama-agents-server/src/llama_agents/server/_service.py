@@ -122,18 +122,14 @@ class _WorkflowService:
             f"Shutting down Workflow server. Cancelling {len(all_runs)} handlers."
         )
 
-        async def _cancel_run(
-            handler_id: str, adapter: ServerExternalAdapter
-        ) -> None:
+        async def _cancel_run(handler_id: str, adapter: ServerExternalAdapter) -> None:
             try:
                 adapter._cancel_idle_release_timer()
                 await adapter.cancel()
             except Exception:
                 pass
 
-        await asyncio.gather(
-            *[_cancel_run(hid, ext) for hid, ext in all_runs]
-        )
+        await asyncio.gather(*[_cancel_run(hid, ext) for hid, ext in all_runs])
         for decorator in self._decorators.values():
             decorator._active_runs.clear()
             decorator._context_providers.clear()
@@ -274,9 +270,7 @@ class _WorkflowService:
         """Get the server runtime decorator for a workflow."""
         return self._decorators.get(workflow_name)
 
-    def get_adapter_for_handler(
-        self, handler_id: str
-    ) -> ServerExternalAdapter | None:
+    def get_adapter_for_handler(self, handler_id: str) -> ServerExternalAdapter | None:
         """Find the active server external adapter for a handler ID."""
         for decorator in self._decorators.values():
             adapter = decorator.get_active_run(handler_id)

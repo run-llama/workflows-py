@@ -21,7 +21,6 @@ from workflows.events import (
     StopEvent,
     WorkflowIdleEvent,
 )
-from workflows.runtime.types.named_task import NamedTask
 from workflows.runtime.types.plugin import (
     ExternalRunAdapter,
     InternalRunAdapter,
@@ -237,7 +236,10 @@ class ServerInternalAdapter(BaseInternalRunAdapterDecorator):
             server_ext = self._runtime.get_active_run(handler_id)
             if server_ext is not None:
                 server_ext._notify_idle()
-        elif isinstance(event, StepStateChanged) and event.step_state == StepState.RUNNING:
+        elif (
+            isinstance(event, StepStateChanged)
+            and event.step_state == StepState.RUNNING
+        ):
             if meta.idle_since is not None:
                 meta.idle_since = None
                 server_ext = self._runtime.get_active_run(handler_id)
