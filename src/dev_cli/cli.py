@@ -1,5 +1,5 @@
-# SPDX-FileCopyrightText: 2026 LlamaIndex Authors
 # SPDX-License-Identifier: MIT
+# Copyright (c) 2026 LlamaIndex Inc.
 """CLI entry point for dev."""
 
 from __future__ import annotations

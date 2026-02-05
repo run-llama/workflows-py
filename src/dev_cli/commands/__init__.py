@@ -1,6 +1,5 @@
-# SPDX-FileCopyrightText: 2026 LlamaIndex Authors
 # SPDX-License-Identifier: MIT
-"""CLI commands for workflows-dev."""
+# Copyright (c) 2026 LlamaIndex Inc.
 
 from __future__ import annotations
 
