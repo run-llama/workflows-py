@@ -60,25 +60,25 @@ jobs:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
           UV_PUBLISH_TOKEN: ${{ secrets.PYPI_TOKEN }}
 
-      - name: Extract published llama-index-workflows version
+      - name: Extract published llama-agents-server version
         if: steps.changesets.outputs.published == 'true'
-        id: workflows-version
+        id: server-version
         run: |
           PACKAGES='${{ steps.changesets.outputs.publishedPackages }}'
-          VERSION=$(echo "$PACKAGES" | jq -r '.[] | select(.name == "llama-index-workflows") | .version')
+          VERSION=$(echo "$PACKAGES" | jq -r '.[] | select(.name == "llama-agents-server") | .version')
 
           if [ -n "$VERSION" ]; then
             echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-            echo "tag=llama-index-workflows@v${VERSION}" >> "$GITHUB_OUTPUT"
-            echo "Found llama-index-workflows version: $VERSION"
+            echo "tag=llama-agents-server@v${VERSION}" >> "$GITHUB_OUTPUT"
+            echo "Found llama-agents-server version: $VERSION"
           else
-            echo "llama-index-workflows was not published in this release"
+            echo "llama-agents-server was not published in this release"
           fi
 
-      - name: Trigger OpenAPI publish for llama-index-workflows
-        if: steps.changesets.outputs.published == 'true' && steps.workflows-version.outputs.version != ''
+      - name: Trigger OpenAPI publish for llama-agents-server
+        if: steps.changesets.outputs.published == 'true' && steps.server-version.outputs.version != ''
         uses: peter-evans/repository-dispatch@v3
         with:
           token: ${{ steps.app-token.outputs.token }}
           event-type: publish-openapi
-          client-payload: '{"tag": "${{ steps.workflows-version.outputs.tag }}"}'
+          client-payload: '{"tag": "${{ steps.server-version.outputs.tag }}"}'

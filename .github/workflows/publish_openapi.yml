@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag to update (e.g. llama-index-workflows@v2.12.0)"
+        description: "Release tag to update (e.g. llama-agents-server@v0.1.1)"
         required: true
         type: string
   repository_dispatch:
