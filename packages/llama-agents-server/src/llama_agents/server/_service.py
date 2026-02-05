@@ -5,14 +5,15 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
 from llama_index_instrumentation.dispatcher import instrument_tags
 from workflows import Context, Workflow
-from workflows.events import Event, StartEvent
+from workflows.events import Event, StartEvent, StopEvent
 from workflows.handler import WorkflowHandler
 from workflows.utils import _nanoid as nanoid
 
-from ._handler import _NamedWorkflow, _WorkflowHandler
+from ._server_runtime import ServerExternalAdapter, ServerRuntimeDecorator
 from .abstract_workflow_store import (
     AbstractWorkflowStore,
     HandlerQuery,
@@ -25,10 +26,11 @@ logger = logging.getLogger()
 
 
 class _WorkflowService:
-    """Handler lifecycle, persistence, and event registry management.
+    """Workflow registration, startup, and event registry management.
 
-    This layer owns the _handlers dict, _workflows dict, _reload_lock,
-    and all lifecycle methods. It has no knowledge of HTTP.
+    Delegates handler lifecycle (checkpointing, idle release, resume) to
+    ServerRuntimeDecorator. This layer handles workflow registration, run
+    initiation, context provider hookup, and event type registries.
     """
 
     def __init__(
@@ -40,13 +42,14 @@ class _WorkflowService:
     ) -> None:
         self._workflows: dict[str, Workflow] = {}
         self._additional_events: dict[str, list[type[Event]] | None] = {}
-        self._handlers: dict[str, _WorkflowHandler] = {}
         self._workflow_store = (
             workflow_store if workflow_store is not None else MemoryWorkflowStore()
         )
         self._persistence_backoff = list(persistence_backoff)
         self._idle_release_timeout = idle_release_timeout
         self._reload_lock = KeyedLock()
+        # Per-workflow runtime decorators
+        self._decorators: dict[str, ServerRuntimeDecorator] = {}
 
     def add_workflow(
         self,
@@ -57,6 +60,15 @@ class _WorkflowService:
         self._workflows[name] = workflow
         if additional_events is not None:
             self._additional_events[name] = additional_events
+        # Wrap the workflow's runtime with the server decorator
+        decorator = ServerRuntimeDecorator(
+            workflow._runtime,
+            store=self._workflow_store,
+            persistence_backoff=self._persistence_backoff,
+            idle_release_timeout=self._idle_release_timeout,
+        )
+        workflow._runtime = decorator
+        self._decorators[name] = decorator
 
     async def start(self) -> None:
         """Resume previously running (non-idle) workflows from persistence."""
@@ -71,9 +83,8 @@ class _WorkflowService:
             workflow = self._workflows[persistent.workflow_name]
             try:
                 await self.start_workflow(
-                    workflow=_NamedWorkflow(
-                        name=persistent.workflow_name, workflow=workflow
-                    ),
+                    workflow_name=persistent.workflow_name,
+                    workflow=workflow,
                     handler_id=persistent.handler_id,
                     context=Context.from_dict(workflow=workflow, data=persistent.ctx),
                 )
@@ -102,116 +113,206 @@ class _WorkflowService:
                 continue
 
     async def stop(self) -> None:
+        """Shut down all active workflow runs."""
+        # Collect all active runs across all decorators
+        all_runs: list[tuple[str, ServerExternalAdapter]] = []
+        for decorator in self._decorators.values():
+            all_runs.extend(list(decorator.active_runs.items()))
         logger.info(
-            f"Shutting down Workflow server. Cancelling {len(self._handlers)} handlers."
+            f"Shutting down Workflow server. Cancelling {len(all_runs)} handlers."
         )
+
+        async def _cancel_run(
+            handler_id: str, adapter: ServerExternalAdapter
+        ) -> None:
+            try:
+                adapter._cancel_idle_release_timer()
+                await adapter.cancel()
+            except Exception:
+                pass
+
         await asyncio.gather(
-            *[self.close_handler(handler) for handler in list(self._handlers.values())]
+            *[_cancel_run(hid, ext) for hid, ext in all_runs]
         )
-        self._handlers.clear()
+        for decorator in self._decorators.values():
+            decorator._active_runs.clear()
+            decorator._context_providers.clear()
+            decorator._run_metadata.clear()
 
     async def start_workflow(
         self,
-        workflow: _NamedWorkflow,
+        workflow_name: str,
+        workflow: Workflow,
         handler_id: str,
         start_event: StartEvent | None = None,
         context: Context | None = None,
-        idle_since: datetime | None = None,
-    ) -> _WorkflowHandler:
-        """Start a workflow and return a wrapper for the handler."""
+    ) -> ServerExternalAdapter:
+        """Start a workflow and return the server external adapter."""
+        decorator = self._decorators.get(workflow_name)
+        if decorator is None:
+            raise RuntimeError(f"Workflow '{workflow_name}' not registered")
+
         with instrument_tags({"handler_id": handler_id}):
-            handler = workflow.workflow.run(
+            handler: WorkflowHandler[Any] = workflow.run(
                 ctx=context,
                 start_event=start_event,
             )
-            wrapper = await self.run_workflow_handler(
-                handler_id, workflow.name, handler, idle_since=idle_since
+
+            # The external adapter returned by workflow.run() is already wrapped
+            # by ServerRuntimeDecorator.run_workflow() → ServerExternalAdapter
+            server_ext = self._get_server_external_adapter(handler)
+
+            # Register with the decorator
+            decorator.register_run(
+                handler_id,
+                server_ext,
+                workflow_name=workflow_name,
+                workflow=workflow,
             )
-            return wrapper
 
-    async def run_workflow_handler(
-        self,
-        handler_id: str,
-        workflow_name: str,
-        handler: WorkflowHandler,
-        idle_since: datetime | None = None,
-    ) -> _WorkflowHandler:
-        """Create a wrapper for the handler and start streaming events."""
-        queue: asyncio.Queue[Event] = asyncio.Queue()
-        started_at = datetime.now(timezone.utc)
+            # Register context provider for checkpointing
+            handler_ctx = handler.ctx
 
-        wrapper = _WorkflowHandler(
-            run_handler=handler,
-            queue=queue,
-            task=None,
-            consumer_mutex=asyncio.Lock(),
-            handler_id=handler_id,
-            workflow_name=workflow_name,
-            started_at=started_at,
-            updated_at=started_at,
-            completed_at=None,
-            _workflow_store=self._workflow_store,
-            _persistence_backoff=self._persistence_backoff,
-            _idle_release_timeout=self._idle_release_timeout,
-            _on_idle_release=self.release_handler,
+            def _get_ctx() -> dict[str, Any] | None:
+                try:
+                    return handler_ctx.to_dict()
+                except Exception:
+                    return None
+
+            decorator.register_context_provider_strong(handler_id, _get_ctx)
+
+            # Initial checkpoint (with retry matching step-checkpoint backoff)
+            ctx_dict = _get_ctx()
+            if ctx_dict is not None:
+                meta = decorator.get_run_metadata(handler_id)
+                if meta is not None:
+                    persistent = PersistentHandler(
+                        handler_id=handler_id,
+                        workflow_name=workflow_name,
+                        status="running",
+                        run_id=handler.run_id,
+                        started_at=meta.started_at,
+                        updated_at=meta.updated_at,
+                        ctx=ctx_dict,
+                    )
+                    try:
+                        await self._persist_with_retry(persistent)
+                    except Exception:
+                        # Clean up: cancel the run and unregister
+                        try:
+                            await server_ext.cancel()
+                        except Exception:
+                            pass
+                        decorator.unregister_run(handler_id)
+                        raise
+
+            # Set up completion callback to do final checkpoint and unregister
+            async def _on_complete() -> None:
+                # If the adapter was suspended, the inner run was cancelled
+                # intentionally — don't treat it as a real completion.
+                if server_ext.is_suspended:
+                    return
+
+                result = None
+                error: str | None = None
+                status: str = "completed"
+                try:
+                    result = await handler.stop_event_result()
+                except asyncio.CancelledError:
+                    # Re-check: suspend may have happened during the await
+                    if server_ext.is_suspended:
+                        return
+                    status = "cancelled"
+                except Exception as e:
+                    status = "failed"
+                    error = str(e)
+
+                # Final checkpoint with completed status
+                now = datetime.now(timezone.utc)
+                meta = decorator.get_run_metadata(handler_id)
+                if meta is not None:
+                    ctx_dict = _get_ctx() or {}
+                    meta.completed_at = now
+                    meta.updated_at = now
+                    persistent = PersistentHandler(
+                        handler_id=handler_id,
+                        workflow_name=workflow_name,
+                        status=status,
+                        run_id=handler.run_id,
+                        error=error,
+                        result=result if isinstance(result, StopEvent) else None,
+                        started_at=meta.started_at,
+                        updated_at=now,
+                        completed_at=now,
+                        ctx=ctx_dict,
+                    )
+                    try:
+                        await self._workflow_store.update(persistent)
+                    except Exception:
+                        pass
+
+                decorator.unregister_run(handler_id)
+
+            asyncio.create_task(_on_complete())
+
+            return server_ext
+
+    def _get_server_external_adapter(
+        self, handler: WorkflowHandler[Any]
+    ) -> ServerExternalAdapter:
+        """Extract the ServerExternalAdapter from a WorkflowHandler."""
+        adapter = handler._external_adapter
+        if isinstance(adapter, ServerExternalAdapter):
+            return adapter
+        # It should be wrapped by the decorator
+        raise RuntimeError(
+            "WorkflowHandler's external adapter is not a ServerExternalAdapter. "
+            "Is the workflow's runtime wrapped by ServerRuntimeDecorator?"
         )
-        wrapper.idle_since = idle_since
-        # Initial checkpoint before registration; fail fast if persistence is unavailable
-        await wrapper.checkpoint()
-        # Now register and start streaming
-        self._handlers[handler_id] = wrapper
 
-        async def on_finish() -> None:
-            self._handlers.pop(handler_id, None)
+    def get_decorator(self, workflow_name: str) -> ServerRuntimeDecorator | None:
+        """Get the server runtime decorator for a workflow."""
+        return self._decorators.get(workflow_name)
 
-        wrapper.start_streaming(on_finish=on_finish)
+    def get_adapter_for_handler(
+        self, handler_id: str
+    ) -> ServerExternalAdapter | None:
+        """Find the active server external adapter for a handler ID."""
+        for decorator in self._decorators.values():
+            adapter = decorator.get_active_run(handler_id)
+            if adapter is not None:
+                return adapter
+        return None
 
-        return wrapper
-
-    async def close_handler(self, handler: _WorkflowHandler) -> None:
-        """Close and cleanup a handler."""
-        await handler.cancel_handlers_and_tasks()
-        self._handlers.pop(handler.handler_id, None)
-
-    async def release_handler(self, wrapper: _WorkflowHandler) -> None:
-        """Release an idle handler from memory, keeping it in persistence."""
-        handler_id = wrapper.handler_id
-
-        async with self._reload_lock(handler_id):
-            current = self._handlers.get(handler_id)
-            if current is not None and current is not wrapper:
-                logger.debug(
-                    f"Skipping release checkpoint for {handler_id}: "
-                    "handler was already reloaded"
-                )
-                wrapper._cancel_idle_release_timer(skip_checkpoint=True)
-                await wrapper.cancel_handlers_and_tasks()
-                return
-
-            self._handlers.pop(handler_id, None)
-            wrapper._cancel_idle_release_timer()
-
-            try:
-                await wrapper.checkpoint()
-            finally:
-                await wrapper.cancel_handlers_and_tasks()
-
-        logger.info(f"Released idle workflow {handler_id} from memory")
+    def get_workflow_name_for_handler(self, handler_id: str) -> str | None:
+        """Get the workflow name for an active handler."""
+        for decorator in self._decorators.values():
+            meta = decorator.get_run_metadata(handler_id)
+            if meta is not None:
+                return meta.workflow_name
+        return None
 
     async def try_reload_handler(
         self, handler_id: str
-    ) -> tuple[_WorkflowHandler | None, PersistentHandler | None]:
+    ) -> tuple[ServerExternalAdapter | None, PersistentHandler | None]:
         """Attempt to reload a released handler from persistence.
 
-        Uses per-handler locking to prevent concurrent reloads from creating
-        duplicate workflow instances.
-
-        Returns (wrapper, persistent_data). The persistent data is returned
+        Returns (adapter, persistent_data). The persistent data is returned
         so callers can inspect it without re-querying the store.
+
+        Uses a per-handler lock to prevent concurrent reloads from creating
+        duplicate workflow instances.
         """
+        # Fast path: already active (no lock needed)
+        adapter = self.get_adapter_for_handler(handler_id)
+        if adapter is not None:
+            return adapter, None
+
         async with self._reload_lock(handler_id):
-            if handler_id in self._handlers:
-                return self._handlers[handler_id], None
+            # Re-check after acquiring lock
+            adapter = self.get_adapter_for_handler(handler_id)
+            if adapter is not None:
+                return adapter, None
 
             found = await self._workflow_store.query(
                 HandlerQuery(handler_id_in=[handler_id])
@@ -220,7 +321,6 @@ class _WorkflowService:
                 return None, None
 
             handler_data = found[0]
-
             if handler_data.status != "running":
                 return None, handler_data
 
@@ -233,23 +333,42 @@ class _WorkflowService:
 
             try:
                 context = Context.from_dict(workflow=workflow, data=handler_data.ctx)
-                wrapper = await self.start_workflow(
-                    workflow=_NamedWorkflow(
-                        name=handler_data.workflow_name, workflow=workflow
-                    ),
+                ext = await self.start_workflow(
+                    workflow_name=handler_data.workflow_name,
+                    workflow=workflow,
                     handler_id=handler_id,
                     context=context,
-                    idle_since=handler_data.idle_since,
                 )
-
-                if wrapper.idle_since is not None:
-                    wrapper._start_idle_release_timer()
-
                 logger.info(f"Reloaded workflow {handler_id} from persistence")
-                return wrapper, handler_data
+                return ext, handler_data
             except Exception as e:
                 logger.error(f"Failed to reload handler {handler_id}: {e}")
                 raise
+
+    async def _persist_with_retry(self, persistent: PersistentHandler) -> None:
+        """Persist handler state with retry/backoff matching step-checkpoint logic."""
+        backoffs = list(self._persistence_backoff)
+        while True:
+            try:
+                await self._workflow_store.update(persistent)
+                return
+            except Exception as e:
+                backoff = backoffs.pop(0) if backoffs else None
+                if backoff is None:
+                    raise
+                logger.error(
+                    f"Failed to persist handler {persistent.handler_id}. "
+                    f"Retrying in {backoff}s: {e}"
+                )
+                await asyncio.sleep(backoff)
+
+    def _get_context_dict(self, handler_id: str) -> dict[str, Any] | None:
+        """Get context dict for a handler from any decorator."""
+        for decorator in self._decorators.values():
+            ctx_dict = decorator.get_context_dict(handler_id)
+            if ctx_dict is not None:
+                return ctx_dict
+        return None
 
     def event_registry(self, workflow_name: str) -> dict[str, type[Event]]:
         items = {e.__name__: e for e in self._workflows[workflow_name].events}
@@ -269,11 +388,7 @@ class _WorkflowService:
         handler_id: str | None,
         run_kwargs: dict | None,
     ) -> tuple[str, dict | None]:
-        """Prepare and validate run parameters from already-parsed request data.
-
-        Returns (handler_id, start_event_data) where handler_id may be generated
-        if not provided.
-        """
+        """Prepare and validate run parameters from already-parsed request data."""
         if run_kwargs and start_event_data is None:
             start_event_data = run_kwargs
         handler_id = handler_id or nanoid()

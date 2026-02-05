@@ -14,7 +14,6 @@ def test_init() -> None:
     server = WorkflowServer()
     assert len(server.app.user_middleware) == 1
     assert server._service._workflows == {}
-    assert server._service._handlers == {}
 
 
 def test_init_custom_middleware() -> None:
@@ -68,7 +67,9 @@ def test_extract_workflow_success(simple_test_workflow: Workflow) -> None:
     mock_request = Mock()
     mock_request.path_params = {"name": "test"}
 
-    assert server._api._extract_workflow(mock_request).workflow == simple_test_workflow
+    name, workflow = server._api._extract_workflow(mock_request)
+    assert name == "test"
+    assert workflow == simple_test_workflow
 
 
 def test_extract_workflow_missing_name() -> None:

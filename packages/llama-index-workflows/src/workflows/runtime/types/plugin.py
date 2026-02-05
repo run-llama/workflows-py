@@ -180,6 +180,23 @@ class InternalRunAdapter(ABC):
         """
         pass
 
+    async def after_step_completed(self) -> None:
+        """
+        Called after a step result tick has been fully processed by the control loop.
+
+        This fires after _reduce_tick(TickStepResult) has updated the broker state
+        and all resulting commands (including write_to_event_stream for StepStateChanged)
+        have been processed. This is the right point for checkpointing since the full
+        state update is visible.
+
+        Also called at workflow completion (after the final tick that produces
+        CommandCompleteRun) so the decorator can do a final checkpoint.
+
+        Does not fire for non-step ticks (event ticks, timeout ticks, etc.).
+        Default is no-op.
+        """
+        pass
+
     async def wait_for_next_task(
         self,
         task_set: list[NamedTask],
@@ -522,13 +539,18 @@ def as_snapshottable_adapter(
     adapter: ExternalRunAdapter | InternalRunAdapter,
 ) -> SnapshottableAdapter | None:
     """
-    Check if an internal adapter supports snapshotting.
+    Check if an adapter supports snapshotting.
 
     Returns the adapter cast to SnapshottableAdapter if it implements
-    the snapshotting interface, or None otherwise.
+    the snapshotting interface, or None otherwise. Unwraps decorator
+    layers (adapters with a ``_inner`` attribute) to find a wrapped
+    snapshottable adapter.
     """
-    if isinstance(adapter, SnapshottableAdapter):
-        return adapter
+    current: ExternalRunAdapter | InternalRunAdapter | None = adapter
+    while current is not None:
+        if isinstance(current, SnapshottableAdapter):
+            return current
+        current = getattr(current, "_inner", None)
     return None
 
 
@@ -573,9 +595,15 @@ def as_v2_runtime_compatibility_shim(
 ) -> V2RuntimeCompatibilityShim | None:
     """
     Check if an adapter supports the V2 runtime compatibility shim.
+
+    Unwraps decorator layers (adapters with a ``_inner`` attribute) to find
+    a wrapped V2RuntimeCompatibilityShim.
     """
-    if isinstance(adapter, V2RuntimeCompatibilityShim):
-        return adapter
+    current: ExternalRunAdapter | None = adapter
+    while current is not None:
+        if isinstance(current, V2RuntimeCompatibilityShim):
+            return current
+        current = getattr(current, "_inner", None)
     return None
 
 

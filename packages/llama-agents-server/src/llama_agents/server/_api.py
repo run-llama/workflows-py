@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from importlib.metadata import version
 from pathlib import Path
 from typing import AsyncGenerator, cast
@@ -37,12 +38,14 @@ from starlette.staticfiles import StaticFiles
 from workflows import Context, Workflow
 from workflows.events import InternalDispatchEvent, StartEvent
 from workflows.representation import get_workflow_representation
+from workflows.runtime.types.ticks import TickAddEvent
 from workflows.utils import _nanoid as nanoid
 
-from ._handler import NoLockAvailable, _NamedWorkflow, _WorkflowHandler
+from ._server_runtime import ServerExternalAdapter
 from ._service import _WorkflowService
 from .abstract_workflow_store import (
     HandlerQuery,
+    PersistentHandler,
     Status,
 )
 
@@ -50,6 +53,84 @@ logger = logging.getLogger()
 
 
 _DEFAULT_ASSETS_PATH = Path(__file__).parent / "static"
+
+
+def _handler_data_from_persistent(persistent: PersistentHandler) -> HandlerData:
+    """Build HandlerData from a PersistentHandler record."""
+    return HandlerData(
+        handler_id=persistent.handler_id,
+        workflow_name=persistent.workflow_name,
+        run_id=persistent.run_id,
+        status=persistent.status,
+        started_at=persistent.started_at.isoformat()
+        if persistent.started_at is not None
+        else datetime.now(timezone.utc).isoformat(),
+        updated_at=persistent.updated_at.isoformat()
+        if persistent.updated_at is not None
+        else None,
+        completed_at=persistent.completed_at.isoformat()
+        if persistent.completed_at is not None
+        else None,
+        error=persistent.error,
+        result=EventEnvelopeWithMetadata.from_event(persistent.result)
+        if persistent.result is not None
+        else None,
+    )
+
+
+def _build_handler_data(
+    handler_id: str,
+    adapter: ServerExternalAdapter,
+    service: _WorkflowService,
+) -> HandlerData:
+    """Build HandlerData from an active adapter."""
+    workflow_name = service.get_workflow_name_for_handler(handler_id) or ""
+    for decorator in service._decorators.values():
+        meta = decorator.get_run_metadata(handler_id)
+        if meta is not None:
+            status: Status = "running"
+            error: str | None = None
+            result = None
+
+            try:
+                if adapter._inner_done():
+                    try:
+                        result = adapter._inner_result()
+                        status = "completed"
+                        meta.completed_at = meta.updated_at
+                    except asyncio.CancelledError:
+                        status = "cancelled"
+                        meta.completed_at = meta.updated_at
+                    except Exception as e:
+                        status = "failed"
+                        error = str(e)
+                        meta.completed_at = meta.updated_at
+            except Exception:
+                pass
+
+            return HandlerData(
+                handler_id=handler_id,
+                workflow_name=meta.workflow_name,
+                run_id=adapter.run_id,
+                status=status,
+                started_at=meta.started_at.isoformat(),
+                updated_at=meta.updated_at.isoformat(),
+                completed_at=meta.completed_at.isoformat()
+                if meta.completed_at is not None
+                else None,
+                error=error,
+                result=EventEnvelopeWithMetadata.from_event(result)
+                if result is not None
+                else None,
+            )
+
+    return HandlerData(
+        handler_id=handler_id,
+        workflow_name=workflow_name,
+        run_id=adapter.run_id,
+        status="running",
+        started_at=datetime.now(timezone.utc).isoformat(),
+    )
 
 
 class _WorkflowAPI:
@@ -247,10 +328,14 @@ class _WorkflowAPI:
                       description: Number of workflow handlers that are idle
                   required: [status, loaded_workflows, active_workflows, idle_workflows]
         """
-        loaded = len(self._service._handlers)
-        idle = sum(
-            1 for h in self._service._handlers.values() if h.idle_since is not None
-        )
+        loaded = 0
+        idle = 0
+        for decorator in self._service._decorators.values():
+            loaded += len(decorator.active_runs)
+            for hid in decorator.active_runs:
+                meta = decorator.get_run_metadata(hid)
+                if meta is not None and meta.idle_since is not None:
+                    idle += 1
         active = loaded - idle
         return JSONResponse(
             HealthResponse(
@@ -375,41 +460,38 @@ class _WorkflowAPI:
           500:
             description: Error running workflow or invalid request body
         """
-        workflow = self._extract_workflow(request)
+        name, workflow = self._extract_workflow(request)
         context, start_event, handler_id = await self._extract_run_params(
-            request, workflow.workflow, workflow.name
+            request, workflow, name
         )
 
         if start_event is not None:
-            input_ev = workflow.workflow.start_event_class.model_validate(start_event)
+            input_ev = workflow.start_event_class.model_validate(start_event)
         else:
             input_ev = None
 
         try:
-            wrapper = await self._service.start_workflow(
-                workflow=_NamedWorkflow(name=workflow.name, workflow=workflow.workflow),
+            adapter = await self._service.start_workflow(
+                workflow_name=name,
+                workflow=workflow,
                 handler_id=handler_id,
                 context=context,
                 start_event=input_ev,
             )
-            handler = wrapper.run_handler
             try:
-                await handler
+                await adapter.get_result()
                 status = 200
             except Exception as e:
                 status = 500
                 logger.error(f"Error running workflow: {e}", exc_info=True)
-            if wrapper.task is not None:
-                try:
-                    await wrapper.task
-                except Exception:
-                    pass
-            # explicitly close handlers from this synchronous api so they don't linger with events
-            # that no-one is listening for
-            await self._service.close_handler(wrapper)
+
+            # Wait briefly for the _on_complete task to persist final state
+            await asyncio.sleep(0)
+
+            handler_data = _build_handler_data(handler_id, adapter, self._service)
 
             return JSONResponse(
-                wrapper.to_response_model().model_dump(), status_code=status
+                handler_data.model_dump(), status_code=status
             )
         except Exception as e:
             status = 500
@@ -451,16 +533,16 @@ class _WorkflowAPI:
           500:
             description: Error while getting the JSON schema for the start or stop event
         """
-        workflow = self._extract_workflow(request)
+        name, workflow = self._extract_workflow(request)
         try:
-            start_event_schema = workflow.workflow.start_event_class.model_json_schema()
+            start_event_schema = workflow.start_event_class.model_json_schema()
         except Exception as e:
             raise HTTPException(
                 detail=f"Error getting schema of start event for workflow: {e}",
                 status_code=500,
             )
         try:
-            stop_event_schema = workflow.workflow.stop_event_class.model_json_schema()
+            stop_event_schema = workflow.stop_event_class.model_json_schema()
         except Exception as e:
             raise HTTPException(
                 detail=f"Error getting schema of stop event for workflow: {e}",
@@ -504,9 +586,9 @@ class _WorkflowAPI:
           500:
             description: Error while getting JSON workflow representation
         """
-        workflow = self._extract_workflow(request)
+        name, workflow = self._extract_workflow(request)
         try:
-            workflow_graph = get_workflow_representation(workflow.workflow)
+            workflow_graph = get_workflow_representation(workflow)
         except Exception as e:
             raise HTTPException(
                 detail=f"Error while getting JSON workflow representation: {e}",
@@ -559,19 +641,20 @@ class _WorkflowAPI:
           404:
             description: Workflow or handler identifier not found
         """
-        workflow = self._extract_workflow(request)
+        name, workflow = self._extract_workflow(request)
         context, start_event, handler_id = await self._extract_run_params(
-            request, workflow.workflow, workflow.name
+            request, workflow, name
         )
 
         if start_event is not None:
-            input_ev = workflow.workflow.start_event_class.model_validate(start_event)
+            input_ev = workflow.start_event_class.model_validate(start_event)
         else:
             input_ev = None
 
         try:
-            wrapper = await self._service.start_workflow(
-                workflow=_NamedWorkflow(name=workflow.name, workflow=workflow.workflow),
+            adapter = await self._service.start_workflow(
+                workflow_name=name,
+                workflow=workflow,
                 handler_id=handler_id,
                 context=context,
                 start_event=input_ev,
@@ -581,27 +664,22 @@ class _WorkflowAPI:
             raise HTTPException(
                 detail=f"Initial persistence failed: {e}", status_code=500
             )
-        return JSONResponse(wrapper.to_response_model().model_dump())
+        handler_data = _build_handler_data(handler_id, adapter, self._service)
+        return JSONResponse(handler_data.model_dump())
 
     async def _load_handler(self, handler_id: str) -> HandlerData:
-        wrapper = self._service._handlers.get(handler_id)
-        if wrapper is None:
-            found = await self._service._workflow_store.query(
-                HandlerQuery(handler_id_in=[handler_id])
-            )
-            if not found:
-                raise HTTPException(detail="Handler not found", status_code=404)
-            existing = found[0]
-            return _WorkflowHandler.handler_data_from_persistent(existing)
-        else:
-            if wrapper.run_handler.done() and wrapper.task is not None:
-                try:
-                    await wrapper.task  # make sure its fully done
-                except Exception:
-                    # failed workflows raise their exception here
-                    pass  # failed workflows raise their exception here
+        """Load handler data from active decorators or persistence."""
+        adapter = self._service.get_adapter_for_handler(handler_id)
+        if adapter is not None:
+            return _build_handler_data(handler_id, adapter, self._service)
 
-            return wrapper.to_response_model()
+        # Not active - check persistence
+        found = await self._service._workflow_store.query(
+            HandlerQuery(handler_id_in=[handler_id])
+        )
+        if not found:
+            raise HTTPException(detail="Handler not found", status_code=404)
+        return _handler_data_from_persistent(found[0])
 
     async def _get_workflow_result(self, request: Request) -> JSONResponse:
         """
@@ -720,18 +798,6 @@ class _WorkflowAPI:
         description: |
           Streams events produced by a workflow execution. Events are emitted as
           newline-delimited JSON by default, or as Server-Sent Events when `sse=true`.
-          Event data is returned as an envelope that preserves backward-compatible fields
-          and adds metadata for type-safety on the client:
-          {
-            "value": <pydantic serialized value>,
-            "types": [<class names from MRO excluding the event class and base Event>],
-            "type": <class name>,
-            "qualified_name": <python module path + class name>,
-          }
-
-          Event queue is mutable. Elements are added to the queue by the workflow handler, and removed by any consumer of the queue.
-          The queue is protected by a lock that is acquired by the consumer, so only one consumer of the queue at a time is allowed.
-
         parameters:
           - in: path
             name: handler_id
@@ -754,13 +820,6 @@ class _WorkflowAPI:
               default: false
             description: If true, include internal workflow events (e.g., step state changes).
           - in: query
-            name: acquire_timeout
-            required: false
-            schema:
-              type: number
-              default: 1
-            description: Timeout for acquiring the lock to iterate over the events.
-          - in: query
             name: include_qualified_name
             required: false
             schema:
@@ -774,28 +833,10 @@ class _WorkflowAPI:
               text/event-stream:
                 schema:
                   type: object
-                  description: Server-Sent Events stream of event data.
-                  properties:
-                    value:
-                      type: object
-                      description: The event value.
-                    type:
-                      type: string
-                      description: The class name of the event.
-                    types:
-                      type: array
-                      description: Superclass names from MRO (excluding the event class and base Event).
-                      items:
-                        type: string
-                    qualified_name:
-                      type: string
-                      description: The qualified name of the event.
-                  required: [value, type]
           404:
             description: Handler not found
         """
         handler_id = request.path_params["handler_id"]
-        timeout = request.query_params.get("acquire_timeout", "1").lower()
         include_internal = (
             request.query_params.get("include_internal", "false").lower() == "true"
         )
@@ -803,23 +844,18 @@ class _WorkflowAPI:
             request.query_params.get("include_qualified_name", "true").lower() == "true"
         )
         sse = request.query_params.get("sse", "true").lower() == "true"
-        try:
-            timeout = float(timeout)
-        except ValueError:
-            raise HTTPException(
-                detail=f"Invalid acquire_timeout: '{timeout}'", status_code=400
-            )
 
-        handler = self._service._handlers.get(handler_id)
-        if handler is None:
+        # Find active adapter
+        adapter = self._service.get_adapter_for_handler(handler_id)
+        if adapter is None:
             # Try to reload from persistence (for released idle workflows)
             try:
-                handler, persisted = await self._service.try_reload_handler(handler_id)
+                adapter, persisted = await self._service.try_reload_handler(handler_id)
             except Exception as e:
                 raise HTTPException(
                     detail=f"Failed to reload handler: {e}", status_code=500
                 )
-            if handler is None:
+            if adapter is None:
                 if persisted:
                     status = persisted.status
                     if status in {"completed", "failed", "cancelled"}:
@@ -827,25 +863,20 @@ class _WorkflowAPI:
                             detail="Handler is completed", status_code=204
                         )
                 raise HTTPException(detail="Handler not found", status_code=404)
-        if handler.queue.empty() and handler.task is not None and handler.task.done():
-            # https://html.spec.whatwg.org/multipage/server-sent-events.html
-            # Clients will reconnect if the connection is closed; a client can
-            # be told to stop reconnecting using the HTTP 204 No Content response code.
-            raise HTTPException(detail="Handler is completed", status_code=204)
 
-        # Get raw_event query parameter
+        # Check if already done
+        try:
+            if adapter._inner_done():
+                raise HTTPException(detail="Handler is completed", status_code=204)
+        except HTTPException:
+            raise
+        except Exception:
+            pass
+
         media_type = "text/event-stream" if sse else "application/x-ndjson"
 
-        try:
-            generator = await handler.acquire_events_stream(timeout=timeout)
-        except NoLockAvailable as e:
-            raise HTTPException(
-                detail=f"No lock available to acquire after {timeout}s timeout",
-                status_code=409,
-            ) from e
-
-        async def event_stream(handler: _WorkflowHandler) -> AsyncGenerator[str, None]:
-            async for event in generator:
+        async def event_stream() -> AsyncGenerator[str, None]:
+            async for event in adapter.stream_published_events():
                 if not include_internal and isinstance(event, InternalDispatchEvent):
                     continue
                 envelope = EventEnvelopeWithMetadata.from_event(
@@ -853,14 +884,13 @@ class _WorkflowAPI:
                 )
                 payload = envelope.model_dump_json()
                 if sse:
-                    # emit as untyped data. Difficult to subscribe to dynamic event types with SSE.
                     yield f"data: {payload}\n\n"
                 else:
                     yield f"{payload}\n"
 
                 await asyncio.sleep(0)
 
-        return StreamingResponse(event_stream(handler), media_type=media_type)
+        return StreamingResponse(event_stream(), media_type=media_type)
 
     async def _get_handlers(self, request: Request) -> JSONResponse:
         """
@@ -973,36 +1003,13 @@ class _WorkflowAPI:
                 properties:
                   event:
                     description: Serialized event. Accepts object or JSON-encoded string for backward compatibility.
-                    oneOf:
-                      - type: string
-                        description: JSON string of the event envelope or value.
-                        examples:
-                          - '{"type": "ExternalEvent", "value": {"response": "hi"}}'
-                      - type: object
-                        properties:
-                          type:
-                            type: string
-                            description: The class name of the event.
-                          value:
-                            type: object
-                            description: The event value object (preferred over data).
-                        additionalProperties: true
                   step:
                     type: string
-                    description: Optional target step name. If not provided, event is sent to all steps.
+                    description: Optional target step name.
                 required: [event]
         responses:
           200:
             description: Event sent successfully
-            content:
-              application/json:
-                schema:
-                  type: object
-                  properties:
-                    status:
-                      type: string
-                      enum: [sent]
-                  required: [status]
           400:
             description: Invalid event data
           404:
@@ -1012,20 +1019,27 @@ class _WorkflowAPI:
         """
         handler_id = request.path_params["handler_id"]
 
-        # Check if handler exists
-        wrapper = self._service._handlers.get(handler_id)
-        if wrapper is not None and is_status_completed(wrapper.status):
-            raise HTTPException(detail="Workflow already completed", status_code=409)
-        if wrapper is None:
-            # Try to reload from persistence (for released idle workflows)
+        # Find active adapter
+        adapter = self._service.get_adapter_for_handler(handler_id)
+
+        # Check if active and completed
+        if adapter is not None:
             try:
-                wrapper, persisted = await self._service.try_reload_handler(handler_id)
+                if adapter._inner_done():
+                    raise HTTPException(detail="Workflow already completed", status_code=409)
+            except HTTPException:
+                raise
+            except Exception:
+                pass
+        else:
+            # Try to reload from persistence
+            try:
+                adapter, persisted = await self._service.try_reload_handler(handler_id)
             except Exception as e:
                 raise HTTPException(
                     detail=f"Failed to reload handler: {e}", status_code=500
                 )
-            if wrapper is None:
-                # Check if it exists but is completed
+            if adapter is None:
                 if persisted and is_status_completed(persisted.status):
                     raise HTTPException(
                         detail="Workflow already completed", status_code=409
@@ -1033,23 +1047,15 @@ class _WorkflowAPI:
                 elif persisted is None:
                     raise HTTPException(detail="Handler not found", status_code=404)
                 else:
-                    # Shouldn't really happen
                     raise HTTPException(
                         detail=f"Failed to resume incomplete handler with status {persisted.status}",
                         status_code=500,
                     )
 
-        # Immediately mark active to cancel the idle timer before it can fire.
-        # This prevents a race where the timer releases the handler before we
-        # finish processing the event.
-        wrapper.mark_active()
-
-        handler = wrapper.run_handler
-
-        # Get the context
-        ctx = handler.ctx
-        if ctx is None:
-            raise HTTPException(detail="Context not available", status_code=500)
+        # Get workflow name for event registry
+        workflow_name = self._service.get_workflow_name_for_handler(handler_id)
+        if workflow_name is None:
+            raise HTTPException(detail="Workflow name not found for handler", status_code=500)
 
         # Parse request body
         try:
@@ -1061,10 +1067,9 @@ class _WorkflowAPI:
                 raise HTTPException(detail="Event data is required", status_code=400)
 
             # Deserialize the event
-
             try:
                 event = EventEnvelope.parse(
-                    event_str, self._service.event_registry(wrapper.workflow_name)
+                    event_str, self._service.event_registry(workflow_name)
                 )
             except EventValidationError as e:
                 raise HTTPException(detail=str(e), status_code=400)
@@ -1073,9 +1078,10 @@ class _WorkflowAPI:
                     detail=f"Failed to deserialize event: {e}", status_code=400
                 )
 
-            # Send the event to the context
+            # Send the event via the adapter using TickAddEvent
             try:
-                ctx.send_event(event, step=step)
+                tick = TickAddEvent(event=event, step_name=step)
+                await adapter.send_event(tick)
             except Exception as e:
                 raise HTTPException(
                     detail=f"Failed to send event: {e}", status_code=400
@@ -1110,33 +1116,53 @@ class _WorkflowAPI:
             schema:
               type: boolean
               default: false
-            description: If true, also deletes the handler from the store, otherwise updates the status to cancelled.
+            description: If true, also deletes the handler from the store.
         responses:
           200:
             description: Handler cancelled and deleted or cancelled only
-            content:
-              application/json:
-                schema:
-                  type: object
-                  properties:
-                    status:
-                      type: string
-                      enum: [deleted, cancelled]
-                  required: [status]
           404:
             description: Handler not found
         """
         handler_id = request.path_params["handler_id"]
-        # Simple boolean parsing aligned with other APIs (e.g., `sse`): only "true" enables
         purge = request.query_params.get("purge", "false").lower() == "true"
 
-        wrapper = self._service._handlers.get(handler_id)
-        if wrapper is None and not purge:
+        adapter = self._service.get_adapter_for_handler(handler_id)
+        if adapter is None and not purge:
             raise HTTPException(detail="Handler not found", status_code=404)
 
-        # Close the handler if it exists (this will cancel and trigger auto-checkpoint)
-        if wrapper is not None:
-            await self._service.close_handler(wrapper)
+        # Cancel the adapter if active
+        if adapter is not None:
+            adapter._cancel_idle_release_timer()
+            try:
+                await adapter.cancel()
+            except Exception:
+                pass
+            # Persist cancelled status
+            workflow_name = self._service.get_workflow_name_for_handler(handler_id) or ""
+            for decorator in self._service._decorators.values():
+                meta = decorator.get_run_metadata(handler_id)
+                if meta is not None:
+                    now = datetime.now(timezone.utc)
+                    meta.completed_at = now
+                    meta.updated_at = now
+                    persistent = PersistentHandler(
+                        handler_id=handler_id,
+                        workflow_name=workflow_name,
+                        status="cancelled",
+                        run_id=adapter.run_id,
+                        started_at=meta.started_at,
+                        updated_at=now,
+                        completed_at=now,
+                        ctx=self._service._get_context_dict(handler_id) or {},
+                    )
+                    try:
+                        await self._service._workflow_store.update(persistent)
+                    except Exception:
+                        pass
+                    break
+            # Unregister from all decorators
+            for decorator in self._service._decorators.values():
+                decorator.unregister_run(handler_id)
 
         # Handle persistence
         if purge:
@@ -1155,7 +1181,7 @@ class _WorkflowAPI:
     #
     # Private methods
     #
-    def _extract_workflow(self, request: Request) -> _NamedWorkflow:
+    def _extract_workflow(self, request: Request) -> tuple[str, Workflow]:
         if "name" not in request.path_params:
             raise HTTPException(detail="'name' parameter missing", status_code=400)
         name = request.path_params["name"]
@@ -1163,7 +1189,7 @@ class _WorkflowAPI:
         if name not in self._service._workflows:
             raise HTTPException(detail="Workflow not found", status_code=404)
 
-        return _NamedWorkflow(name=name, workflow=self._service._workflows[name])
+        return (name, self._service._workflows[name])
 
     async def _extract_run_params(
         self, request: Request, workflow: Workflow, workflow_name: str

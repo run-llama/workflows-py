@@ -126,6 +126,9 @@ class BaseInternalRunAdapterDecorator(InternalRunAdapter):
     async def finalize_step(self) -> None:
         await self._inner.finalize_step()
 
+    async def after_step_completed(self) -> None:
+        await self._inner.after_step_completed()
+
     async def wait_for_next_task(
         self,
         task_set: list[NamedTask],

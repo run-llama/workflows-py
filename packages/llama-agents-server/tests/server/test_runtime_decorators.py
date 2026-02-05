@@ -30,6 +30,7 @@ from workflows.runtime.types.ticks import WorkflowTick
 class StubInternalAdapter(InternalRunAdapter):
     def __init__(self) -> None:
         self.closed = False
+        self.after_step_completed_called = False
 
     @property
     def run_id(self) -> str:
@@ -52,6 +53,9 @@ class StubInternalAdapter(InternalRunAdapter):
 
     def get_state_store(self) -> StateStore[Any] | None:
         return None
+
+    async def after_step_completed(self) -> None:
+        self.after_step_completed_called = True
 
 
 class StubExternalAdapter(ExternalRunAdapter):
@@ -126,6 +130,8 @@ async def test_internal_adapter_decorator_forwards() -> None:
     dec = BaseInternalRunAdapterDecorator(inner)
     assert dec.run_id == "r1"
     assert await dec.get_now() == 1.0
+    await dec.after_step_completed()
+    assert inner.after_step_completed_called
     await dec.close()
     assert inner.closed
 

@@ -424,17 +424,24 @@ class _ControlLoopRunner:
         if self.snapshot_adapter is not None:
             self.snapshot_adapter.on_tick(tick)
 
+        result: StopEvent | None = None
         for command in commands:
             try:
-                result = await self.process_command(command)
+                cmd_result = await self.process_command(command)
             except Exception:
                 await self.cleanup_tasks()
                 raise
 
-            if result is not None:
-                return result
+            if cmd_result is not None:
+                result = cmd_result
 
-        return None
+        # Fire after_step_completed() after all commands from a step result
+        # tick have been processed (state is fully updated, events published).
+        # This also fires at workflow completion for a final checkpoint.
+        if isinstance(tick, TickStepResult):
+            await self.adapter.after_step_completed()
+
+        return result
 
 
 async def control_loop(

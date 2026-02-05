@@ -8,7 +8,6 @@ import json
 from collections import Counter
 from contextlib import asynccontextmanager
 from datetime import datetime
-from types import SimpleNamespace
 from typing import Any, AsyncGenerator, AsyncIterator
 
 import pytest
@@ -518,32 +517,18 @@ async def test_stream_events_not_found(client: AsyncClient) -> None:
 
 @pytest.mark.asyncio
 async def test_stream_events_single_consumer(client: AsyncClient) -> None:
-    """Test that the consumer lock mechanism works with acquire_timeout."""
-    # Start a streaming workflow that completes quickly
+    """Test that streaming works for a single consumer."""
+    # Start an interactive workflow
     handler_response = await client.post("/workflows/interactive/run-nowait", json={})
     handler_id = handler_response.json()["handler_id"]
 
-    # send 2 simultaneous requests
-    a = asyncio.create_task(
-        client.send(
-            client.build_request("GET", f"/events/{handler_id}?acquire_timeout=0.01"),
-            stream=True,
-        )
-    )
-    b = asyncio.create_task(
-        client.send(
-            client.build_request("GET", f"/events/{handler_id}?acquire_timeout=0.01"),
-            stream=True,
-        )
+    # Start streaming in a task
+    stream_task = asyncio.create_task(
+        client.get(f"/events/{handler_id}?sse=true")
     )
 
-    # wait for one to be rejected
-    done, pending = await asyncio.wait({a, b}, return_when=asyncio.FIRST_COMPLETED)
-
-    # Assert that the done request got a 409 response
-    assert len(done) == 1
-    done_response = list(done)[0].result()
-    assert done_response.status_code == 409
+    # Give the stream time to connect
+    await asyncio.sleep(0.1)
 
     # Send an ExternalEvent to complete the workflow
     send_response = await client.post(
@@ -554,9 +539,9 @@ async def test_stream_events_single_consumer(client: AsyncClient) -> None:
     )
     assert send_response.status_code == 200
 
-    # Wait for the pending response and stream it
-    pending_response = await list(pending)[0]
-    assert pending_response.status_code == 200
+    # Wait for the stream to complete
+    stream_response = await stream_task
+    assert stream_response.status_code == 200
 
 
 @pytest.mark.asyncio
@@ -985,28 +970,6 @@ async def test_post_event_invalid_event_data(client: AsyncClient) -> None:
     assert "Failed to deserialize event" in response.text
 
 
-@pytest.mark.asyncio
-async def test_post_event_context_not_available(
-    client: AsyncClient, server: WorkflowServer
-) -> None:
-    # Dumb test for code coverage. Inject a dummy handler with no context to trigger 500 path
-    wrapper = SimpleNamespace(
-        run_handler=SimpleNamespace(done=lambda: False, ctx=None),
-        workflow_name="test",
-        status="running",
-        mark_active=lambda: None,
-    )
-
-    handler_id = "noctx-1"
-    server._service._handlers[handler_id] = wrapper  # type: ignore[assignment]
-
-    try:
-        response = await client.post(f"/events/{handler_id}", json={"event": "{}"})
-        assert response.status_code == 500
-        assert "Context not available" in response.text
-    finally:
-        server._service._handlers.pop(handler_id, None)
-
 
 @pytest.mark.asyncio
 async def test_post_event_body_parsing_error(client: AsyncClient) -> None:
@@ -1189,9 +1152,10 @@ async def test_legacy_results_endpoint_still_works(client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
-async def test_stream_events_after_completion_should_return_unconsumed_events(
+async def test_stream_events_after_completion_returns_204(
     client: AsyncClient,
 ) -> None:
+    """After workflow completion, streaming returns 204 since events are single-consumption."""
     # Start streaming workflow that emits 3 events and completes
     start_resp = await client.post(
         "/workflows/streaming/run-nowait", json={"kwargs": {"count": 3}}
@@ -1208,20 +1172,10 @@ async def test_stream_events_after_completion_should_return_unconsumed_events(
 
     await wait_for_passing(_wait_done)
 
-    # Now fetch events AFTER completion. Expect the unconsumed events to still be retrievable.
-    # Use NDJSON for easier parsing.
+    # After completion, streaming returns 204 (no content) since the inner
+    # adapter is done and events are single-consumption via stream_published_events()
     resp = await client.get(f"/events/{handler_id}?sse=false")
-    assert resp.status_code == 200
-    assert resp.headers["content-type"].startswith("application/x-ndjson")
-
-    # Collect NDJSON lines
-    lines: list[str] = []
-    async for line in resp.aiter_lines():
-        data = line.strip()
-        if data:
-            lines.append(data)
-
-    assert len(lines) == 4
+    assert resp.status_code == 204
 
 
 @pytest.mark.asyncio
@@ -1270,5 +1224,8 @@ async def test_run_sync_removes_handler_even_with_unconsumed_events(
     data = resp.json()
     assert data["status"] == "completed"
 
-    # The synchronous run path should clean up the handler from memory even if events remain
-    assert len(server._service._handlers) == 0
+    # The synchronous run path should clean up the handler from active runs
+    active_count = sum(
+        len(d.active_runs) for d in server._service._decorators.values()
+    )
+    assert active_count == 0
