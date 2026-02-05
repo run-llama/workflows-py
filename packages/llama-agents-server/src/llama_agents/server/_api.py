@@ -490,9 +490,7 @@ class _WorkflowAPI:
 
             handler_data = _build_handler_data(handler_id, adapter, self._service)
 
-            return JSONResponse(
-                handler_data.model_dump(), status_code=status
-            )
+            return JSONResponse(handler_data.model_dump(), status_code=status)
         except Exception as e:
             status = 500
             logger.error(f"Error running workflow: {e}", exc_info=True)
@@ -1026,7 +1024,9 @@ class _WorkflowAPI:
         if adapter is not None:
             try:
                 if adapter._inner_done():
-                    raise HTTPException(detail="Workflow already completed", status_code=409)
+                    raise HTTPException(
+                        detail="Workflow already completed", status_code=409
+                    )
             except HTTPException:
                 raise
             except Exception:
@@ -1055,7 +1055,9 @@ class _WorkflowAPI:
         # Get workflow name for event registry
         workflow_name = self._service.get_workflow_name_for_handler(handler_id)
         if workflow_name is None:
-            raise HTTPException(detail="Workflow name not found for handler", status_code=500)
+            raise HTTPException(
+                detail="Workflow name not found for handler", status_code=500
+            )
 
         # Parse request body
         try:
@@ -1138,7 +1140,9 @@ class _WorkflowAPI:
             except Exception:
                 pass
             # Persist cancelled status
-            workflow_name = self._service.get_workflow_name_for_handler(handler_id) or ""
+            workflow_name = (
+                self._service.get_workflow_name_for_handler(handler_id) or ""
+            )
             for decorator in self._service._decorators.values():
                 meta = decorator.get_run_metadata(handler_id)
                 if meta is not None:

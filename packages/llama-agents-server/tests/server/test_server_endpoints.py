@@ -523,9 +523,7 @@ async def test_stream_events_single_consumer(client: AsyncClient) -> None:
     handler_id = handler_response.json()["handler_id"]
 
     # Start streaming in a task
-    stream_task = asyncio.create_task(
-        client.get(f"/events/{handler_id}?sse=true")
-    )
+    stream_task = asyncio.create_task(client.get(f"/events/{handler_id}?sse=true"))
 
     # Give the stream time to connect
     await asyncio.sleep(0.1)
@@ -970,7 +968,6 @@ async def test_post_event_invalid_event_data(client: AsyncClient) -> None:
     assert "Failed to deserialize event" in response.text
 
 
-
 @pytest.mark.asyncio
 async def test_post_event_body_parsing_error(client: AsyncClient) -> None:
     # Start interactive workflow which waits for an event (keeps running)
@@ -1225,7 +1222,5 @@ async def test_run_sync_removes_handler_even_with_unconsumed_events(
     assert data["status"] == "completed"
 
     # The synchronous run path should clean up the handler from active runs
-    active_count = sum(
-        len(d.active_runs) for d in server._service._decorators.values()
-    )
+    active_count = sum(len(d.active_runs) for d in server._service._decorators.values())
     assert active_count == 0

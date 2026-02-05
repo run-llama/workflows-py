@@ -9,7 +9,10 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 from httpx import ASGITransport, AsyncClient
-from llama_agents.server._server_runtime import ServerExternalAdapter, ServerRuntimeDecorator
+from llama_agents.server._server_runtime import (
+    ServerExternalAdapter,
+    ServerRuntimeDecorator,
+)
 from llama_agents.server.abstract_workflow_store import (
     HandlerQuery,
     PersistentHandler,
@@ -17,7 +20,7 @@ from llama_agents.server.abstract_workflow_store import (
 )
 from llama_agents.server.memory_workflow_store import MemoryWorkflowStore
 from llama_agents.server.server import WorkflowServer
-from server_test_fixtures import async_yield, wait_for_passing
+from server_test_fixtures import wait_for_passing
 from workflows import Context, Workflow, step
 from workflows.context.context_types import SerializedContext
 from workflows.events import HumanResponseEvent, StartEvent, StopEvent
@@ -186,9 +189,7 @@ async def test_workflow_becomes_idle_and_is_suspended(
         await wait_for_passing(check_suspended, interval=0.01, max_duration=3.0)
 
         # Should still exist in the store with status "running"
-        persisted = await memory_store.query(
-            HandlerQuery(handler_id_in=[handler_id])
-        )
+        persisted = await memory_store.query(HandlerQuery(handler_id_in=[handler_id]))
         assert len(persisted) == 1
         assert persisted[0].status == "running"
         assert persisted[0].idle_since is not None
@@ -374,9 +375,7 @@ async def test_send_event_via_http_resumes_suspended_workflow(
 
     async with server.contextmanager():
         transport = ASGITransport(app=server.app)
-        async with AsyncClient(
-            transport=transport, base_url="http://test"
-        ) as client:
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
             # Start a workflow via HTTP
             response = await client.post("/workflows/test/run-nowait", json={})
             assert response.status_code == 200
@@ -407,7 +406,9 @@ async def test_send_event_via_http_resumes_suspended_workflow(
             async def check_completed() -> None:
                 resp = await client.get(f"/handlers/{handler_id}")
                 data = resp.json()
-                assert data["status"] in ("completed", "failed"), f"status={data['status']}"
+                assert data["status"] in ("completed", "failed"), (
+                    f"status={data['status']}"
+                )
                 assert data["status"] == "completed"
 
             await wait_for_passing(check_completed, interval=0.05, max_duration=5.0)
@@ -431,9 +432,7 @@ async def test_suspend_persists_checkpoint_before_cancelling(
         await wait_for_passing(check_suspended, interval=0.01, max_duration=3.0)
 
         # Verify the store has a checkpoint
-        persisted = await memory_store.query(
-            HandlerQuery(handler_id_in=[handler_id])
-        )
+        persisted = await memory_store.query(HandlerQuery(handler_id_in=[handler_id]))
         assert len(persisted) == 1
         assert persisted[0].status == "running"
         # Context should be saved

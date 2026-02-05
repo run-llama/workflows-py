@@ -83,7 +83,9 @@ async def test_store_is_updated_on_step_completion(
     assert isinstance(persistent.ctx, dict)
 
     # Send a response event to complete the workflow
-    await adapter.send_event(TickAddEvent(event=ExternalEvent(response="pong"), step_name=None))
+    await adapter.send_event(
+        TickAddEvent(event=ExternalEvent(response="pong"), step_name=None)
+    )
 
     # Wait for the workflow to complete
     result = await adapter.get_result()

@@ -7,7 +7,7 @@ from __future__ import annotations
 import asyncio
 from datetime import timedelta
 from typing import Any, AsyncGenerator
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 from llama_agents.server._server_runtime import (
@@ -20,10 +20,6 @@ from llama_agents.server.abstract_workflow_store import (
     PersistentHandler,
 )
 from llama_agents.server.memory_workflow_store import MemoryWorkflowStore
-from llama_agents.server.runtime_decorators import (
-    BaseExternalRunAdapterDecorator,
-    BaseInternalRunAdapterDecorator,
-)
 from workflows.context.state_store import StateStore
 from workflows.events import Event, StopEvent
 from workflows.runtime.types.named_task import NamedTask
@@ -36,7 +32,6 @@ from workflows.runtime.types.plugin import (
     WaitResultTimeout,
 )
 from workflows.runtime.types.ticks import WorkflowTick
-
 
 # -- Stubs -----------------------------------------------------------------
 
@@ -688,12 +683,15 @@ async def test_send_event_on_suspended_adapter_triggers_resume() -> None:
     mock_ctx = MagicMock()
     mock_ctx.to_dict.return_value = ctx_data
 
-    with um.patch(
-        "workflows.context.Context.from_dict",
-        return_value=mock_ctx,
-    ), um.patch(
-        "workflows.runtime.types.internal_state.BrokerState.from_workflow",
-        return_value=MagicMock(),
+    with (
+        um.patch(
+            "workflows.context.Context.from_dict",
+            return_value=mock_ctx,
+        ),
+        um.patch(
+            "workflows.runtime.types.internal_state.BrokerState.from_workflow",
+            return_value=MagicMock(),
+        ),
     ):
         # send_event should trigger _resume internally
         tick = MagicMock()
@@ -723,9 +721,7 @@ async def test_suspend_checkpoints_before_cancelling() -> None:
     """_suspend writes a final checkpoint to the store before cancelling the inner run."""
     decorator, stub_rt, store = _make_idle_decorator()
     ctx_data = {"globals": {"x": 99}, "state": {"y": 42}}
-    ext = _setup_run(
-        decorator, handler_id="h1", workflow_name="wf1", ctx_dict=ctx_data
-    )
+    ext = _setup_run(decorator, handler_id="h1", workflow_name="wf1", ctx_dict=ctx_data)
 
     # Ensure inner not yet cancelled and store empty
     assert not stub_rt._external.cancelled
