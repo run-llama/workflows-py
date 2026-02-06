@@ -101,7 +101,7 @@ class _ControlLoopRunner:
     This control loop uses a sequential, deterministic design:
     - Scheduled wakeups are tracked in a heap (for timeouts/delays)
     - External events come via wait_receive
-    - No concurrent timeout tasks, ensuring deterministic DBOS function_id ordering
+    - No concurrent timeout tasks, ensuring deterministic ordering for replay
     """
 
     def __init__(
@@ -237,6 +237,7 @@ class _ControlLoopRunner:
             if command.exception is not None:
                 raise command.exception
         elif isinstance(command, CommandCompleteRun):
+            await self.cleanup_tasks()
             return command.result
         elif isinstance(command, CommandPublishEvent):
             await self.adapter.write_to_event_stream(command.event)
@@ -249,7 +250,7 @@ class _ControlLoopRunner:
 
     async def cleanup_tasks(self) -> None:
         """Cancel and cleanup all running worker tasks."""
-        # Signal adapter to stop waiting (wakes blocked DBOS.recv)
+        # Signal adapter to stop waiting
         try:
             await self.adapter.close()
         except Exception:
@@ -279,7 +280,7 @@ class _ControlLoopRunner:
 
         This uses a sequential, deterministic design that combines timeout
         handling with event waiting in a single operation, ensuring
-        deterministic DBOS function_id ordering for replay.
+        deterministic ordering for replay.
 
         Args:
             start_event: Optional initial event to process
@@ -396,6 +397,16 @@ class _ControlLoopRunner:
                             "Worker task failed unexpectedly", exc_info=True
                         )
                     else:
+                        # Check if this worker returned a StopEvent - if so,
+                        # cancel other workers immediately to prevent them from
+                        # writing to the event stream after workflow completion
+                        for res in tick_result.result:
+                            if (
+                                isinstance(res, StepWorkerResult)
+                                and isinstance(res.result, StopEvent)
+                            ):
+                                await self.cleanup_tasks()
+                                break
                         self.tick_buffer.append(tick_result)
 
         finally:

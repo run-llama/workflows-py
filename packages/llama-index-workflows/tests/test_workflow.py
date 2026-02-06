@@ -846,9 +846,6 @@ class OtherEvent(Event):
     pass
 
 
-@pytest.mark.xfail(
-    reason="Regression in 2.14.0: yield after StopEvent no longer cancels concurrent step fast enough"
-)
 @pytest.mark.asyncio
 async def test_stop_event_cancels_concurrent_step_stream_write() -> None:
     """Test that StopEvent cancels concurrent step before it writes to the event stream.
