@@ -1,5 +1,11 @@
 # llama-index-workflows
 
+## 2.14.1
+
+### Patch Changes
+
+- 6ece797: Fix concurrent step cancellation regression where StopEvent no longer cancelled as quickly as previously
+
 ## 2.14.0
 
 ### Minor Changes
