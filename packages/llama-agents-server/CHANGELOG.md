@@ -1,5 +1,14 @@
 # llama-agents-server
 
+## 0.1.2
+
+### Patch Changes
+
+- ef7f808: Fix OpenAPI schema version to use current server package, not workflows core
+- Updated dependencies [6ece797]
+  - llama-index-workflows@2.14.1
+  - llama-agents-client@0.1.2
+
 ## 0.1.1
 
 ### Patch Changes
