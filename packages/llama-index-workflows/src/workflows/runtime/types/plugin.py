@@ -157,7 +157,7 @@ class InternalRunAdapter(ABC):
         Signal shutdown to wake any blocked wait operations.
 
         Called during cleanup to allow the adapter to exit gracefully.
-        Default is no-op. DBOS adapter sends a shutdown signal to wake blocked recv.
+        Default is no-op. Custom adapters may send a shutdown signal to wake blocked recv.
         """
         pass
 
@@ -200,8 +200,8 @@ class InternalRunAdapter(ABC):
 
         Default implementation uses asyncio.wait(FIRST_COMPLETED) and returns
         the highest-priority completed task (workers before pull).
-        DBOS overrides to coordinate based on journal for deterministic replay,
-        using the stable keys from NamedTask to identify tasks.
+        Custom adapters may override to coordinate based on journal for
+        deterministic replay, using the stable keys from NamedTask to identify tasks.
         """
         tasks = NamedTask.all_tasks(task_set)
         if not tasks:

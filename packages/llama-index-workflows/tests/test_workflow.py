@@ -838,3 +838,81 @@ async def test_workflow_parallel_resume() -> None:
     resume_event.set()
     result = await new_handler
     assert result == "Done"
+
+
+class OtherEvent(Event):
+    """Event written to stream by concurrent step."""
+
+    pass
+
+
+@pytest.mark.asyncio
+async def test_stop_event_cancels_concurrent_step_stream_write() -> None:
+    """Test that StopEvent cancels concurrent step before it writes to the event stream.
+
+    This test exposes a regression introduced in 2.14.0:
+    - In 2.13.1: A single asyncio.sleep(0) yield after stop_step returns is
+      sufficient for cancellation to propagate, blocking other_step's write.
+    - In 2.14.0: The yield is not enough - other_step's write still goes through.
+
+    The architectural change from asyncio.Queue to tick_buffer + wait_for_next_task
+    changed the timing characteristics, requiring longer delays for cancellation
+    to take effect.
+
+    To reproduce:
+    1. stop_step returns StopEvent
+    2. Single yield point (asyncio.sleep(0))
+    3. other_step writes to stream
+
+    In 2.13.1: write is blocked (PASS)
+    In 2.14.0: write goes through (FAIL)
+    """
+    stop_started = asyncio.Event()
+    other_started = asyncio.Event()
+    stop_proceed = asyncio.Event()
+    write_proceed = asyncio.Event()
+    return_proceed = asyncio.Event()
+
+    class ConcurrentStreamWriteWorkflow(Workflow):
+        @step
+        async def stop_step(self, ev: StartEvent) -> StopEvent:
+            stop_started.set()
+            await stop_proceed.wait()
+            return StopEvent(result="done")
+
+        @step
+        async def other_step(self, ctx: Context, ev: StartEvent) -> None:
+            other_started.set()
+            await write_proceed.wait()
+            ctx.write_event_to_stream(OtherEvent())
+            await return_proceed.wait()
+
+    wf = ConcurrentStreamWriteWorkflow(timeout=5)
+    handler = wf.run()
+
+    # Wait for both steps to start
+    await asyncio.wait_for(stop_started.wait(), timeout=2)
+    await asyncio.wait_for(other_started.wait(), timeout=2)
+
+    # Sequence: stop returns, yield, then write attempts
+    stop_proceed.set()
+    await asyncio.sleep(0)  # Single yield - enough in 2.13.1, not in 2.14.0
+    write_proceed.set()
+    return_proceed.set()
+
+    # Collect events from stream
+    events: list[Event] = []
+    async for event in handler.stream_events():
+        events.append(event)
+        if isinstance(event, StopEvent):
+            break
+
+    await handler
+
+    # In 2.13.1: other_step is cancelled before write, only StopEvent in stream
+    # In 2.14.0: write goes through, OtherEvent appears before StopEvent
+    other_events = [e for e in events if isinstance(e, OtherEvent)]
+    assert len(other_events) == 0, (
+        f"OtherEvent should not appear in stream - other_step should have been "
+        f"cancelled after stop_step returned. Got events: {events}"
+    )
