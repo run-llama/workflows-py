@@ -141,7 +141,7 @@ class _WorkflowAPI:
                 "openapi": "3.0.0",
                 "info": {
                     "title": "Workflows API",
-                    "version": version("llama-index-workflows"),
+                    "version": version("llama-agents-server"),
                 },
                 "components": {
                     "schemas": {
