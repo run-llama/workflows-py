@@ -19,9 +19,9 @@ def default_index_path() -> Path:
     return (
         Path(__file__).resolve().parents[2]
         / "packages"
-        / "llama-index-workflows"
+        / "llama-agents-server"
         / "src"
-        / "workflows"
+        / "llama_agents"
         / "server"
         / "static"
         / "index.html"
