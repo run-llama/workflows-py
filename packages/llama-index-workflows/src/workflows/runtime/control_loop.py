@@ -401,9 +401,8 @@ class _ControlLoopRunner:
                         # cancel other workers immediately to prevent them from
                         # writing to the event stream after workflow completion
                         for res in tick_result.result:
-                            if (
-                                isinstance(res, StepWorkerResult)
-                                and isinstance(res.result, StopEvent)
+                            if isinstance(res, StepWorkerResult) and isinstance(
+                                res.result, StopEvent
                             ):
                                 await self.cleanup_tasks()
                                 break
