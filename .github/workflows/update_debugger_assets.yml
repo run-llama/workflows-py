@@ -52,7 +52,7 @@ jobs:
           CHANGESET_FILE=".changeset/update-debugger-assets.md"
           cat > "$CHANGESET_FILE" << 'EOF'
           ---
-          "llama-index-workflows": patch
+          "llama-agents-server": patch
           ---
 
           Update debugger assets
@@ -82,7 +82,7 @@ jobs:
             This PR updates the workflow debugger assets and creates a changeset for a patch version bump.
 
             ### Changes
-            - Updated `packages/llama-index-workflows/src/workflows/server/static/index.html`
+            - Updated `packages/llama-agents-server/src/llama_agents/server/static/index.html`
               - JavaScript: ${{ steps.payload.outputs.js_url }}
               - CSS: ${{ steps.payload.outputs.css_url }}
 
