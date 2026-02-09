@@ -1,0 +1,12 @@
+{
+  "mode": "pre",
+  "tag": "rc",
+  "initialVersions": {
+    "docs": "0.0.1",
+    "llama-agents-client": "0.1.2",
+    "llama-agents-server": "0.1.2",
+    "llama-index-utils-workflow": "0.9.1",
+    "llama-index-workflows": "2.14.1"
+  },
+  "changesets": []
+}
