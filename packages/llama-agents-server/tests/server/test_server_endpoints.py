@@ -8,18 +8,17 @@ import json
 from collections import Counter
 from contextlib import asynccontextmanager
 from datetime import datetime
-from types import SimpleNamespace
 from typing import Any, AsyncGenerator, AsyncIterator
 
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient, Response
-from llama_agents.server import WorkflowServer
-from llama_agents.server._store.abstract_workflow_store import (
+from llama_agents.server import (
     HandlerQuery,
+    MemoryWorkflowStore,
     PersistentHandler,
+    WorkflowServer,
 )
-from llama_agents.server._store.memory_workflow_store import MemoryWorkflowStore
 from llama_index_instrumentation.dispatcher import active_instrument_tags
 from server_test_fixtures import (
     ExternalEvent,  # type: ignore[import]
@@ -170,9 +169,6 @@ async def test_health_check(client: AsyncClient) -> None:
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "healthy"
-    assert data["loaded_workflows"] == 0
-    assert data["active_workflows"] == 0
-    assert data["idle_workflows"] == 0
 
 
 @pytest.mark.asyncio
@@ -430,18 +426,18 @@ async def test_stream_events_success(client: AsyncClient) -> None:
     data = response.json()
     handler_id = data["handler_id"]
 
-    # Stream events
-    response = await client.get(f"/events/{handler_id}")
+    # Stream events (after_sequence=-1 to get all from beginning)
+    response = await client.get(f"/events/{handler_id}?after_sequence=-1")
     assert response.status_code == 200
     assert response.headers["content-type"] == "text/event-stream; charset=utf-8"
 
     # Collect streamed events
     events: list[dict[str, Any]] = []
     async for line in response.aiter_lines():
-        if line.strip():
+        line = line.strip()
+        if line.startswith("data: "):
             event_data = json.loads(line.removeprefix("data: "))
             assert isinstance(event_data, dict)
-            # Filter out empty events
             if event_data:
                 events.append(event_data)
 
@@ -466,8 +462,8 @@ async def test_stream_events_sse(client: AsyncClient) -> None:
     data = response.json()
     handler_id = data["handler_id"]
 
-    # Stream events in SSE format
-    response = await client.get(f"/events/{handler_id}?sse=true")
+    # Stream events in SSE format (after_sequence=-1 to get all from beginning)
+    response = await client.get(f"/events/{handler_id}?sse=true&after_sequence=-1")
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("text/event-stream")
 
@@ -504,8 +500,8 @@ async def test_stream_events_sse(client: AsyncClient) -> None:
         assert event["data"]["value"]["message"] == f"event_{i}"
         assert event["data"]["value"]["sequence"] == i
 
-    # stream completed
-    response = await client.get(f"/events/{handler_id}?sse=true")
+    # reconnect with after_sequence beyond last event returns 204
+    response = await client.get(f"/events/{handler_id}?sse=true&after_sequence=999999")
     assert response.status_code == 204
 
 
@@ -517,46 +513,41 @@ async def test_stream_events_not_found(client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
-async def test_stream_events_single_consumer(client: AsyncClient) -> None:
-    """Test that the consumer lock mechanism works with acquire_timeout."""
-    # Start a streaming workflow that completes quickly
-    handler_response = await client.post("/workflows/interactive/run-nowait", json={})
-    handler_id = handler_response.json()["handler_id"]
-
-    # send 2 simultaneous requests
-    a = asyncio.create_task(
-        client.send(
-            client.build_request("GET", f"/events/{handler_id}?acquire_timeout=0.01"),
-            stream=True,
-        )
+async def test_stream_events_multiple_consumers(client: AsyncClient) -> None:
+    """Multiple concurrent consumers can stream the same handler's events."""
+    # Start a streaming workflow
+    response = await client.post(
+        "/workflows/streaming/run-nowait", json={"kwargs": {"count": 2}}
     )
-    b = asyncio.create_task(
-        client.send(
-            client.build_request("GET", f"/events/{handler_id}?acquire_timeout=0.01"),
-            stream=True,
-        )
-    )
+    handler_id = response.json()["handler_id"]
 
-    # wait for one to be rejected
-    done, pending = await asyncio.wait({a, b}, return_when=asyncio.FIRST_COMPLETED)
+    # Two concurrent stream requests (after_sequence=-1 to get all from beginning)
+    a = asyncio.create_task(client.get(f"/events/{handler_id}?after_sequence=-1"))
+    b = asyncio.create_task(client.get(f"/events/{handler_id}?after_sequence=-1"))
 
-    # Assert that the done request got a 409 response
-    assert len(done) == 1
-    done_response = list(done)[0].result()
-    assert done_response.status_code == 409
+    response_a, response_b = await asyncio.gather(a, b)
 
-    # Send an ExternalEvent to complete the workflow
-    send_response = await client.post(
-        f"/events/{handler_id}",
-        json={
-            "event": JsonSerializer().serialize(ExternalEvent(response="test-response"))
-        },
-    )
-    assert send_response.status_code == 200
+    assert response_a.status_code == 200
+    assert response_b.status_code == 200
 
-    # Wait for the pending response and stream it
-    pending_response = await list(pending)[0]
-    assert pending_response.status_code == 200
+    # Both consumers should receive the same events
+    def parse_events(text: str) -> list[dict[str, Any]]:
+        events = []
+        for line in text.strip().split("\n"):
+            line = line.strip()
+            if line.startswith("data: "):
+                data = json.loads(line.removeprefix("data: "))
+                if data:
+                    events.append(data)
+        return events
+
+    events_a = parse_events(response_a.text)
+    events_b = parse_events(response_b.text)
+
+    # Both should have the same event types
+    types_a = [e["type"] for e in events_a]
+    types_b = [e["type"] for e in events_b]
+    assert types_a == types_b
 
 
 @pytest.mark.asyncio
@@ -572,15 +563,16 @@ async def test_stream_events_no_events_default_hides_internal(
     data = response.json()
     handler_id = data["handler_id"]
 
-    # Stream without include_internal
-    response = await client.get(f"/events/{handler_id}")
+    # Stream without include_internal (after_sequence=-1 to get all from beginning)
+    response = await client.get(f"/events/{handler_id}?after_sequence=-1")
     assert response.status_code == 200
     assert response.headers["content-type"] == "text/event-stream; charset=utf-8"
 
     # Collect events
     events = []
     async for line in response.aiter_lines():
-        if line.strip():
+        line = line.strip()
+        if line.startswith("data: "):
             event_data = json.loads(line.removeprefix("data: "))
             if event_data:
                 events.append(event_data)
@@ -603,15 +595,18 @@ async def test_stream_events_include_internal_true(client: AsyncClient) -> None:
     data = response.json()
     handler_id = data["handler_id"]
 
-    # Stream with include_internal=true
-    response = await client.get(f"/events/{handler_id}?include_internal=true")
+    # Stream with include_internal=true (after_sequence=-1 to get all from beginning)
+    response = await client.get(
+        f"/events/{handler_id}?include_internal=true&after_sequence=-1"
+    )
     assert response.status_code == 200
     assert response.headers["content-type"] == "text/event-stream; charset=utf-8"
 
     # Collect events
     events = []
     async for line in response.aiter_lines():
-        if line.strip():
+        line = line.strip()
+        if line.startswith("data: "):
             event_data = json.loads(line.removeprefix("data: "))
             if event_data:
                 events.append(event_data)
@@ -776,14 +771,12 @@ async def test_get_handlers_filters_status_and_workflow_name(
     # Seed persistence with mixed handlers
     persisted = [
         PersistentHandler(
-            handler_id="h1", workflow_name="interactive", status="running", ctx={}
+            handler_id="h1", workflow_name="interactive", status="running"
         ),
         PersistentHandler(
-            handler_id="h2", workflow_name="interactive", status="completed", ctx={}
+            handler_id="h2", workflow_name="interactive", status="completed"
         ),
-        PersistentHandler(
-            handler_id="h3", workflow_name="other", status="failed", ctx={}
-        ),
+        PersistentHandler(handler_id="h3", workflow_name="other", status="failed"),
     ]
 
     async with server_with_persisted_handlers(
@@ -814,13 +807,13 @@ async def test_get_handlers_filters_multiple_status_params(
 ) -> None:
     persisted = [
         PersistentHandler(
-            handler_id="ha", workflow_name="interactive", status="completed", ctx={}
+            handler_id="ha", workflow_name="interactive", status="completed"
         ),
         PersistentHandler(
-            handler_id="hb", workflow_name="interactive", status="failed", ctx={}
+            handler_id="hb", workflow_name="interactive", status="failed"
         ),
         PersistentHandler(
-            handler_id="hc", workflow_name="interactive", status="running", ctx={}
+            handler_id="hc", workflow_name="interactive", status="running"
         ),
     ]
 
@@ -986,29 +979,6 @@ async def test_post_event_invalid_event_data(client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
-async def test_post_event_context_not_available(
-    client: AsyncClient, server: WorkflowServer
-) -> None:
-    # Dumb test for code coverage. Inject a dummy handler with no context to trigger 500 path
-    wrapper = SimpleNamespace(
-        run_handler=SimpleNamespace(done=lambda: False, ctx=None),
-        workflow_name="test",
-        status="running",
-        mark_active=lambda: None,
-    )
-
-    handler_id = "noctx-1"
-    server._service._handlers[handler_id] = wrapper  # type: ignore[assignment]
-
-    try:
-        response = await client.post(f"/events/{handler_id}", json={"event": "{}"})
-        assert response.status_code == 500
-        assert "Context not available" in response.text
-    finally:
-        server._service._handlers.pop(handler_id, None)
-
-
-@pytest.mark.asyncio
 async def test_post_event_body_parsing_error(client: AsyncClient) -> None:
     # Start interactive workflow which waits for an event (keeps running)
     response = await client.post("/workflows/interactive/run-nowait", json={})
@@ -1125,7 +1095,6 @@ async def test_delete_persisted_handler_removes_from_store(
                 handler_id="persist-only",
                 workflow_name="interactive",
                 status="completed",
-                ctx={},
             )
         ],
     ) as (_server, client, store):
@@ -1152,7 +1121,6 @@ async def test_stop_only_persisted_handler_without_removal_returns_not_found(
                 handler_id="store-only",
                 workflow_name="interactive",
                 status="completed",
-                ctx={},
             )
         ],
     ) as (_server, client, store):
@@ -1208,9 +1176,9 @@ async def test_stream_events_after_completion_should_return_unconsumed_events(
 
     await wait_for_passing(_wait_done)
 
-    # Now fetch events AFTER completion. Expect the unconsumed events to still be retrievable.
-    # Use NDJSON for easier parsing.
-    resp = await client.get(f"/events/{handler_id}?sse=false")
+    # Now fetch events AFTER completion. Expect all events to be retrievable.
+    # Use NDJSON for easier parsing. after_sequence=-1 to get all from beginning.
+    resp = await client.get(f"/events/{handler_id}?sse=false&after_sequence=-1")
     assert resp.status_code == 200
     assert resp.headers["content-type"].startswith("application/x-ndjson")
 
@@ -1222,6 +1190,143 @@ async def test_stream_events_after_completion_should_return_unconsumed_events(
             lines.append(data)
 
     assert len(lines) == 4
+
+
+@pytest.mark.asyncio
+async def test_stream_events_sse_includes_id_field(client: AsyncClient) -> None:
+    """SSE events include an id: field with the event sequence number."""
+    response = await client.post(
+        "/workflows/streaming/run-nowait", json={"kwargs": {"count": 2}}
+    )
+    handler_id = response.json()["handler_id"]
+
+    response = await client.get(f"/events/{handler_id}?sse=true&after_sequence=-1")
+    assert response.status_code == 200
+
+    # Parse raw SSE frames and extract id fields
+    ids: list[int] = []
+    for line in response.text.strip().split("\n"):
+        line = line.strip()
+        if line.startswith("id: "):
+            ids.append(int(line.removeprefix("id: ")))
+
+    # Every SSE event should have an id
+    assert len(ids) >= 2
+    # Ids should be monotonically increasing
+    assert ids == sorted(ids)
+
+
+@pytest.mark.asyncio
+async def test_stream_events_last_event_id_header(client: AsyncClient) -> None:
+    """SSE Last-Event-ID header takes priority over after_sequence query param."""
+    response = await client.post(
+        "/workflows/streaming/run-nowait", json={"kwargs": {"count": 3}}
+    )
+    handler_id = response.json()["handler_id"]
+
+    # First, stream all events to get the sequence numbers
+    response = await client.get(f"/events/{handler_id}?sse=true&after_sequence=-1")
+    assert response.status_code == 200
+
+    ids: list[int] = []
+    for line in response.text.strip().split("\n"):
+        line = line.strip()
+        if line.startswith("id: "):
+            ids.append(int(line.removeprefix("id: ")))
+    assert len(ids) >= 3
+
+    # Reconnect with Last-Event-ID header set to skip past all events.
+    # The query param says after_sequence=-1 (from beginning), but the header
+    # should override it.
+    response = await client.get(
+        f"/events/{handler_id}?sse=true&after_sequence=-1",
+        headers={"last-event-id": str(ids[-1])},
+    )
+    # Should get 204 because Last-Event-ID is past the last event and the run
+    # is complete.
+    assert response.status_code == 204
+
+
+@pytest.mark.asyncio
+async def test_stream_events_after_sequence_now(client: AsyncClient) -> None:
+    """after_sequence=now skips historical events, only receives new ones."""
+    # Start a streaming workflow
+    response = await client.post(
+        "/workflows/streaming/run-nowait", json={"kwargs": {"count": 3}}
+    )
+    handler_id = response.json()["handler_id"]
+
+    # Wait for completion so all events are stored
+    async def _wait_done() -> None:
+        r = await client.get(f"/handlers/{handler_id}")
+        if r.status_code != 200:
+            raise AssertionError("not done")
+
+    await wait_for_passing(_wait_done)
+
+    # Now request with after_sequence=now. Since the workflow is already complete,
+    # "now" resolves to the last sequence, and there are no remaining events, so
+    # we should get 204.
+    response = await client.get(f"/events/{handler_id}?after_sequence=now")
+    assert response.status_code == 204
+
+
+@pytest.mark.asyncio
+async def test_stream_events_after_sequence_now_receives_future_events(
+    interactive_workflow: Workflow,
+) -> None:
+    """after_sequence=now on a running workflow receives only events appended after the request."""
+    async with server_with_persisted_handlers(interactive_workflow) as (
+        _server,
+        client,
+        store,
+    ):
+        # Start the interactive workflow (it waits for an external event)
+        start_resp = await client.post("/workflows/interactive/run-nowait", json={})
+        handler_id = start_resp.json()["handler_id"]
+
+        # Wait until some events are stored (at least the internal dispatch)
+        await asyncio.sleep(0.1)
+
+        # Count events currently in the store
+        found = await store.query(HandlerQuery(handler_id_in=[handler_id]))
+        run_id = found[0].run_id
+        assert run_id is not None
+        events_before = await store.query_events(run_id)
+        assert len(events_before) > 0
+
+        # Start streaming with after_sequence=now — should skip all existing events
+        stream_task = asyncio.create_task(
+            client.get(f"/events/{handler_id}?sse=false&after_sequence=now")
+        )
+
+        # Give the streaming request time to start
+        await asyncio.sleep(0.05)
+
+        # Send an external event to progress the workflow
+        serializer = JsonSerializer()
+        event = ExternalEvent(response="after-now")
+        event_str = serializer.serialize(event)
+        await client.post(f"/events/{handler_id}", json={"event": event_str})
+
+        response = await stream_task
+        assert response.status_code == 200
+
+        # Parse NDJSON lines
+        events = []
+        for line in response.text.strip().split("\n"):
+            line = line.strip()
+            if line:
+                events.append(json.loads(line))
+
+        # The events should include at minimum the StopEvent from completion.
+        # They should NOT include any of the events that existed before "now".
+        event_types = [e["type"] for e in events]
+        assert "StopEvent" in event_types
+
+        # Verify we got fewer events than the total stored — the historical ones were skipped
+        all_events = await store.query_events(run_id)
+        assert len(events) < len(all_events)
 
 
 @pytest.mark.asyncio
@@ -1258,17 +1363,3 @@ async def test_instrument_tags_contains_handler_id_in_server_context() -> None:
             assert data["status"] == "completed"
             assert seen_handler_id["handler_id"] is not None
             assert seen_handler_id["handler_id"] == handler_id
-
-
-@pytest.mark.asyncio
-async def test_run_sync_removes_handler_even_with_unconsumed_events(
-    client: AsyncClient, server: WorkflowServer
-) -> None:
-    # Run a streaming workflow synchronously; it emits user events but we don't consume them here.
-    resp = await client.post("/workflows/streaming/run", json={"kwargs": {"count": 2}})
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["status"] == "completed"
-
-    # The synchronous run path should clean up the handler from memory even if events remain
-    assert len(server._service._handlers) == 0

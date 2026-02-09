@@ -8,6 +8,7 @@ from typing import (
     Any,
     AsyncGenerator,
     AsyncIterator,
+    Literal,
     overload,
 )
 
@@ -202,55 +203,89 @@ class WorkflowClient:
         self,
         handler_id: str,
         include_internal_events: bool = False,
-        lock_timeout: float = 1,
+        after_sequence: int | Literal["now"] = -1,
+        max_reconnect_attempts: int = 3,
     ) -> AsyncGenerator[EventEnvelopeWithMetadata, None]:
         """
         Stream events as they are produced by the workflow.
 
+        Uses SSE (Server-Sent Events) mode and automatically reconnects from
+        the last received event on connection drops.
+
         Args:
             handler_id (str): ID of the handler running the workflow
             include_internal_events (bool): Include internal workflow events. Defaults to False.
-            lock_timeout (float): Timeout (in seconds) for acquiring the lock to iterate over the events.
+            after_sequence (int | str): Sequence number to start streaming after. Defaults to -1 (all events). Use ``"now"`` to only receive new events.
+            max_reconnect_attempts (int): Maximum number of reconnect attempts on connection drop. Defaults to 3.
 
         Returns:
             AsyncGenerator[EventEnvelopeWithMetadata, None]: Generator for the events that are streamed as instances of `EventEnvelopeWithMetadata`.
         """
         incl_inter = "true" if include_internal_events else "false"
         url = f"/events/{handler_id}"
+        last_sequence = after_sequence
+        attempts = 0
 
-        async with self._get_client() as client:
-            try:
-                async with client.stream(
-                    "GET",
-                    url,
-                    params={
-                        "sse": "false",
-                        "include_internal": incl_inter,
-                        "acquire_timeout": lock_timeout,
-                    },
-                    headers={"Connection": "keep-alive"},
-                    timeout=None,
-                ) as response:
-                    # Handle different response codes
-                    if response.status_code == 404:
-                        raise ValueError("Handler not found")
-                    elif response.status_code == 204:
-                        # Handler completed, no more events
-                        return
+        while True:
+            async with self._get_client() as client:
+                try:
+                    async with client.stream(
+                        "GET",
+                        url,
+                        params={
+                            "sse": "true",
+                            "include_internal": incl_inter,
+                            "after_sequence": str(last_sequence),
+                        },
+                        headers={"Connection": "keep-alive"},
+                        timeout=None,
+                    ) as response:
+                        if response.status_code == 404:
+                            raise ValueError("Handler not found")
+                        elif response.status_code == 204:
+                            return
 
-                    _raise_for_status_with_body(response)
+                        _raise_for_status_with_body(response)
 
-                    async for line in response.aiter_lines():
-                        if line.strip():  # Skip empty lines
-                            event = EventEnvelopeWithMetadata.model_validate_json(line)
-                            yield event
+                        # Reset attempts on successful connection
+                        attempts = 0
 
-            except httpx.TimeoutException:
-                raise TimeoutError(
-                    f"Timeout waiting for events from handler {handler_id}"
-                )
-            except httpx.RequestError as e:
-                raise ConnectionError(f"Failed to connect to event stream: {e}")
+                        # Parse SSE stream: "id: N\ndata: {...}\n\n"
+                        current_id: str | None = None
+                        async for line in response.aiter_lines():
+                            stripped = line.strip()
+                            if not stripped:
+                                # Empty line = end of SSE event
+                                continue
+                            if stripped.startswith("id:"):
+                                current_id = stripped[3:].strip()
+                            elif stripped.startswith("data:"):
+                                data = stripped[5:].strip()
+                                event = EventEnvelopeWithMetadata.model_validate_json(
+                                    data
+                                )
+                                if current_id is not None:
+                                    try:
+                                        last_sequence = int(current_id)
+                                    except ValueError:
+                                        pass
+                                current_id = None
+                                yield event
+
+                    # Stream ended normally (server closed connection)
+                    return
+
+                except httpx.TimeoutException:
+                    raise TimeoutError(
+                        f"Timeout waiting for events from handler {handler_id}"
+                    )
+                except (httpx.RequestError, ConnectionError):
+                    attempts += 1
+                    if attempts > max_reconnect_attempts:
+                        raise ConnectionError(
+                            f"Failed to connect to event stream after {max_reconnect_attempts} attempts"
+                        )
+                    # Retry from last received sequence
 
     async def send_event(
         self,

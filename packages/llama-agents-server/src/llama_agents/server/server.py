@@ -5,17 +5,21 @@ from __future__ import annotations
 import json
 import logging
 from contextlib import asynccontextmanager
-from datetime import timedelta
 from typing import Any, AsyncGenerator
 
 import uvicorn
+from llama_agents.server._runtime.durable_runtime import DurableDecorator
+from llama_agents.server._runtime.server_runtime import ServerRuntimeDecorator
 from starlette.middleware import Middleware
 from workflows import Workflow
 from workflows.events import Event
+from workflows.plugins.basic import basic_runtime
+from workflows.runtime.types.plugin import Runtime
 
 from ._api import _WorkflowAPI
 from ._service import _WorkflowService
 from ._store.abstract_workflow_store import AbstractWorkflowStore
+from ._store.memory_workflow_store import MemoryWorkflowStore
 
 logger = logging.getLogger()
 
@@ -28,16 +32,31 @@ class WorkflowServer:
         workflow_store: AbstractWorkflowStore | None = None,
         # retry/backoff seconds for persisting the handler state in the store after failures. Configurable mainly for testing.
         persistence_backoff: list[float] = [0.5, 3],
-        # Release idle workflows from memory after this timeout (None = disabled)
-        idle_release_timeout: timedelta | None = timedelta(seconds=10),
+        runtime: Runtime | None = None,
     ):
-        self._service = _WorkflowService(
-            workflow_store=workflow_store,
-            persistence_backoff=persistence_backoff,
-            idle_release_timeout=idle_release_timeout,
+        self._workflow_store = (
+            workflow_store if workflow_store is not None else MemoryWorkflowStore()
         )
+        inner: Runtime = (
+            runtime
+            if runtime is not None
+            else DurableDecorator(basic_runtime, store=self._workflow_store)
+        )
+        self._runtime: ServerRuntimeDecorator = ServerRuntimeDecorator(
+            inner,
+            store=self._workflow_store,
+            persistence_backoff=list(persistence_backoff),
+        )
+        self._service = _WorkflowService(
+            runtime=self._runtime, store=self._workflow_store
+        )
+
         self._api = _WorkflowAPI(self._service, middleware=middleware)
         self.app = self._api.app
+
+    # ------------------------------------------------------------------
+    # Workflow registration
+    # ------------------------------------------------------------------
 
     def add_workflow(
         self,
@@ -45,9 +64,25 @@ class WorkflowServer:
         workflow: Workflow,
         additional_events: list[type[Event]] | None = None,
     ) -> None:
-        self._service.add_workflow(name, workflow, additional_events)
+        workflow._switch_workflow_name(name)
+        workflow._switch_runtime(self._runtime)
 
-    async def start(self) -> "WorkflowServer":
+        if additional_events is not None:
+            self._api.register_additional_events(name, additional_events)
+
+    def get_workflows(self) -> dict[str, Workflow]:
+        """Return registered workflows as a dict by name. Only available after start()."""
+        return {
+            n: wf
+            for n in self._service.get_workflow_names()
+            if (wf := self._service.get_workflow(n)) is not None
+        }
+
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
+
+    async def start(self) -> WorkflowServer:
         """Resumes previously running workflows, if they were not complete at last shutdown.
 
         Idle workflows are not resumed - they remain released and will be
@@ -57,7 +92,7 @@ class WorkflowServer:
         return self
 
     @asynccontextmanager
-    async def contextmanager(self) -> AsyncGenerator["WorkflowServer", None]:
+    async def contextmanager(self) -> AsyncGenerator[WorkflowServer, None]:
         """Use this server as a context manager to start and stop it"""
         await self.start()
         try:
@@ -67,6 +102,10 @@ class WorkflowServer:
 
     async def stop(self) -> None:
         await self._service.stop()
+
+    # ------------------------------------------------------------------
+    # Serve
+    # ------------------------------------------------------------------
 
     async def serve(
         self,

@@ -1,18 +1,18 @@
 import httpx
 import pytest
 from client_test_workflows import (
+    CrashingWorkflow,
     GreetEvent,
+    GreetingWorkflow,
     InputEvent,
     OutputEvent,
-    crashing_wf,
-    greeting_wf,
 )
 from httpx import ASGITransport, AsyncClient
 from llama_agents.client import WorkflowClient
 from llama_agents.client.protocol.serializable_events import (
     EventEnvelopeWithMetadata,
 )
-from llama_agents.server._store.memory_workflow_store import MemoryWorkflowStore
+from llama_agents.server import MemoryWorkflowStore
 from llama_agents.server.server import WorkflowServer
 
 
@@ -20,8 +20,8 @@ from llama_agents.server.server import WorkflowServer
 def server() -> WorkflowServer:
     # Use MemoryWorkflowStore so get_handlers() can retrieve from persistence
     ws = WorkflowServer(workflow_store=MemoryWorkflowStore())
-    ws.add_workflow(name="greeting", workflow=greeting_wf)
-    ws.add_workflow(name="crashing", workflow=crashing_wf)
+    ws.add_workflow(name="greeting", workflow=GreetingWorkflow())
+    ws.add_workflow(name="crashing", workflow=CrashingWorkflow())
     return ws
 
 

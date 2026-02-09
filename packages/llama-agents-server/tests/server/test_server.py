@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 LlamaIndex Inc.
 
+from __future__ import annotations
+
 from typing import Any
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -8,13 +10,6 @@ import pytest
 from llama_agents.server import WorkflowServer
 from starlette.middleware import Middleware
 from workflows.workflow import Workflow
-
-
-def test_init() -> None:
-    server = WorkflowServer()
-    assert len(server.app.user_middleware) == 1
-    assert server._service._workflows == {}
-    assert server._service._handlers == {}
 
 
 def test_init_custom_middleware() -> None:
@@ -26,8 +21,8 @@ def test_init_custom_middleware() -> None:
 def test_add_workflow(simple_test_workflow: Workflow) -> None:
     server = WorkflowServer()
     server.add_workflow("test", simple_test_workflow)
-    assert "test" in server._service._workflows
-    assert server._service._workflows["test"] == simple_test_workflow
+    assert "test" in server.get_workflows()
+    assert server.get_workflows()["test"] == simple_test_workflow
 
 
 @pytest.mark.asyncio
@@ -68,7 +63,7 @@ def test_extract_workflow_success(simple_test_workflow: Workflow) -> None:
     mock_request = Mock()
     mock_request.path_params = {"name": "test"}
 
-    assert server._api._extract_workflow(mock_request).workflow == simple_test_workflow
+    assert server._api._extract_workflow(mock_request) is simple_test_workflow
 
 
 def test_extract_workflow_missing_name() -> None:

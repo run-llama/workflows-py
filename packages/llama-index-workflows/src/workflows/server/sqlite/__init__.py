@@ -3,7 +3,7 @@
 """Re-export sqlite components from the optional llama-agents-server package."""
 
 try:
-    from llama_agents.server._store.sqlite.sqlite_workflow_store import (
+    from llama_agents.server import (
         SqliteWorkflowStore,
     )
 except ImportError as e:

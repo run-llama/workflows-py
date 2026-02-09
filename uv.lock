@@ -1731,6 +1731,7 @@ name = "llama-agents-server"
 version = "0.2.0rc0"
 source = { editable = "packages/llama-agents-server" }
 dependencies = [
+    { name = "httpx" },
     { name = "llama-agents-client" },
     { name = "llama-index-workflows" },
     { name = "starlette" },
@@ -1740,6 +1741,7 @@ dependencies = [
 [package.dev-dependencies]
 dev = [
     { name = "hatch" },
+    { name = "llama-agents-integration-tests" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-cov" },
@@ -1751,6 +1753,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "httpx", specifier = ">=0.27.0" },
     { name = "llama-agents-client", editable = "packages/llama-agents-client" },
     { name = "llama-index-workflows", editable = "packages/llama-index-workflows" },
     { name = "starlette", specifier = ">=0.39.0" },
@@ -1760,6 +1763,7 @@ requires-dist = [
 [package.metadata.requires-dev]
 dev = [
     { name = "hatch", specifier = ">=1.14.1" },
+    { name = "llama-agents-integration-tests", editable = "packages/llama-agents-integration-tests" },
     { name = "pytest", specifier = ">=8.4.2" },
     { name = "pytest-asyncio", specifier = ">=1.0.0" },
     { name = "pytest-cov", specifier = ">=7.0.0" },

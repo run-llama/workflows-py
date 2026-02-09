@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from workflows.representation import WorkflowGraph
 
 from .serializable_events import EventEnvelopeWithMetadata
@@ -35,13 +35,6 @@ class HandlersListResponse(BaseModel):
 
 class HealthResponse(BaseModel):
     status: Literal["healthy"]
-    loaded_workflows: int = Field(
-        description="Number of workflow handlers currently loaded in memory"
-    )
-    active_workflows: int = Field(
-        description="Number of workflow handlers that are active (not idle)"
-    )
-    idle_workflows: int = Field(description="Number of workflow handlers that are idle")
 
 
 class WorkflowsListResponse(BaseModel):

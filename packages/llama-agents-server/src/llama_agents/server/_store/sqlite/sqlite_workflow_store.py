@@ -1,22 +1,46 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 LlamaIndex Inc.
+from __future__ import annotations
+
+import asyncio
 import json
 import sqlite3
+from collections.abc import AsyncIterator
 from datetime import datetime
-from typing import List, Optional, Sequence, Tuple
+from typing import Any, List, Sequence
 
+from llama_agents.client.protocol.serializable_events import EventEnvelopeWithMetadata
 from workflows.context import JsonSerializer
 
 from ..abstract_workflow_store import (
     AbstractWorkflowStore,
     HandlerQuery,
     PersistentHandler,
+    StoredEvent,
+    StoredTick,
 )
 from .migrate import run_migrations
+from .sqlite_state_store import SqliteStateStore
 
 
 class SqliteWorkflowStore(AbstractWorkflowStore):
-    def __init__(self, db_path: str) -> None:
+    def __init__(self, db_path: str, poll_interval: float = 1.0) -> None:
         self.db_path = db_path
+        self.poll_interval = poll_interval
+        self._conditions: dict[str, asyncio.Condition] = {}
         self._init_db()
+
+    def create_state_store(
+        self, run_id: str, state_type: type[Any] | None = None
+    ) -> SqliteStateStore[Any]:
+        return SqliteStateStore(
+            db_path=self.db_path, run_id=run_id, state_type=state_type
+        )
+
+    def _get_condition(self, run_id: str) -> asyncio.Condition:
+        if run_id not in self._conditions:
+            self._conditions[run_id] = asyncio.Condition()
+        return self._conditions[run_id]
 
     def _init_db(self) -> None:
         conn = sqlite3.connect(self.db_path)
@@ -33,7 +57,7 @@ class SqliteWorkflowStore(AbstractWorkflowStore):
 
         clauses, params = filter_spec
         sql = """SELECT handler_id, workflow_name, status, run_id, error, result,
-                        started_at, updated_at, completed_at, idle_since, ctx FROM handlers"""
+                        started_at, updated_at, completed_at, idle_since FROM handlers"""
         if clauses:
             sql = f"{sql} WHERE {' AND '.join(clauses)}"
         conn = sqlite3.connect(self.db_path)
@@ -53,8 +77,8 @@ class SqliteWorkflowStore(AbstractWorkflowStore):
         cursor.execute(
             """
             INSERT INTO handlers (handler_id, workflow_name, status, run_id, error, result,
-                                  started_at, updated_at, completed_at, idle_since, ctx)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                                  started_at, updated_at, completed_at, idle_since)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(handler_id) DO UPDATE SET
                 workflow_name = excluded.workflow_name,
                 status = excluded.status,
@@ -64,8 +88,7 @@ class SqliteWorkflowStore(AbstractWorkflowStore):
                 started_at = excluded.started_at,
                 updated_at = excluded.updated_at,
                 completed_at = excluded.completed_at,
-                idle_since = excluded.idle_since,
-                ctx = excluded.ctx
+                idle_since = excluded.idle_since
             """,
             (
                 handler.handler_id,
@@ -80,7 +103,6 @@ class SqliteWorkflowStore(AbstractWorkflowStore):
                 handler.updated_at.isoformat() if handler.updated_at else None,
                 handler.completed_at.isoformat() if handler.completed_at else None,
                 handler.idle_since.isoformat() if handler.idle_since else None,
-                json.dumps(handler.ctx),
             ),
         )
         conn.commit()
@@ -107,11 +129,149 @@ class SqliteWorkflowStore(AbstractWorkflowStore):
 
         return int(deleted)
 
-    def _build_filters(
-        self, query: HandlerQuery
-    ) -> Optional[Tuple[List[str], List[str]]]:
-        clauses: List[str] = []
-        params: List[str] = []
+    async def append_event(self, run_id: str, event: EventEnvelopeWithMetadata) -> None:
+        conn = sqlite3.connect(self.db_path)
+        try:
+            conn.execute(
+                """INSERT INTO events (run_id, sequence, timestamp, event_json)
+                VALUES (?, COALESCE((SELECT MAX(sequence) FROM events WHERE run_id = ?), -1) + 1, CURRENT_TIMESTAMP, ?)""",
+                (
+                    run_id,
+                    run_id,
+                    event.model_dump_json(),
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        condition = self._get_condition(run_id)
+        async with condition:
+            condition.notify_all()
+
+    async def query_events(
+        self,
+        run_id: str,
+        after_sequence: int | None = None,
+        limit: int | None = None,
+    ) -> list[StoredEvent]:
+        conn = sqlite3.connect(self.db_path)
+        try:
+            sql = "SELECT run_id, sequence, timestamp, event_json FROM events WHERE run_id = ?"
+            params: list[Any] = [run_id]
+            if after_sequence is not None:
+                sql += " AND sequence > ?"
+                params.append(after_sequence)
+            sql += " ORDER BY sequence"
+            if limit is not None:
+                sql += " LIMIT ?"
+                params.append(limit)
+            cursor = conn.cursor()
+            cursor.execute(sql, params)
+            rows = cursor.fetchall()
+        finally:
+            conn.close()
+        return [
+            StoredEvent(
+                run_id=row[0],
+                sequence=row[1],
+                timestamp=datetime.fromisoformat(row[2]),
+                event=EventEnvelopeWithMetadata.model_validate_json(row[3]),
+            )
+            for row in rows
+        ]
+
+    async def subscribe_events(
+        self, run_id: str, after_sequence: int = -1
+    ) -> AsyncIterator[StoredEvent]:
+        condition = self._get_condition(run_id)
+        cursor = after_sequence
+        while True:
+            events = await self.query_events(run_id, after_sequence=cursor)
+            for event in events:
+                yield event
+                cursor = event.sequence
+                if self._is_terminal_event(event):
+                    self._conditions.pop(run_id, None)
+                    return
+            if not events:
+                # Check if terminal event already exists (subscriber joined late)
+                all_events = await self.query_events(run_id)
+                if all_events and self._is_terminal_event(all_events[-1]):
+                    self._conditions.pop(run_id, None)
+                    return
+                # Wait for notification or poll timeout
+                async with condition:
+                    fresh = await self.query_events(run_id, after_sequence=cursor)
+                    if not fresh:
+                        try:
+                            await asyncio.wait_for(
+                                condition.wait(), timeout=self.poll_interval
+                            )
+                        except TimeoutError:
+                            pass
+
+    async def append_tick(self, run_id: str, tick_data: dict[str, Any]) -> None:
+        conn = sqlite3.connect(self.db_path)
+        try:
+            conn.execute(
+                """INSERT INTO ticks (run_id, sequence, timestamp, tick_data)
+                VALUES (?, COALESCE((SELECT MAX(sequence) FROM ticks WHERE run_id = ?), -1) + 1, CURRENT_TIMESTAMP, ?)""",
+                (
+                    run_id,
+                    run_id,
+                    json.dumps(tick_data),
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    async def get_ticks(self, run_id: str) -> List[StoredTick]:
+        conn = sqlite3.connect(self.db_path)
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT run_id, sequence, timestamp, tick_data FROM ticks WHERE run_id = ? ORDER BY sequence",
+                (run_id,),
+            )
+            rows = cursor.fetchall()
+        finally:
+            conn.close()
+        return [
+            StoredTick(
+                run_id=row[0],
+                sequence=row[1],
+                timestamp=datetime.fromisoformat(row[2]),
+                tick_data=json.loads(row[3]),
+            )
+            for row in rows
+        ]
+
+    def get_legacy_ctx(self, run_id: str) -> dict[str, Any] | None:
+        """Read the old ctx column for a run_id, if present."""
+        conn = sqlite3.connect(self.db_path)
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT ctx FROM handlers WHERE run_id = ?",
+                (run_id,),
+            )
+            row = cursor.fetchone()
+            if row is None or row[0] is None:
+                return None
+            try:
+                data = json.loads(row[0])
+                if not isinstance(data, dict) or not data:
+                    return None
+                return data
+            except (json.JSONDecodeError, TypeError):
+                return None
+        finally:
+            conn.close()
+
+    def _build_filters(self, query: HandlerQuery) -> tuple[list[str], list[str]] | None:
+        clauses: list[str] = []
+        params: list[str] = []
 
         def add_in_clause(column: str, values: Sequence[str]) -> None:
             placeholders = ",".join(["?"] * len(values))
@@ -127,6 +287,11 @@ class SqliteWorkflowStore(AbstractWorkflowStore):
             if len(query.handler_id_in) == 0:
                 return None
             add_in_clause("handler_id", query.handler_id_in)
+
+        if query.run_id_in is not None:
+            if len(query.run_id_in) == 0:
+                return None
+            add_in_clause("run_id", query.run_id_in)
 
         if query.status_in is not None:
             if len(query.status_in) == 0:
@@ -157,5 +322,4 @@ def _row_to_persistent_handler(row: tuple) -> PersistentHandler:
         updated_at=datetime.fromisoformat(row[7]) if row[7] else None,
         completed_at=datetime.fromisoformat(row[8]) if row[8] else None,
         idle_since=datetime.fromisoformat(row[9]) if row[9] else None,
-        ctx=json.loads(row[10]),
     )
