@@ -8,5 +8,7 @@
     "llama-index-utils-workflow": "0.9.1",
     "llama-index-workflows": "2.14.1"
   },
-  "changesets": []
+  "changesets": [
+    "itchy-crabs-report"
+  ]
 }
