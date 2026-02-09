@@ -12,7 +12,7 @@ from llama_agents.client import WorkflowClient
 from llama_agents.client.protocol.serializable_events import (
     EventEnvelopeWithMetadata,
 )
-from llama_agents.server.memory_workflow_store import MemoryWorkflowStore
+from llama_agents.server._store.memory_workflow_store import MemoryWorkflowStore
 from llama_agents.server.server import WorkflowServer
 
 

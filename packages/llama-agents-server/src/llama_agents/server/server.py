@@ -15,7 +15,7 @@ from workflows.events import Event
 
 from ._api import _WorkflowAPI
 from ._service import _WorkflowService
-from .abstract_workflow_store import AbstractWorkflowStore
+from ._store.abstract_workflow_store import AbstractWorkflowStore
 
 logger = logging.getLogger()
 

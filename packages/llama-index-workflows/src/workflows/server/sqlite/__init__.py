@@ -3,7 +3,9 @@
 """Re-export sqlite components from the optional llama-agents-server package."""
 
 try:
-    from llama_agents.server.sqlite.sqlite_workflow_store import SqliteWorkflowStore
+    from llama_agents.server._store.sqlite.sqlite_workflow_store import (
+        SqliteWorkflowStore,
+    )
 except ImportError as e:
     raise ImportError(
         "workflows.server.sqlite requires the 'server' extra. "

@@ -25,7 +25,7 @@ from workflows.events import (
 from workflows.handler import WorkflowHandler
 from workflows.workflow import Workflow
 
-from .abstract_workflow_store import (
+from ._store.abstract_workflow_store import (
     AbstractWorkflowStore,
     PersistentHandler,
     Status,
