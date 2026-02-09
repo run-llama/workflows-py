@@ -1011,3 +1011,72 @@ async def test_simultaneous_retries_with_same_delay(
     assert result.result == "both_succeeded"
     assert wf.step_a_attempts == 2
     assert wf.step_b_attempts == 2
+
+
+@pytest.mark.asyncio
+async def test_external_event_not_double_routed_when_waiter_exists(
+    test_plugin: MockRunAdapter,
+) -> None:
+    """Regression test: an external event that resolves a wait_for_event waiter
+    should NOT also be routed to another step that accepts the same event type.
+
+    Before the fix, the accepting step would run twice — once from normal
+    routing and once from the waiter waking up and re-emitting the event.
+    """
+
+    class ExternalInput(Event):
+        value: str
+
+    step_run_count = 0
+
+    class DoubleRouteWorkflow(Workflow):
+        @step
+        async def kickoff(self, ev: StartEvent) -> ExternalInput:
+            return ExternalInput(value="init")
+
+        @step
+        async def handle_input(self, ev: ExternalInput, ctx: Context) -> StopEvent:
+            # This step accepts ExternalInput AND waits for ExternalInput.
+            # wait_for_event works by raising an exception on first call,
+            # then the control loop re-runs the step after the waiter resolves.
+            # So this step runs twice normally: once to register the waiter,
+            # once after resolution. The bug caused a THIRD run via normal
+            # event routing of the external event to this step.
+            nonlocal step_run_count
+            step_run_count += 1
+            result = await ctx.wait_for_event(
+                ExternalInput,
+                waiter_event=InputRequiredEvent(),
+            )
+            return StopEvent(result=f"got_{result.value}")
+
+    wf = DoubleRouteWorkflow(timeout=2.0)
+    task = asyncio.create_task(
+        run_control_loop(
+            workflow=wf,
+            start_event=StartEvent(),
+            test_runtime=test_plugin,
+        )
+    )
+
+    # Wait for the waiter to be registered
+    async for event in test_plugin.stream_published_events():
+        if isinstance(event, InputRequiredEvent):
+            break
+
+    # Send the external event — this resolves the waiter on handle_input.
+    # Without the fix, handle_input would ALSO get ExternalInput via normal
+    # accepted_events routing, causing a second execution.
+    await test_plugin.send_event(TickAddEvent(event=ExternalInput(value="hello")))
+
+    result = await asyncio.wait_for(task, timeout=2.0)
+    assert isinstance(result, StopEvent)
+    assert result.result == "got_hello", (
+        f"Expected waiter resolution result, got '{result.result}'"
+    )
+    # Step runs twice: once to register the waiter (raises WaitingForEvent),
+    # once after waiter resolution (returns the result). Without the fix,
+    # it would run a third time from the external event being routed directly.
+    assert step_run_count == 2, (
+        f"handle_input should run exactly twice, but ran {step_run_count} times"
+    )

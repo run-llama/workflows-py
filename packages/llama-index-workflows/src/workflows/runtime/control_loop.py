@@ -834,7 +834,36 @@ def _process_add_event_tick(
     handled = False
     if isinstance(tick.event, StartEvent):
         state.is_running = True
+
+    # First, check if the event resolves any waiters. Track which steps were
+    # woken via waiter resolution so we don't also route the event to them
+    # as a normal accepted event (which would cause duplicate processing).
+    waiter_resolved_steps: set[str] = set()
     for step_name, step_config in state.config.steps.items():
+        wait_conditions = state.workers[step_name].collected_waiters
+        for wait_condition in wait_conditions:
+            is_match = type(tick.event) is wait_condition.waiting_for_event
+            is_match = is_match and all(
+                getattr(tick.event, k, None) == v
+                for k, v in wait_condition.requirements.items()
+            )
+            if is_match:
+                handled = True
+                waiter_resolved_steps.add(step_name)
+                wait_condition.resolved_event = tick.event
+                subcommands = _add_or_enqueue_event(
+                    EventAttempt(event=wait_condition.event),
+                    step_name,
+                    state.workers[step_name],
+                    now_seconds,
+                )
+                commands.extend(subcommands)
+
+    # Then route to accepting steps, skipping any that were already woken
+    # via waiter resolution above.
+    for step_name, step_config in state.config.steps.items():
+        if step_name in waiter_resolved_steps:
+            continue
         is_accepted = type(tick.event) in step_config.accepted_events
         if is_accepted and (tick.step_name is None or tick.step_name == step_name):
             handled = True
@@ -849,27 +878,6 @@ def _process_add_event_tick(
                 now_seconds,
             )
             commands.extend(subcommands)
-
-    # separately, check if the event is a waiting event, and if so, update the waiting event state
-    # and set the resolved event. Add the original event as a command
-    for step_name, step_config in state.config.steps.items():
-        wait_conditions = state.workers[step_name].collected_waiters
-        for wait_condition in wait_conditions:
-            is_match = type(tick.event) is wait_condition.waiting_for_event
-            is_match = is_match and all(
-                getattr(tick.event, k, None) == v
-                for k, v in wait_condition.requirements.items()
-            )
-            if is_match:
-                handled = True
-                wait_condition.resolved_event = tick.event
-                subcommands = _add_or_enqueue_event(
-                    EventAttempt(event=wait_condition.event),
-                    step_name,
-                    state.workers[step_name],
-                    now_seconds,
-                )
-                commands.extend(subcommands)
     if not handled:
         # InputRequiredEvent subclasses are intentionally designed to be handled
         # externally by human consumers, not by workflow steps. Don't emit
