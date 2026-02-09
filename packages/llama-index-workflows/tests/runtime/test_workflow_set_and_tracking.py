@@ -222,6 +222,22 @@ def test_runtime_setter_same_runtime_after_launch_is_noop() -> None:
     assert wf.runtime is rt
 
 
+@pytest.mark.asyncio
+async def test_run_locks_runtime() -> None:
+    rt1 = BasicRuntime()
+    rt2 = BasicRuntime()
+    wf = SimpleWorkflow(runtime=rt1)
+    assert wf._runtime_locked is False
+
+    handler = wf.run()
+    assert wf._runtime_locked is True
+
+    with pytest.raises(RuntimeError, match="Cannot reassign runtime"):
+        wf._switch_runtime(rt2)
+
+    await handler
+
+
 def test_runtime_setter_before_launch_then_launch_locks() -> None:
     rt1 = BasicRuntime()
     rt2 = BasicRuntime()

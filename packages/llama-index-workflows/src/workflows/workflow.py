@@ -430,6 +430,10 @@ class Workflow(metaclass=WorkflowMeta):
         """
         from workflows.context import Context
 
+        if not self._runtime_locked:
+            # don't allow switching runtime after a workflow has been launched
+            self._runtime_locked = True
+
         # Validate the workflow
         self._validate()
 
