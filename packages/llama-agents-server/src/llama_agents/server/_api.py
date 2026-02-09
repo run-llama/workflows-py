@@ -41,7 +41,7 @@ from workflows.utils import _nanoid as nanoid
 
 from ._handler import NoLockAvailable, _NamedWorkflow, _WorkflowHandler
 from ._service import _WorkflowService
-from .abstract_workflow_store import (
+from ._store.abstract_workflow_store import (
     HandlerQuery,
     Status,
 )

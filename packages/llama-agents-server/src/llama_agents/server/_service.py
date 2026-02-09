@@ -13,13 +13,13 @@ from workflows.handler import WorkflowHandler
 from workflows.utils import _nanoid as nanoid
 
 from ._handler import _NamedWorkflow, _WorkflowHandler
-from .abstract_workflow_store import (
+from ._keyed_lock import KeyedLock
+from ._store.abstract_workflow_store import (
     AbstractWorkflowStore,
     HandlerQuery,
     PersistentHandler,
 )
-from .keyed_lock import KeyedLock
-from .memory_workflow_store import MemoryWorkflowStore
+from ._store.memory_workflow_store import MemoryWorkflowStore
 
 logger = logging.getLogger()
 

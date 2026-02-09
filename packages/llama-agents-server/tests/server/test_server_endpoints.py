@@ -15,11 +15,11 @@ import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient, Response
 from llama_agents.server import WorkflowServer
-from llama_agents.server.abstract_workflow_store import (
+from llama_agents.server._store.abstract_workflow_store import (
     HandlerQuery,
     PersistentHandler,
 )
-from llama_agents.server.memory_workflow_store import MemoryWorkflowStore
+from llama_agents.server._store.memory_workflow_store import MemoryWorkflowStore
 from llama_index_instrumentation.dispatcher import active_instrument_tags
 from server_test_fixtures import (
     ExternalEvent,  # type: ignore[import]
