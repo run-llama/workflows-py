@@ -7,19 +7,21 @@ import dataclasses
 from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import (
-    TYPE_CHECKING,
     Any,
     Generic,
+    Literal,
     TypeVar,
     Union,
 )
 
-from workflows.decorators import R
+from pydantic import BaseModel, ConfigDict, model_serializer, model_validator
 from workflows.events import Event
-
-if TYPE_CHECKING:
-    pass
-
+from workflows.runtime.types.serialization_helpers import (
+    SerializableEvent,
+    SerializableEventType,
+    SerializableException,
+    SerializableOptionalEvent,
+)
 
 EventType = TypeVar("EventType", bound=Event)
 
@@ -29,7 +31,7 @@ EventType = TypeVar("EventType", bound=Event)
 
 
 @dataclass(frozen=True)
-class StepWorkerContext(Generic[R]):
+class StepWorkerContext:
     """
     Base state passed to step functions and returned by step functions.
     """
@@ -37,7 +39,7 @@ class StepWorkerContext(Generic[R]):
     # immutable state of the step events at start of the step function execution
     state: StepWorkerState
     # add commands here to mutate the internal worker state after step execution
-    returns: Returns[R]
+    returns: Returns
 
 
 @dataclass(frozen=True)
@@ -79,13 +81,13 @@ class StepWorkerWaiter(Generic[EventType]):
 
 
 @dataclass()
-class Returns(Generic[R]):
+class Returns:
     """
     Mutate to add return values to the step function. These are only executed after the
     step function has completed (including errors!)
     """
 
-    return_values: list[StepFunctionResult[R]]
+    return_values: list[StepFunctionResult]
 
 
 class WaitingForEvent(Exception, Generic[EventType]):
@@ -110,71 +112,83 @@ StepWorkerStateContextVar = ContextVar[StepWorkerContext]("step_worker")
 ###################################
 
 
-@dataclass
-class StepWorkerResult(Generic[R]):
-    """
-    Returned after a step function has been successfully executed.
-    """
+class StepWorkerResult(BaseModel):
+    """Returned after a step function has been successfully executed."""
 
-    result: R
+    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
+    type: Literal["result"] = "result"
+    result: SerializableOptionalEvent = None
 
 
-@dataclass
-class StepWorkerFailed(Generic[R]):
-    """
-    Returned after a step function has failed
-    """
+class StepWorkerFailed(BaseModel):
+    """Returned after a step function has failed."""
 
-    exception: Exception
+    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
+    type: Literal["failed"] = "failed"
+    exception: SerializableException
     failed_at: float
 
 
-@dataclass
-class DeleteWaiter:
-    """
-    Returned after a waiter condition has been successfully resolved.
-    """
+class DeleteWaiter(BaseModel):
+    """Returned after a waiter condition has been successfully resolved."""
 
+    model_config = ConfigDict(frozen=True)
+    type: Literal["delete_waiter"] = "delete_waiter"
     waiter_id: str
 
 
-@dataclass
-class DeleteCollectedEvent:
-    """
-    Returned after a collected event has been successfully resolved.
-    """
+class DeleteCollectedEvent(BaseModel):
+    """Returned after a collected event has been successfully resolved."""
 
+    model_config = ConfigDict(frozen=True)
+    type: Literal["delete_collected"] = "delete_collected"
     event_id: str
 
 
-@dataclass
-class AddCollectedEvent:
-    """
-    Returned after a collected event has been added, and is not yet resolved.
-    """
+class AddCollectedEvent(BaseModel):
+    """Returned after a collected event has been added, and is not yet resolved."""
 
+    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
+    type: Literal["add_collected"] = "add_collected"
     event_id: str
-    event: Event
+    event: SerializableEvent
 
 
-@dataclass
-class AddWaiter(Generic[EventType]):
-    """
-    Returned after a waiter has been added, and is not yet resolved.
-    """
+class AddWaiter(BaseModel, Generic[EventType]):
+    """Returned after a waiter has been added, and is not yet resolved."""
 
+    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
+    type: Literal["add_waiter"] = "add_waiter"
     waiter_id: str
-    waiter_event: Event | None
-    requirements: dict[str, Any]
-    timeout: float | None
-    event_type: type[EventType]
+    waiter_event: SerializableOptionalEvent = None
+    requirements: dict[str, Any] = {}
+    timeout: float | None = None
+    event_type: SerializableEventType
+    has_requirements: bool = False
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler: Any) -> dict[str, Any]:
+        data = handler(self)
+        # Always serialize requirements as {} and record whether they existed
+        data["has_requirements"] = bool(self.requirements)
+        data["requirements"] = {}
+        return data
+
+    @model_validator(mode="wrap")
+    @classmethod
+    def _validate(cls, data: Any, handler: Any) -> AddWaiter:
+        if isinstance(data, dict):
+            # Strip has_requirements before validation (it's computed)
+            data = dict(data)
+            data.pop("has_requirements", None)
+        return handler(data)
 
 
 # A step function result "command" communicates back to the workflow how the step function was resolved
 # e.g. are we collecting events, waiting for an event, or just returning a result?
 StepFunctionResult = Union[
-    StepWorkerResult[R],
-    StepWorkerFailed[R],
+    StepWorkerResult,
+    StepWorkerFailed,
     AddCollectedEvent,
     DeleteCollectedEvent,
     AddWaiter[Event],
