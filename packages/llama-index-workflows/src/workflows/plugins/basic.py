@@ -128,7 +128,7 @@ class InternalAsyncioAdapter(InternalRunAdapter, SnapshottableAdapter):
         except asyncio.TimeoutError:
             return WaitResultTimeout()
 
-    def on_tick(self, tick: WorkflowTick) -> None:
+    async def on_tick(self, tick: WorkflowTick) -> None:
         self._queues.ticks.append(tick)
 
     def replay(self) -> list[WorkflowTick]:
@@ -148,7 +148,8 @@ class ExternalAsyncioAdapter(
     and stream events published by the workflow.
     """
 
-    def __init__(self, queues: AsyncioAdapterQueues) -> None:
+    def __init__(self, outer: BasicRuntime, queues: AsyncioAdapterQueues) -> None:
+        self._outer = outer
         self._queues = queues
 
     @property
@@ -170,9 +171,6 @@ class ExternalAsyncioAdapter(
                 yield item
                 if isinstance(item, StopEvent):
                     break
-
-    def on_tick(self, tick: WorkflowTick) -> None:
-        self._queues.ticks.append(tick)
 
     def replay(self) -> list[WorkflowTick]:
         return self._queues.ticks
@@ -196,6 +194,7 @@ class ExternalAsyncioAdapter(
         """Abort by cancelling the control loop task."""
         if not self._queues.complete.done():
             self._queues.complete.cancel()
+        self._outer._queues.pop(self.run_id, None)
 
     @property
     def init_state(self) -> BrokerState:
@@ -206,6 +205,7 @@ class BasicRuntime(Runtime):
     """Default asyncio-based runtime with no durability."""
 
     def __init__(self) -> None:
+        super().__init__()
         # WeakValueDictionary allows queues to be GC'd when no adapters reference them.
         # The task closure in run_workflow() captures a strong reference, keeping
         # queues alive for fire-and-forget workflows even if the external adapter is dropped.
@@ -323,7 +323,7 @@ class BasicRuntime(Runtime):
     def get_external_adapter(self, run_id: str) -> ExternalRunAdapter:
         if run_id not in self._queues:
             raise RuntimeError(f"No active workflow with run_id '{run_id}'. ")
-        return ExternalAsyncioAdapter(self._queues[run_id])
+        return ExternalAsyncioAdapter(self, self._queues[run_id])
 
 
 _current_run_id: ContextVar[str | None] = ContextVar("current_run_id", default=None)
