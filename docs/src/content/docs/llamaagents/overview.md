@@ -24,7 +24,7 @@ Get from zero to a working pipeline quickly. Start from templates, configure and
 
 **[Agent Workflows](/python/llamaagents/workflows/)**: The powerful event-driven orchestration framework underneath it all. Use standalone as an async library, or let `llamactl` serve them. Built-in durability and [observability](/python/llamaagents/workflows/observability/).
 
-**[`llama-cloud-services`](/python/cloud/)**: LlamaCloud's document primitives (Parse, Extract, Classify), [Agent Data](/python/llamaagents/llamactl/agent-data-overview/) for structured storage, and vector indexes for retrieval. `llamactl` handles authentication automatically.
+**[`llama-cloud-services`](/python/cloud/)**: LlamaCloud's document primitives (Parse, Extract, Classify), [Agent Data](/python/llamaagents/cloud/agent-data-overview/) for structured storage, and vector indexes for retrieval. `llamactl` handles authentication automatically.
 
 **[@llamaindex/ui](/python/llamaagents/llamactl/ui-hooks/)**: React hooks for workflow-powered frontends. Deploy alongside your backend with `llamactl`.
 
