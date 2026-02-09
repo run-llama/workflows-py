@@ -1,5 +1,11 @@
 # llama-agents-server
 
+## 0.2.0-rc.0
+
+### Minor Changes
+
+- 06cca76: Test pre-release functioning
+
 ## 0.1.2
 
 ### Patch Changes
