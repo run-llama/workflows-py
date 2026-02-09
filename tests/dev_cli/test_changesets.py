@@ -14,6 +14,8 @@ from dev_cli.changesets import (
     PyProjectContainer,
     current_version,
     is_published,
+    pep440_to_semver,
+    semver_to_pep440,
     sync_package_version_with_pyproject,
 )
 
@@ -168,3 +170,123 @@ dependencies = []
 
     # Content should be unchanged
     assert pyproject.read_text() == original_content
+
+
+def test_sync_package_version_converts_semver_prerelease(tmp_path: Path) -> None:
+    package_dir = tmp_path / "package"
+    package_dir.mkdir()
+    pyproject = package_dir / "pyproject.toml"
+    pyproject.write_text(
+        """
+[project]
+name = "test-package"
+version = "1.0.0"
+dependencies = []
+""".strip()
+    )
+
+    packages = {
+        "test-js-package": PackageJson(
+            name="test-js-package",
+            version="1.2.3-a.4",
+            path=package_dir,
+            private=False,
+        )
+    }
+
+    sync_package_version_with_pyproject(package_dir, packages, "test-js-package")
+
+    _, py_doc = PyProjectContainer.parse(pyproject.read_text())
+    assert py_doc.project.version == "1.2.3a4"
+
+
+# -- semver_to_pep440 tests --
+
+
+@pytest.mark.parametrize(
+    ("semver", "expected"),
+    [
+        ("1.2.3-a.0", "1.2.3a0"),
+        ("1.2.3-a.4", "1.2.3a4"),
+        ("2.0.0-b.1", "2.0.0b1"),
+        ("0.1.0-rc.3", "0.1.0rc3"),
+        ("10.20.30-a.99", "10.20.30a99"),
+    ],
+)
+def test_semver_to_pep440_prerelease(semver: str, expected: str) -> None:
+    assert semver_to_pep440(semver) == expected
+
+
+@pytest.mark.parametrize(
+    "version",
+    [
+        "1.2.3",
+        "0.0.1",
+        "10.20.30",
+    ],
+)
+def test_semver_to_pep440_stable_passthrough(version: str) -> None:
+    assert semver_to_pep440(version) == version
+
+
+def test_semver_to_pep440_rejects_non_pep440_label() -> None:
+    with pytest.raises(ValueError, match="Unsupported pre-release label 'alpha'"):
+        semver_to_pep440("1.2.3-alpha.1")
+
+
+# -- pep440_to_semver tests --
+
+
+@pytest.mark.parametrize(
+    ("pep440", "expected"),
+    [
+        ("1.2.3a0", "1.2.3-a.0"),
+        ("1.2.3a4", "1.2.3-a.4"),
+        ("2.0.0b1", "2.0.0-b.1"),
+        ("0.1.0rc3", "0.1.0-rc.3"),
+        ("10.20.30a99", "10.20.30-a.99"),
+    ],
+)
+def test_pep440_to_semver_prerelease(pep440: str, expected: str) -> None:
+    assert pep440_to_semver(pep440) == expected
+
+
+@pytest.mark.parametrize(
+    "version",
+    [
+        "1.2.3",
+        "0.0.1",
+        "10.20.30",
+    ],
+)
+def test_pep440_to_semver_stable_passthrough(version: str) -> None:
+    assert pep440_to_semver(version) == version
+
+
+# -- roundtrip tests --
+
+
+@pytest.mark.parametrize(
+    "semver",
+    [
+        "1.2.3-a.4",
+        "2.0.0-b.1",
+        "0.1.0-rc.3",
+    ],
+)
+def test_roundtrip_semver_to_pep440_and_back(semver: str) -> None:
+    pep440 = semver_to_pep440(semver)
+    assert pep440_to_semver(pep440) == semver
+
+
+@pytest.mark.parametrize(
+    "pep440",
+    [
+        "1.2.3a4",
+        "2.0.0b1",
+        "0.1.0rc3",
+    ],
+)
+def test_roundtrip_pep440_to_semver_and_back(pep440: str) -> None:
+    semver = pep440_to_semver(pep440)
+    assert semver_to_pep440(semver) == pep440
