@@ -10,7 +10,7 @@ Cloud deployments of LlamaAgents are now in beta preview and broadly available f
 
 Agent Data is a JSON store tied to a `deploymentName` and `collection`. Use the official JavaScript SDK with strong typing for CRUD, search, and aggregation.
 
-See the [Agent Data Overview](/python/llamaagents/llamactl/agent-data-overview) for concepts, constraints, and environment details.
+See the [Agent Data Overview](/python/llamaagents/cloud/agent-data-overview/) for concepts, constraints, and environment details.
 
 Install:
 ```bash
@@ -118,7 +118,7 @@ for (const r of results.items) {
 }
 ```
 
-See the [Agent Data Overview](/python/llamaagents/llamactl/agent-data-overview#filter-dsl) for more details on filters.
+See the [Agent Data Overview](/python/llamaagents/cloud/agent-data-overview/#filter-dsl) for more details on filters.
 
 - Filter keys target `data` fields, except `created_at`/`updated_at` which are top-level.
 - Sort with comma-separated specs; prefix data fields in `orderBy` (e.g., `"data.name desc, created_at"`).

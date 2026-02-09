@@ -77,5 +77,5 @@ For extraction workflows, the SDKs provide a specialized `ExtractedData<T>` wrap
 Using `ExtractedData` enables human-in-the-loop review workflows and provides traceability from extracted fields back to source documents.
 
 Next steps:
-- Python usage: see [Agent Data (Python)](/python/llamaagents/llamactl/agent-data-python)
-- JavaScript usage: see [Agent Data (JavaScript)](/python/llamaagents/llamactl/agent-data-javascript)
+- Python usage: see [Agent Data (Python)](/python/llamaagents/cloud/agent-data-python)
+- JavaScript usage: see [Agent Data (JavaScript)](/python/llamaagents/cloud/agent-data-javascript)

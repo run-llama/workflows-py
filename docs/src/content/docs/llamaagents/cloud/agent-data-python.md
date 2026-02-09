@@ -7,7 +7,7 @@ sidebar:
 Cloud deployments of LlamaAgents are now in beta preview and broadly available for feedback. You can try them out locally or deploy to LlamaCloud and send us feedback with the in-app button.
 :::
 
-See the [Agent Data Overview](/python/llamaagents/llamactl/agent-data-overview) for concepts, constraints, and environment details.
+See the [Agent Data Overview](/python/llamaagents/cloud/agent-data-overview/) for concepts, constraints, and environment details.
 
 ### Install
 
