@@ -61,7 +61,7 @@ jobs:
           UV_PUBLISH_TOKEN: ${{ secrets.PYPI_TOKEN }}
 
       - name: Extract published llama-agents-server version
-        if: steps.changesets.outputs.published == 'true'
+        if: github.ref == 'refs/heads/main' && steps.changesets.outputs.published == 'true'
         id: server-version
         run: |
           PACKAGES='${{ steps.changesets.outputs.publishedPackages }}'
@@ -76,7 +76,7 @@ jobs:
           fi
 
       - name: Trigger OpenAPI publish for llama-agents-server
-        if: steps.changesets.outputs.published == 'true' && steps.server-version.outputs.version != ''
+        if: github.ref == 'refs/heads/main' && steps.changesets.outputs.published == 'true' && steps.server-version.outputs.version != ''
         uses: peter-evans/repository-dispatch@v3
         with:
           token: ${{ steps.app-token.outputs.token }}
