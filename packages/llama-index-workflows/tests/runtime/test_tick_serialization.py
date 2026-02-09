@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import time
 
+import pytest
 from pydantic import TypeAdapter
 from workflows.events import Event, StartEvent, StopEvent
 from workflows.runtime.types.results import (
@@ -75,94 +76,89 @@ def test_event_type_roundtrip() -> None:
 # -- Tick roundtrip tests --
 
 
-def test_tick_add_event_round_trip() -> None:
-    tick = TickAddEvent(
-        event=StartEvent(),
-        step_name="my_step",
-        attempts=3,
-        first_attempt_at=1234567890.0,
-    )
+@pytest.mark.parametrize(
+    "tick",
+    [
+        pytest.param(
+            TickAddEvent(
+                event=StartEvent(),
+                step_name="my_step",
+                attempts=3,
+                first_attempt_at=1234567890.0,
+            ),
+            id="add_event",
+        ),
+        pytest.param(
+            TickPublishEvent(event=MyEvent(value="world")),
+            id="publish_event",
+        ),
+        pytest.param(
+            TickCancelRun(),
+            id="cancel_run",
+        ),
+        pytest.param(
+            TickTimeout(timeout=30.5),
+            id="timeout",
+        ),
+        pytest.param(
+            TickStepResult(
+                step_name="process",
+                worker_id=42,
+                event=MyEvent(value="trigger"),
+                result=[StepWorkerResult(result=StopEvent(result="done"))],
+            ),
+            id="step_result_with_event",
+        ),
+        pytest.param(
+            TickStepResult(
+                step_name="process",
+                worker_id=1,
+                event=StartEvent(),
+                result=[StepWorkerResult(result=None)],
+            ),
+            id="step_result_with_none",
+        ),
+        pytest.param(
+            TickStepResult(
+                step_name="collector",
+                worker_id=2,
+                event=StartEvent(),
+                result=[
+                    AddCollectedEvent(
+                        event_id="evt-1", event=MyEvent(value="collected")
+                    )
+                ],
+            ),
+            id="step_result_add_collected_event",
+        ),
+        pytest.param(
+            TickStepResult(
+                step_name="collector",
+                worker_id=3,
+                event=StartEvent(),
+                result=[DeleteCollectedEvent(event_id="evt-2")],
+            ),
+            id="step_result_delete_collected_event",
+        ),
+        pytest.param(
+            TickStepResult(
+                step_name="cleanup",
+                worker_id=5,
+                event=StartEvent(),
+                result=[DeleteWaiter(waiter_id="w-2")],
+            ),
+            id="step_result_delete_waiter",
+        ),
+    ],
+)
+def test_tick_roundtrip(tick: WorkflowTick) -> None:
     serialized = tick.model_dump(mode="json")
     roundtripped = json.loads(json.dumps(serialized))
-    result = TickAddEvent.model_validate(roundtripped)
-
-    assert isinstance(result, TickAddEvent)
-    assert isinstance(result.event, StartEvent)
-    assert result.step_name == "my_step"
-    assert result.attempts == 3
-    assert result.first_attempt_at == 1234567890.0
+    result = type(tick).model_validate(roundtripped)
+    assert result == tick
 
 
-def test_tick_publish_event_round_trip() -> None:
-    tick = TickPublishEvent(event=MyEvent(value="world"))
-    serialized = tick.model_dump(mode="json")
-    roundtripped = json.loads(json.dumps(serialized))
-    result = TickPublishEvent.model_validate(roundtripped)
-
-    assert isinstance(result, TickPublishEvent)
-    assert isinstance(result.event, MyEvent)
-    assert result.event.value == "world"
-
-
-def test_tick_cancel_run_round_trip() -> None:
-    tick = TickCancelRun()
-    serialized = tick.model_dump(mode="json")
-    roundtripped = json.loads(json.dumps(serialized))
-    result = TickCancelRun.model_validate(roundtripped)
-
-    assert isinstance(result, TickCancelRun)
-
-
-def test_tick_timeout_round_trip() -> None:
-    tick = TickTimeout(timeout=30.5)
-    serialized = tick.model_dump(mode="json")
-    roundtripped = json.loads(json.dumps(serialized))
-    result = TickTimeout.model_validate(roundtripped)
-
-    assert isinstance(result, TickTimeout)
-    assert result.timeout == 30.5
-
-
-def test_tick_step_result_with_event_result() -> None:
-    event = MyEvent(value="trigger")
-    worker_result = StepWorkerResult(result=StopEvent(result="done"))
-    tick = TickStepResult(
-        step_name="process",
-        worker_id=42,
-        event=event,
-        result=[worker_result],
-    )
-    serialized = tick.model_dump(mode="json")
-    roundtripped = json.loads(json.dumps(serialized))
-    result = TickStepResult.model_validate(roundtripped)
-
-    assert isinstance(result, TickStepResult)
-    assert result.step_name == "process"
-    assert result.worker_id == 42
-    assert isinstance(result.event, MyEvent)
-    assert result.event.value == "trigger"
-    assert len(result.result) == 1
-    r = result.result[0]
-    assert isinstance(r, StepWorkerResult)
-    assert isinstance(r.result, StopEvent)
-    assert r.result.result == "done"
-
-
-def test_tick_step_result_with_none_result() -> None:
-    tick = TickStepResult(
-        step_name="process",
-        worker_id=1,
-        event=StartEvent(),
-        result=[StepWorkerResult(result=None)],
-    )
-    serialized = tick.model_dump(mode="json")
-    roundtripped = json.loads(json.dumps(serialized))
-    result = TickStepResult.model_validate(roundtripped)
-
-    assert isinstance(result, TickStepResult)
-    r = result.result[0]
-    assert isinstance(r, StepWorkerResult)
-    assert r.result is None
+# -- Tick roundtrip tests with lossy serialization --
 
 
 def test_tick_step_result_with_failed_value_error() -> None:
@@ -210,42 +206,6 @@ def test_tick_step_result_with_failed_unimportable_exception() -> None:
     assert r.failed_at == failed_at
 
 
-def test_tick_step_result_with_add_collected_event() -> None:
-    tick = TickStepResult(
-        step_name="collector",
-        worker_id=2,
-        event=StartEvent(),
-        result=[AddCollectedEvent(event_id="evt-1", event=MyEvent(value="collected"))],
-    )
-    serialized = tick.model_dump(mode="json")
-    roundtripped = json.loads(json.dumps(serialized))
-    result = TickStepResult.model_validate(roundtripped)
-
-    assert isinstance(result, TickStepResult)
-    r = result.result[0]
-    assert isinstance(r, AddCollectedEvent)
-    assert r.event_id == "evt-1"
-    assert isinstance(r.event, MyEvent)
-    assert r.event.value == "collected"
-
-
-def test_tick_step_result_with_delete_collected_event() -> None:
-    tick = TickStepResult(
-        step_name="collector",
-        worker_id=3,
-        event=StartEvent(),
-        result=[DeleteCollectedEvent(event_id="evt-2")],
-    )
-    serialized = tick.model_dump(mode="json")
-    roundtripped = json.loads(json.dumps(serialized))
-    result = TickStepResult.model_validate(roundtripped)
-
-    assert isinstance(result, TickStepResult)
-    r = result.result[0]
-    assert isinstance(r, DeleteCollectedEvent)
-    assert r.event_id == "evt-2"
-
-
 def test_tick_step_result_with_add_waiter() -> None:
     tick = TickStepResult(
         step_name="waiter_step",
@@ -281,23 +241,6 @@ def test_tick_step_result_with_add_waiter() -> None:
     assert r.requirements == {}
     assert r.timeout == 60.0
     assert r.event_type is MyEvent
-
-
-def test_tick_step_result_with_delete_waiter() -> None:
-    tick = TickStepResult(
-        step_name="cleanup",
-        worker_id=5,
-        event=StartEvent(),
-        result=[DeleteWaiter(waiter_id="w-2")],
-    )
-    serialized = tick.model_dump(mode="json")
-    roundtripped = json.loads(json.dumps(serialized))
-    result = TickStepResult.model_validate(roundtripped)
-
-    assert isinstance(result, TickStepResult)
-    r = result.result[0]
-    assert isinstance(r, DeleteWaiter)
-    assert r.waiter_id == "w-2"
 
 
 # -- WorkflowTick discriminated union tests --
