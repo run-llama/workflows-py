@@ -22,6 +22,7 @@ from dev_cli.commands.pytest_cmd import (
     discover_test_packages,
     extract_failed_test_names,
     extract_failures_section,
+    extract_test_counts,
     run_tests_with_rich_progress,
 )
 
@@ -681,7 +682,9 @@ def test_pytest_summary_appears_last(
 def test_pytest_extracts_failures_not_full_output(
     runner: CliRunner, packages_dir: Path, create_pkg: Callable[[str], PackageInfo]
 ) -> None:
+    # Use two packages so single-package auto-verbose doesn't kick in
     pkg_a = create_pkg("pkg-a")
+    pkg_b = create_pkg("pkg-b")
 
     failure_output = (
         "============================= test session starts ==============================\n"
@@ -699,10 +702,15 @@ def test_pytest_extracts_failures_not_full_output(
 
     with patch(
         "dev_cli.commands.pytest_cmd.discover_test_packages",
-        return_value=[pkg_a],
+        return_value=[pkg_a, pkg_b],
     ):
         with patch("dev_cli.commands.pytest_cmd.subprocess.run") as mock_run:
-            mock_run.return_value = Mock(returncode=1, stdout=failure_output, stderr="")
+            mock_run.side_effect = [
+                sync_success(),
+                Mock(returncode=1, stdout=failure_output, stderr=""),
+                sync_success(),
+                Mock(returncode=0, stdout="", stderr=""),
+            ]
             result = runner.invoke(cli, ["pytest"])
 
             assert "AssertionError" in result.output
@@ -748,7 +756,7 @@ def test_render_progress_table_pending(
     from rich.spinner import Spinner
 
     pkg = create_pkg("pkg-a")
-    results: dict[str, dict[str, bool | str | float]] = {}
+    results: dict[str, dict[str, bool | str | float | None]] = {}
     start_times: dict[str, float] = {}
     spinners: dict[str, Spinner] = {}
 
@@ -762,7 +770,7 @@ def test_render_progress_table_running(
     from rich.spinner import Spinner
 
     pkg = create_pkg("pkg-a")
-    results: dict[str, dict[str, bool | str | float]] = {}
+    results: dict[str, dict[str, bool | str | float | None]] = {}
     start_times = {"pkg-a": time.time() - 5.0}
     spinners = {"pkg-a": Spinner("dots", style="yellow")}
 
@@ -815,7 +823,7 @@ def test_run_tests_with_rich_progress_multiple(
 
     def mock_run(
         pkg: PackageInfo, pytest_args: tuple[str, ...]
-    ) -> dict[str, bool | str | float]:
+    ) -> dict[str, bool | str | float | None]:
         nonlocal call_count
         call_count += 1
         return {
@@ -881,3 +889,132 @@ def test_pytest_skips_rich_when_not_tty(
 
                 mock_rich.assert_not_called()
                 mock_subprocess.assert_called()
+
+
+# --- extract_test_counts tests ---
+
+
+def test_extract_test_counts_passed_only() -> None:
+    output = "============================== 42 passed in 3.2s =============================="
+    assert extract_test_counts(output) == "42 passed"
+
+
+def test_extract_test_counts_mixed() -> None:
+    output = "============================== 1 failed, 42 passed in 3.2s =============================="
+    assert extract_test_counts(output) == "1 failed, 42 passed"
+
+
+def test_extract_test_counts_with_skipped() -> None:
+    output = "============================== 10 passed, 2 skipped in 1.5s =============================="
+    assert extract_test_counts(output) == "10 passed, 2 skipped"
+
+
+def test_extract_test_counts_no_summary() -> None:
+    assert extract_test_counts("no summary here\n") is None
+
+
+def test_extract_test_counts_with_ansi() -> None:
+    output = "\x1b[32m============================== 5 passed in 0.5s ==============================\x1b[0m"
+    assert extract_test_counts(output) == "5 passed"
+
+
+def test_extract_test_counts_without_timing() -> None:
+    output = "============================== 42 passed =============================="
+    assert extract_test_counts(output) == "42 passed"
+
+
+# --- Single-package auto-verbose tests ---
+
+
+def test_single_package_shows_full_output(
+    runner: CliRunner, packages_dir: Path, create_pkg: Callable[[str], PackageInfo]
+) -> None:
+    """Single package runs show full pytest output without -v flag."""
+    pkg_a = create_pkg("pkg-a")
+
+    with patch(
+        "dev_cli.commands.pytest_cmd.discover_test_packages",
+        return_value=[pkg_a],
+    ):
+        with patch("dev_cli.commands.pytest_cmd.subprocess.run") as mock_run:
+            mock_run.return_value = Mock(
+                returncode=0,
+                stdout="collected 5 items\ntest_foo.py::test_one PASSED\n============================== 5 passed in 1.0s ==============================\n",
+                stderr="",
+            )
+            result = runner.invoke(cli, ["pytest", "-p", "pkg-a"])
+
+            # Should show full pytest output
+            assert "collected 5 items" in result.output
+            assert "test_foo.py::test_one PASSED" in result.output
+            # Should still show summary
+            assert "Test Summary" in result.output
+
+
+# --- Test counts in compact output ---
+
+
+def test_compact_output_shows_test_counts(
+    runner: CliRunner, packages_dir: Path, create_pkg: Callable[[str], PackageInfo]
+) -> None:
+    """Non-TTY compact progress lines include test counts."""
+    pkgs = [create_pkg(name) for name in ["pkg-a", "pkg-b"]]
+
+    with patch(
+        "dev_cli.commands.pytest_cmd.discover_test_packages",
+        return_value=pkgs,
+    ):
+        with patch("dev_cli.commands.pytest_cmd.subprocess.run") as mock_run:
+            mock_run.side_effect = [
+                sync_success(),
+                Mock(
+                    returncode=0,
+                    stdout="============================== 10 passed in 1.0s ==============================\n",
+                    stderr="",
+                ),
+                sync_success(),
+                Mock(
+                    returncode=0,
+                    stdout="============================== 5 passed in 0.5s ==============================\n",
+                    stderr="",
+                ),
+            ]
+            result = runner.invoke(cli, ["pytest"])
+
+            assert (
+                "PASSED (10 passed)" in result.output
+                or "PASSED (5 passed)" in result.output
+            )
+            assert "15 tests total" in result.output
+
+
+def test_summary_table_shows_test_counts(
+    runner: CliRunner, packages_dir: Path, create_pkg: Callable[[str], PackageInfo]
+) -> None:
+    """Summary table includes test counts per package."""
+    pkgs = [create_pkg(name) for name in ["pkg-a", "pkg-b"]]
+
+    with patch(
+        "dev_cli.commands.pytest_cmd.discover_test_packages",
+        return_value=pkgs,
+    ):
+        with patch("dev_cli.commands.pytest_cmd.subprocess.run") as mock_run:
+            mock_run.side_effect = [
+                sync_success(),
+                Mock(
+                    returncode=0,
+                    stdout="============================== 10 passed in 1.0s ==============================\n",
+                    stderr="",
+                ),
+                sync_success(),
+                Mock(
+                    returncode=1,
+                    stdout="=================================== FAILURES ===================================\n_________________________ test_bad _________________________\nAssertionError\n============================== 1 failed, 4 passed in 0.5s ==============================\n",
+                    stderr="",
+                ),
+            ]
+            result = runner.invoke(cli, ["pytest"])
+
+            assert "PASSED (10 passed)" in result.output
+            assert "FAILED (1 failed, 4 passed)" in result.output
+            assert "15 tests total" in result.output

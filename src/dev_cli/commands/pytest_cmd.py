@@ -53,6 +53,35 @@ class PackageInfo:
 _ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 
+def extract_test_counts(stdout: str) -> str | None:
+    """Extract test count summary from pytest output.
+
+    Parses the final pytest summary line like "= 42 passed, 1 failed in 3.2s ="
+    and returns a short string like "42 passed" or "42 passed, 1 failed".
+
+    Args:
+        stdout: The complete stdout from a pytest run.
+
+    Returns:
+        A short summary string, or None if no summary line found.
+    """
+    if not isinstance(stdout, str):
+        return None
+    for line in reversed(stdout.splitlines()):
+        clean = _ANSI_ESCAPE_RE.sub("", line).strip()
+        match = re.match(r"^=+\s+(.+?)\s+in\s+[\d.]+s\s+=+$", clean)
+        if match:
+            return match.group(1)
+        # Also match lines without timing, e.g. "= 42 passed ="
+        match = re.match(r"^=+\s+(.+?)\s+=+$", clean)
+        if match:
+            inner = match.group(1)
+            # Avoid matching section headers like "FAILURES" or "test session starts"
+            if re.search(r"\d+\s+(passed|failed|error|skipped|warning)", inner):
+                return inner
+    return None
+
+
 def extract_failures_section(stdout: str) -> str | None:
     """Extract the FAILURES section from pytest output.
 
@@ -175,7 +204,7 @@ def discover_test_packages(repo_root: Path) -> list[PackageInfo]:
 
 def run_package_tests(
     pkg: PackageInfo, pytest_args: tuple[str, ...]
-) -> dict[str, bool | str | float]:
+) -> dict[str, bool | str | float | None]:
     """Run pytest for a single package and return the results.
 
     Args:
@@ -219,31 +248,34 @@ def run_package_tests(
         "stdout": result.stdout,
         "stderr": result.stderr,
         "duration": duration,
+        "test_summary": extract_test_counts(result.stdout),
     }
 
 
 def _render_progress_table(
     packages: list[PackageInfo],
-    results: dict[str, dict[str, bool | str | float]],
+    results: dict[str, dict[str, bool | str | float | None]],
     start_times: dict[str, float],
     spinners: dict[str, Spinner],
 ) -> Table:
     """Render the progress table for rich Live display."""
     table = Table(show_header=False, box=None, padding=(0, 1))
     table.add_column("name", style="bold")
-    table.add_column("status", width=12)
+    table.add_column("status")
     table.add_column("time", justify="right", width=10)
 
     for pkg in packages:
         if pkg.name in results:
             result_data = results[pkg.name]
             duration = result_data["duration"]
+            test_summary = result_data.get("test_summary")
+            summary_suffix = f" ({test_summary})" if test_summary else ""
             if result_data.get("no_tests"):
                 status: Text | Spinner = Text("NO TESTS", style="yellow")
             elif result_data["success"]:
-                status = Text("PASSED", style="green")
+                status = Text(f"PASSED{summary_suffix}", style="green")
             else:
-                status = Text("FAILED", style="red")
+                status = Text(f"FAILED{summary_suffix}", style="red")
             time_str = f"({duration:.1f}s)"
         elif pkg.name in start_times:
             elapsed = time.time() - start_times[pkg.name]
@@ -260,7 +292,7 @@ def run_tests_with_rich_progress(
     packages: list[PackageInfo],
     pytest_args: tuple[str, ...],
     max_workers: int,
-) -> dict[str, dict[str, bool | str | float]]:
+) -> dict[str, dict[str, bool | str | float | None]]:
     """Run tests with a live rich progress display.
 
     Shows a live-updating table with package status, spinner for running
@@ -275,7 +307,7 @@ def run_tests_with_rich_progress(
         Dictionary mapping package names to their test results.
     """
     console = Console()
-    results: dict[str, dict[str, bool | str | float]] = {}
+    results: dict[str, dict[str, bool | str | float | None]] = {}
     start_times: dict[str, float] = {}
     spinners: dict[str, Spinner] = {}
 
@@ -386,6 +418,11 @@ def pytest_cmd(
     max_workers = min(parallel, len(target_packages))
     use_rich_progress = sys.stdout.isatty() and not verbose
 
+    # Single package: always show full output directly
+    if total == 1:
+        verbose = True
+        use_rich_progress = False
+
     if use_rich_progress:
         # Use rich live progress display for interactive terminals
         results = run_tests_with_rich_progress(
@@ -393,7 +430,7 @@ def pytest_cmd(
         )
     else:
         # Fall back to simple output for non-TTY or verbose mode
-        results: dict[str, dict[str, bool | str | float]] = {}
+        results: dict[str, dict[str, bool | str | float | None]] = {}
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {
                 executor.submit(run_package_tests, pkg, pytest_args): pkg
@@ -414,12 +451,14 @@ def pytest_cmd(
                         click.echo(result_data["stderr"], nl=False, err=True)
                 else:
                     # Compact progress line (for non-TTY output)
+                    test_summary = result_data.get("test_summary")
+                    summary_suffix = f" ({test_summary})" if test_summary else ""
                     if result_data.get("no_tests"):
                         status = click.style("NO TESTS", fg="yellow")
                     elif result_data["success"]:
-                        status = click.style("PASSED", fg="green")
+                        status = click.style(f"PASSED{summary_suffix}", fg="green")
                     else:
-                        status = click.style("FAILED", fg="red")
+                        status = click.style(f"FAILED{summary_suffix}", fg="red")
                     click.echo(
                         f"[{idx}/{total}] {pkg.name}... {status} "
                         f"({result_data['duration']:.1f}s)"
@@ -454,12 +493,14 @@ def pytest_cmd(
 
     max_name_len = max(len(name) for name in results)
     for name, result_data in results.items():
+        test_summary = result_data.get("test_summary")
+        summary_suffix = f" ({test_summary})" if test_summary else ""
         if result_data.get("no_tests"):
             status = click.style("NO TESTS", fg="yellow")
         elif result_data["success"]:
-            status = click.style("PASSED", fg="green")
+            status = click.style(f"PASSED{summary_suffix}", fg="green")
         else:
-            status = click.style("FAILED", fg="red")
+            status = click.style(f"FAILED{summary_suffix}", fg="red")
         click.echo(f"{name.ljust(max_name_len)}  {status}")
 
     click.echo("=" * 50)
@@ -470,7 +511,22 @@ def pytest_cmd(
         summary_parts.append(click.style(f"{passed} passed", fg="green"))
     if no_tests:
         summary_parts.append(click.style(f"{no_tests} no tests", fg="yellow"))
-    click.echo(", ".join(summary_parts))
+
+    # Count total individual tests across all packages
+    total_tests = 0
+    for result_data in results.values():
+        ts = result_data.get("test_summary")
+        if ts and isinstance(ts, str):
+            # Sum all numeric counts from summary like "42 passed, 1 failed"
+            total_tests += sum(
+                int(n)
+                for n in re.findall(r"(\d+)\s+(?:passed|failed|error|skipped)", ts)
+            )
+
+    summary_line = ", ".join(summary_parts)
+    if total_tests:
+        summary_line += f" ({total_tests} tests total)"
+    click.echo(summary_line)
 
     # Show failed test names at the very end for quick reference
     if failed:
