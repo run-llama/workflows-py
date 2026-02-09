@@ -1,3 +1,9 @@
+from __future__ import annotations
+
+from contextlib import asynccontextmanager
+from typing import AsyncIterator, Union
+from unittest.mock import AsyncMock
+
 import httpx
 import pytest
 from client_test_workflows import (
@@ -260,3 +266,121 @@ async def test_error_message_format(client: WorkflowClient) -> None:
         "404 Not Found for POST http://test/workflows/nonexistent_workflow/run. Response: Workflow not found"
         == error_message
     )  # Status code
+
+
+def _envelope(msg: str) -> EventEnvelopeWithMetadata:
+    return EventEnvelopeWithMetadata(
+        value={"msg": msg}, qualified_name=None, type="TestEvent", types=None
+    )
+
+
+# Each "connection" in a script is a list of SSE events to yield, optionally
+# ending with an exception to simulate a disconnect. A bare exception means
+# the connection fails before yielding any data.
+ConnectionScript = Union[
+    list[Union[tuple[int, EventEnvelopeWithMetadata], Exception]], Exception
+]
+
+
+class FakeStreamClient:
+    """Mock httpx client that replays a scripted sequence of SSE connections."""
+
+    def __init__(self, script: list[ConnectionScript]) -> None:
+        self._script = list(script)
+        self.captured_params: list[dict[str, str]] = []
+        self._call = 0
+
+    @asynccontextmanager
+    async def stream(
+        self,
+        method: str,
+        url: str,
+        params: dict[str, str] | None = None,
+        **kwargs: object,
+    ) -> AsyncIterator[AsyncMock]:
+        self.captured_params.append(params or {})
+        assert self._call < len(self._script), "More connections than scripted"
+        entry = self._script[self._call]
+        self._call += 1
+
+        if isinstance(entry, Exception):
+            raise entry
+
+        events = entry
+        tail_error: Exception | None = None
+        # If the last element is an exception, pop it as a mid-stream error
+        if events and isinstance(events[-1], Exception):
+            tail_error = events[-1]  # type: ignore[assignment]
+            events = events[:-1]  # type: ignore[assignment]
+
+        resp = AsyncMock()
+        resp.status_code = 200
+
+        async def aiter_lines() -> AsyncIterator[str]:
+            for seq, env in events:  # type: ignore[union-attr]
+                yield f"id: {seq}"
+                yield f"data: {env.model_dump_json()}"
+                yield ""
+            if tail_error is not None:
+                raise tail_error
+
+        resp.aiter_lines = aiter_lines
+        yield resp
+
+
+async def _collect(
+    script: list[ConnectionScript], **kwargs: object
+) -> list[EventEnvelopeWithMetadata]:
+    fake = FakeStreamClient(script)
+    wf_client = WorkflowClient(httpx_client=fake)  # type: ignore[arg-type]
+    events = [
+        e
+        async for e in wf_client.get_workflow_events(handler_id="h", **kwargs)  # type: ignore[arg-type]
+    ]
+    return events
+
+
+@pytest.mark.asyncio
+async def test_reconnect_resumes_from_last_sequence() -> None:
+    e1, e2, e3 = _envelope("first"), _envelope("second"), _envelope("third")
+    fake = FakeStreamClient(
+        [
+            [(0, e1), httpx.RemoteProtocolError("reset")],
+            [(1, e2), (2, e3)],
+        ]
+    )
+    wf_client = WorkflowClient(httpx_client=fake)  # type: ignore[arg-type]
+    events = [e async for e in wf_client.get_workflow_events(handler_id="h")]
+
+    assert [e.value["msg"] for e in events] == ["first", "second", "third"]
+    assert fake.captured_params[0]["after_sequence"] == "-1"
+    assert fake.captured_params[1]["after_sequence"] == "0"
+
+
+@pytest.mark.asyncio
+async def test_reconnect_exceeds_max_attempts_raises() -> None:
+    with pytest.raises(ConnectionError, match="after 2 attempts"):
+        await _collect(
+            [httpx.ConnectError("refused")] * 3,
+            max_reconnect_attempts=2,
+        )
+
+
+@pytest.mark.asyncio
+async def test_reconnect_resets_attempts_on_success() -> None:
+    e1, e2 = _envelope("a"), _envelope("b")
+    events = await _collect(
+        [
+            [(0, e1), httpx.ReadError("broken")],
+            httpx.ReadError("broken again"),
+            [(1, e2)],
+        ],
+        max_reconnect_attempts=2,
+    )
+    assert [e.value["msg"] for e in events] == ["a", "b"]
+
+
+@pytest.mark.asyncio
+async def test_timeout_exception_not_retried() -> None:
+    with pytest.raises(TimeoutError, match="Timeout"):
+        await _collect([httpx.ReadTimeout("timed out")])
