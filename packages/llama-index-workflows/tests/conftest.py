@@ -6,10 +6,12 @@ from typing import Any, AsyncGenerator
 import pytest
 from pydantic import Field
 from workflows.context import Context
-from workflows.context.state_store import DictState, InMemoryStateStore
+from workflows.context.external_context import ExternalContext
 from workflows.decorators import step
 from workflows.events import Event, StartEvent, StopEvent
-from workflows.plugins.basic import AsyncioAdapterQueues, ExternalAsyncioAdapter
+from workflows.plugins.basic import (
+    BasicRuntime,
+)
 from workflows.runtime.types.internal_state import BrokerState
 from workflows.workflow import Workflow
 
@@ -52,16 +54,15 @@ def events() -> list:
 
 @pytest.fixture()
 async def ctx(workflow: Workflow) -> AsyncGenerator[Context[Any], None]:
-    from workflows.context.external_context import ExternalContext
+    runtime = BasicRuntime()
 
-    queues = AsyncioAdapterQueues(
+    _ = runtime._get_or_create_queues(
         run_id="test-run",
         init_state=BrokerState.from_workflow(workflow),
-        state_store=InMemoryStateStore(DictState()),
     )
     ctx = Context._create_external(
         workflow=workflow,
-        external_adapter=ExternalAsyncioAdapter(queues=queues),
+        external_adapter=runtime.get_external_adapter("test-run"),
     )
     assert isinstance(ctx._face, ExternalContext)
     try:

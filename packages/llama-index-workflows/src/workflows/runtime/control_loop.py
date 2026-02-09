@@ -11,7 +11,6 @@ import traceback
 from dataclasses import replace
 from typing import TYPE_CHECKING
 
-from workflows.decorators import R
 from workflows.errors import (
     WorkflowCancelledByUser,
     WorkflowRuntimeError,
@@ -50,7 +49,6 @@ from workflows.runtime.types.named_task import NamedTask
 from workflows.runtime.types.plugin import (
     InternalRunAdapter,
     WaitResultTick,
-    as_snapshottable_adapter,
     get_current_run,
 )
 from workflows.runtime.types.results import (
@@ -128,7 +126,6 @@ class _ControlLoopRunner:
         # avoiding TypeError from comparing WorkflowTick objects that don't implement __lt__
         self.scheduled_wakeups: list[tuple[float, int, WorkflowTick]] = []
         self._wakeup_sequence = 0
-        self.snapshot_adapter = as_snapshottable_adapter(adapter)
         # Pull task sequence counter for deterministic journaling
         self._pull_sequence = 0
         # Map from worker task to (step_name, worker_id) key
@@ -431,8 +428,7 @@ class _ControlLoopRunner:
             )
             raise
 
-        if self.snapshot_adapter is not None:
-            self.snapshot_adapter.on_tick(tick)
+        await self.adapter.on_tick(tick)
 
         for command in commands:
             try:
@@ -557,7 +553,7 @@ def _check_idle_state(state: BrokerState) -> bool:
 
 
 def _process_step_result_tick(
-    tick: TickStepResult[R], init: BrokerState, now_seconds: float
+    tick: TickStepResult, init: BrokerState, now_seconds: float
 ) -> tuple[BrokerState, list[WorkflowCommand]]:
     """
     processes the results from a step function execution
