@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import urllib.error
 import urllib.request
@@ -22,6 +23,13 @@ import click
 import tomlkit
 from packaging.version import Version
 from pydantic import BaseModel, Field
+
+# Valid PEP 440 pre-release labels. Semver pre-release identifiers must use
+# these same labels (e.g. 1.2.3-a.4, not 1.2.3-alpha.4) so that the
+# conversion is purely structural.
+_PEP440_LABELS = {"a", "b", "rc"}
+
+_SEMVER_PRERELEASE_RE = re.compile(r"^(\d+\.\d+\.\d+)-([a-zA-Z]+)\.(\d+)$")
 
 
 def run_command(
@@ -44,6 +52,48 @@ def run_and_capture(
         capture_output=True,
     )
     return result.stdout
+
+
+def semver_to_pep440(version: str) -> str:
+    """Convert a semver version string to PEP 440 format.
+
+    Only PEP 440-compatible pre-release labels are accepted (a, b, rc):
+        1.2.3-a.4   -> 1.2.3a4
+        1.2.3-b.1   -> 1.2.3b1
+        1.2.3-rc.2  -> 1.2.3rc2
+
+    Non-prerelease versions pass through unchanged.
+    """
+    match = _SEMVER_PRERELEASE_RE.match(version)
+    if not match:
+        return version
+
+    base, label, num = match.groups()
+    if label not in _PEP440_LABELS:
+        raise ValueError(
+            f"Unsupported pre-release label '{label}' in version '{version}'. "
+            f"Use a PEP 440 label: {', '.join(sorted(_PEP440_LABELS))}"
+        )
+    return f"{base}{label}{num}"
+
+
+def pep440_to_semver(version: str) -> str:
+    """Convert a PEP 440 version string to semver format.
+
+    Pre-release versions are converted:
+        1.2.3a4   -> 1.2.3-a.4
+        1.2.3b1   -> 1.2.3-b.1
+        1.2.3rc2  -> 1.2.3-rc.2
+
+    Non-prerelease versions pass through unchanged.
+    """
+    v = Version(version)
+    base = ".".join(str(x) for x in v.release)
+    if v.pre is None:
+        return base
+
+    label, num = v.pre
+    return f"{base}-{label}.{num}"
 
 
 @dataclass
@@ -82,7 +132,7 @@ def sync_package_version_with_pyproject(
     if not pyproject_path.exists():
         return False
 
-    package_version = packages[js_package_name].version
+    package_version = semver_to_pep440(packages[js_package_name].version)
     toml_doc, py_doc = PyProjectContainer.parse(pyproject_path.read_text())
     current_version = py_doc.project.version
 
