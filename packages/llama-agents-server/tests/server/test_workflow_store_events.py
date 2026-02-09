@@ -14,6 +14,10 @@ from llama_agents.server import (
     MemoryWorkflowStore,
     SqliteWorkflowStore,
 )
+from llama_agents_integration_tests.fake_agent_data import (
+    FakeAgentDataBackend,
+    create_agent_data_store,
+)
 from llama_agents.server._store.abstract_workflow_store import StoredEvent
 from workflows.events import (
     Event,
@@ -51,7 +55,6 @@ def _failed() -> WorkflowFailedEvent:
 def _cancelled() -> WorkflowCancelledEvent:
     return WorkflowCancelledEvent()
 
-
 async def _subscribe_and_collect(
     store: AbstractWorkflowStore,
     run_id: str,
@@ -73,12 +76,16 @@ async def _subscribe_and_collect(
     return collected, task
 
 
-@pytest.fixture(params=["memory", "sqlite"])
-def store(request: pytest.FixtureRequest, tmp_path: Path) -> AbstractWorkflowStore:
+@pytest.fixture(params=["memory", "sqlite", "agent_data"])
+def store(
+    request: pytest.FixtureRequest, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> AbstractWorkflowStore:
     if request.param == "memory":
         return MemoryWorkflowStore()
-    else:
+    elif request.param == "sqlite":
         return SqliteWorkflowStore(str(tmp_path / "test.sqlite"), poll_interval=0.05)
+    else:
+        return create_agent_data_store(FakeAgentDataBackend(), monkeypatch)
 
 
 @pytest.mark.asyncio
