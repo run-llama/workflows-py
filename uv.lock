@@ -1728,7 +1728,7 @@ dev = [
 
 [[package]]
 name = "llama-agents-server"
-version = "0.1.2"
+version = "0.2.0rc0"
 source = { editable = "packages/llama-agents-server" }
 dependencies = [
     { name = "llama-agents-client" },
