@@ -7,7 +7,7 @@ import asyncio
 import functools
 import time
 from contextvars import copy_context
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, Protocol, TypeVar
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Optional, Protocol, TypeVar
 
 from llama_index_instrumentation.dispatcher import instrument_tags
 from workflows.decorators import P, StepConfig
@@ -40,7 +40,7 @@ from workflows.workflow import Workflow
 if TYPE_CHECKING:
     from workflows.context.context import Context
 
-StepReturnT = TypeVar("StepReturnT", bound=Event | None)
+StepReturnT = TypeVar("StepReturnT", bound=Optional[Event])
 
 
 class StepWorkerFunction(Protocol):
