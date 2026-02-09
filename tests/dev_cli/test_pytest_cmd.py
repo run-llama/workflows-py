@@ -116,7 +116,7 @@ def test_pytest_filters_by_package(
         "dev_cli.commands.pytest_cmd.discover_test_packages",
         return_value=[pkg_a, pkg_b],
     ):
-        with patch("dev_cli.commands.pytest_cmd.subprocess.run") as mock_run:
+        with patch("dev_cli.commands.pytest_cmd._run_tracked") as mock_run:
             mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
             runner.invoke(cli, ["pytest", "-p", "pkg-a"])
 
@@ -162,7 +162,7 @@ def test_pytest_package_filter_matching(
     filter_args = [arg for f in filters for arg in ["-p", f]]
 
     with patch("dev_cli.commands.pytest_cmd.discover_test_packages", return_value=pkgs):
-        with patch("dev_cli.commands.pytest_cmd.subprocess.run") as mock_run:
+        with patch("dev_cli.commands.pytest_cmd._run_tracked") as mock_run:
             mock_run.return_value = Mock(returncode=0, stdout="", stderr="")
             runner.invoke(cli, ["pytest", *filter_args])
             assert mock_run.call_count == expected_matches * 2  # sync + pytest per pkg
@@ -177,7 +177,7 @@ def test_pytest_passes_args_through(
         "dev_cli.commands.pytest_cmd.discover_test_packages",
         return_value=[my_pkg],
     ):
-        with patch("dev_cli.commands.pytest_cmd.subprocess.run") as mock_run:
+        with patch("dev_cli.commands.pytest_cmd._run_tracked") as mock_run:
             mock_run.return_value = Mock(returncode=0)
             runner.invoke(cli, ["pytest", "--", "-v", "--tb=short", "-k", "test_foo"])
 
@@ -197,7 +197,7 @@ def test_pytest_continues_on_failure(
         "dev_cli.commands.pytest_cmd.discover_test_packages",
         return_value=pkgs,
     ):
-        with patch("dev_cli.commands.pytest_cmd.subprocess.run") as mock_run:
+        with patch("dev_cli.commands.pytest_cmd._run_tracked") as mock_run:
             mock_run.side_effect = [
                 sync_success(),
                 Mock(returncode=1, stdout="", stderr=""),
@@ -223,14 +223,13 @@ def test_pytest_shows_summary(
         "dev_cli.commands.pytest_cmd.discover_test_packages",
         return_value=pkgs,
     ):
-        with patch("dev_cli.commands.pytest_cmd.subprocess.run") as mock_run:
+        with patch("dev_cli.commands.pytest_cmd._run_tracked") as mock_run:
             mock_run.return_value = Mock(returncode=0)
             result = runner.invoke(cli, ["pytest"])
 
-            assert "Test Summary" in result.output
             assert "pkg-a" in result.output
             assert "pkg-b" in result.output
-            assert "2 passed" in result.output
+            assert "2 packages passed" in result.output
 
 
 # --- Quiet/verbose mode tests ---
@@ -246,7 +245,7 @@ def test_pytest_quiet_mode_hides_streaming_output(
         "dev_cli.commands.pytest_cmd.discover_test_packages",
         return_value=pkgs,
     ):
-        with patch("dev_cli.commands.pytest_cmd.subprocess.run") as mock_run:
+        with patch("dev_cli.commands.pytest_cmd._run_tracked") as mock_run:
             mock_run.return_value = Mock(
                 returncode=0,
                 stdout="collected 5 items\ntest_foo.py::test_one PASSED\n",
@@ -270,7 +269,7 @@ def test_pytest_verbose_shows_streaming_output(
         "dev_cli.commands.pytest_cmd.discover_test_packages",
         return_value=pkgs,
     ):
-        with patch("dev_cli.commands.pytest_cmd.subprocess.run") as mock_run:
+        with patch("dev_cli.commands.pytest_cmd._run_tracked") as mock_run:
             mock_run.return_value = Mock(
                 returncode=0,
                 stdout="collected 5 items\ntest_foo.py::test_one PASSED\n",
@@ -280,8 +279,7 @@ def test_pytest_verbose_shows_streaming_output(
 
             assert "collected 5 items" in result.output
             assert "test_foo.py::test_one PASSED" in result.output
-            assert "Test Summary" in result.output
-            assert "2 passed" in result.output
+            assert "2 packages passed" in result.output
 
 
 def test_pytest_failure_recap_always_shown(
@@ -302,7 +300,7 @@ def test_pytest_failure_recap_always_shown(
         return_value=pkgs,
     ):
         for verbose_flag in [[], ["--verbose"]]:
-            with patch("dev_cli.commands.pytest_cmd.subprocess.run") as mock_run:
+            with patch("dev_cli.commands.pytest_cmd._run_tracked") as mock_run:
                 mock_run.side_effect = [
                     sync_success(),
                     Mock(returncode=0, stdout="all tests passed\n", stderr=""),
@@ -331,7 +329,7 @@ def test_pytest_runs_parallel_by_default(
     call_order: list[str] = []
 
     def mock_subprocess_run(
-        cmd: list[str], **kwargs: object
+        cmd: list[str], env: object = None, **kwargs: object
     ) -> subprocess.CompletedProcess[str]:
         nonlocal started_count
 
@@ -364,7 +362,7 @@ def test_pytest_runs_parallel_by_default(
         return_value=pkgs,
     ):
         with patch(
-            "dev_cli.commands.pytest_cmd.subprocess.run",
+            "dev_cli.commands.pytest_cmd._run_tracked",
             side_effect=mock_subprocess_run,
         ):
             result = runner.invoke(cli, ["pytest"])
@@ -391,7 +389,7 @@ def test_pytest_parallel_one_runs_sequentially(
     max_concurrent = 0
 
     def mock_subprocess_run(
-        cmd: list[str], **kwargs: object
+        cmd: list[str], env: object = None, **kwargs: object
     ) -> subprocess.CompletedProcess[str]:
         nonlocal active_count, max_concurrent
 
@@ -424,7 +422,7 @@ def test_pytest_parallel_one_runs_sequentially(
         return_value=pkgs,
     ):
         with patch(
-            "dev_cli.commands.pytest_cmd.subprocess.run",
+            "dev_cli.commands.pytest_cmd._run_tracked",
             side_effect=mock_subprocess_run,
         ):
             result = runner.invoke(cli, ["pytest", "--parallel", "1"])
@@ -447,7 +445,7 @@ def test_pytest_parallel_handles_mixed_results(
     lock = threading.Lock()
 
     def mock_subprocess_run(
-        cmd: list[str], **kwargs: object
+        cmd: list[str], env: object = None, **kwargs: object
     ) -> subprocess.CompletedProcess[str]:
         if is_sync_call(cmd):
             return subprocess.CompletedProcess(
@@ -477,7 +475,7 @@ def test_pytest_parallel_handles_mixed_results(
         return_value=pkgs,
     ):
         with patch(
-            "dev_cli.commands.pytest_cmd.subprocess.run",
+            "dev_cli.commands.pytest_cmd._run_tracked",
             side_effect=mock_subprocess_run,
         ):
             result = runner.invoke(cli, ["pytest"])
@@ -486,6 +484,7 @@ def test_pytest_parallel_handles_mixed_results(
             assert result.exit_code == 1
             assert "2 passed" in result.output
             assert "1 failed" in result.output
+            assert "packages" in result.output
 
 
 # --- extract_failures_section tests ---
@@ -664,7 +663,7 @@ def test_pytest_summary_appears_last(
         "dev_cli.commands.pytest_cmd.discover_test_packages",
         return_value=pkgs,
     ):
-        with patch("dev_cli.commands.pytest_cmd.subprocess.run") as mock_run:
+        with patch("dev_cli.commands.pytest_cmd._run_tracked") as mock_run:
             mock_run.side_effect = [
                 sync_success(),
                 Mock(returncode=0, stdout="all tests passed\n", stderr=""),
@@ -704,7 +703,7 @@ def test_pytest_extracts_failures_not_full_output(
         "dev_cli.commands.pytest_cmd.discover_test_packages",
         return_value=[pkg_a, pkg_b],
     ):
-        with patch("dev_cli.commands.pytest_cmd.subprocess.run") as mock_run:
+        with patch("dev_cli.commands.pytest_cmd._run_tracked") as mock_run:
             mock_run.side_effect = [
                 sync_success(),
                 Mock(returncode=1, stdout=failure_output, stderr=""),
@@ -736,7 +735,7 @@ def test_pytest_shows_failed_test_names_at_end(
         "dev_cli.commands.pytest_cmd.discover_test_packages",
         return_value=[pkg_a],
     ):
-        with patch("dev_cli.commands.pytest_cmd.subprocess.run") as mock_run:
+        with patch("dev_cli.commands.pytest_cmd._run_tracked") as mock_run:
             mock_run.return_value = Mock(returncode=1, stdout=failure_output, stderr="")
             result = runner.invoke(cli, ["pytest"])
 
@@ -761,7 +760,7 @@ def test_render_progress_table_pending(
     spinners: dict[str, Spinner] = {}
 
     table = _render_progress_table([pkg], results, start_times, spinners)
-    assert table.row_count == 1
+    assert table.row_count == 1  # just the name
 
 
 def test_render_progress_table_running(
@@ -775,7 +774,7 @@ def test_render_progress_table_running(
     spinners = {"pkg-a": Spinner("dots", style="yellow")}
 
     table = _render_progress_table([pkg], results, start_times, spinners)
-    assert table.row_count == 1
+    assert table.row_count == 2  # name + spinner
 
 
 def test_render_progress_table_completed(
@@ -793,7 +792,7 @@ def test_render_progress_table_completed(
     spinners: dict[str, Spinner] = {}
 
     table = _render_progress_table([pkg_a, pkg_b], results, start_times, spinners)
-    assert table.row_count == 2
+    assert table.row_count == 4  # 2 packages x (name + detail)
 
 
 def test_run_tests_with_rich_progress_returns_results(
@@ -858,7 +857,7 @@ def test_pytest_verbose_does_not_use_rich(
         with patch(
             "dev_cli.commands.pytest_cmd.run_tests_with_rich_progress"
         ) as mock_rich:
-            with patch("dev_cli.commands.pytest_cmd.subprocess.run") as mock_subprocess:
+            with patch("dev_cli.commands.pytest_cmd._run_tracked") as mock_subprocess:
                 mock_subprocess.return_value = Mock(
                     returncode=0, stdout="passed\n", stderr=""
                 )
@@ -881,7 +880,7 @@ def test_pytest_skips_rich_when_not_tty(
         with patch(
             "dev_cli.commands.pytest_cmd.run_tests_with_rich_progress"
         ) as mock_rich:
-            with patch("dev_cli.commands.pytest_cmd.subprocess.run") as mock_subprocess:
+            with patch("dev_cli.commands.pytest_cmd._run_tracked") as mock_subprocess:
                 mock_subprocess.return_value = Mock(
                     returncode=0, stdout="passed", stderr=""
                 )
@@ -936,7 +935,7 @@ def test_single_package_shows_full_output(
         "dev_cli.commands.pytest_cmd.discover_test_packages",
         return_value=[pkg_a],
     ):
-        with patch("dev_cli.commands.pytest_cmd.subprocess.run") as mock_run:
+        with patch("dev_cli.commands.pytest_cmd._run_tracked") as mock_run:
             mock_run.return_value = Mock(
                 returncode=0,
                 stdout="collected 5 items\ntest_foo.py::test_one PASSED\n============================== 5 passed in 1.0s ==============================\n",
@@ -947,8 +946,8 @@ def test_single_package_shows_full_output(
             # Should show full pytest output
             assert "collected 5 items" in result.output
             assert "test_foo.py::test_one PASSED" in result.output
-            # Should still show summary
-            assert "Test Summary" in result.output
+            # Should still show pass summary
+            assert "1 package passed" in result.output
 
 
 # --- Test counts in compact output ---
@@ -964,7 +963,7 @@ def test_compact_output_shows_test_counts(
         "dev_cli.commands.pytest_cmd.discover_test_packages",
         return_value=pkgs,
     ):
-        with patch("dev_cli.commands.pytest_cmd.subprocess.run") as mock_run:
+        with patch("dev_cli.commands.pytest_cmd._run_tracked") as mock_run:
             mock_run.side_effect = [
                 sync_success(),
                 Mock(
@@ -985,7 +984,7 @@ def test_compact_output_shows_test_counts(
                 "PASSED (10 passed)" in result.output
                 or "PASSED (5 passed)" in result.output
             )
-            assert "15 tests total" in result.output
+            assert "15 tests" in result.output
 
 
 def test_summary_table_shows_test_counts(
@@ -998,7 +997,7 @@ def test_summary_table_shows_test_counts(
         "dev_cli.commands.pytest_cmd.discover_test_packages",
         return_value=pkgs,
     ):
-        with patch("dev_cli.commands.pytest_cmd.subprocess.run") as mock_run:
+        with patch("dev_cli.commands.pytest_cmd._run_tracked") as mock_run:
             mock_run.side_effect = [
                 sync_success(),
                 Mock(
@@ -1017,4 +1016,4 @@ def test_summary_table_shows_test_counts(
 
             assert "PASSED (10 passed)" in result.output
             assert "FAILED (1 failed, 4 passed)" in result.output
-            assert "15 tests total" in result.output
+            assert "15 tests" in result.output

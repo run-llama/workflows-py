@@ -7,8 +7,10 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
+import threading
 import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, as_completed, wait
 from dataclasses import dataclass
@@ -202,6 +204,46 @@ def discover_test_packages(repo_root: Path) -> list[PackageInfo]:
     return sorted(packages, key=lambda p: p.name)
 
 
+# Active subprocesses tracked for cleanup on interrupt
+_active_procs: list[subprocess.Popen[str]] = []
+_active_procs_lock = threading.Lock()
+
+
+def _run_tracked(
+    cmd: list[str], env: dict[str, str]
+) -> subprocess.CompletedProcess[str]:
+    """Run a subprocess while tracking it for interrupt cleanup."""
+    proc = subprocess.Popen(
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env
+    )
+    with _active_procs_lock:
+        _active_procs.append(proc)
+    try:
+        stdout, stderr = proc.communicate()
+    except BaseException:
+        proc.kill()
+        proc.wait()
+        raise
+    finally:
+        with _active_procs_lock:
+            try:
+                _active_procs.remove(proc)
+            except ValueError:
+                pass
+    return subprocess.CompletedProcess(cmd, proc.returncode, stdout, stderr)
+
+
+def _kill_active_procs() -> None:
+    """Kill all tracked subprocesses."""
+    with _active_procs_lock:
+        for proc in _active_procs:
+            try:
+                proc.kill()
+            except OSError:
+                pass
+        _active_procs.clear()
+
+
 def run_package_tests(
     pkg: PackageInfo, pytest_args: tuple[str, ...]
 ) -> dict[str, bool | str | float | None]:
@@ -225,7 +267,7 @@ def run_package_tests(
 
     # Ensure dependencies are installed before running tests (--inexact to only add, not remove)
     sync_cmd = ["uv", "sync", "--directory", str(pkg.path), "--inexact"]
-    sync_result = subprocess.run(sync_cmd, capture_output=True, text=True, env=env)
+    sync_result = _run_tracked(sync_cmd, env)
     if sync_result.returncode != 0:
         duration = time.time() - start_time
         return {
@@ -237,7 +279,7 @@ def run_package_tests(
         }
 
     cmd = ["uv", "run", "--directory", str(pkg.path), "pytest", *pytest_args]
-    result = subprocess.run(cmd, capture_output=True, text=True, env=env)
+    result = _run_tracked(cmd, env)
     duration = time.time() - start_time
     # Exit code 0 = success, exit code 5 = no tests collected (not a failure)
     no_tests = result.returncode == 5
@@ -258,33 +300,33 @@ def _render_progress_table(
     start_times: dict[str, float],
     spinners: dict[str, Spinner],
 ) -> Table:
-    """Render the progress table for rich Live display."""
+    """Render the progress display for rich Live."""
     table = Table(show_header=False, box=None, padding=(0, 1))
-    table.add_column("name", style="bold")
-    table.add_column("status")
-    table.add_column("time", justify="right", width=10)
+    table.add_column("name", style="bold", no_wrap=True)
+    table.add_column("time", justify="right", style="dim", no_wrap=True)
 
     for pkg in packages:
         if pkg.name in results:
             result_data = results[pkg.name]
             duration = result_data["duration"]
             test_summary = result_data.get("test_summary")
-            summary_suffix = f" ({test_summary})" if test_summary else ""
+            table.add_row(pkg.name, f"{duration:.1f}s")
             if result_data.get("no_tests"):
-                status: Text | Spinner = Text("NO TESTS", style="yellow")
+                table.add_row(Text("  no tests collected", style="yellow"), "")
+            elif test_summary:
+                style = "green" if result_data["success"] else "red"
+                table.add_row(Text(f"  {test_summary}", style=style), "")
             elif result_data["success"]:
-                status = Text(f"PASSED{summary_suffix}", style="green")
+                table.add_row(Text("  passed", style="green"), "")
             else:
-                status = Text(f"FAILED{summary_suffix}", style="red")
-            time_str = f"({duration:.1f}s)"
+                table.add_row(Text("  failed", style="red"), "")
         elif pkg.name in start_times:
             elapsed = time.time() - start_times[pkg.name]
-            status = spinners.get(pkg.name, Spinner("dots", style="yellow"))
-            time_str = f"({elapsed:.1f}s)"
+            table.add_row(pkg.name, f"{elapsed:.1f}s")
+            spinner = spinners.get(pkg.name, Spinner("dots", style="yellow"))
+            table.add_row(spinner, "")
         else:
-            status = Text("pending", style="dim")
-            time_str = ""
-        table.add_row(pkg.name, status, time_str)
+            table.add_row(Text(pkg.name, style="dim"), "")
     return table
 
 
@@ -339,6 +381,50 @@ def run_tests_with_rich_progress(
 
                 live.update(render())
 
+    return results
+
+
+def _run_tests_verbose(
+    target_packages: list[PackageInfo],
+    pytest_args: tuple[str, ...],
+    max_workers: int,
+    total: int,
+    verbose: bool,
+) -> dict[str, dict[str, bool | str | float | None]]:
+    """Run tests with simple sequential output (non-TTY or verbose mode)."""
+    results: dict[str, dict[str, bool | str | float | None]] = {}
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {
+            executor.submit(run_package_tests, pkg, pytest_args): pkg
+            for pkg in target_packages
+        }
+        for idx, future in enumerate(as_completed(futures), 1):
+            pkg = futures[future]
+            result_data = future.result()
+            results[pkg.name] = result_data
+
+            if verbose:
+                click.echo(f"\n{'=' * 60}")
+                click.echo(f"Completed tests in {pkg.name}")
+                click.echo("=" * 60)
+                if result_data["stdout"]:
+                    click.echo(result_data["stdout"], nl=False)
+                if result_data["stderr"]:
+                    click.echo(result_data["stderr"], nl=False, err=True)
+            else:
+                # Compact progress line (for non-TTY output)
+                test_summary = result_data.get("test_summary")
+                summary_suffix = f" ({test_summary})" if test_summary else ""
+                if result_data.get("no_tests"):
+                    status = click.style("NO TESTS", fg="yellow")
+                elif result_data["success"]:
+                    status = click.style(f"PASSED{summary_suffix}", fg="green")
+                else:
+                    status = click.style(f"FAILED{summary_suffix}", fg="red")
+                click.echo(
+                    f"[{idx}/{total}] {pkg.name}... {status} "
+                    f"({result_data['duration']:.1f}s)"
+                )
     return results
 
 
@@ -423,46 +509,32 @@ def pytest_cmd(
         verbose = True
         use_rich_progress = False
 
-    if use_rich_progress:
-        # Use rich live progress display for interactive terminals
-        results = run_tests_with_rich_progress(
-            target_packages, pytest_args, max_workers
-        )
-    else:
-        # Fall back to simple output for non-TTY or verbose mode
-        results: dict[str, dict[str, bool | str | float | None]] = {}
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = {
-                executor.submit(run_package_tests, pkg, pytest_args): pkg
-                for pkg in target_packages
-            }
-            for idx, future in enumerate(as_completed(futures), 1):
-                pkg = futures[future]
-                result_data = future.result()
-                results[pkg.name] = result_data
+    # Install a SIGINT handler that exits immediately. The default Python handler
+    # raises KeyboardInterrupt, but ThreadPoolExecutor's shutdown(wait=True) blocks
+    # the main thread in thread joins, preventing the interrupt from being handled
+    # until all subprocess children finish.
+    original_sigint = signal.getsignal(signal.SIGINT)
 
-                if verbose:
-                    click.echo(f"\n{'=' * 60}")
-                    click.echo(f"Completed tests in {pkg.name}")
-                    click.echo("=" * 60)
-                    if result_data["stdout"]:
-                        click.echo(result_data["stdout"], nl=False)
-                    if result_data["stderr"]:
-                        click.echo(result_data["stderr"], nl=False, err=True)
-                else:
-                    # Compact progress line (for non-TTY output)
-                    test_summary = result_data.get("test_summary")
-                    summary_suffix = f" ({test_summary})" if test_summary else ""
-                    if result_data.get("no_tests"):
-                        status = click.style("NO TESTS", fg="yellow")
-                    elif result_data["success"]:
-                        status = click.style(f"PASSED{summary_suffix}", fg="green")
-                    else:
-                        status = click.style(f"FAILED{summary_suffix}", fg="red")
-                    click.echo(
-                        f"[{idx}/{total}] {pkg.name}... {status} "
-                        f"({result_data['duration']:.1f}s)"
-                    )
+    def _handle_sigint(signum: int, frame: object) -> None:
+        _kill_active_procs()
+        click.echo("\nInterrupted.")
+        # Restore default handler so a second Ctrl+C kills immediately
+        signal.signal(signal.SIGINT, signal.SIG_DFL)
+        sys.exit(130)
+
+    signal.signal(signal.SIGINT, _handle_sigint)
+
+    try:
+        if use_rich_progress:
+            results = run_tests_with_rich_progress(
+                target_packages, pytest_args, max_workers
+            )
+        else:
+            results = _run_tests_verbose(
+                target_packages, pytest_args, max_workers, total, verbose
+            )
+    finally:
+        signal.signal(signal.SIGINT, original_sigint)
 
     # Print summary
     passed = sum(1 for v in results.values() if v["success"] and not v.get("no_tests"))
@@ -486,47 +558,52 @@ def pytest_cmd(
                 if result_data["stderr"]:
                     click.echo(result_data["stderr"], nl=False, err=True)
 
-    # Print summary table at the end
-    click.echo(f"\n{'=' * 50}")
-    click.echo("Test Summary")
-    click.echo("=" * 50)
-
-    max_name_len = max(len(name) for name in results)
-    for name, result_data in results.items():
-        test_summary = result_data.get("test_summary")
-        summary_suffix = f" ({test_summary})" if test_summary else ""
-        if result_data.get("no_tests"):
-            status = click.style("NO TESTS", fg="yellow")
-        elif result_data["success"]:
-            status = click.style(f"PASSED{summary_suffix}", fg="green")
-        else:
-            status = click.style(f"FAILED{summary_suffix}", fg="red")
-        click.echo(f"{name.ljust(max_name_len)}  {status}")
-
-    click.echo("=" * 50)
-    summary_parts = []
-    if failed:
-        summary_parts.append(click.style(f"{failed} failed", fg="red"))
-    if passed:
-        summary_parts.append(click.style(f"{passed} passed", fg="green"))
-    if no_tests:
-        summary_parts.append(click.style(f"{no_tests} no tests", fg="yellow"))
-
     # Count total individual tests across all packages
     total_tests = 0
     for result_data in results.values():
         ts = result_data.get("test_summary")
         if ts and isinstance(ts, str):
-            # Sum all numeric counts from summary like "42 passed, 1 failed"
             total_tests += sum(
                 int(n)
                 for n in re.findall(r"(\d+)\s+(?:passed|failed|error|skipped)", ts)
             )
 
-    summary_line = ", ".join(summary_parts)
-    if total_tests:
-        summary_line += f" ({total_tests} tests total)"
-    click.echo(summary_line)
+    if failed or no_tests:
+        # Print summary table only when there are failures or missing tests
+        click.echo(f"\n{'=' * 50}")
+        click.echo("Test Summary")
+        click.echo("=" * 50)
+
+        max_name_len = max(len(name) for name in results)
+        for name, result_data in results.items():
+            test_summary = result_data.get("test_summary")
+            summary_suffix = f" ({test_summary})" if test_summary else ""
+            if result_data.get("no_tests"):
+                status = click.style("NO TESTS", fg="yellow")
+            elif result_data["success"]:
+                status = click.style(f"PASSED{summary_suffix}", fg="green")
+            else:
+                status = click.style(f"FAILED{summary_suffix}", fg="red")
+            click.echo(f"{name.ljust(max_name_len)}  {status}")
+
+        click.echo("=" * 50)
+        pkg_parts = []
+        if failed:
+            pkg_parts.append(click.style(f"{failed} failed", fg="red"))
+        if passed:
+            pkg_parts.append(click.style(f"{passed} passed", fg="green"))
+        if no_tests:
+            pkg_parts.append(click.style(f"{no_tests} no tests", fg="yellow"))
+        pkg_label = "package" if (passed + failed + no_tests) == 1 else "packages"
+        summary_line = f"{', '.join(pkg_parts)} {pkg_label}"
+        if total_tests:
+            summary_line += f", {total_tests} tests total"
+        click.echo(summary_line)
+    else:
+        # All passed — just a short totals line
+        pkg_label = "package" if passed == 1 else "packages"
+        total_str = f", {total_tests} tests" if total_tests else ""
+        click.echo(click.style(f"\n{passed} {pkg_label} passed{total_str}", fg="green"))
 
     # Show failed test names at the very end for quick reference
     if failed:
