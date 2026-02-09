@@ -11,7 +11,7 @@ from unittest.mock import MagicMock
 import pytest
 from llama_agents.client.protocol import HandlerData
 from llama_agents.server._handler import _WorkflowHandler
-from llama_agents.server.memory_workflow_store import MemoryWorkflowStore
+from llama_agents.server._store.memory_workflow_store import MemoryWorkflowStore
 from workflows.events import Event, StopEvent
 from workflows.handler import WorkflowHandler
 from workflows.runtime.types.plugin import ExternalRunAdapter

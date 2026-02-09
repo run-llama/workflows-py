@@ -4,7 +4,7 @@ import sqlite3
 from pathlib import Path
 from typing import List
 
-from llama_agents.server.sqlite.migrate import run_migrations
+from llama_agents.server._store.sqlite.migrate import run_migrations
 
 
 def _get_table_columns(conn: sqlite3.Connection, table: str) -> List[str]:

@@ -9,7 +9,7 @@ from datetime import timedelta
 import pytest
 from llama_agents.client.client import WorkflowClient
 from llama_agents.server import WorkflowServer
-from llama_agents.server.memory_workflow_store import MemoryWorkflowStore
+from llama_agents.server._store.memory_workflow_store import MemoryWorkflowStore
 from server_test_fixtures import (
     live_server,  # type: ignore[import]
     wait_for_passing,  # type: ignore[import]
