@@ -67,11 +67,7 @@ class _IdleReleaseInternalRunAdapter(BaseInternalRunAdapterDecorator):
             )
         await super().write_to_event_stream(event)
         if isinstance(event, WorkflowIdleEvent):
-            skip = self._runtime._skip_idle_release.get(self.run_id, 0)
-            if skip > 0:
-                self._runtime._skip_idle_release[self.run_id] = skip - 1
-            else:
-                self._runtime._spawn_task(self._runtime._deferred_release(self.run_id))
+            self._runtime._spawn_task(self._runtime._deferred_release(self.run_id))
 
 
 class IdleReleaseExternalRunAdapter(BaseExternalRunAdapterDecorator):
@@ -103,8 +99,6 @@ class IdleReleaseExternalRunAdapter(BaseExternalRunAdapterDecorator):
     async def send_event(self, tick: WorkflowTick) -> None:
         async with self._runtime._reload_lock(self.run_id):
             if self.run_id not in self._runtime._active_run_ids:
-                counter = self._runtime._skip_idle_release
-                counter[self.run_id] = counter.get(self.run_id, 0) + 2
                 await self._runtime._ensure_active_run_locked(self.run_id)
             else:
                 await self._runtime._store.update_handler_status(
@@ -131,7 +125,6 @@ class IdleReleaseDecorator(BaseRuntimeDecorator):
         self._persistence: PersistenceDecorator = decorated
         self._reload_lock = KeyedLock()
         self._active_run_ids: set[str] = set()
-        self._skip_idle_release: dict[str, int] = {}
         self._background_tasks: set[asyncio.Task[None]] = set()
         self.stop_task: asyncio.Task[None] | None = None
         self._idle_timeout = idle_timeout
