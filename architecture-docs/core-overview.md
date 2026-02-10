@@ -4,16 +4,35 @@
 
 ```mermaid
 graph LR
-    User -->|".run()"| Workflow
-    Workflow -->|creates| Context
-    Context -->|"_workflow_run()"| Runtime
-    Runtime -->|launches| ControlLoop
-    Runtime -->|returns| Handler[WorkflowHandler]
-    ControlLoop -->|uses| InternalAdapter[InternalRunAdapter]
-    Handler -->|uses| ExternalAdapter[ExternalRunAdapter]
+    subgraph Client ["Client (public API)"]
+        WR["Workflow.run()"]
+        WH[WorkflowHandler]
+        EC["Context\n(ExternalContext)"]
+    end
+
+    subgraph Runtime
+        EA[ExternalRunAdapter]
+        CL[Control Loop]
+        IA[InternalRunAdapter]
+    end
+
+    subgraph Worker ["Worker (per step)"]
+        IC["Context\n(InternalContext)"]
+        Steps[Step Functions]
+    end
+
+    WR -->|launches| CL
+    WH --- EA
+    EC --- EA
+    EA --- CL
+    CL --- IA
+    IA --- IC
+    IA --- Steps
 ```
 
-A **Workflow** is a container for step functions. Calling `run()` creates a **Context**, which asks the **Runtime** to launch execution. The runtime returns two adapters — one for the **control loop** (internal) and one for the caller via **WorkflowHandler** (external).
+The system has three zones. **Client** code calls `Workflow.run()` and interacts through `WorkflowHandler` and `Context`. The **Runtime** sits in the middle — the control loop drives execution, with `ExternalRunAdapter` and `InternalRunAdapter` as its boundaries. **Workers** are step functions that see `Context` with a different face (InternalContext).
+
+The adapters are the key abstraction boundary. Everything on the client side goes through `ExternalRunAdapter`; everything on the worker side goes through `InternalRunAdapter`. The runtime is swappable by replacing or decorating these adapters.
 
 ## Workflow
 
