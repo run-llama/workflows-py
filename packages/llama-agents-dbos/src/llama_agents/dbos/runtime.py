@@ -13,7 +13,6 @@ import asyncio
 import logging
 import sys
 import time
-import weakref
 from dataclasses import dataclass
 from typing import Any, AsyncGenerator, TypedDict
 
@@ -433,13 +432,6 @@ _IO_STREAM_PUBLISHED_EVENTS_NAME = "published_events"
 _IO_STREAM_TICK_TOPIC = "ticks"
 
 
-@dataclass
-class _StreamWriteLock:
-    """Wrapper for asyncio.Lock to allow storage in WeakValueDictionary."""
-
-    lock: asyncio.Lock
-
-
 class InternalDBOSAdapter(InternalRunAdapter):
     """
     Internal DBOS adapter for the workflow control loop.
@@ -451,15 +443,6 @@ class InternalDBOSAdapter(InternalRunAdapter):
     - close sends shutdown signal to wake blocked recv
     - wait_for_next_task coordinates task completion ordering for deterministic replay
     """
-
-    # Class-level registry of stream write locks, keyed by run_id.
-    # Uses WeakValueDictionary so locks are GC'd when no adapters reference them.
-    # This is a workaround for DBOS race condition in write_stream_from_workflow
-    # where max(offset) read and insert are not atomic.
-    # See: https://github.com/dbos-inc/dbos-transact-py/issues/XXX
-    _stream_write_locks: weakref.WeakValueDictionary[str, _StreamWriteLock] = (
-        weakref.WeakValueDictionary()
-    )
 
     def __init__(
         self,
@@ -480,28 +463,13 @@ class InternalDBOSAdapter(InternalRunAdapter):
         self._state_store: SqlStateStore[Any] | None = None
         # Journal for deterministic task ordering - lazily initialized
         self._journal: TaskJournal | None = None
-        # Get or create the shared lock for this run_id
-        self._stream_lock_holder = self._get_or_create_stream_lock(run_id)
-
-    @classmethod
-    def _get_or_create_stream_lock(cls, run_id: str) -> _StreamWriteLock:
-        """Get existing lock for run_id or create a new one."""
-        lock_holder = cls._stream_write_locks.get(run_id)
-        if lock_holder is None:
-            lock_holder = _StreamWriteLock(lock=asyncio.Lock())
-            cls._stream_write_locks[run_id] = lock_holder
-        return lock_holder
 
     @property
     def run_id(self) -> str:
         return self._run_id
 
     async def write_to_event_stream(self, event: Event) -> None:
-        # Serialize stream writes to work around DBOS race condition where
-        # concurrent writes can read the same max(offset) and try to insert
-        # with the same offset, causing UNIQUE constraint violations.
-        async with self._stream_lock_holder.lock:
-            await DBOS.write_stream_async(_IO_STREAM_PUBLISHED_EVENTS_NAME, event)
+        await DBOS.write_stream_async(_IO_STREAM_PUBLISHED_EVENTS_NAME, event)
 
     async def get_now(self) -> float:
         return _durable_time()
