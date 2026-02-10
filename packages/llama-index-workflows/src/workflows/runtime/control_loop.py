@@ -332,13 +332,6 @@ class _ControlLoopRunner:
                 await self.cleanup_tasks()
                 raise
 
-        # Open the gate briefly so rewind workers can start, then close it
-        # before the main loop begins its get_now() calls.
-        if self.worker_tasks:
-            self._worker_gate.set()
-            await asyncio.sleep(0)
-            self._worker_gate.clear()
-
         # Initialize pull task (single-iteration)
         pull_task: asyncio.Task[WorkflowTick | None] | None = None
 
