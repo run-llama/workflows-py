@@ -67,8 +67,27 @@ class TickTimeout(BaseModel):
     timeout: float
 
 
+class TickIdleCheck(BaseModel):
+    """Scheduled after state appears idle, to re-check after async events drain.
+
+    Appended to tick_buffer when the reducer sees quiescent state. Processed
+    on the next loop iteration after asyncio.sleep(0), giving in-flight
+    ctx.send_event() calls a chance to deliver via the pull task.
+    """
+
+    model_config = ConfigDict(frozen=True)
+    type: Literal["idle_check"] = "idle_check"
+
+
 WorkflowTick = Annotated[
-    Union[TickStepResult, TickAddEvent, TickCancelRun, TickPublishEvent, TickTimeout],
+    Union[
+        TickStepResult,
+        TickAddEvent,
+        TickCancelRun,
+        TickPublishEvent,
+        TickTimeout,
+        TickIdleCheck,
+    ],
     Discriminator("type"),
 ]
 
