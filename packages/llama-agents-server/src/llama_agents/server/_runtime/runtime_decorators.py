@@ -44,12 +44,12 @@ class BaseRuntimeDecorator(Runtime):
     etc.) without re-implementing the full interface.
     """
 
-    def __init__(self, inner: Runtime) -> None:
+    def __init__(self, decorated: Runtime) -> None:
         super().__init__()
-        self._inner = inner
+        self._decorated = decorated
 
     def register(self, workflow: Workflow) -> RegisteredWorkflow:
-        return self._inner.register(workflow)
+        return self._decorated.register(workflow)
 
     def run_workflow(
         self,
@@ -60,7 +60,7 @@ class BaseRuntimeDecorator(Runtime):
         serialized_state: dict[str, Any] | None = None,
         serializer: BaseSerializer | None = None,
     ) -> ExternalRunAdapter:
-        return self._inner.run_workflow(
+        return self._decorated.run_workflow(
             run_id,
             workflow,
             init_state,
@@ -70,32 +70,32 @@ class BaseRuntimeDecorator(Runtime):
         )
 
     def get_internal_adapter(self, workflow: Workflow) -> InternalRunAdapter:
-        return self._inner.get_internal_adapter(workflow)
+        return self._decorated.get_internal_adapter(workflow)
 
     def get_external_adapter(self, run_id: str) -> ExternalRunAdapter:
-        return self._inner.get_external_adapter(run_id)
+        return self._decorated.get_external_adapter(run_id)
 
     def launch(self) -> None:
         super().launch()
-        self._inner.launch()
+        self._decorated.launch()
 
     def destroy(self) -> None:
-        self._inner.destroy()
+        self._decorated.destroy()
 
     def track_workflow(self, workflow: Workflow) -> None:
         self._pending.add(workflow)
-        self._inner.track_workflow(workflow)
+        self._decorated.track_workflow(workflow)
 
     def untrack_workflow(self, workflow: Workflow) -> None:
         self._pending.discard(workflow)
-        self._inner.untrack_workflow(workflow)
+        self._decorated.untrack_workflow(workflow)
 
     def get_registered(self, workflow: Workflow) -> RegisteredWorkflow | None:
-        return self._inner.get_registered(workflow)
+        return self._decorated.get_registered(workflow)
 
     @contextmanager
     def registering(self) -> Generator[Runtime, None, None]:
-        with self._inner.registering() as rt:
+        with self._decorated.registering() as rt:
             yield rt
 
 
@@ -106,46 +106,46 @@ class BaseInternalRunAdapterDecorator(InternalRunAdapter):
     override individual methods to intercept or augment behaviour.
     """
 
-    def __init__(self, inner: InternalRunAdapter) -> None:
-        self._inner = inner
+    def __init__(self, decorated: InternalRunAdapter) -> None:
+        self._decorated = decorated
 
     @property
     def run_id(self) -> str:
-        return self._inner.run_id
+        return self._decorated.run_id
 
     async def write_to_event_stream(self, event: Event) -> None:
-        await self._inner.write_to_event_stream(event)
+        await self._decorated.write_to_event_stream(event)
 
     async def get_now(self) -> float:
-        return await self._inner.get_now()
+        return await self._decorated.get_now()
 
     async def send_event(self, tick: WorkflowTick) -> None:
-        await self._inner.send_event(tick)
+        await self._decorated.send_event(tick)
 
     async def wait_receive(
         self,
         timeout_seconds: float | None = None,
     ) -> WaitResult:
-        return await self._inner.wait_receive(timeout_seconds)
+        return await self._decorated.wait_receive(timeout_seconds)
 
     async def close(self) -> None:
-        await self._inner.close()
+        await self._decorated.close()
 
     def get_state_store(self) -> StateStore[Any] | None:
-        return self._inner.get_state_store()
+        return self._decorated.get_state_store()
 
     async def finalize_step(self) -> None:
-        await self._inner.finalize_step()
+        await self._decorated.finalize_step()
 
     async def on_tick(self, tick: WorkflowTick) -> None:
-        await self._inner.on_tick(tick)
+        await self._decorated.on_tick(tick)
 
     async def wait_for_next_task(
         self,
         task_set: list[NamedTask],
         timeout: float | None = None,
     ) -> asyncio.Task[Any] | None:
-        return await self._inner.wait_for_next_task(task_set, timeout)
+        return await self._decorated.wait_for_next_task(task_set, timeout)
 
 
 class BaseExternalRunAdapterDecorator(ExternalRunAdapter):
@@ -155,27 +155,27 @@ class BaseExternalRunAdapterDecorator(ExternalRunAdapter):
     override individual methods to intercept or augment behaviour.
     """
 
-    def __init__(self, inner: ExternalRunAdapter) -> None:
-        self._inner = inner
+    def __init__(self, decorated: ExternalRunAdapter) -> None:
+        self._decorated = decorated
 
     @property
     def run_id(self) -> str:
-        return self._inner.run_id
+        return self._decorated.run_id
 
     async def send_event(self, tick: WorkflowTick) -> None:
-        await self._inner.send_event(tick)
+        await self._decorated.send_event(tick)
 
     def stream_published_events(self) -> AsyncGenerator[Event, None]:
-        return self._inner.stream_published_events()
+        return self._decorated.stream_published_events()
 
     async def close(self) -> None:
-        await self._inner.close()
+        await self._decorated.close()
 
     async def get_result(self) -> StopEvent:
-        return await self._inner.get_result()
+        return await self._decorated.get_result()
 
     async def cancel(self) -> None:
-        await self._inner.cancel()
+        await self._decorated.cancel()
 
     def get_state_store(self) -> StateStore[Any] | None:
-        return self._inner.get_state_store()
+        return self._decorated.get_state_store()

@@ -47,7 +47,7 @@ class WaitingWorkflow(Workflow):
 
 def _get_idle_release(server: WorkflowServer) -> IdleReleaseDecorator:
     """Extract the IdleReleaseDecorator from the server's runtime stack."""
-    inner = server._runtime._inner
+    inner = server._runtime._decorated
     assert isinstance(inner, IdleReleaseDecorator)
     return inner
 

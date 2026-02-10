@@ -159,8 +159,8 @@ def test_add_workflow_no_double_wrap() -> None:
     server.add_workflow("greeting", wf)
     assert isinstance(wf.runtime, ServerRuntimeDecorator)
     # Inner should be IdleReleaseDecorator, not another ServerRuntimeDecorator
-    assert isinstance(wf.runtime._inner, IdleReleaseDecorator)
-    assert not isinstance(wf.runtime._inner, ServerRuntimeDecorator)
+    assert isinstance(wf.runtime._decorated, IdleReleaseDecorator)
+    assert not isinstance(wf.runtime._decorated, ServerRuntimeDecorator)
 
 
 def test_server_runtime_decorator_wraps_internal_adapter() -> None:

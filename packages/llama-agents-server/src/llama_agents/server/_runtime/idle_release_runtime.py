@@ -50,12 +50,12 @@ class _IdleReleaseInternalRunAdapter(BaseInternalRunAdapterDecorator):
 
     def __init__(
         self,
-        inner: InternalRunAdapter,
-        outer: IdleReleaseDecorator,
+        decorated: InternalRunAdapter,
+        runtime: IdleReleaseDecorator,
         store: AbstractWorkflowStore,
     ) -> None:
-        super().__init__(inner)
-        self._main_runtime = outer
+        super().__init__(decorated)
+        self._runtime = runtime
         self._store = store
 
     @override
@@ -67,13 +67,11 @@ class _IdleReleaseInternalRunAdapter(BaseInternalRunAdapterDecorator):
             )
         await super().write_to_event_stream(event)
         if isinstance(event, WorkflowIdleEvent):
-            skip = self._main_runtime._skip_idle_release.get(self.run_id, 0)
+            skip = self._runtime._skip_idle_release.get(self.run_id, 0)
             if skip > 0:
-                self._main_runtime._skip_idle_release[self.run_id] = skip - 1
+                self._runtime._skip_idle_release[self.run_id] = skip - 1
             else:
-                self._main_runtime._spawn_task(
-                    self._main_runtime._deferred_release(self.run_id)
-                )
+                self._runtime._spawn_task(self._runtime._deferred_release(self.run_id))
 
 
 class IdleReleaseExternalRunAdapter(BaseExternalRunAdapterDecorator):
@@ -84,17 +82,17 @@ class IdleReleaseExternalRunAdapter(BaseExternalRunAdapterDecorator):
     may not exist yet when this adapter is constructed.
     """
 
-    def __init__(self, parent: IdleReleaseDecorator, run_id: str) -> None:
-        # Intentionally skip super().__init__ — _inner is a lazy property.
-        self._parent = parent
+    def __init__(self, runtime: IdleReleaseDecorator, run_id: str) -> None:
+        # Intentionally skip super().__init__ — _decorated is a lazy property.
+        self._runtime = runtime
         self._run_id = run_id
 
     @property  # type: ignore[override]
-    def _inner(self) -> ExternalRunAdapter:
-        return self._parent._inner.get_external_adapter(self._run_id)
+    def _decorated(self) -> ExternalRunAdapter:
+        return self._runtime._decorated.get_external_adapter(self._run_id)
 
-    @_inner.setter
-    def _inner(self, value: ExternalRunAdapter) -> None:
+    @_decorated.setter
+    def _decorated(self, value: ExternalRunAdapter) -> None:
         pass
 
     @property
@@ -103,16 +101,16 @@ class IdleReleaseExternalRunAdapter(BaseExternalRunAdapterDecorator):
 
     @override
     async def send_event(self, tick: WorkflowTick) -> None:
-        async with self._parent._reload_lock(self.run_id):
-            if self.run_id not in self._parent._active_run_ids:
-                counter = self._parent._skip_idle_release
+        async with self._runtime._reload_lock(self.run_id):
+            if self.run_id not in self._runtime._active_run_ids:
+                counter = self._runtime._skip_idle_release
                 counter[self.run_id] = counter.get(self.run_id, 0) + 2
-                await self._parent._ensure_active_run_locked(self.run_id)
+                await self._runtime._ensure_active_run_locked(self.run_id)
             else:
-                await self._parent._store.update_handler_status(
+                await self._runtime._store.update_handler_status(
                     self.run_id, idle_since=None
                 )
-            await self._inner.send_event(tick)
+            await self._decorated.send_event(tick)
 
 
 class IdleReleaseDecorator(BaseRuntimeDecorator):
@@ -124,21 +122,21 @@ class IdleReleaseDecorator(BaseRuntimeDecorator):
 
     def __init__(
         self,
-        inner: PersistenceDecorator,
+        decorated: PersistenceDecorator,
         store: AbstractWorkflowStore,
         idle_timeout: float = 60.0,
     ) -> None:
-        super().__init__(inner)
+        super().__init__(decorated)
         self._store = store
-        self._persistence: PersistenceDecorator = inner
+        self._persistence: PersistenceDecorator = decorated
         self._reload_lock = KeyedLock()
         self._active_run_ids: set[str] = set()
         self._skip_idle_release: dict[str, int] = {}
-        self._background_tasks: set[asyncio.Task[Any]] = set()
+        self._background_tasks: set[asyncio.Task[None]] = set()
         self.stop_task: asyncio.Task[None] | None = None
         self._idle_timeout = idle_timeout
 
-    def _spawn_task(self, coro: Coroutine[Any, Any, Any]) -> asyncio.Task[Any]:
+    def _spawn_task(self, coro: Coroutine[Any, Any, None]) -> asyncio.Task[None]:
         task = asyncio.create_task(coro)
         self._background_tasks.add(task)
         task.add_done_callback(self._background_tasks.discard)
@@ -166,7 +164,7 @@ class IdleReleaseDecorator(BaseRuntimeDecorator):
 
     @override
     def get_internal_adapter(self, workflow: Workflow) -> InternalRunAdapter:
-        inner_adapter = self._inner.get_internal_adapter(workflow)
+        inner_adapter = self._decorated.get_internal_adapter(workflow)
         return _IdleReleaseInternalRunAdapter(inner_adapter, self, self._store)
 
     @override
@@ -198,7 +196,7 @@ class IdleReleaseDecorator(BaseRuntimeDecorator):
     def _abort_inner_run(self, run_id: str) -> None:
         """Cancel the inner runtime's control loop task for a run."""
         try:
-            inner_adapter = self._inner.get_external_adapter(run_id)
+            inner_adapter = self._decorated.get_external_adapter(run_id)
         except Exception:
             return
         if isinstance(inner_adapter, V2RuntimeCompatibilityShim):

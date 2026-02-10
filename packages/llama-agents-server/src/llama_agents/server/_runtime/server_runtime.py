@@ -66,14 +66,14 @@ class _ServerInternalRunAdapter(BaseInternalRunAdapterDecorator):
 
     def __init__(
         self,
-        inner: InternalRunAdapter,
-        parent: ServerRuntimeDecorator,
+        decorated: InternalRunAdapter,
+        runtime: ServerRuntimeDecorator,
         *,
         state_type: type[Any] | None = None,
     ) -> None:
-        super().__init__(inner)
-        self._parent = parent
-        self._store = parent._store
+        super().__init__(decorated)
+        self._runtime = runtime
+        self._store = runtime._store
         self._state_type = state_type
         self._state_store: StateStore[Any] | None = None
 
@@ -83,7 +83,7 @@ class _ServerInternalRunAdapter(BaseInternalRunAdapterDecorator):
             return self._state_store
         store = self._store.create_state_store(self.run_id, self._state_type)
         # Seed with initial context state if provided at run start
-        initial = self._parent._initial_state.pop(self.run_id, None)
+        initial = self._runtime._initial_state.pop(self.run_id, None)
         if initial is not None and isinstance(store, InMemoryStateStore):
             store._state = initial
         self._state_store = store
@@ -95,23 +95,23 @@ class _ServerInternalRunAdapter(BaseInternalRunAdapterDecorator):
         Monitors for writes to the event stream that indicate a workflow has terminated.
         """
         if isinstance(event, WorkflowFailedEvent):
-            await self._parent._handle_status_update(
+            await self._runtime._handle_status_update(
                 run_id=self.run_id,
                 status="failed",
                 error=event.exception_message,
             )
         elif isinstance(event, WorkflowTimedOutEvent):
-            await self._parent._handle_status_update(
+            await self._runtime._handle_status_update(
                 run_id=self.run_id,
                 status="failed",
                 error=f"Workflow timed out after {event.timeout}s",
             )
         elif isinstance(event, WorkflowCancelledEvent):
-            await self._parent._handle_status_update(
+            await self._runtime._handle_status_update(
                 run_id=self.run_id, status="cancelled"
             )
         elif isinstance(event, StopEvent):
-            await self._parent._handle_status_update(
+            await self._runtime._handle_status_update(
                 run_id=self.run_id,
                 status="completed",
                 result=event,
@@ -139,12 +139,12 @@ class ServerRuntimeDecorator(BaseRuntimeDecorator):
 
     def __init__(
         self,
-        inner: Runtime,
+        decorated: Runtime,
         store: AbstractWorkflowStore,
         *,
         persistence_backoff: list[float] | None = None,
     ) -> None:
-        super().__init__(inner)
+        super().__init__(decorated)
         self._store: AbstractWorkflowStore = store
         self._registered_workflows: dict[str, Workflow] = {}
         self._initial_state: dict[str, Any] = {}
@@ -237,7 +237,7 @@ class ServerRuntimeDecorator(BaseRuntimeDecorator):
 
     def get_internal_adapter(self, workflow: Workflow) -> InternalRunAdapter:
         """Wraps the inner runtime's adapter in _ServerInternalRunAdapter."""
-        inner_adapter = self._inner.get_internal_adapter(workflow)
+        inner_adapter = self._decorated.get_internal_adapter(workflow)
         state_type = infer_state_type(workflow)
         return _ServerInternalRunAdapter(inner_adapter, self, state_type=state_type)
 

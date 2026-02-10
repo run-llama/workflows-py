@@ -26,6 +26,7 @@ from workflows.runtime.types.internal_state import BrokerState
 from workflows.runtime.types.plugin import (
     ExternalRunAdapter,
     InternalRunAdapter,
+    Runtime,
 )
 from workflows.runtime.types.ticks import WorkflowTick, WorkflowTickAdapter
 from workflows.workflow import Workflow
@@ -50,10 +51,10 @@ class _PersistenceInternalRunAdapter(BaseInternalRunAdapterDecorator):
 
     def __init__(
         self,
-        inner: InternalRunAdapter,
+        decorated: InternalRunAdapter,
         store: AbstractWorkflowStore,
     ) -> None:
-        super().__init__(inner)
+        super().__init__(decorated)
         self._store = store
 
     @override
@@ -78,17 +79,17 @@ class PersistenceDecorator(BaseRuntimeDecorator):
 
     def __init__(
         self,
-        inner: Any,
+        decorated: Runtime,
         store: AbstractWorkflowStore,
     ) -> None:
-        super().__init__(inner)
+        super().__init__(decorated)
         self._store = store
         self._workflows_by_name: dict[str, Workflow] = {}
         self._active_run_ids: set[str] = set()
-        self._background_tasks: set[asyncio.Task[Any]] = set()
+        self._background_tasks: set[asyncio.Task[None]] = set()
         self.resume_task: asyncio.Task[None] | None = None
 
-    def _spawn_task(self, coro: Coroutine[Any, Any, Any]) -> asyncio.Task[Any]:
+    def _spawn_task(self, coro: Coroutine[Any, Any, None]) -> asyncio.Task[None]:
         task = asyncio.create_task(coro)
         self._background_tasks.add(task)
         task.add_done_callback(self._background_tasks.discard)
@@ -116,7 +117,7 @@ class PersistenceDecorator(BaseRuntimeDecorator):
 
     @override
     def get_internal_adapter(self, workflow: Workflow) -> InternalRunAdapter:
-        inner_adapter = self._inner.get_internal_adapter(workflow)
+        inner_adapter = self._decorated.get_internal_adapter(workflow)
         return _PersistenceInternalRunAdapter(inner_adapter, self._store)
 
     @override
