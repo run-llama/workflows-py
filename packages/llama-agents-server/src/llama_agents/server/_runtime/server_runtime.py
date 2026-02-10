@@ -84,43 +84,81 @@ class _ServerInternalRunAdapter(BaseInternalRunAdapterDecorator):
         store = self._store.create_state_store(self.run_id, self._state_type)
         # Seed with initial context state if provided at run start
         initial = self._runtime._initial_state.pop(self.run_id, None)
-        if initial is not None and isinstance(store, InMemoryStateStore):
-            store._state = initial
+        if initial is not None:
+            serialized_state, serializer = initial
+            self._seed_state(store, serialized_state, serializer)
         self._state_store = store
         return store
+
+    def _seed_state(
+        self,
+        store: StateStore[Any],
+        serialized_state: dict[str, Any],
+        serializer: BaseSerializer,
+    ) -> None:
+        """Seed a state store from serialized state data.
+
+        Dispatches to the appropriate seeding mechanism based on store type.
+        InMemory stores are seeded directly. SQL-backed stores handle both
+        their own serialized references (optimized copy) and InMemory format.
+        """
+        from .._store.postgres_state_store import PostgresStateStore
+        from .._store.sqlite.sqlite_state_store import SqliteStateStore
+
+        if isinstance(store, InMemoryStateStore):
+            try:
+                seed_store = InMemoryStateStore.from_dict(serialized_state, serializer)
+                store._state = seed_store._state
+            except Exception:
+                logger.warning("Failed to seed InMemoryStateStore", exc_info=True)
+        elif isinstance(store, SqliteStateStore):
+            store._seed_from_serialized(serialized_state, serializer)
+        elif isinstance(store, PostgresStateStore):
+            store._pending_seed = (serialized_state, serializer)
+        else:
+            logger.warning(
+                "Unknown state store type %s, skipping seed", type(store).__name__
+            )
 
     @override
     async def write_to_event_stream(self, event: Event) -> None:
         """
         Monitors for writes to the event stream that indicate a workflow has terminated.
+
+        During replay, store writes (status updates and event appends) are skipped
+        to avoid duplicates. The inner adapter forwarding always happens so that
+        runtime-level concerns (e.g. idle detection) still function during replay.
         """
-        if isinstance(event, WorkflowFailedEvent):
-            await self._runtime._handle_status_update(
-                run_id=self.run_id,
-                status="failed",
-                error=event.exception_message,
-            )
-        elif isinstance(event, WorkflowTimedOutEvent):
-            await self._runtime._handle_status_update(
-                run_id=self.run_id,
-                status="failed",
-                error=f"Workflow timed out after {event.timeout}s",
-            )
-        elif isinstance(event, WorkflowCancelledEvent):
-            await self._runtime._handle_status_update(
-                run_id=self.run_id, status="cancelled"
-            )
-        elif isinstance(event, StopEvent):
-            await self._runtime._handle_status_update(
-                run_id=self.run_id,
-                status="completed",
-                result=event,
-            )
+        replaying = self.is_replaying()
 
-        envelope = EventEnvelopeWithMetadata.from_event(event)
-        await self._store.append_event(self.run_id, envelope)
+        if not replaying:
+            if isinstance(event, WorkflowFailedEvent):
+                await self._runtime._handle_status_update(
+                    run_id=self.run_id,
+                    status="failed",
+                    error=event.exception_message,
+                )
+            elif isinstance(event, WorkflowTimedOutEvent):
+                await self._runtime._handle_status_update(
+                    run_id=self.run_id,
+                    status="failed",
+                    error=f"Workflow timed out after {event.timeout}s",
+                )
+            elif isinstance(event, WorkflowCancelledEvent):
+                await self._runtime._handle_status_update(
+                    run_id=self.run_id, status="cancelled"
+                )
+            elif isinstance(event, StopEvent):
+                await self._runtime._handle_status_update(
+                    run_id=self.run_id,
+                    status="completed",
+                    result=event,
+                )
 
-        # Forward to inner adapter (e.g. _DurableInternalRunAdapter for idle detection)
+            envelope = EventEnvelopeWithMetadata.from_event(event)
+            await self._store.append_event(self.run_id, envelope)
+
+        # Always forward to inner adapter (e.g. idle detection, DBOS stream)
         await super().write_to_event_stream(event)
 
 
@@ -220,18 +258,20 @@ class ServerRuntimeDecorator(BaseRuntimeDecorator):
         serialized_state: dict[str, Any] | None = None,
         serializer: BaseSerializer | None = None,
     ) -> ExternalRunAdapter:
+        # Intercept serialized state: we handle seeding ourselves in get_state_store
+        # so non-InMemory formats don't leak to the base runtime.
+        passthrough_state = serialized_state
         if serialized_state and serializer:
-            try:
-                seed_store = InMemoryStateStore.from_dict(serialized_state, serializer)
-                self._initial_state[run_id] = seed_store._state
-            except Exception:
-                pass
+            self._initial_state[run_id] = (serialized_state, serializer)
+            store_type = serialized_state.get("store_type")
+            if store_type is not None and store_type != "in_memory":
+                passthrough_state = None
         return super().run_workflow(
             run_id,
             workflow,
             init_state,
             start_event=start_event,
-            serialized_state=serialized_state,
+            serialized_state=passthrough_state,
             serializer=serializer,
         )
 

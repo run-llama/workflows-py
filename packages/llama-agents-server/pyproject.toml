@@ -12,7 +12,8 @@ dev = [
   "pytest-timeout>=2.4.0",
   "pytest-xdist>=3.8.0",
   "time-machine>=2.19.0,<3.0.0",
-  "llama-agents-integration-tests"
+  "llama-agents-integration-tests",
+  "asyncpg>=0.29.0"
 ]
 
 [project]
@@ -28,6 +29,9 @@ dependencies = [
   "uvicorn>=0.32.0",
   "httpx>=0.27.0"
 ]
+
+[project.optional-dependencies]
+asyncpg = ["asyncpg>=0.29.0"]
 
 [project.scripts]
 llama-agents-server = "llama_agents.server.__main__:run_server"
