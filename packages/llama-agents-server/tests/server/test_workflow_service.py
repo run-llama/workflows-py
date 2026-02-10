@@ -26,7 +26,7 @@ async def test_cancel_running_handler(
     memory_store: MemoryWorkflowStore, interactive_workflow: Workflow
 ) -> None:
     """Start an interactive workflow, cancel it, and verify status becomes cancelled."""
-    server = WorkflowServer(workflow_store=memory_store)
+    server = WorkflowServer(workflow_store=memory_store, idle_timeout=0.01)
     server.add_workflow(
         "interactive", interactive_workflow, additional_events=[ExternalEvent]
     )
@@ -55,7 +55,7 @@ async def test_cancel_handler_with_purge(
     memory_store: MemoryWorkflowStore, simple_test_workflow: Workflow
 ) -> None:
     """Start and complete a workflow, then purge it from the store."""
-    server = WorkflowServer(workflow_store=memory_store)
+    server = WorkflowServer(workflow_store=memory_store, idle_timeout=0.01)
     server.add_workflow("simple", simple_test_workflow)
 
     async with server.contextmanager():
@@ -84,7 +84,7 @@ async def test_cancel_handler_with_purge(
 @pytest.mark.asyncio
 async def test_cancel_handler_not_found(memory_store: MemoryWorkflowStore) -> None:
     """Cancelling a nonexistent handler returns None."""
-    server = WorkflowServer(workflow_store=memory_store)
+    server = WorkflowServer(workflow_store=memory_store, idle_timeout=0.01)
 
     async with server.contextmanager():
         result = await server._service.cancel_handler("nonexistent")
@@ -96,7 +96,7 @@ async def test_send_event_workflow_not_registered(
     memory_store: MemoryWorkflowStore,
 ) -> None:
     """Sending an event to a handler whose workflow is not registered raises EventSendError."""
-    server = WorkflowServer(workflow_store=memory_store)
+    server = WorkflowServer(workflow_store=memory_store, idle_timeout=0.01)
 
     # Seed store with a handler for an unregistered workflow
     await memory_store.update(
@@ -121,7 +121,7 @@ async def test_send_event_no_run_id(
     memory_store: MemoryWorkflowStore, interactive_workflow: Workflow
 ) -> None:
     """Sending an event to a handler with no run_id raises EventSendError."""
-    server = WorkflowServer(workflow_store=memory_store)
+    server = WorkflowServer(workflow_store=memory_store, idle_timeout=0.01)
     server.add_workflow(
         "interactive", interactive_workflow, additional_events=[ExternalEvent]
     )
@@ -149,7 +149,7 @@ async def test_start_workflow_happy_path(
     memory_store: MemoryWorkflowStore, simple_test_workflow: Workflow
 ) -> None:
     """start_workflow returns HandlerData with correct initial fields."""
-    server = WorkflowServer(workflow_store=memory_store)
+    server = WorkflowServer(workflow_store=memory_store, idle_timeout=0.01)
     server.add_workflow("simple", simple_test_workflow)
 
     async with server.contextmanager():
@@ -167,7 +167,7 @@ async def test_await_workflow_happy_path(
     memory_store: MemoryWorkflowStore, simple_test_workflow: Workflow
 ) -> None:
     """await_workflow returns completed HandlerData."""
-    server = WorkflowServer(workflow_store=memory_store)
+    server = WorkflowServer(workflow_store=memory_store, idle_timeout=0.01)
     server.add_workflow("simple", simple_test_workflow)
 
     async with server.contextmanager():
@@ -185,7 +185,7 @@ async def test_await_workflow_error_returns_failed(
 ) -> None:
     """await_workflow on an ErrorWorkflow returns failed status, not an exception."""
     error_wf = ErrorWorkflow()
-    server = WorkflowServer(workflow_store=memory_store)
+    server = WorkflowServer(workflow_store=memory_store, idle_timeout=0.01)
     server.add_workflow("error", error_wf)
 
     async with server.contextmanager():
@@ -199,7 +199,7 @@ async def test_resolve_handler_raises_on_completed(
     memory_store: MemoryWorkflowStore, simple_test_workflow: Workflow
 ) -> None:
     """resolve_handler raises HandlerCompletedError for a terminal handler."""
-    server = WorkflowServer(workflow_store=memory_store)
+    server = WorkflowServer(workflow_store=memory_store, idle_timeout=0.01)
     server.add_workflow("simple", simple_test_workflow)
 
     async with server.contextmanager():
@@ -223,7 +223,7 @@ async def test_send_event_happy_path(
     memory_store: MemoryWorkflowStore, interactive_workflow: Workflow
 ) -> None:
     """send_event delivers an event and the workflow completes."""
-    server = WorkflowServer(workflow_store=memory_store)
+    server = WorkflowServer(workflow_store=memory_store, idle_timeout=0.01)
     server.add_workflow(
         "interactive", interactive_workflow, additional_events=[ExternalEvent]
     )
@@ -262,7 +262,7 @@ async def test_cancel_terminal_handler_without_purge(
     memory_store: MemoryWorkflowStore, simple_test_workflow: Workflow
 ) -> None:
     """cancel_handler on an already-completed handler without purge returns None."""
-    server = WorkflowServer(workflow_store=memory_store)
+    server = WorkflowServer(workflow_store=memory_store, idle_timeout=0.01)
     server.add_workflow("simple", simple_test_workflow)
 
     async with server.contextmanager():

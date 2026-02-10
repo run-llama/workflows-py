@@ -116,7 +116,7 @@ async def test_idle_handler_released_from_memory(
     memory_store: MemoryWorkflowStore, waiting_workflow: WaitingWorkflow
 ) -> None:
     """When a workflow becomes idle, its handler is released from memory."""
-    server = WorkflowServer(workflow_store=memory_store)
+    server = WorkflowServer(workflow_store=memory_store, idle_timeout=0.01)
     server.add_workflow("test", waiting_workflow)
 
     async with server.contextmanager():
@@ -144,7 +144,7 @@ async def test_released_handler_reloaded_on_event(
     memory_store: MemoryWorkflowStore, waiting_workflow: WaitingWorkflow
 ) -> None:
     """A released idle handler is reloaded when an event is sent to it."""
-    server = WorkflowServer(workflow_store=memory_store)
+    server = WorkflowServer(workflow_store=memory_store, idle_timeout=0.01)
     server.add_workflow("test", waiting_workflow)
 
     async with server.contextmanager():
@@ -175,7 +175,7 @@ async def test_idle_since_cleared_on_reload(
     memory_store: MemoryWorkflowStore, waiting_workflow: WaitingWorkflow
 ) -> None:
     """idle_since is cleared in the store when a handler is reloaded."""
-    server = WorkflowServer(workflow_store=memory_store)
+    server = WorkflowServer(workflow_store=memory_store, idle_timeout=0.01)
     server.add_workflow("test", waiting_workflow)
 
     async with server.contextmanager():
@@ -233,7 +233,7 @@ async def test_on_server_start_resumes_running_handlers(
         )
     )
 
-    server = WorkflowServer(workflow_store=memory_store)
+    server = WorkflowServer(workflow_store=memory_store, idle_timeout=0.01)
     server.add_workflow("test", simple_test_workflow)
 
     async with server.contextmanager():
@@ -256,7 +256,7 @@ async def test_on_server_start_resumes_handler_with_no_ticks_as_fresh(
         )
     )
 
-    server = WorkflowServer(workflow_store=memory_store)
+    server = WorkflowServer(workflow_store=memory_store, idle_timeout=0.01)
     server.add_workflow("test", simple_test_workflow)
 
     async with server.contextmanager():
@@ -287,7 +287,7 @@ async def test_on_server_start_ignores_unregistered_workflows(
         )
     )
 
-    server = WorkflowServer(workflow_store=memory_store)
+    server = WorkflowServer(workflow_store=memory_store, idle_timeout=0.01)
     server.add_workflow("test", simple_test_workflow)
 
     async with server.contextmanager():
@@ -316,7 +316,7 @@ async def test_on_server_start_marks_failed_handler_on_error(
         )
     )
 
-    server = WorkflowServer(workflow_store=memory_store)
+    server = WorkflowServer(workflow_store=memory_store, idle_timeout=0.01)
     server.add_workflow("failing", FailingResumeWorkflow())
 
     async with server.contextmanager():
@@ -341,7 +341,7 @@ async def test_on_server_start_ignores_idle_handlers(
         )
     )
 
-    server = WorkflowServer(workflow_store=memory_store)
+    server = WorkflowServer(workflow_store=memory_store, idle_timeout=0.01)
     server.add_workflow("test", simple_test_workflow)
 
     async with server.contextmanager():
@@ -362,7 +362,7 @@ async def test_destroy_cancels_resume_task(
     memory_store: MemoryWorkflowStore, simple_test_workflow: Workflow
 ) -> None:
     """destroy() should cancel the resume_task."""
-    server = WorkflowServer(workflow_store=memory_store)
+    server = WorkflowServer(workflow_store=memory_store, idle_timeout=0.01)
     server.add_workflow("test", simple_test_workflow)
 
     async with server.contextmanager():
@@ -380,7 +380,7 @@ async def test_destroy_aborts_active_runs(
     memory_store: MemoryWorkflowStore, waiting_workflow: WaitingWorkflow
 ) -> None:
     """destroy() should abort all active runs via _on_server_stop."""
-    server = WorkflowServer(workflow_store=memory_store)
+    server = WorkflowServer(workflow_store=memory_store, idle_timeout=0.01)
     server.add_workflow("test", waiting_workflow)
 
     async with server.contextmanager():
@@ -404,7 +404,7 @@ async def test_ensure_active_run_handler_not_found(
     memory_store: MemoryWorkflowStore, simple_test_workflow: Workflow
 ) -> None:
     """_ensure_active_run raises ValueError when no handler exists for run_id."""
-    server = WorkflowServer(workflow_store=memory_store)
+    server = WorkflowServer(workflow_store=memory_store, idle_timeout=0.01)
     server.add_workflow("test", simple_test_workflow)
 
     async with server.contextmanager():
@@ -429,7 +429,7 @@ async def test_ensure_active_run_workflow_not_found(
         )
     )
 
-    server = WorkflowServer(workflow_store=memory_store)
+    server = WorkflowServer(workflow_store=memory_store, idle_timeout=0.01)
     server.add_workflow("test", simple_test_workflow)
 
     async with server.contextmanager():
@@ -443,7 +443,7 @@ async def test_context_from_ticks_empty_ticks(
     memory_store: MemoryWorkflowStore, simple_test_workflow: Workflow
 ) -> None:
     """_context_from_ticks returns None when there are no ticks for the run_id."""
-    server = WorkflowServer(workflow_store=memory_store)
+    server = WorkflowServer(workflow_store=memory_store, idle_timeout=0.01)
     server.add_workflow("test", simple_test_workflow)
 
     async with server.contextmanager():
@@ -459,7 +459,7 @@ async def test_persistence_retries_on_failure(
     memory_store: MemoryWorkflowStore, simple_test_workflow: Workflow
 ) -> None:
     """Workflow completes despite transient store write failures thanks to retries."""
-    server = WorkflowServer(workflow_store=memory_store)
+    server = WorkflowServer(workflow_store=memory_store, idle_timeout=0.01)
     server.add_workflow("test", simple_test_workflow)
     # Use instant retries
     server._runtime._persistence_backoff = [0, 0]
@@ -489,7 +489,7 @@ async def test_workflow_cancelled_after_all_retries_fail(
     memory_store: MemoryWorkflowStore, simple_test_workflow: Workflow
 ) -> None:
     """When store writes always fail, handler never reaches completed status."""
-    server = WorkflowServer(workflow_store=memory_store)
+    server = WorkflowServer(workflow_store=memory_store, idle_timeout=0.01)
     server.add_workflow("test", simple_test_workflow)
     # Use instant retries with only 2 attempts
     server._runtime._persistence_backoff = [0, 0]
@@ -568,7 +568,7 @@ async def test_legacy_ctx_no_ticks_resumes_workflow(
         sqlite_store.db_path, "legacy-1", "run-legacy-1", "test", ctx_data
     )
 
-    server = WorkflowServer(workflow_store=sqlite_store)
+    server = WorkflowServer(workflow_store=sqlite_store, idle_timeout=0.01)
     server.add_workflow("test", simple_test_workflow)
 
     async with server.contextmanager():
@@ -604,7 +604,7 @@ async def test_legacy_ctx_seeds_user_state(
         sqlite_store.db_path, "state-1", "run-state-1", "test", ctx_data
     )
 
-    server = WorkflowServer(workflow_store=sqlite_store)
+    server = WorkflowServer(workflow_store=sqlite_store, idle_timeout=0.01)
     server.add_workflow("test", wf)
 
     async with server.contextmanager():
@@ -622,7 +622,7 @@ async def test_no_legacy_ctx_no_ticks_fresh_start(
         sqlite_store.db_path, "fresh-1", "run-fresh-1", "test", None
     )
 
-    server = WorkflowServer(workflow_store=sqlite_store)
+    server = WorkflowServer(workflow_store=sqlite_store, idle_timeout=0.01)
     server.add_workflow("test", simple_test_workflow)
 
     async with server.contextmanager():
@@ -670,7 +670,7 @@ async def test_legacy_ctx_state_not_overwritten_on_second_resume(
     }
     state_store._write_in_memory_state(new_state_data)
 
-    server = WorkflowServer(workflow_store=sqlite_store)
+    server = WorkflowServer(workflow_store=sqlite_store, idle_timeout=0.01)
     server.add_workflow("test", wf)
 
     async with server.contextmanager():
@@ -748,7 +748,7 @@ async def test_simple_hitl_cross_server_restart(
     handler_id = "simple-restart-1"
 
     # Server 1: start workflow, let it idle
-    server1 = WorkflowServer(workflow_store=sqlite_store)
+    server1 = WorkflowServer(workflow_store=sqlite_store, idle_timeout=0.01)
     server1.add_workflow("test", WaitingWorkflow())
 
     async with server1.contextmanager():
@@ -759,7 +759,7 @@ async def test_simple_hitl_cross_server_restart(
         await wait_handler_idle(sqlite_store, handler_id)
 
     # Server 2: send event, expect completion
-    server2 = WorkflowServer(workflow_store=sqlite_store)
+    server2 = WorkflowServer(workflow_store=sqlite_store, idle_timeout=0.01)
     server2.add_workflow("test", WaitingWorkflow())
 
     async with server2.contextmanager():
@@ -780,7 +780,7 @@ async def test_multistep_hitl_broker_state_survives_restart(
 
     def _make_server() -> WorkflowServer:
         wf = MultiStepHITLWorkflow()
-        server = WorkflowServer(workflow_store=sqlite_store)
+        server = WorkflowServer(workflow_store=sqlite_store, idle_timeout=0.01)
         server.add_workflow("test", wf, additional_events=HITL_EXTRA_EVENTS)
         return server
 
@@ -846,7 +846,7 @@ async def test_multistep_hitl_multiple_restarts_at_same_wait_point(
 
     def _make_server() -> WorkflowServer:
         wf = MultiStepHITLWorkflow()
-        server = WorkflowServer(workflow_store=sqlite_store)
+        server = WorkflowServer(workflow_store=sqlite_store, idle_timeout=0.01)
         server.add_workflow("test", wf, additional_events=HITL_EXTRA_EVENTS)
         return server
 
@@ -917,7 +917,7 @@ async def test_tick_content_after_multistep_workflow(
     handler_id = "tick-verify-1"
 
     wf = MultiStepHITLWorkflow()
-    server = WorkflowServer(workflow_store=sqlite_store)
+    server = WorkflowServer(workflow_store=sqlite_store, idle_timeout=0.01)
     server.add_workflow("test", wf, additional_events=HITL_EXTRA_EVENTS)
 
     async with server.contextmanager():
@@ -947,7 +947,7 @@ async def test_concurrent_send_event_to_idle_handler(
     memory_store: MemoryWorkflowStore, waiting_workflow: WaitingWorkflow
 ) -> None:
     """Two concurrent send_event calls to the same idle handler cause no unhandled exceptions."""
-    server = WorkflowServer(workflow_store=memory_store)
+    server = WorkflowServer(workflow_store=memory_store, idle_timeout=0.01)
     server.add_workflow("test", waiting_workflow)
 
     async with server.contextmanager():
@@ -1005,7 +1005,7 @@ async def test_failed_workflow_after_reload(
 ) -> None:
     """Workflow that raises after reload ends up with status='failed' and error message."""
     wf = FailAfterWaitWorkflow()
-    server = WorkflowServer(workflow_store=memory_store)
+    server = WorkflowServer(workflow_store=memory_store, idle_timeout=0.01)
     server.add_workflow("test", wf, additional_events=[FailAfterWaitEvent])
 
     async with server.contextmanager():

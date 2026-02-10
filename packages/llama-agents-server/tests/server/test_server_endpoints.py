@@ -61,7 +61,7 @@ def server(
     interactive_workflow: Workflow,
 ) -> WorkflowServer:
     # Use MemoryWorkflowStore so get_handlers() can retrieve from persistence
-    server = WorkflowServer(workflow_store=MemoryWorkflowStore())
+    server = WorkflowServer(workflow_store=MemoryWorkflowStore(), idle_timeout=0.01)
     server.add_workflow("test", simple_test_workflow)
     server.add_workflow("error", error_workflow)
     server.add_workflow("streaming", streaming_workflow)
@@ -91,7 +91,7 @@ async def server_with_persisted_handlers(
         for handler in persisted_handlers:
             await store.update(handler)
 
-    server_with_store = WorkflowServer(workflow_store=store)
+    server_with_store = WorkflowServer(workflow_store=store, idle_timeout=0.01)
     server_with_store.add_workflow("interactive", interactive_workflow)
 
     async with server_with_store.contextmanager():
@@ -1341,7 +1341,7 @@ async def test_instrument_tags_contains_handler_id_in_server_context() -> None:
             seen_handler_id["handler_id"] = hid
             return StopEvent()
 
-    server = WorkflowServer(workflow_store=MemoryWorkflowStore())
+    server = WorkflowServer(workflow_store=MemoryWorkflowStore(), idle_timeout=0.01)
     server.add_workflow("tags", TagReadingWorkflow())
 
     async with server.contextmanager():

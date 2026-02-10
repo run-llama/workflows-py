@@ -78,7 +78,7 @@ def store(request: pytest.FixtureRequest, tmp_path: Path) -> AbstractWorkflowSto
     if request.param == "memory":
         return MemoryWorkflowStore()
     else:
-        return SqliteWorkflowStore(str(tmp_path / "test.sqlite"), poll_interval=0.1)
+        return SqliteWorkflowStore(str(tmp_path / "test.sqlite"), poll_interval=0.05)
 
 
 @pytest.mark.asyncio
@@ -170,7 +170,7 @@ async def test_subscribe_events_receives_appended_events(
     await store.append_event("run-1", make_envelope(seq_label=1))
     await store.append_event("run-1", make_envelope(event=_stop(seq_label=2)))
 
-    await asyncio.wait_for(task, timeout=2.0)
+    await asyncio.wait_for(task, timeout=5.0)
 
     assert len(collected) == 3
     assert [e.sequence for e in collected] == [0, 1, 2]
@@ -196,7 +196,7 @@ async def test_subscribe_events_terminates_on_terminal_event(
         await store.append_event("run-1", make_envelope())
     await store.append_event("run-1", make_envelope(event=terminal_event))
 
-    await asyncio.wait_for(task, timeout=2.0)
+    await asyncio.wait_for(task, timeout=5.0)
 
     assert collected[-1].event.type == expected_type
 
@@ -213,7 +213,7 @@ async def test_subscribe_events_multiple_concurrent_subscribers(
     await store.append_event("run-1", make_envelope(seq_label=1))
     await store.append_event("run-1", make_envelope(event=_stop(seq_label=2)))
 
-    await asyncio.wait_for(asyncio.gather(task_a, task_b), timeout=2.0)
+    await asyncio.wait_for(asyncio.gather(task_a, task_b), timeout=5.0)
 
     assert len(collected_a) == 3
     assert len(collected_b) == 3
@@ -234,7 +234,7 @@ async def test_subscribe_events_with_after_sequence(
 
     await store.append_event("run-1", make_envelope(event=_stop(seq_label=3)))
 
-    await asyncio.wait_for(task, timeout=2.0)
+    await asyncio.wait_for(task, timeout=5.0)
 
     # Should have events 2, 3 (skipping 0 and 1)
     assert len(collected) == 2

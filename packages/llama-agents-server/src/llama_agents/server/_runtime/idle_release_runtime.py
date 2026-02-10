@@ -72,7 +72,7 @@ class _IdleReleaseInternalRunAdapter(BaseInternalRunAdapterDecorator):
                 self._main_runtime._skip_idle_release[self.run_id] = skip - 1
             else:
                 self._main_runtime._spawn_task(
-                    self._main_runtime._release_idle_handler(self.run_id)
+                    self._main_runtime._deferred_release(self.run_id)
                 )
 
 
@@ -126,6 +126,7 @@ class IdleReleaseDecorator(BaseRuntimeDecorator):
         self,
         inner: PersistenceDecorator,
         store: AbstractWorkflowStore,
+        idle_timeout: float = 60.0,
     ) -> None:
         super().__init__(inner)
         self._store = store
@@ -135,6 +136,7 @@ class IdleReleaseDecorator(BaseRuntimeDecorator):
         self._skip_idle_release: dict[str, int] = {}
         self._background_tasks: set[asyncio.Task[Any]] = set()
         self.stop_task: asyncio.Task[None] | None = None
+        self._idle_timeout = idle_timeout
 
     def _spawn_task(self, coro: Coroutine[Any, Any, Any]) -> asyncio.Task[Any]:
         task = asyncio.create_task(coro)
@@ -171,11 +173,21 @@ class IdleReleaseDecorator(BaseRuntimeDecorator):
     def get_external_adapter(self, run_id: str) -> ExternalRunAdapter:
         return IdleReleaseExternalRunAdapter(self, run_id)
 
+    async def _deferred_release(self, run_id: str) -> None:
+        """Wait for idle_timeout then release the handler if still idle."""
+        await asyncio.sleep(self._idle_timeout)
+        await self._release_idle_handler(run_id)
+
     async def _release_idle_handler(self, run_id: str) -> None:
         """Release an idle handler from memory."""
         async with self._reload_lock(run_id):
             handlers = await self._store.query(HandlerQuery(run_id_in=[run_id]))
             if len(handlers) != 1 or handlers[0].idle_since is None:
+                return
+            elapsed = (
+                datetime.now(timezone.utc) - handlers[0].idle_since
+            ).total_seconds()
+            if elapsed < self._idle_timeout:
                 return
             if run_id not in self._active_run_ids:
                 return

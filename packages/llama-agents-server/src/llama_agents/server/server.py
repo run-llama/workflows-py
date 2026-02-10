@@ -34,6 +34,7 @@ class WorkflowServer:
         # retry/backoff seconds for persisting the handler state in the store after failures. Configurable mainly for testing.
         persistence_backoff: list[float] = [0.5, 3],
         runtime: Runtime | None = None,
+        idle_timeout: float = 60.0,
     ):
         self._workflow_store = (
             workflow_store if workflow_store is not None else MemoryWorkflowStore()
@@ -44,6 +45,7 @@ class WorkflowServer:
             else IdleReleaseDecorator(
                 PersistenceDecorator(basic_runtime, store=self._workflow_store),
                 store=self._workflow_store,
+                idle_timeout=idle_timeout,
             )
         )
         self._runtime: ServerRuntimeDecorator = ServerRuntimeDecorator(
