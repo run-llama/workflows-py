@@ -19,11 +19,6 @@ from typing_extensions import override
 from workflows import Context
 from workflows.context.context_types import SerializedContext
 from workflows.context.serializers import BaseSerializer, JsonSerializer
-from workflows.context.state_store import (
-    InMemoryStateStore,
-    StateStore,
-    infer_state_type,
-)
 from workflows.events import (
     Event,
     StartEvent,
@@ -35,7 +30,6 @@ from workflows.runtime.types.plugin import (
     ExternalRunAdapter,
     InternalRunAdapter,
     V2RuntimeCompatibilityShim,
-    as_snapshottable_adapter,
 )
 from workflows.runtime.types.ticks import WorkflowTick, WorkflowTickAdapter
 from workflows.workflow import Workflow
@@ -70,27 +64,10 @@ class _DurableInternalRunAdapter(BaseInternalRunAdapterDecorator):
         inner: InternalRunAdapter,
         outer: DurableDecorator,
         store: AbstractWorkflowStore,
-        *,
-        state_type: type[Any] | None = None,
     ) -> None:
         super().__init__(inner)
         self._main_runtime = outer
         self._store = store
-        self._inner_snapshottable = as_snapshottable_adapter(inner)
-        self._state_type = state_type
-        self._state_store: StateStore[Any] | None = None
-
-    @override
-    def get_state_store(self) -> StateStore[Any]:
-        if self._state_store is not None:
-            return self._state_store
-        store = self._store.create_state_store(self.run_id, self._state_type)
-        # Seed with initial context state if provided at run start
-        initial = self._main_runtime._initial_state.pop(self.run_id, None)
-        if initial is not None and isinstance(store, InMemoryStateStore):
-            store._state = initial
-        self._state_store = store
-        return store
 
     @override
     async def on_tick(self, tick: WorkflowTick) -> None:
@@ -204,7 +181,6 @@ class DurableDecorator(BaseRuntimeDecorator):
         self._reload_lock = KeyedLock()
         self._active_run_ids: set[str] = set()
         self._skip_idle_release: dict[str, int] = {}
-        self._initial_state: dict[str, Any] = {}
         self._workflows_by_name: dict[str, Workflow] = {}
         self._background_tasks: set[asyncio.Task[Any]] = set()
         self.resume_task: asyncio.Task[None] | None = None
@@ -227,12 +203,6 @@ class DurableDecorator(BaseRuntimeDecorator):
         serializer: BaseSerializer | None = None,
     ) -> ExternalRunAdapter:
         self._active_run_ids.add(run_id)
-        if serialized_state and serializer:
-            try:
-                seed_store = InMemoryStateStore.from_dict(serialized_state, serializer)
-                self._initial_state[run_id] = seed_store._state
-            except Exception:
-                pass
         return super().run_workflow(
             run_id,
             workflow,
@@ -245,12 +215,10 @@ class DurableDecorator(BaseRuntimeDecorator):
     @override
     def get_internal_adapter(self, workflow: Workflow) -> InternalRunAdapter:
         inner_adapter = self._inner.get_internal_adapter(workflow)
-        state_type = infer_state_type(workflow)
         return _DurableInternalRunAdapter(
             inner_adapter,
             self,
             self._store,
-            state_type=state_type,
         )
 
     @override

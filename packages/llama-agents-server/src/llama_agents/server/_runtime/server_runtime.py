@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, timezone
-from typing import Awaitable, Callable
+from typing import Any, Awaitable, Callable
 
 from llama_agents.client.protocol.serializable_events import (
     EventEnvelopeWithMetadata,
@@ -19,15 +19,24 @@ from llama_agents.server._runtime.runtime_decorators import (
     BaseInternalRunAdapterDecorator,
 )
 from typing_extensions import override
+from workflows.context.serializers import BaseSerializer
+from workflows.context.state_store import (
+    InMemoryStateStore,
+    StateStore,
+    infer_state_type,
+)
 from workflows.events import (
     Event,
+    StartEvent,
     StopEvent,
     WorkflowCancelledEvent,
     WorkflowFailedEvent,
     WorkflowTimedOutEvent,
 )
 from workflows.handler import WorkflowHandler
+from workflows.runtime.types.internal_state import BrokerState
 from workflows.runtime.types.plugin import (
+    ExternalRunAdapter,
     InternalRunAdapter,
     Runtime,
 )
@@ -60,10 +69,26 @@ class _ServerInternalRunAdapter(BaseInternalRunAdapterDecorator):
         self,
         inner: InternalRunAdapter,
         parent: ServerRuntimeDecorator,
+        *,
+        state_type: type[Any] | None = None,
     ) -> None:
         super().__init__(inner)
         self._parent = parent
         self._store = parent._store
+        self._state_type = state_type
+        self._state_store: StateStore[Any] | None = None
+
+    @override
+    def get_state_store(self) -> StateStore[Any]:
+        if self._state_store is not None:
+            return self._state_store
+        store = self._store.create_state_store(self.run_id, self._state_type)
+        # Seed with initial context state if provided at run start
+        initial = self._parent._initial_state.pop(self.run_id, None)
+        if initial is not None and isinstance(store, InMemoryStateStore):
+            store._state = initial
+        self._state_store = store
+        return store
 
     @override
     async def write_to_event_stream(self, event: Event) -> None:
@@ -123,6 +148,7 @@ class ServerRuntimeDecorator(BaseRuntimeDecorator):
         super().__init__(inner)
         self._store: AbstractWorkflowStore = store
         self._registered_workflows: dict[str, Workflow] = {}
+        self._initial_state: dict[str, Any] = {}
         self._persistence_backoff = (
             list(persistence_backoff) if persistence_backoff is not None else [0.5, 3]
         )
@@ -185,10 +211,36 @@ class ServerRuntimeDecorator(BaseRuntimeDecorator):
             )
         )
 
+    @override
+    def run_workflow(
+        self,
+        run_id: str,
+        workflow: Workflow,
+        init_state: BrokerState,
+        start_event: StartEvent | None = None,
+        serialized_state: dict[str, Any] | None = None,
+        serializer: BaseSerializer | None = None,
+    ) -> ExternalRunAdapter:
+        if serialized_state and serializer:
+            try:
+                seed_store = InMemoryStateStore.from_dict(serialized_state, serializer)
+                self._initial_state[run_id] = seed_store._state
+            except Exception:
+                pass
+        return super().run_workflow(
+            run_id,
+            workflow,
+            init_state,
+            start_event=start_event,
+            serialized_state=serialized_state,
+            serializer=serializer,
+        )
+
     def get_internal_adapter(self, workflow: Workflow) -> InternalRunAdapter:
         """Wraps the inner runtime's adapter in _ServerInternalRunAdapter."""
         inner_adapter = self._inner.get_internal_adapter(workflow)
-        return _ServerInternalRunAdapter(inner_adapter, self)
+        state_type = infer_state_type(workflow)
+        return _ServerInternalRunAdapter(inner_adapter, self, state_type=state_type)
 
     # ------------------------------------------------------------------
     # Handler persistence
