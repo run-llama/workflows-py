@@ -8,7 +8,8 @@ from contextlib import asynccontextmanager
 from typing import Any, AsyncGenerator
 
 import uvicorn
-from llama_agents.server._runtime.durable_runtime import DurableDecorator
+from llama_agents.server._runtime.idle_release_runtime import IdleReleaseDecorator
+from llama_agents.server._runtime.persistence_runtime import PersistenceDecorator
 from llama_agents.server._runtime.server_runtime import ServerRuntimeDecorator
 from starlette.middleware import Middleware
 from workflows import Workflow
@@ -40,7 +41,10 @@ class WorkflowServer:
         inner: Runtime = (
             runtime
             if runtime is not None
-            else DurableDecorator(basic_runtime, store=self._workflow_store)
+            else IdleReleaseDecorator(
+                PersistenceDecorator(basic_runtime, store=self._workflow_store),
+                store=self._workflow_store,
+            )
         )
         self._runtime: ServerRuntimeDecorator = ServerRuntimeDecorator(
             inner,

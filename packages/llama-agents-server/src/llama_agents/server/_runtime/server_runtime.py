@@ -61,8 +61,8 @@ class _ServerInternalRunAdapter(BaseInternalRunAdapterDecorator):
     """Internal adapter that records every emitted event to the workflow store.
 
     Handles event recording and terminal-event status updates. Tick
-    persistence, state stores, and idle detection live in
-    _DurableInternalRunAdapter.
+    persistence lives in _PersistenceInternalRunAdapter, and idle detection
+    lives in _IdleReleaseInternalRunAdapter.
     """
 
     def __init__(

@@ -15,7 +15,7 @@ from llama_agents.server import (
     PersistentHandler,
     WorkflowServer,
 )
-from llama_agents.server._runtime.durable_runtime import DurableDecorator
+from llama_agents.server._runtime.idle_release_runtime import IdleReleaseDecorator
 from llama_agents.server._runtime.runtime_decorators import BaseRuntimeDecorator
 from llama_agents.server._runtime.server_runtime import (
     ServerRuntimeDecorator,
@@ -158,8 +158,8 @@ def test_add_workflow_no_double_wrap() -> None:
     server.add_workflow("greeting", wf)
     server.add_workflow("greeting", wf)
     assert isinstance(wf.runtime, ServerRuntimeDecorator)
-    # Inner should be DurableLocalDecorator, not another ServerRuntimeDecorator
-    assert isinstance(wf.runtime._inner, DurableDecorator)
+    # Inner should be IdleReleaseDecorator, not another ServerRuntimeDecorator
+    assert isinstance(wf.runtime._inner, IdleReleaseDecorator)
     assert not isinstance(wf.runtime._inner, ServerRuntimeDecorator)
 
 

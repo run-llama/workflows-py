@@ -19,7 +19,8 @@ from llama_agents.server import (
     SqliteWorkflowStore,
     WorkflowServer,
 )
-from llama_agents.server._runtime.durable_runtime import DurableDecorator
+from llama_agents.server._runtime.idle_release_runtime import IdleReleaseDecorator
+from llama_agents.server._runtime.persistence_runtime import PersistenceDecorator
 from server_test_fixtures import wait_for_passing  # type: ignore[import]
 from workflows import Context, Workflow, step
 from workflows.context.serializers import JsonSerializer
@@ -41,11 +42,17 @@ class WaitingWorkflow(Workflow):
         return StopEvent(result=f"received: {external.response}")
 
 
-def _get_durable(server: WorkflowServer) -> DurableDecorator:
-    """Extract the DurableDecorator from the server's runtime stack."""
+def _get_idle_release(server: WorkflowServer) -> IdleReleaseDecorator:
+    """Extract the IdleReleaseDecorator from the server's runtime stack."""
     inner = server._runtime._inner
-    assert isinstance(inner, DurableDecorator)
+    assert isinstance(inner, IdleReleaseDecorator)
     return inner
+
+
+def _get_persistence(server: WorkflowServer) -> PersistenceDecorator:
+    """Extract the PersistenceDecorator from the server's runtime stack."""
+    idle_release = _get_idle_release(server)
+    return idle_release._persistence
 
 
 @pytest.fixture
@@ -75,10 +82,10 @@ async def test_idle_handler_released_from_memory(
         run_id = handler_data.run_id
         assert run_id is not None
 
-        durable = _get_durable(server)
+        idle_release = _get_idle_release(server)
 
         async def handler_released() -> None:
-            assert run_id not in durable._active_run_ids
+            assert run_id not in idle_release._active_run_ids
 
         await wait_for_passing(handler_released, max_duration=2.0, interval=0.01)
 
@@ -108,11 +115,11 @@ async def test_released_handler_reloaded_on_event(
         run_id = handler_data.run_id
         assert run_id is not None
 
-        durable = _get_durable(server)
+        idle_release = _get_idle_release(server)
 
         # Wait for release
         async def handler_released() -> None:
-            assert run_id not in durable._active_run_ids
+            assert run_id not in idle_release._active_run_ids
 
         await wait_for_passing(handler_released, max_duration=2.0, interval=0.01)
 
@@ -149,11 +156,11 @@ async def test_idle_since_cleared_on_reload(
         run_id = handler_data.run_id
         assert run_id is not None
 
-        durable = _get_durable(server)
+        idle_release = _get_idle_release(server)
 
         # Wait for release
         async def handler_released() -> None:
-            assert run_id not in durable._active_run_ids
+            assert run_id not in idle_release._active_run_ids
 
         await wait_for_passing(handler_released, max_duration=2.0, interval=0.01)
 
@@ -280,7 +287,7 @@ async def test_on_server_start_ignores_unregistered_workflows(
     server.add_workflow("test", simple_workflow)
 
     async with server.contextmanager():
-        durable = _get_durable(server)
+        idle_release = _get_idle_release(server)
 
         # Known handler should resume and complete
         async def known_completed() -> None:
@@ -290,7 +297,7 @@ async def test_on_server_start_ignores_unregistered_workflows(
         await wait_for_passing(known_completed, max_duration=5.0, interval=0.05)
 
         # Unknown handler's run_id should NOT be in active runs
-        assert "run-unknown-1" not in durable._active_run_ids
+        assert "run-unknown-1" not in idle_release._active_run_ids
 
 
 @pytest.mark.asyncio
@@ -344,15 +351,16 @@ async def test_on_server_start_ignores_idle_handlers(
     server.add_workflow("test", simple_workflow)
 
     async with server.contextmanager():
-        durable = _get_durable(server)
+        idle_release = _get_idle_release(server)
+        persistence = _get_persistence(server)
 
         # Give the resume task time to run
         async def resume_done() -> None:
-            assert durable.resume_task is not None
-            assert durable.resume_task.done()
+            assert persistence.resume_task is not None
+            assert persistence.resume_task.done()
 
         await wait_for_passing(resume_done, max_duration=2.0, interval=0.05)
-        assert run_id not in durable._active_run_ids
+        assert run_id not in idle_release._active_run_ids
 
 
 @pytest.mark.asyncio
@@ -364,13 +372,13 @@ async def test_destroy_cancels_resume_task(
     server.add_workflow("test", simple_workflow)
 
     async with server.contextmanager():
-        durable = _get_durable(server)
-        assert durable.resume_task is not None
+        persistence = _get_persistence(server)
+        assert persistence.resume_task is not None
 
     # After contextmanager exits, destroy() was called.
     # Give the event loop a chance to finalize the cancellation.
     await asyncio.sleep(0.05)
-    assert durable.resume_task.cancelled() or durable.resume_task.done()
+    assert persistence.resume_task.cancelled() or persistence.resume_task.done()
 
 
 @pytest.mark.asyncio
@@ -384,19 +392,19 @@ async def test_destroy_aborts_active_runs(
     )
 
     async with server.contextmanager():
-        durable = _get_durable(server)
+        idle_release = _get_idle_release(server)
 
         # Start a workflow that will stay running (waiting for event)
         await server._service.start_workflow(waiting_workflow, "destroy-test-1")
 
         async def run_is_active() -> None:
-            assert len(durable._active_run_ids) > 0
+            assert len(idle_release._active_run_ids) > 0
 
         await wait_for_passing(run_is_active, max_duration=2.0, interval=0.01)
 
     # After exit, active runs should be cleared
     await asyncio.sleep(0.05)
-    assert len(durable._active_run_ids) == 0
+    assert len(idle_release._active_run_ids) == 0
 
 
 @pytest.mark.asyncio
@@ -408,11 +416,11 @@ async def test_ensure_active_run_handler_not_found(
     server.add_workflow("test", simple_workflow)
 
     async with server.contextmanager():
-        durable = _get_durable(server)
+        idle_release = _get_idle_release(server)
         with pytest.raises(
             ValueError, match="Expected 1 handler for run nonexistent-run-id, got 0"
         ):
-            await durable._ensure_active_run("nonexistent-run-id")
+            await idle_release._ensure_active_run("nonexistent-run-id")
 
 
 @pytest.mark.asyncio
@@ -433,9 +441,9 @@ async def test_ensure_active_run_workflow_not_found(
     server.add_workflow("test", simple_workflow)
 
     async with server.contextmanager():
-        durable = _get_durable(server)
+        idle_release = _get_idle_release(server)
         with pytest.raises(ValueError, match="Workflow unregistered not found"):
-            await durable._ensure_active_run("run-unregistered")
+            await idle_release._ensure_active_run("run-unregistered")
 
 
 @pytest.mark.asyncio
@@ -447,8 +455,8 @@ async def test_context_from_ticks_empty_ticks(
     server.add_workflow("test", simple_workflow)
 
     async with server.contextmanager():
-        durable = _get_durable(server)
-        result = await durable._context_from_ticks(
+        persistence = _get_persistence(server)
+        result = await persistence.context_from_ticks(
             simple_workflow, "run-id-with-no-ticks"
         )
         assert result is None
@@ -938,12 +946,12 @@ async def test_multistep_hitl_multiple_restarts_at_same_wait_point(
         server_n = _make_server()
 
         async with server_n.contextmanager():
-            durable = _get_durable(server_n)
+            persistence = _get_persistence(server_n)
 
             # Wait for resume task to complete
             async def resume_done() -> None:
-                assert durable.resume_task is not None
-                assert durable.resume_task.done()
+                assert persistence.resume_task is not None
+                assert persistence.resume_task.done()
 
             await wait_for_passing(resume_done, max_duration=2.0, interval=0.05)
 
@@ -1038,11 +1046,11 @@ async def test_concurrent_send_event_to_idle_handler(
         run_id = handler_data.run_id
         assert run_id is not None
 
-        durable = _get_durable(server)
+        idle_release = _get_idle_release(server)
 
         # Wait for release to idle
         async def handler_released() -> None:
-            assert run_id not in durable._active_run_ids
+            assert run_id not in idle_release._active_run_ids
 
         await wait_for_passing(handler_released, max_duration=2.0, interval=0.01)
 
@@ -1104,11 +1112,11 @@ async def test_failed_workflow_after_reload(
         run_id = handler_data.run_id
         assert run_id is not None
 
-        durable = _get_durable(server)
+        idle_release = _get_idle_release(server)
 
         # Wait for handler to become idle (waiting for FailAfterWaitEvent)
         async def handler_idle() -> None:
-            assert run_id not in durable._active_run_ids
+            assert run_id not in idle_release._active_run_ids
 
         await wait_for_passing(handler_idle, max_duration=2.0, interval=0.01)
 
