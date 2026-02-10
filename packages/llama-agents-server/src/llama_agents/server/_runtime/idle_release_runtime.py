@@ -37,6 +37,7 @@ from .._store.abstract_workflow_store import (
 )
 from .persistence_runtime import PersistenceDecorator
 from .runtime_decorators import (
+    BaseExternalRunAdapterDecorator,
     BaseInternalRunAdapterDecorator,
     BaseRuntimeDecorator,
 )
@@ -75,47 +76,43 @@ class _IdleReleaseInternalRunAdapter(BaseInternalRunAdapterDecorator):
                 )
 
 
-class IdleReleaseExternalRunAdapter(ExternalRunAdapter):
-    """External adapter that adds reload-on-demand for idle-released handlers."""
+class IdleReleaseExternalRunAdapter(BaseExternalRunAdapterDecorator):
+    """Proxy adapter that adds reload-on-demand for idle-released handlers.
 
-    def __init__(self, outer: IdleReleaseDecorator, run_id: str) -> None:
-        self._outer = outer
+    The inner adapter is resolved lazily via a property because
+    ``get_external_adapter`` is sync but reload is async — the inner run
+    may not exist yet when this adapter is constructed.
+    """
+
+    def __init__(self, parent: IdleReleaseDecorator, run_id: str) -> None:
+        # Intentionally skip super().__init__ — _inner is a lazy property.
+        self._parent = parent
         self._run_id = run_id
+
+    @property  # type: ignore[override]
+    def _inner(self) -> ExternalRunAdapter:
+        return self._parent._inner.get_external_adapter(self._run_id)
+
+    @_inner.setter
+    def _inner(self, value: ExternalRunAdapter) -> None:
+        pass
 
     @property
     def run_id(self) -> str:
         return self._run_id
 
-    def _get_inner(self) -> ExternalRunAdapter:
-        return self._outer._inner.get_external_adapter(self._run_id)
-
     @override
     async def send_event(self, tick: WorkflowTick) -> None:
-        async with self._outer._reload_lock(self._run_id):
-            if self._run_id not in self._outer._active_run_ids:
-                counter = self._outer._skip_idle_release
-                counter[self._run_id] = counter.get(self._run_id, 0) + 2
-                await self._outer._ensure_active_run_locked(self._run_id)
+        async with self._parent._reload_lock(self.run_id):
+            if self.run_id not in self._parent._active_run_ids:
+                counter = self._parent._skip_idle_release
+                counter[self.run_id] = counter.get(self.run_id, 0) + 2
+                await self._parent._ensure_active_run_locked(self.run_id)
             else:
-                await self._outer._store.update_handler_status(
-                    self._run_id, idle_since=None
+                await self._parent._store.update_handler_status(
+                    self.run_id, idle_since=None
                 )
-            await self._get_inner().send_event(tick)
-
-    def stream_published_events(self) -> Any:
-        return self._get_inner().stream_published_events()
-
-    async def close(self) -> None:
-        await self._get_inner().close()
-
-    async def get_result(self) -> Any:
-        return await self._get_inner().get_result()
-
-    async def cancel(self) -> None:
-        await self._get_inner().cancel()
-
-    def get_state_store(self) -> Any:
-        return self._get_inner().get_state_store()
+            await self._inner.send_event(tick)
 
 
 class IdleReleaseDecorator(BaseRuntimeDecorator):
