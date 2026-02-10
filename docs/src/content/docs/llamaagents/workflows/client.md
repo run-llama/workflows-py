@@ -4,7 +4,7 @@ sidebar:
 title: Workflow Client
 ---
 
-`WorkflowClient` is a Python client for interacting with a running [`WorkflowServer`](/python/llamaagents/workflows/server/).
+`WorkflowClient` is a Python client for interacting with a running [`WorkflowServer`](/python/llamaagents/workflows/deployment/).
 
 ## Basic usage
 

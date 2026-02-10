@@ -36,7 +36,7 @@ draw_most_recent_execution(handler, filename="most_recent.html")
 
 ## 2. Using the `workflow-debugger`
 
-Workflows ship with a [`WorkflowServer`](/python/llamaagents/workflows/server/) that allows you to convert workflows to API's. As part of the `WorkflowServer`, a debugging UI is provided as the home `/` page.
+Workflows ship with a [`WorkflowServer`](/python/llamaagents/workflows/deployment/) that allows you to convert workflows to API's. As part of the `WorkflowServer`, a debugging UI is provided as the home `/` page.
 
 Using this server app, you can visualize and run your workflows.
 

@@ -16,7 +16,7 @@ Get from zero to a working pipeline quickly. Start from templates, configure and
 
 **Customize**: When you need more control, fork to GitHub and edit the Python code directly. Use the [`llamactl` CLI](/python/llamaagents/llamactl/getting-started/) to develop locally, then deploy to LlamaCloud or self-host.
 
-**Go deeper**: Use [Agent Workflows](/python/llamaagents/workflows/) directly in your own applications. Run workflows as async processes, or [mount them as endpoints](/python/llamaagents/workflows/server/) in your existing server.
+**Go deeper**: Use [Agent Workflows](/python/llamaagents/workflows/) directly in your own applications. Run workflows as async processes, or [mount them as endpoints](/python/llamaagents/workflows/deployment/) in your existing server.
 
 ### Components
 
