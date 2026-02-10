@@ -1,12 +1,25 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 LlamaIndex Inc.
+
+from __future__ import annotations
+
 from datetime import datetime, timezone
 
 import pytest
-from llama_agents.server._store.abstract_workflow_store import (
+from llama_agents.client.protocol.serializable_events import EventEnvelopeWithMetadata
+from llama_agents.server import (
+    AbstractWorkflowStore,
     HandlerQuery,
+    MemoryWorkflowStore,
     PersistentHandler,
 )
-from llama_agents.server._store.memory_workflow_store import MemoryWorkflowStore
-from workflows.events import StopEvent
+from llama_agents.server._store.abstract_workflow_store import Status, StoredEvent
+from workflows.events import (
+    Event,
+    StopEvent,
+    WorkflowCancelledEvent,
+    WorkflowFailedEvent,
+)
 
 
 @pytest.mark.asyncio
@@ -17,7 +30,6 @@ async def test_update_and_query_returns_inserted_handler() -> None:
         handler_id="h1",
         workflow_name="wf_a",
         status="running",
-        ctx={"state": {"x": 1, "y": [1, 2, 3]}},
     )
 
     await store.update(handler)
@@ -32,7 +44,6 @@ async def test_update_and_query_returns_inserted_handler() -> None:
     assert found.handler_id == "h1"
     assert found.workflow_name == "wf_a"
     assert found.status == "running"
-    assert found.ctx == {"state": {"x": 1, "y": [1, 2, 3]}}
 
 
 @pytest.mark.asyncio
@@ -45,17 +56,15 @@ async def test_update_on_conflict_overwrites_existing_row() -> None:
             handler_id="h2",
             workflow_name="wf_b",
             status="running",
-            ctx={"k": "v1"},
         )
     )
 
-    # Update same handler_id (completed) with new ctx
+    # Update same handler_id (completed)
     await store.update(
         PersistentHandler(
             handler_id="h2",
             workflow_name="wf_b",
             status="completed",
-            ctx={"k": "v2", "n": 42},
         )
     )
 
@@ -65,7 +74,7 @@ async def test_update_on_conflict_overwrites_existing_row() -> None:
     )
     assert result_in_progress == []
 
-    # Should be returned for status=completed with latest ctx
+    # Should be returned for status=completed with latest values
     result_completed = await store.query(
         HandlerQuery(workflow_name_in=["wf_b"], status_in=["completed"])
     )
@@ -74,7 +83,6 @@ async def test_update_on_conflict_overwrites_existing_row() -> None:
     assert found.handler_id == "h2"
     assert found.workflow_name == "wf_b"
     assert found.status == "completed"
-    assert found.ctx == {"k": "v2", "n": 42}
 
 
 @pytest.mark.asyncio
@@ -86,7 +94,6 @@ async def test_delete_filters_by_query() -> None:
             handler_id="delete-me",
             workflow_name="wf_delete",
             status="completed",
-            ctx={"val": 1},
         )
     )
     await store.update(
@@ -94,7 +101,6 @@ async def test_delete_filters_by_query() -> None:
             handler_id="keep-me",
             workflow_name="wf_keep",
             status="running",
-            ctx={"val": 2},
         )
     )
 
@@ -115,7 +121,6 @@ async def test_delete_noop_on_empty_filter() -> None:
             handler_id="delete-me",
             workflow_name="wf_delete",
             status="completed",
-            ctx={},
         )
     )
 
@@ -138,7 +143,6 @@ async def test_query_filters_by_handler_id_and_empty_lists() -> None:
                 handler_id=hid,
                 workflow_name=wf,
                 status="running",
-                ctx={"seed": hid},
             )
         )
 
@@ -169,7 +173,6 @@ async def test_query_filters_by_multiple_statuses() -> None:
             handler_id="h1",
             workflow_name="wf",
             status="running",
-            ctx={},
         )
     )
     await store.update(
@@ -177,7 +180,6 @@ async def test_query_filters_by_multiple_statuses() -> None:
             handler_id="h2",
             workflow_name="wf",
             status="completed",
-            ctx={},
         )
     )
     await store.update(
@@ -185,7 +187,6 @@ async def test_query_filters_by_multiple_statuses() -> None:
             handler_id="h3",
             workflow_name="wf",
             status="failed",
-            ctx={},
         )
     )
     await store.update(
@@ -193,7 +194,6 @@ async def test_query_filters_by_multiple_statuses() -> None:
             handler_id="h4",
             workflow_name="wf",
             status="cancelled",
-            ctx={},
         )
     )
 
@@ -216,7 +216,6 @@ async def test_query_filters_by_workflow_name() -> None:
             handler_id="h1",
             workflow_name="wf_a",
             status="running",
-            ctx={},
         )
     )
     await store.update(
@@ -224,7 +223,6 @@ async def test_query_filters_by_workflow_name() -> None:
             handler_id="h2",
             workflow_name="wf_b",
             status="running",
-            ctx={},
         )
     )
     await store.update(
@@ -232,7 +230,6 @@ async def test_query_filters_by_workflow_name() -> None:
             handler_id="h3",
             workflow_name="wf_a",
             status="completed",
-            ctx={},
         )
     )
 
@@ -257,7 +254,6 @@ async def test_query_combines_multiple_filters() -> None:
             handler_id="h1",
             workflow_name="wf_a",
             status="running",
-            ctx={},
         )
     )
     await store.update(
@@ -265,7 +261,6 @@ async def test_query_combines_multiple_filters() -> None:
             handler_id="h2",
             workflow_name="wf_a",
             status="completed",
-            ctx={},
         )
     )
     await store.update(
@@ -273,7 +268,6 @@ async def test_query_combines_multiple_filters() -> None:
             handler_id="h3",
             workflow_name="wf_b",
             status="running",
-            ctx={},
         )
     )
     await store.update(
@@ -281,7 +275,6 @@ async def test_query_combines_multiple_filters() -> None:
             handler_id="h4",
             workflow_name="wf_b",
             status="completed",
-            ctx={},
         )
     )
 
@@ -315,7 +308,6 @@ async def test_delete_removes_multiple_matching_handlers() -> None:
                 handler_id=f"h{i}",
                 workflow_name="wf",
                 status="completed" if i % 2 == 0 else "running",
-                ctx={},
             )
         )
 
@@ -343,7 +335,6 @@ async def test_store_handles_all_datetime_fields() -> None:
         started_at=now,
         updated_at=now,
         completed_at=now,
-        ctx={"data": "value"},
     )
 
     await store.update(handler)
@@ -367,7 +358,6 @@ async def test_store_handles_error_field() -> None:
         workflow_name="wf",
         status="failed",
         error="Something went wrong",
-        ctx={},
     )
 
     await store.update(handler)
@@ -388,3 +378,195 @@ async def test_empty_store_returns_empty_results() -> None:
     # Delete from empty store
     deleted = await store.delete(HandlerQuery(handler_id_in=["nonexistent"]))
     assert deleted == 0
+
+
+@pytest.mark.asyncio
+async def test_update_handler_status_with_nonexistent_run_id() -> None:
+    store = MemoryWorkflowStore()
+    # Should not raise when run_id does not exist
+    await store.update_handler_status("nonexistent-run-id", status="completed")
+
+
+@pytest.mark.asyncio
+async def test_update_handler_status_sets_status_and_completed_at() -> None:
+    store = MemoryWorkflowStore()
+    await store.update(
+        PersistentHandler(
+            handler_id="h1",
+            workflow_name="wf",
+            status="running",
+            run_id="run-1",
+        )
+    )
+
+    await store.update_handler_status("run-1", status="completed")
+
+    result = await store.query(HandlerQuery(run_id_in=["run-1"]))
+    assert len(result) == 1
+    handler = result[0]
+    assert handler.status == "completed"
+    assert handler.updated_at is not None
+    assert handler.completed_at is not None
+
+
+@pytest.mark.asyncio
+async def test_update_handler_status_with_result() -> None:
+    store = MemoryWorkflowStore()
+    await store.update(
+        PersistentHandler(
+            handler_id="h1",
+            workflow_name="wf",
+            status="running",
+            run_id="run-1",
+        )
+    )
+
+    stop = StopEvent(result={"answer": 42})
+    await store.update_handler_status("run-1", status="completed", result=stop)
+
+    result = await store.query(HandlerQuery(run_id_in=["run-1"]))
+    handler = result[0]
+    assert handler.status == "completed"
+    assert handler.result == stop
+
+
+@pytest.mark.asyncio
+async def test_update_handler_status_with_error() -> None:
+    store = MemoryWorkflowStore()
+    await store.update(
+        PersistentHandler(
+            handler_id="h1",
+            workflow_name="wf",
+            status="running",
+            run_id="run-1",
+        )
+    )
+
+    await store.update_handler_status("run-1", status="failed", error="boom")
+
+    result = await store.query(HandlerQuery(run_id_in=["run-1"]))
+    handler = result[0]
+    assert handler.status == "failed"
+    assert handler.error == "boom"
+    assert handler.completed_at is not None
+
+
+@pytest.mark.asyncio
+async def test_update_handler_status_idle_since_explicit_none_clears() -> None:
+    store = MemoryWorkflowStore()
+    now = datetime.now(timezone.utc)
+    await store.update(
+        PersistentHandler(
+            handler_id="h1",
+            workflow_name="wf",
+            status="running",
+            run_id="run-1",
+            idle_since=now,
+        )
+    )
+
+    # Passing idle_since=None explicitly should clear it
+    await store.update_handler_status("run-1", idle_since=None)
+
+    result = await store.query(HandlerQuery(run_id_in=["run-1"]))
+    assert result[0].idle_since is None
+
+
+@pytest.mark.asyncio
+async def test_update_handler_status_idle_since_unset_preserves() -> None:
+    store = MemoryWorkflowStore()
+    now = datetime.now(timezone.utc)
+    await store.update(
+        PersistentHandler(
+            handler_id="h1",
+            workflow_name="wf",
+            status="running",
+            run_id="run-1",
+            idle_since=now,
+        )
+    )
+
+    # Not passing idle_since at all should preserve the existing value
+    await store.update_handler_status("run-1", status="running")
+
+    result = await store.query(HandlerQuery(run_id_in=["run-1"]))
+    assert result[0].idle_since == now
+
+
+@pytest.mark.asyncio
+async def test_update_handler_status_non_terminal_does_not_set_completed_at() -> None:
+    store = MemoryWorkflowStore()
+    await store.update(
+        PersistentHandler(
+            handler_id="h1",
+            workflow_name="wf",
+            status="running",
+            run_id="run-1",
+        )
+    )
+
+    # Update status to "running" (non-terminal) should not set completed_at
+    await store.update_handler_status("run-1", status="running")
+
+    result = await store.query(HandlerQuery(run_id_in=["run-1"]))
+    assert result[0].completed_at is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("terminal_status", ["completed", "failed", "cancelled"])
+async def test_update_handler_status_terminal_sets_completed_at(
+    terminal_status: Status,
+) -> None:
+    store = MemoryWorkflowStore()
+    await store.update(
+        PersistentHandler(
+            handler_id="h1",
+            workflow_name="wf",
+            status="running",
+            run_id="run-1",
+        )
+    )
+
+    await store.update_handler_status("run-1", status=terminal_status)
+
+    result = await store.query(HandlerQuery(run_id_in=["run-1"]))
+    assert result[0].completed_at is not None
+
+
+def _make_stored_event(event: Event, run_id: str = "run-1") -> StoredEvent:
+    return StoredEvent(
+        run_id=run_id,
+        sequence=0,
+        timestamp=datetime.now(timezone.utc),
+        event=EventEnvelopeWithMetadata.from_event(event),
+    )
+
+
+def test_is_terminal_event_stop_event() -> None:
+    stored = _make_stored_event(StopEvent(result="done"))
+    assert AbstractWorkflowStore._is_terminal_event(stored) is True
+
+
+def test_is_terminal_event_regular_event() -> None:
+    stored = _make_stored_event(Event())
+    assert AbstractWorkflowStore._is_terminal_event(stored) is False
+
+
+def test_is_terminal_event_workflow_failed_event() -> None:
+    # WorkflowFailedEvent extends StopEvent, so it should be terminal
+    event = WorkflowFailedEvent(
+        step_name="my_step",
+        exception_type="ValueError",
+        exception_message="bad value",
+        traceback="",
+        attempts=1,
+        elapsed_seconds=0.1,
+    )
+    stored = _make_stored_event(event)
+    assert AbstractWorkflowStore._is_terminal_event(stored) is True
+
+
+def test_is_terminal_event_workflow_cancelled_event() -> None:
+    # WorkflowCancelledEvent extends StopEvent, so it should be terminal
+    stored = _make_stored_event(WorkflowCancelledEvent())
+    assert AbstractWorkflowStore._is_terminal_event(stored) is True

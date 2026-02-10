@@ -32,6 +32,9 @@ if TYPE_CHECKING:
 
 MAX_DEPTH = 1000
 
+# Keys set by pre-built workflows that are known to be unserializable in some cases.
+KNOWN_UNSERIALIZABLE_KEYS: tuple[str, ...] = ("memory",)
+
 
 class InMemorySerializedState(BaseModel):
     """Serialized state containing actual data (from InMemoryStateStore)."""
@@ -81,7 +84,7 @@ def parse_in_memory_state(
 def serialize_dict_state_data(
     state: DictState,
     serializer: BaseSerializer,
-    known_unserializable_keys: tuple[str, ...] = (),
+    known_unserializable_keys: tuple[str, ...] = KNOWN_UNSERIALIZABLE_KEYS,
 ) -> dict[str, Any]:
     """Serialize DictState items to {"_data": {...}} format.
 
@@ -115,7 +118,7 @@ def serialize_dict_state_data(
 def create_in_memory_payload(
     state: BaseModel,
     serializer: BaseSerializer,
-    known_unserializable_keys: tuple[str, ...] = (),
+    known_unserializable_keys: tuple[str, ...] = KNOWN_UNSERIALIZABLE_KEYS,
 ) -> InMemorySerializedState:
     """Create InMemorySerializedState from any state model.
 
@@ -447,10 +450,6 @@ class InMemoryStateStore(Generic[MODEL_T]):
         - [Context.store][workflows.context.context.Context.store]
     """
 
-    # These keys are set by pre-built workflows and
-    # are known to be unserializable in some cases.
-    known_unserializable_keys = ("memory",)
-
     state_type: Type[MODEL_T]
 
     def __init__(self, initial_state: MODEL_T):
@@ -510,9 +509,7 @@ class InMemoryStateStore(Generic[MODEL_T]):
             dict[str, Any]: A payload suitable for
             [from_dict][workflows.context.state_store.InMemoryStateStore.from_dict].
         """
-        payload = create_in_memory_payload(
-            self._state, serializer, self.known_unserializable_keys
-        )
+        payload = create_in_memory_payload(self._state, serializer)
         return payload.model_dump()
 
     @classmethod

@@ -6,12 +6,13 @@ import asyncio
 import socket
 import time
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import AsyncGenerator, Awaitable, Callable, TypeVar
 
 import httpx
 import pytest
 import uvicorn
-from llama_agents.server import WorkflowServer
+from llama_agents.server import MemoryWorkflowStore, SqliteWorkflowStore, WorkflowServer
 from workflows import Context, Workflow, step
 from workflows.events import (
     Event,
@@ -191,6 +192,16 @@ class StructuredStartWorkflow(Workflow):
     @step
     async def start(self, ev: RequiredStartEvent) -> StopEvent:
         return StopEvent(result=ev.message)
+
+
+@pytest.fixture
+def memory_store() -> MemoryWorkflowStore:
+    return MemoryWorkflowStore()
+
+
+@pytest.fixture
+def sqlite_store(tmp_path: Path) -> SqliteWorkflowStore:
+    return SqliteWorkflowStore(str(tmp_path / "test.db"))
 
 
 @pytest.fixture
