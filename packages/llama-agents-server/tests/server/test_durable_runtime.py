@@ -8,11 +8,11 @@ import asyncio
 import json
 import sqlite3
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
 import pytest
 from llama_agents.server import (
+    AbstractWorkflowStore,
     HandlerQuery,
     MemoryWorkflowStore,
     PersistentHandler,
@@ -55,9 +55,52 @@ def _get_persistence(server: WorkflowServer) -> PersistenceDecorator:
     return idle_release._persistence
 
 
-@pytest.fixture
-def memory_store() -> MemoryWorkflowStore:
-    return MemoryWorkflowStore()
+async def wait_handler_status(
+    store: AbstractWorkflowStore,
+    handler_id: str,
+    status: str,
+    max_duration: float = 5.0,
+    interval: float = 0.05,
+) -> PersistentHandler:
+    """Wait until a handler reaches the expected status."""
+
+    async def check() -> PersistentHandler:
+        found = await store.query(HandlerQuery(handler_id_in=[handler_id]))
+        assert len(found) == 1
+        assert found[0].status == status
+        return found[0]
+
+    return await wait_for_passing(check, max_duration=max_duration, interval=interval)
+
+
+async def wait_handler_idle(
+    store: AbstractWorkflowStore,
+    handler_id: str,
+    max_duration: float = 5.0,
+    interval: float = 0.05,
+) -> None:
+    """Wait until a handler has idle_since set."""
+
+    async def check() -> None:
+        found = await store.query(HandlerQuery(handler_id_in=[handler_id]))
+        assert len(found) == 1
+        assert found[0].idle_since is not None
+
+    await wait_for_passing(check, max_duration=max_duration, interval=interval)
+
+
+async def wait_run_released(
+    idle_release: IdleReleaseDecorator,
+    run_id: str,
+    max_duration: float = 2.0,
+    interval: float = 0.01,
+) -> None:
+    """Wait until a run_id is no longer in the active run set."""
+
+    async def check() -> None:
+        assert run_id not in idle_release._active_run_ids
+
+    await wait_for_passing(check, max_duration=max_duration, interval=interval)
 
 
 @pytest.fixture
@@ -84,10 +127,7 @@ async def test_idle_handler_released_from_memory(
 
         idle_release = _get_idle_release(server)
 
-        async def handler_released() -> None:
-            assert run_id not in idle_release._active_run_ids
-
-        await wait_for_passing(handler_released, max_duration=2.0, interval=0.01)
+        await wait_run_released(idle_release, run_id)
 
         # Should still exist in store with status running
         persisted = await memory_store.query(
@@ -118,10 +158,7 @@ async def test_released_handler_reloaded_on_event(
         idle_release = _get_idle_release(server)
 
         # Wait for release
-        async def handler_released() -> None:
-            assert run_id not in idle_release._active_run_ids
-
-        await wait_for_passing(handler_released, max_duration=2.0, interval=0.01)
+        await wait_run_released(idle_release, run_id)
 
         # Send event to wake it up
         await server._service.send_event(
@@ -129,14 +166,9 @@ async def test_released_handler_reloaded_on_event(
         )
 
         # Handler should complete
-        async def handler_completed() -> None:
-            found = await memory_store.query(
-                HandlerQuery(handler_id_in=["reload-test-1"])
-            )
-            assert len(found) == 1
-            assert found[0].status == "completed"
-
-        await wait_for_passing(handler_completed, max_duration=2.0, interval=0.01)
+        await wait_handler_status(
+            memory_store, "reload-test-1", "completed", max_duration=2.0, interval=0.01
+        )
 
 
 @pytest.mark.asyncio
@@ -159,10 +191,7 @@ async def test_idle_since_cleared_on_reload(
         idle_release = _get_idle_release(server)
 
         # Wait for release
-        async def handler_released() -> None:
-            assert run_id not in idle_release._active_run_ids
-
-        await wait_for_passing(handler_released, max_duration=2.0, interval=0.01)
+        await wait_run_released(idle_release, run_id)
 
         # Verify idle_since is set
         found = await memory_store.query(HandlerQuery(handler_id_in=["idle-clear-1"]))
@@ -191,19 +220,9 @@ class FailingResumeWorkflow(Workflow):
         raise ValueError("Resume failed intentionally")
 
 
-@pytest.fixture
-def simple_workflow() -> Workflow:
-    class SimpleWorkflow(Workflow):
-        @step
-        async def process(self, ev: StartEvent) -> StopEvent:
-            return StopEvent(result="done")
-
-    return SimpleWorkflow()
-
-
 @pytest.mark.asyncio
 async def test_on_server_start_resumes_running_handlers(
-    memory_store: MemoryWorkflowStore, simple_workflow: Workflow
+    memory_store: MemoryWorkflowStore, simple_test_workflow: Workflow
 ) -> None:
     """Seed store with a running handler; after server start it should complete."""
     handler_id = "resume-1"
@@ -218,21 +237,15 @@ async def test_on_server_start_resumes_running_handlers(
     )
 
     server = WorkflowServer(workflow_store=memory_store)
-    server.add_workflow("test", simple_workflow)
+    server.add_workflow("test", simple_test_workflow)
 
     async with server.contextmanager():
-
-        async def handler_completed() -> None:
-            found = await memory_store.query(HandlerQuery(handler_id_in=[handler_id]))
-            assert len(found) == 1
-            assert found[0].status == "completed"
-
-        await wait_for_passing(handler_completed, max_duration=5.0, interval=0.05)
+        await wait_handler_status(memory_store, handler_id, "completed")
 
 
 @pytest.mark.asyncio
 async def test_on_server_start_resumes_handler_with_no_ticks_as_fresh(
-    memory_store: MemoryWorkflowStore, simple_workflow: Workflow
+    memory_store: MemoryWorkflowStore, simple_test_workflow: Workflow
 ) -> None:
     """A handler with no persisted ticks should run fresh from StartEvent."""
     handler_id = "no-ticks-1"
@@ -247,21 +260,15 @@ async def test_on_server_start_resumes_handler_with_no_ticks_as_fresh(
     )
 
     server = WorkflowServer(workflow_store=memory_store)
-    server.add_workflow("test", simple_workflow)
+    server.add_workflow("test", simple_test_workflow)
 
     async with server.contextmanager():
-
-        async def handler_completed() -> None:
-            found = await memory_store.query(HandlerQuery(handler_id_in=[handler_id]))
-            assert len(found) == 1
-            assert found[0].status == "completed"
-
-        await wait_for_passing(handler_completed, max_duration=5.0, interval=0.05)
+        await wait_handler_status(memory_store, handler_id, "completed")
 
 
 @pytest.mark.asyncio
 async def test_on_server_start_ignores_unregistered_workflows(
-    memory_store: MemoryWorkflowStore, simple_workflow: Workflow
+    memory_store: MemoryWorkflowStore, simple_test_workflow: Workflow
 ) -> None:
     """Only handlers for registered workflows should be resumed."""
 
@@ -284,17 +291,13 @@ async def test_on_server_start_ignores_unregistered_workflows(
     )
 
     server = WorkflowServer(workflow_store=memory_store)
-    server.add_workflow("test", simple_workflow)
+    server.add_workflow("test", simple_test_workflow)
 
     async with server.contextmanager():
         idle_release = _get_idle_release(server)
 
         # Known handler should resume and complete
-        async def known_completed() -> None:
-            found = await memory_store.query(HandlerQuery(handler_id_in=["known-1"]))
-            assert found[0].status == "completed"
-
-        await wait_for_passing(known_completed, max_duration=5.0, interval=0.05)
+        await wait_handler_status(memory_store, "known-1", "completed")
 
         # Unknown handler's run_id should NOT be in active runs
         assert "run-unknown-1" not in idle_release._active_run_ids
@@ -320,19 +323,13 @@ async def test_on_server_start_marks_failed_handler_on_error(
     server.add_workflow("failing", FailingResumeWorkflow())
 
     async with server.contextmanager():
-
-        async def handler_failed() -> None:
-            found = await memory_store.query(HandlerQuery(handler_id_in=[handler_id]))
-            assert len(found) == 1
-            assert found[0].status == "failed"
-            assert found[0].error is not None
-
-        await wait_for_passing(handler_failed, max_duration=5.0, interval=0.05)
+        handler = await wait_handler_status(memory_store, handler_id, "failed")
+        assert handler.error is not None
 
 
 @pytest.mark.asyncio
 async def test_on_server_start_ignores_idle_handlers(
-    memory_store: MemoryWorkflowStore, simple_workflow: Workflow
+    memory_store: MemoryWorkflowStore, simple_test_workflow: Workflow
 ) -> None:
     """Idle handlers should NOT be resumed on server start."""
     handler_id = "idle-1"
@@ -348,7 +345,7 @@ async def test_on_server_start_ignores_idle_handlers(
     )
 
     server = WorkflowServer(workflow_store=memory_store)
-    server.add_workflow("test", simple_workflow)
+    server.add_workflow("test", simple_test_workflow)
 
     async with server.contextmanager():
         idle_release = _get_idle_release(server)
@@ -365,11 +362,11 @@ async def test_on_server_start_ignores_idle_handlers(
 
 @pytest.mark.asyncio
 async def test_destroy_cancels_resume_task(
-    memory_store: MemoryWorkflowStore, simple_workflow: Workflow
+    memory_store: MemoryWorkflowStore, simple_test_workflow: Workflow
 ) -> None:
     """destroy() should cancel the resume_task."""
     server = WorkflowServer(workflow_store=memory_store)
-    server.add_workflow("test", simple_workflow)
+    server.add_workflow("test", simple_test_workflow)
 
     async with server.contextmanager():
         persistence = _get_persistence(server)
@@ -409,11 +406,11 @@ async def test_destroy_aborts_active_runs(
 
 @pytest.mark.asyncio
 async def test_ensure_active_run_handler_not_found(
-    memory_store: MemoryWorkflowStore, simple_workflow: Workflow
+    memory_store: MemoryWorkflowStore, simple_test_workflow: Workflow
 ) -> None:
     """_ensure_active_run raises ValueError when no handler exists for run_id."""
     server = WorkflowServer(workflow_store=memory_store)
-    server.add_workflow("test", simple_workflow)
+    server.add_workflow("test", simple_test_workflow)
 
     async with server.contextmanager():
         idle_release = _get_idle_release(server)
@@ -425,7 +422,7 @@ async def test_ensure_active_run_handler_not_found(
 
 @pytest.mark.asyncio
 async def test_ensure_active_run_workflow_not_found(
-    memory_store: MemoryWorkflowStore, simple_workflow: Workflow
+    memory_store: MemoryWorkflowStore, simple_test_workflow: Workflow
 ) -> None:
     """_ensure_active_run raises ValueError when handler references unregistered workflow."""
     await memory_store.update(
@@ -438,7 +435,7 @@ async def test_ensure_active_run_workflow_not_found(
     )
 
     server = WorkflowServer(workflow_store=memory_store)
-    server.add_workflow("test", simple_workflow)
+    server.add_workflow("test", simple_test_workflow)
 
     async with server.contextmanager():
         idle_release = _get_idle_release(server)
@@ -448,27 +445,27 @@ async def test_ensure_active_run_workflow_not_found(
 
 @pytest.mark.asyncio
 async def test_context_from_ticks_empty_ticks(
-    memory_store: MemoryWorkflowStore, simple_workflow: Workflow
+    memory_store: MemoryWorkflowStore, simple_test_workflow: Workflow
 ) -> None:
     """_context_from_ticks returns None when there are no ticks for the run_id."""
     server = WorkflowServer(workflow_store=memory_store)
-    server.add_workflow("test", simple_workflow)
+    server.add_workflow("test", simple_test_workflow)
 
     async with server.contextmanager():
         persistence = _get_persistence(server)
         result = await persistence.context_from_ticks(
-            simple_workflow, "run-id-with-no-ticks"
+            simple_test_workflow, "run-id-with-no-ticks"
         )
         assert result is None
 
 
 @pytest.mark.asyncio
 async def test_persistence_retries_on_failure(
-    memory_store: MemoryWorkflowStore, simple_workflow: Workflow
+    memory_store: MemoryWorkflowStore, simple_test_workflow: Workflow
 ) -> None:
     """Workflow completes despite transient store write failures thanks to retries."""
     server = WorkflowServer(workflow_store=memory_store)
-    server.add_workflow("test", simple_workflow)
+    server.add_workflow("test", simple_test_workflow)
     # Use instant retries
     server._runtime._persistence_backoff = [0, 0]
 
@@ -485,25 +482,20 @@ async def test_persistence_retries_on_failure(
     memory_store.update_handler_status = flaky_update  # type: ignore[assignment]
 
     async with server.contextmanager():
-        await server._service.start_workflow(simple_workflow, "retry-ok-1")
+        await server._service.start_workflow(simple_test_workflow, "retry-ok-1")
 
-        async def handler_completed() -> None:
-            found = await memory_store.query(HandlerQuery(handler_id_in=["retry-ok-1"]))
-            assert len(found) == 1
-            assert found[0].status == "completed"
-
-        await wait_for_passing(handler_completed, max_duration=5.0, interval=0.05)
+        await wait_handler_status(memory_store, "retry-ok-1", "completed")
 
     assert fail_count > 2
 
 
 @pytest.mark.asyncio
 async def test_workflow_cancelled_after_all_retries_fail(
-    memory_store: MemoryWorkflowStore, simple_workflow: Workflow
+    memory_store: MemoryWorkflowStore, simple_test_workflow: Workflow
 ) -> None:
     """When store writes always fail, handler never reaches completed status."""
     server = WorkflowServer(workflow_store=memory_store)
-    server.add_workflow("test", simple_workflow)
+    server.add_workflow("test", simple_test_workflow)
     # Use instant retries with only 2 attempts
     server._runtime._persistence_backoff = [0, 0]
 
@@ -513,7 +505,7 @@ async def test_workflow_cancelled_after_all_retries_fail(
     memory_store.update_handler_status = always_fail  # type: ignore[assignment]
 
     async with server.contextmanager():
-        await server._service.start_workflow(simple_workflow, "retry-fail-1")
+        await server._service.start_workflow(simple_test_workflow, "retry-fail-1")
 
         # Give the workflow time to run and fail through retries
         await asyncio.sleep(0.5)
@@ -525,11 +517,6 @@ async def test_workflow_cancelled_after_all_retries_fail(
 
 
 # --- Legacy ctx migration tests ---
-
-
-@pytest.fixture
-def sqlite_store(tmp_path: Path) -> SqliteWorkflowStore:
-    return SqliteWorkflowStore(str(tmp_path / "test.db"))
 
 
 def _make_legacy_ctx_v1(
@@ -578,25 +565,19 @@ def _insert_handler_with_ctx(
 
 @pytest.mark.asyncio
 async def test_legacy_ctx_no_ticks_resumes_workflow(
-    sqlite_store: SqliteWorkflowStore, simple_workflow: Workflow
+    sqlite_store: SqliteWorkflowStore, simple_test_workflow: Workflow
 ) -> None:
     """Handler with old ctx data and no ticks should resume from old broker state."""
-    ctx_data = _make_legacy_ctx_v1(simple_workflow)
+    ctx_data = _make_legacy_ctx_v1(simple_test_workflow)
     _insert_handler_with_ctx(
         sqlite_store.db_path, "legacy-1", "run-legacy-1", "test", ctx_data
     )
 
     server = WorkflowServer(workflow_store=sqlite_store)
-    server.add_workflow("test", simple_workflow)
+    server.add_workflow("test", simple_test_workflow)
 
     async with server.contextmanager():
-
-        async def handler_completed() -> None:
-            found = await sqlite_store.query(HandlerQuery(handler_id_in=["legacy-1"]))
-            assert len(found) == 1
-            assert found[0].status == "completed"
-
-        await wait_for_passing(handler_completed, max_duration=5.0, interval=0.05)
+        await wait_handler_status(sqlite_store, "legacy-1", "completed")
 
 
 @pytest.mark.asyncio
@@ -632,20 +613,14 @@ async def test_legacy_ctx_seeds_user_state(
     server.add_workflow("test", wf)
 
     async with server.contextmanager():
-
-        async def handler_completed() -> None:
-            found = await sqlite_store.query(HandlerQuery(handler_id_in=["state-1"]))
-            assert len(found) == 1
-            assert found[0].status == "completed"
-            assert found[0].result is not None
-            assert found[0].result.result == "my_key=hello"
-
-        await wait_for_passing(handler_completed, max_duration=5.0, interval=0.05)
+        handler = await wait_handler_status(sqlite_store, "state-1", "completed")
+        assert handler.result is not None
+        assert handler.result.result == "my_key=hello"
 
 
 @pytest.mark.asyncio
 async def test_no_legacy_ctx_no_ticks_fresh_start(
-    sqlite_store: SqliteWorkflowStore, simple_workflow: Workflow
+    sqlite_store: SqliteWorkflowStore, simple_test_workflow: Workflow
 ) -> None:
     """Handler with no ctx and no ticks runs fresh (regression test)."""
     _insert_handler_with_ctx(
@@ -653,16 +628,10 @@ async def test_no_legacy_ctx_no_ticks_fresh_start(
     )
 
     server = WorkflowServer(workflow_store=sqlite_store)
-    server.add_workflow("test", simple_workflow)
+    server.add_workflow("test", simple_test_workflow)
 
     async with server.contextmanager():
-
-        async def handler_completed() -> None:
-            found = await sqlite_store.query(HandlerQuery(handler_id_in=["fresh-1"]))
-            assert len(found) == 1
-            assert found[0].status == "completed"
-
-        await wait_for_passing(handler_completed, max_duration=5.0, interval=0.05)
+        await wait_handler_status(sqlite_store, "fresh-1", "completed")
 
 
 @pytest.mark.asyncio
@@ -710,18 +679,10 @@ async def test_legacy_ctx_state_not_overwritten_on_second_resume(
     server.add_workflow("test", wf)
 
     async with server.contextmanager():
-
-        async def handler_completed() -> None:
-            found = await sqlite_store.query(
-                HandlerQuery(handler_id_in=["nooverwrite-1"])
-            )
-            assert len(found) == 1
-            assert found[0].status == "completed"
-            # Should have the pre-seeded value, not the legacy ctx value
-            assert found[0].result is not None
-            assert found[0].result.result == "my_key=new_value"
-
-        await wait_for_passing(handler_completed, max_duration=5.0, interval=0.05)
+        handler = await wait_handler_status(sqlite_store, "nooverwrite-1", "completed")
+        # Should have the pre-seeded value, not the legacy ctx value
+        assert handler.result is not None
+        assert handler.result.result == "my_key=new_value"
 
 
 # --- Multi-step HITL broker state resumption tests ---
@@ -802,12 +763,7 @@ async def test_simple_hitl_cross_server_restart(
         assert wf1 is not None
         await server1._service.start_workflow(wf1, handler_id)
 
-        async def handler_idle() -> None:
-            found = await sqlite_store.query(HandlerQuery(handler_id_in=[handler_id]))
-            assert len(found) == 1
-            assert found[0].idle_since is not None
-
-        await wait_for_passing(handler_idle, max_duration=5.0, interval=0.05)
+        await wait_handler_idle(sqlite_store, handler_id)
 
     # Server 2: send event, expect completion
     server2 = WorkflowServer(workflow_store=sqlite_store)
@@ -820,12 +776,7 @@ async def test_simple_hitl_cross_server_restart(
             handler_id, WaitableExternalEvent(response="hello")
         )
 
-        async def handler_completed() -> None:
-            found = await sqlite_store.query(HandlerQuery(handler_id_in=[handler_id]))
-            assert len(found) == 1
-            assert found[0].status == "completed"
-
-        await wait_for_passing(handler_completed, max_duration=5.0, interval=0.05)
+        await wait_handler_status(sqlite_store, handler_id, "completed")
 
 
 @pytest.mark.asyncio
@@ -851,12 +802,7 @@ async def test_multistep_hitl_broker_state_survives_restart(
         await server1._service.start_workflow(wf1, handler_id)
 
         # Wait for handler to become idle (waiting for HumanInput1)
-        async def handler_idle_1() -> None:
-            found = await sqlite_store.query(HandlerQuery(handler_id_in=[handler_id]))
-            assert len(found) == 1
-            assert found[0].idle_since is not None
-
-        await wait_for_passing(handler_idle_1, max_duration=5.0, interval=0.05)
+        await wait_handler_idle(sqlite_store, handler_id)
 
     # Verify state was persisted at first wait point
     run_id = (await sqlite_store.query(HandlerQuery(handler_id_in=[handler_id])))[
@@ -894,17 +840,9 @@ async def test_multistep_hitl_broker_state_survives_restart(
     async with server3.contextmanager():
         await server3._service.send_event(handler_id, HumanInput2(answer="answer2"))
 
-        async def handler_completed() -> None:
-            found = await sqlite_store.query(HandlerQuery(handler_id_in=[handler_id]))
-            assert len(found) == 1
-            assert found[0].status == "completed"
-            assert found[0].result is not None
-            assert (
-                found[0].result.result
-                == "step1_complete|answer1|step2_complete|answer2"
-            )
-
-        await wait_for_passing(handler_completed, max_duration=5.0, interval=0.05)
+        handler = await wait_handler_status(sqlite_store, handler_id, "completed")
+        assert handler.result is not None
+        assert handler.result.result == "step1_complete|answer1|step2_complete|answer2"
 
 
 @pytest.mark.asyncio
@@ -929,12 +867,7 @@ async def test_multistep_hitl_multiple_restarts_at_same_wait_point(
         assert wf1 is not None
         await server1._service.start_workflow(wf1, handler_id)
 
-        async def handler_idle() -> None:
-            found = await sqlite_store.query(HandlerQuery(handler_id_in=[handler_id]))
-            assert len(found) == 1
-            assert found[0].idle_since is not None
-
-        await wait_for_passing(handler_idle, max_duration=5.0, interval=0.05)
+        await wait_handler_idle(sqlite_store, handler_id)
 
     run_id = (await sqlite_store.query(HandlerQuery(handler_id_in=[handler_id])))[
         0
@@ -980,15 +913,9 @@ async def test_multistep_hitl_multiple_restarts_at_same_wait_point(
 
         await server_final._service.send_event(handler_id, HumanInput2(answer="final2"))
 
-        async def completed() -> None:
-            found = await sqlite_store.query(HandlerQuery(handler_id_in=[handler_id]))
-            assert found[0].status == "completed"
-            assert found[0].result is not None
-            assert (
-                found[0].result.result == "step1_complete|final1|step2_complete|final2"
-            )
-
-        await wait_for_passing(completed, max_duration=5.0, interval=0.05)
+        handler = await wait_handler_status(sqlite_store, handler_id, "completed")
+        assert handler.result is not None
+        assert handler.result.result == "step1_complete|final1|step2_complete|final2"
 
 
 @pytest.mark.asyncio
@@ -1010,12 +937,7 @@ async def test_tick_content_after_multistep_workflow(
         assert run_id is not None
 
         # Wait for handler to become idle at first wait point
-        async def handler_idle() -> None:
-            found = await sqlite_store.query(HandlerQuery(handler_id_in=[handler_id]))
-            assert len(found) == 1
-            assert found[0].idle_since is not None
-
-        await wait_for_passing(handler_idle, max_duration=5.0, interval=0.05)
+        await wait_handler_idle(sqlite_store, handler_id)
 
         # Verify ticks have expected structure
         ticks = await sqlite_store.get_ticks(run_id)
@@ -1049,10 +971,7 @@ async def test_concurrent_send_event_to_idle_handler(
         idle_release = _get_idle_release(server)
 
         # Wait for release to idle
-        async def handler_released() -> None:
-            assert run_id not in idle_release._active_run_ids
-
-        await wait_for_passing(handler_released, max_duration=2.0, interval=0.01)
+        await wait_run_released(idle_release, run_id)
 
         # Fire two send_event calls concurrently
         results = await asyncio.gather(
@@ -1073,14 +992,7 @@ async def test_concurrent_send_event_to_idle_handler(
         )
 
         # Handler should eventually complete (not hang or crash)
-        async def handler_completed() -> None:
-            found = await memory_store.query(
-                HandlerQuery(handler_id_in=["concurrent-1"])
-            )
-            assert len(found) == 1
-            assert found[0].status == "completed"
-
-        await wait_for_passing(handler_completed, max_duration=5.0, interval=0.05)
+        await wait_handler_status(memory_store, "concurrent-1", "completed")
 
 
 class FailAfterWaitEvent(Event):
@@ -1115,10 +1027,7 @@ async def test_failed_workflow_after_reload(
         idle_release = _get_idle_release(server)
 
         # Wait for handler to become idle (waiting for FailAfterWaitEvent)
-        async def handler_idle() -> None:
-            assert run_id not in idle_release._active_run_ids
-
-        await wait_for_passing(handler_idle, max_duration=2.0, interval=0.01)
+        await wait_run_released(idle_release, run_id)
 
         # Send error event to trigger RuntimeError in the workflow
         await server._service.send_event(
@@ -1126,13 +1035,6 @@ async def test_failed_workflow_after_reload(
         )
 
         # Handler should end up failed with error message
-        async def handler_failed() -> None:
-            found = await memory_store.query(
-                HandlerQuery(handler_id_in=["fail-reload-1"])
-            )
-            assert len(found) == 1
-            assert found[0].status == "failed"
-            assert found[0].error is not None
-            assert "Error response received" in found[0].error
-
-        await wait_for_passing(handler_failed, max_duration=5.0, interval=0.05)
+        handler = await wait_handler_status(memory_store, "fail-reload-1", "failed")
+        assert handler.error is not None
+        assert "Error response received" in handler.error

@@ -16,26 +16,9 @@ from llama_agents.server._service import EventSendError, HandlerCompletedError
 from server_test_fixtures import (  # type: ignore[import]
     ErrorWorkflow,
     ExternalEvent,
-    InteractiveWorkflow,
-    SimpleTestWorkflow,
     wait_for_passing,
 )
 from workflows import Workflow
-
-
-@pytest.fixture
-def memory_store() -> MemoryWorkflowStore:
-    return MemoryWorkflowStore()
-
-
-@pytest.fixture
-def interactive_workflow() -> InteractiveWorkflow:
-    return InteractiveWorkflow()
-
-
-@pytest.fixture
-def simple_test_workflow() -> SimpleTestWorkflow:
-    return SimpleTestWorkflow()
 
 
 @pytest.mark.asyncio

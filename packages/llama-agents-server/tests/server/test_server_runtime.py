@@ -227,16 +227,6 @@ def test_add_workflow_uses_server_runtime_decorator() -> None:
 
 async def test_concurrent_runs_get_independent_sequences() -> None:
     """Two adapters from the same decorator should have independent sequences."""
-
-    class StubInternalAdapterWithId(StubInternalAdapter):
-        def __init__(self, run_id: str) -> None:
-            super().__init__()
-            self._run_id = run_id
-
-        @property
-        def run_id(self) -> str:
-            return self._run_id
-
     store = MemoryWorkflowStore()
     decorator = ServerRuntimeDecorator(StubRuntime(), store=store)
 

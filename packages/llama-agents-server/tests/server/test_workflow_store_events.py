@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from typing import Optional
 
 import pytest
 from llama_agents.client.protocol.serializable_events import EventEnvelopeWithMetadata
@@ -51,6 +52,27 @@ def _cancelled() -> WorkflowCancelledEvent:
     return WorkflowCancelledEvent()
 
 
+async def _subscribe_and_collect(
+    store: AbstractWorkflowStore,
+    run_id: str,
+    after_sequence: Optional[int] = None,
+) -> tuple[list[StoredEvent], asyncio.Task[None]]:
+    """Subscribe to events, returning the collected list and the consumer task."""
+    collected: list[StoredEvent] = []
+    started = asyncio.Event()
+
+    async def consumer() -> None:
+        started.set()
+        kwargs = {} if after_sequence is None else {"after_sequence": after_sequence}
+        async for event in store.subscribe_events(run_id, **kwargs):
+            collected.append(event)
+
+    task = asyncio.create_task(consumer())
+    await started.wait()
+    await asyncio.sleep(0.01)
+    return collected, task
+
+
 @pytest.fixture(params=["memory", "sqlite"])
 def store(request: pytest.FixtureRequest, tmp_path: Path) -> AbstractWorkflowStore:
     if request.param == "memory":
@@ -85,39 +107,29 @@ async def test_append_multiple_events_and_query_all(
 
 
 @pytest.mark.asyncio
-async def test_query_events_after_sequence_filters_correctly(
+@pytest.mark.parametrize(
+    "seed_count, after_sequence, limit, expected_sequences",
+    [
+        pytest.param(5, 2, None, [3, 4], id="after_sequence_only"),
+        pytest.param(5, None, 3, [0, 1, 2], id="limit_only"),
+        pytest.param(10, 3, 2, [4, 5], id="after_sequence_and_limit"),
+    ],
+)
+async def test_query_events_with_filters(
     store: AbstractWorkflowStore,
+    seed_count: int,
+    after_sequence: Optional[int],
+    limit: Optional[int],
+    expected_sequences: list[int],
 ) -> None:
-    for i in range(5):
+    for i in range(seed_count):
         await store.append_event("run-1", make_envelope(seq_label=i))
 
-    # after_sequence=2 should return events with sequence > 2
-    result = await store.query_events("run-1", after_sequence=2)
-    assert len(result) == 2
-    assert [e.sequence for e in result] == [3, 4]
-
-
-@pytest.mark.asyncio
-async def test_query_events_with_limit(store: AbstractWorkflowStore) -> None:
-    for i in range(5):
-        await store.append_event("run-1", make_envelope(seq_label=i))
-
-    result = await store.query_events("run-1", limit=3)
-    assert len(result) == 3
-    assert [e.sequence for e in result] == [0, 1, 2]
-
-
-@pytest.mark.asyncio
-async def test_query_events_with_after_sequence_and_limit(
-    store: AbstractWorkflowStore,
-) -> None:
-    for i in range(10):
-        await store.append_event("run-1", make_envelope(seq_label=i))
-
-    # after_sequence=3 gives sequences 4..9, then limit=2 gives [4, 5]
-    result = await store.query_events("run-1", after_sequence=3, limit=2)
-    assert len(result) == 2
-    assert [e.sequence for e in result] == [4, 5]
+    result = await store.query_events(
+        "run-1", after_sequence=after_sequence, limit=limit
+    )
+    assert len(result) == len(expected_sequences)
+    assert [e.sequence for e in result] == expected_sequences
 
 
 @pytest.mark.asyncio
@@ -152,20 +164,10 @@ async def test_subscribe_events_receives_appended_events(
     store: AbstractWorkflowStore,
 ) -> None:
     """Appending events wakes a waiting subscriber."""
-    collected: list[StoredEvent] = []
-
-    async def consumer() -> None:
-        async for event in store.subscribe_events("run-1"):
-            collected.append(event)
-
-    task = asyncio.create_task(consumer())
-
-    # Give subscriber time to start waiting
-    await asyncio.sleep(0.01)
+    collected, task = await _subscribe_and_collect(store, "run-1")
 
     await store.append_event("run-1", make_envelope(seq_label=0))
     await store.append_event("run-1", make_envelope(seq_label=1))
-    # Append a terminal event to end the subscription
     await store.append_event("run-1", make_envelope(event=_stop(seq_label=2)))
 
     await asyncio.wait_for(task, timeout=2.0)
@@ -175,48 +177,28 @@ async def test_subscribe_events_receives_appended_events(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "terminal_event, expected_type",
+    [
+        pytest.param(_failed(), "WorkflowFailedEvent", id="failed"),
+        pytest.param(_cancelled(), "WorkflowCancelledEvent", id="cancelled"),
+    ],
+)
 async def test_subscribe_events_terminates_on_terminal_event(
     store: AbstractWorkflowStore,
+    terminal_event: Event,
+    expected_type: str,
 ) -> None:
     """Subscriber terminates after receiving a terminal event."""
-    collected: list[StoredEvent] = []
+    collected, task = await _subscribe_and_collect(store, "run-1")
 
-    async def consumer() -> None:
-        async for event in store.subscribe_events("run-1"):
-            collected.append(event)
-
-    task = asyncio.create_task(consumer())
-    await asyncio.sleep(0.01)
-
-    await store.append_event("run-1", make_envelope())
-    await store.append_event("run-1", make_envelope(event=_failed()))
+    if expected_type == "WorkflowFailedEvent":
+        await store.append_event("run-1", make_envelope())
+    await store.append_event("run-1", make_envelope(event=terminal_event))
 
     await asyncio.wait_for(task, timeout=2.0)
 
-    assert len(collected) == 2
-    assert collected[-1].event.type == "WorkflowFailedEvent"
-
-
-@pytest.mark.asyncio
-async def test_subscribe_events_terminates_on_cancelled_event(
-    store: AbstractWorkflowStore,
-) -> None:
-    """Subscriber terminates on WorkflowCancelledEvent."""
-    collected: list[StoredEvent] = []
-
-    async def consumer() -> None:
-        async for event in store.subscribe_events("run-1"):
-            collected.append(event)
-
-    task = asyncio.create_task(consumer())
-    await asyncio.sleep(0.01)
-
-    await store.append_event("run-1", make_envelope(event=_cancelled()))
-
-    await asyncio.wait_for(task, timeout=2.0)
-
-    assert len(collected) == 1
-    assert collected[0].event.type == "WorkflowCancelledEvent"
+    assert collected[-1].event.type == expected_type
 
 
 @pytest.mark.asyncio
@@ -224,20 +206,8 @@ async def test_subscribe_events_multiple_concurrent_subscribers(
     store: AbstractWorkflowStore,
 ) -> None:
     """Multiple concurrent subscribers on the same run each receive all events."""
-    collected_a: list[StoredEvent] = []
-    collected_b: list[StoredEvent] = []
-
-    async def consumer_a() -> None:
-        async for event in store.subscribe_events("run-1"):
-            collected_a.append(event)
-
-    async def consumer_b() -> None:
-        async for event in store.subscribe_events("run-1"):
-            collected_b.append(event)
-
-    task_a = asyncio.create_task(consumer_a())
-    task_b = asyncio.create_task(consumer_b())
-    await asyncio.sleep(0.01)
+    collected_a, task_a = await _subscribe_and_collect(store, "run-1")
+    collected_b, task_b = await _subscribe_and_collect(store, "run-1")
 
     await store.append_event("run-1", make_envelope(seq_label=0))
     await store.append_event("run-1", make_envelope(seq_label=1))
@@ -256,21 +226,12 @@ async def test_subscribe_events_with_after_sequence(
     store: AbstractWorkflowStore,
 ) -> None:
     """Subscriber can resume from a specific sequence position."""
-    # Pre-populate some events
     await store.append_event("run-1", make_envelope(seq_label=0))
     await store.append_event("run-1", make_envelope(seq_label=1))
     await store.append_event("run-1", make_envelope(seq_label=2))
 
-    collected: list[StoredEvent] = []
+    collected, task = await _subscribe_and_collect(store, "run-1", after_sequence=1)
 
-    async def consumer() -> None:
-        async for event in store.subscribe_events("run-1", after_sequence=1):
-            collected.append(event)
-
-    task = asyncio.create_task(consumer())
-    await asyncio.sleep(0.01)
-
-    # Append a terminal event
     await store.append_event("run-1", make_envelope(event=_stop(seq_label=3)))
 
     await asyncio.wait_for(task, timeout=2.0)
