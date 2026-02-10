@@ -842,23 +842,24 @@ async def test_control_loop_emits_idle_event_when_waiting(
     test_plugin: MockRunAdapter,
 ) -> None:
     """
-    Test that WorkflowIdleEvent is emitted when workflow becomes idle waiting for event.
+    Test that WorkflowIdleEvent is emitted when workflow becomes idle.
 
-    A workflow is idle when it has active waiters but no pending work. This test
-    validates that the idle event is published to the stream when this state is reached.
+    A workflow is idle when all steps have empty queues and no in-progress
+    workers. This uses a two-step pattern: the first step completes (leaving
+    state idle), and the second step accepts an external event to finish.
     """
 
-    class AwaitedEvent(Event):
+    class ExternalEvent(HumanResponseEvent):
         value: str
 
     class IdleTrackingWorkflow(Workflow):
         @step
-        async def waiter(self, ev: StartEvent, ctx: Context) -> StopEvent:
-            awaited = await ctx.wait_for_event(
-                AwaitedEvent,
-                waiter_event=InputRequiredEvent(),
-            )
-            return StopEvent(result=f"received_{awaited.value}")
+        async def start(self, ev: StartEvent) -> None:
+            pass
+
+        @step
+        async def finish(self, ev: ExternalEvent) -> StopEvent:
+            return StopEvent(result=f"received_{ev.value}")
 
     wf = IdleTrackingWorkflow(timeout=2.0)
     task = asyncio.create_task(
@@ -871,8 +872,61 @@ async def test_control_loop_emits_idle_event_when_waiting(
 
     # Collect events until we see the WorkflowIdleEvent
     idle_event_found = False
+
+    while True:
+        ev = await test_plugin.get_stream_event(timeout=1.0)
+        if isinstance(ev, WorkflowIdleEvent):
+            idle_event_found = True
+            break
+        if isinstance(ev, StopEvent):
+            break
+
+    assert idle_event_found, (
+        "WorkflowIdleEvent should be emitted when workflow has no pending work"
+    )
+
+    # Now send the external event to complete the workflow
+    await test_plugin.send_event(TickAddEvent(event=ExternalEvent(value="test")))
+
+    result = await asyncio.wait_for(task, timeout=1.0)
+    assert isinstance(result, StopEvent)
+    assert result.result == "received_test"
+
+
+@pytest.mark.asyncio
+async def test_control_loop_emits_idle_event_with_wait_for_event(
+    test_plugin: MockRunAdapter,
+) -> None:
+    """WorkflowIdleEvent fires when a step uses ctx.wait_for_event().
+
+    wait_for_event raises an internal exception that registers a waiter and
+    releases the worker. After that, the state has no queued events and no
+    in-progress workers, so the workflow is idle.
+    """
+
+    class AwaitedEvent(Event):
+        value: str
+
+    class WaitForEventWorkflow(Workflow):
+        @step
+        async def waiter(self, ev: StartEvent, ctx: Context) -> StopEvent:
+            awaited = await ctx.wait_for_event(
+                AwaitedEvent,
+                waiter_event=InputRequiredEvent(),
+            )
+            return StopEvent(result=f"received_{awaited.value}")
+
+    wf = WaitForEventWorkflow(timeout=2.0)
+    task = asyncio.create_task(
+        run_control_loop(
+            workflow=wf,
+            start_event=StartEvent(),
+            test_runtime=test_plugin,
+        )
+    )
+
+    idle_event_found = False
     input_required_found = False
-    events_before_idle: list[Event] = []
 
     while True:
         ev = await test_plugin.get_stream_event(timeout=1.0)
@@ -881,17 +935,15 @@ async def test_control_loop_emits_idle_event_when_waiting(
             break
         if isinstance(ev, InputRequiredEvent):
             input_required_found = True
-        events_before_idle.append(ev)
         if isinstance(ev, StopEvent):
             break
 
-    # WorkflowIdleEvent should be emitted after the workflow enters wait state
     assert idle_event_found, (
         "WorkflowIdleEvent should be emitted when workflow is waiting for external event"
     )
     assert input_required_found, "InputRequiredEvent should be emitted before idle"
 
-    # Now send the awaited event to complete the workflow
+    # Send the awaited event to complete the workflow
     await test_plugin.send_event(TickAddEvent(event=AwaitedEvent(value="test")))
 
     result = await asyncio.wait_for(task, timeout=1.0)
