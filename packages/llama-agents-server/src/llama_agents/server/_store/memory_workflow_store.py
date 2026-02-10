@@ -17,6 +17,7 @@ from .abstract_workflow_store import (
     PersistentHandler,
     StoredEvent,
     StoredTick,
+    is_terminal_status,
 )
 
 logger = logging.getLogger(__name__)
@@ -57,7 +58,7 @@ def _matches_query(handler: PersistentHandler, query: HandlerQuery) -> bool:
 
 
 class MemoryWorkflowStore(AbstractWorkflowStore):
-    def __init__(self) -> None:
+    def __init__(self, max_completed: int | None = 1000) -> None:
         self.handlers: Dict[str, PersistentHandler] = {}
         self.events: Dict[str, List[StoredEvent]] = {}
         self.ticks: Dict[str, List[StoredTick]] = {}
@@ -65,6 +66,7 @@ class MemoryWorkflowStore(AbstractWorkflowStore):
         self._conditions: weakref.WeakValueDictionary[str, asyncio.Condition] = (
             weakref.WeakValueDictionary()
         )
+        self.max_completed = max_completed
 
     def create_state_store(
         self,
@@ -99,6 +101,8 @@ class MemoryWorkflowStore(AbstractWorkflowStore):
 
     async def update(self, handler: PersistentHandler) -> None:
         self.handlers[handler.handler_id] = handler
+        if is_terminal_status(handler.status):
+            self._evict_oldest_completed()
 
     async def delete(self, query: HandlerQuery) -> int:
         to_delete = [
@@ -109,6 +113,34 @@ class MemoryWorkflowStore(AbstractWorkflowStore):
         for handler_id in to_delete:
             del self.handlers[handler_id]
         return len(to_delete)
+
+    def _evict_oldest_completed(self) -> None:
+        """Remove the oldest completed handlers when the cap is exceeded.
+
+        Also cleans up associated events, ticks, and state stores for evicted
+        handlers.
+        """
+        if self.max_completed is None:
+            return
+
+        terminal = [h for h in self.handlers.values() if is_terminal_status(h.status)]
+        overflow = len(terminal) - self.max_completed
+        if overflow <= 0:
+            return
+
+        # Sort by completed_at (None sorts earliest) then by handler_id for
+        # deterministic tie-breaking.
+        terminal.sort(key=lambda h: (h.completed_at or datetime.min, h.handler_id))
+        to_evict = terminal[:overflow]
+
+        for handler in to_evict:
+            del self.handlers[handler.handler_id]
+            # Clean up associated run data
+            run_id = handler.run_id
+            if run_id is not None:
+                self.events.pop(run_id, None)
+                self.ticks.pop(run_id, None)
+                self.state_stores.pop(run_id, None)
 
     def _get_or_create_condition(self, run_id: str) -> asyncio.Condition:
         """Get or create a condition for a run_id.
