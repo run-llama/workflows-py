@@ -2,4 +2,4 @@
 "llama-agents-server": minor
 ---
 
-Test pre-release functioning
+Refactor server internals from monolithic handler to composable runtime decorators (ServerRuntimeDecorator, PersistenceDecorator, IdleReleaseDecorator) enabling pluggable server runtimes

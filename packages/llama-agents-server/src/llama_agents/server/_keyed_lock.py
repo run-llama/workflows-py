@@ -2,6 +2,8 @@
 # Copyright (c) 2026 LlamaIndex Inc.
 """Keyed lock utility for per-key mutual exclusion with automatic cleanup."""
 
+from __future__ import annotations
+
 import asyncio
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
