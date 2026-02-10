@@ -6,13 +6,15 @@ from ._store.abstract_workflow_store import (
     HandlerQuery,
     PersistentHandler,
 )
+from ._store.memory_workflow_store import MemoryWorkflowStore
 from ._store.sqlite.sqlite_workflow_store import SqliteWorkflowStore
 from .server import WorkflowServer
 
 __all__ = [
-    "WorkflowServer",
     "AbstractWorkflowStore",
     "HandlerQuery",
     "PersistentHandler",
+    "WorkflowServer",
+    "MemoryWorkflowStore",
     "SqliteWorkflowStore",
 ]
