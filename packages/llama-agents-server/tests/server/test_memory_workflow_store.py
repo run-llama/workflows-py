@@ -570,3 +570,196 @@ def test_is_terminal_event_workflow_cancelled_event() -> None:
     # WorkflowCancelledEvent extends StopEvent, so it should be terminal
     stored = _make_stored_event(WorkflowCancelledEvent())
     assert AbstractWorkflowStore._is_terminal_event(stored) is True
+
+
+# --- max_completed history cap tests ---
+
+
+@pytest.mark.asyncio
+async def test_max_completed_default_is_1000() -> None:
+    store = MemoryWorkflowStore()
+    assert store.max_completed == 1000
+
+
+@pytest.mark.asyncio
+async def test_max_completed_none_means_unlimited() -> None:
+    store = MemoryWorkflowStore(max_completed=None)
+    assert store.max_completed is None
+
+    # Insert many completed handlers — none should be evicted
+    for i in range(50):
+        await store.update(
+            PersistentHandler(
+                handler_id=f"h{i}",
+                workflow_name="wf",
+                status="completed",
+                run_id=f"run-{i}",
+                completed_at=datetime(2024, 1, 1, 0, 0, i, tzinfo=timezone.utc),
+            )
+        )
+
+    all_handlers = await store.query(HandlerQuery())
+    assert len(all_handlers) == 50
+
+
+@pytest.mark.asyncio
+async def test_max_completed_evicts_oldest_when_exceeded() -> None:
+    store = MemoryWorkflowStore(max_completed=3)
+
+    for i in range(5):
+        await store.update(
+            PersistentHandler(
+                handler_id=f"h{i}",
+                workflow_name="wf",
+                status="completed",
+                run_id=f"run-{i}",
+                completed_at=datetime(2024, 1, 1, 0, 0, i, tzinfo=timezone.utc),
+            )
+        )
+
+    remaining = await store.query(HandlerQuery())
+    ids = {h.handler_id for h in remaining}
+    # h0 and h1 (oldest) should have been evicted
+    assert ids == {"h2", "h3", "h4"}
+
+
+@pytest.mark.asyncio
+async def test_max_completed_does_not_evict_running_handlers() -> None:
+    store = MemoryWorkflowStore(max_completed=2)
+
+    # Add running handlers — these should never be evicted
+    for i in range(3):
+        await store.update(
+            PersistentHandler(
+                handler_id=f"running-{i}",
+                workflow_name="wf",
+                status="running",
+                run_id=f"run-r{i}",
+            )
+        )
+
+    # Add completed handlers up to the cap
+    for i in range(3):
+        await store.update(
+            PersistentHandler(
+                handler_id=f"done-{i}",
+                workflow_name="wf",
+                status="completed",
+                run_id=f"run-d{i}",
+                completed_at=datetime(2024, 1, 1, 0, 0, i, tzinfo=timezone.utc),
+            )
+        )
+
+    remaining = await store.query(HandlerQuery())
+    ids = {h.handler_id for h in remaining}
+    # All 3 running + 2 newest completed
+    assert ids == {"running-0", "running-1", "running-2", "done-1", "done-2"}
+
+
+@pytest.mark.asyncio
+async def test_max_completed_applies_to_all_terminal_statuses() -> None:
+    store = MemoryWorkflowStore(max_completed=2)
+
+    await store.update(
+        PersistentHandler(
+            handler_id="h-completed",
+            workflow_name="wf",
+            status="completed",
+            completed_at=datetime(2024, 1, 1, 0, 0, 0, tzinfo=timezone.utc),
+        )
+    )
+    await store.update(
+        PersistentHandler(
+            handler_id="h-failed",
+            workflow_name="wf",
+            status="failed",
+            completed_at=datetime(2024, 1, 1, 0, 0, 1, tzinfo=timezone.utc),
+        )
+    )
+    await store.update(
+        PersistentHandler(
+            handler_id="h-cancelled",
+            workflow_name="wf",
+            status="cancelled",
+            completed_at=datetime(2024, 1, 1, 0, 0, 2, tzinfo=timezone.utc),
+        )
+    )
+
+    remaining = await store.query(HandlerQuery())
+    ids = {h.handler_id for h in remaining}
+    # Oldest (h-completed) should be evicted
+    assert ids == {"h-failed", "h-cancelled"}
+
+
+@pytest.mark.asyncio
+async def test_max_completed_cleans_up_events_ticks_and_state() -> None:
+    store = MemoryWorkflowStore(max_completed=1)
+
+    # Set up run data for a handler that will be evicted
+    store.events["run-old"] = []
+    store.ticks["run-old"] = []
+    store.create_state_store("run-old")
+
+    await store.update(
+        PersistentHandler(
+            handler_id="h-old",
+            workflow_name="wf",
+            status="completed",
+            run_id="run-old",
+            completed_at=datetime(2024, 1, 1, 0, 0, 0, tzinfo=timezone.utc),
+        )
+    )
+    # Still under cap — data should exist
+    assert "run-old" in store.events
+    assert "run-old" in store.ticks
+    assert "run-old" in store.state_stores
+
+    # Add a second completed handler — h-old should be evicted
+    await store.update(
+        PersistentHandler(
+            handler_id="h-new",
+            workflow_name="wf",
+            status="completed",
+            run_id="run-new",
+            completed_at=datetime(2024, 1, 1, 0, 0, 1, tzinfo=timezone.utc),
+        )
+    )
+
+    # h-old's data should be cleaned up
+    assert "run-old" not in store.events
+    assert "run-old" not in store.ticks
+    assert "run-old" not in store.state_stores
+    # h-new should remain
+    remaining = await store.query(HandlerQuery())
+    assert len(remaining) == 1
+    assert remaining[0].handler_id == "h-new"
+
+
+@pytest.mark.asyncio
+async def test_max_completed_eviction_via_update_handler_status() -> None:
+    """Eviction triggers when status changes to terminal via update_handler_status."""
+    store = MemoryWorkflowStore(max_completed=2)
+
+    # Create 3 running handlers
+    for i in range(3):
+        await store.update(
+            PersistentHandler(
+                handler_id=f"h{i}",
+                workflow_name="wf",
+                status="running",
+                run_id=f"run-{i}",
+            )
+        )
+
+    # Complete them one by one
+    await store.update_handler_status("run-0", status="completed")
+    await store.update_handler_status("run-1", status="completed")
+    await store.update_handler_status("run-2", status="completed")
+
+    remaining = await store.query(HandlerQuery())
+    assert len(remaining) == 2
+    ids = {h.handler_id for h in remaining}
+    # h0 was completed first (oldest completed_at), so it's evicted
+    assert "h0" not in ids
+    assert "h1" in ids
+    assert "h2" in ids
