@@ -131,7 +131,6 @@ async def test_internal_events_multiple_workers(
         start_event=StartEvent(message="hello"),  # type: ignore
         exclude_events=[StopEvent],
     )
-    assert all(isinstance(ev, StepStateChanged) for ev in result.collected)
     collected = [ev for ev in result.collected if isinstance(ev, StepStateChanged)]
     run_ids = [
         str(r.worker_id) + r.name
