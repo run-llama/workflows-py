@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 LlamaIndex Inc.
 """
-Server runtime decorator: adapter wrapping, event recording, and handler
-persistence. Service-level orchestration lives in _service.py.
+Server runtime decorator: the main required runtime decorator for workflows
+served by the WorkflowServer. Handles event recording, handler persistence,
+and status updates.
 """
 
 from __future__ import annotations
@@ -60,9 +61,7 @@ logger = logging.getLogger(__name__)
 class _ServerInternalRunAdapter(BaseInternalRunAdapterDecorator):
     """Internal adapter that records every emitted event to the workflow store.
 
-    Handles event recording and terminal-event status updates. Tick
-    persistence lives in _PersistenceInternalRunAdapter, and idle detection
-    lives in _IdleReleaseInternalRunAdapter.
+    Handles event recording and terminal-event status updates.
     """
 
     def __init__(

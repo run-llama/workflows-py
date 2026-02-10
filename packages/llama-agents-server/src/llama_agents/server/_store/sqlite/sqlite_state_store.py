@@ -51,7 +51,6 @@ class SqliteStateStore(Generic[MODEL_T]):
     No in-memory cache — the database is the source of truth.
     """
 
-    known_unserializable_keys = ("memory",)
     state_type: Type[MODEL_T]
 
     def __init__(
@@ -86,11 +85,7 @@ class SqliteStateStore(Generic[MODEL_T]):
     def _serialize_state(self, state: MODEL_T) -> str:
         """Serialize state model to JSON string."""
         if isinstance(state, DictState):
-            return json.dumps(
-                serialize_dict_state_data(
-                    state, self._serializer, self.known_unserializable_keys
-                )
-            )
+            return json.dumps(serialize_dict_state_data(state, self._serializer))
         return self._serializer.serialize(state)
 
     def _deserialize_state(self, state_json: str) -> MODEL_T:

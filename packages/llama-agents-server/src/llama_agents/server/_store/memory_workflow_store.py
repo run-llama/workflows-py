@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import weakref
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
 from typing import Any, Dict, List
@@ -57,7 +58,9 @@ class MemoryWorkflowStore(AbstractWorkflowStore):
         self.events: Dict[str, List[StoredEvent]] = {}
         self.ticks: Dict[str, List[StoredTick]] = {}
         self.state_stores: Dict[str, InMemoryStateStore[Any]] = {}
-        self._conditions: Dict[str, asyncio.Condition] = {}
+        self._conditions: weakref.WeakValueDictionary[str, asyncio.Condition] = (
+            weakref.WeakValueDictionary()
+        )
 
     def create_state_store(
         self, run_id: str, state_type: type[Any] | None = None
@@ -88,10 +91,17 @@ class MemoryWorkflowStore(AbstractWorkflowStore):
             del self.handlers[handler_id]
         return len(to_delete)
 
-    def _get_condition(self, run_id: str) -> asyncio.Condition:
-        if run_id not in self._conditions:
-            self._conditions[run_id] = asyncio.Condition()
-        return self._conditions[run_id]
+    def _get_or_create_condition(self, run_id: str) -> asyncio.Condition:
+        """Get or create a condition for a run_id.
+
+        The caller is responsible for holding a strong reference to the
+        returned Condition for as long as it needs notifications.
+        """
+        cond = self._conditions.get(run_id)
+        if cond is None:
+            cond = asyncio.Condition()
+            self._conditions[run_id] = cond
+        return cond
 
     async def append_event(self, run_id: str, event: EventEnvelopeWithMetadata) -> None:
         if run_id not in self.events:
@@ -105,9 +115,10 @@ class MemoryWorkflowStore(AbstractWorkflowStore):
             event=event,
         )
         existing.append(stored)
-        condition = self._get_condition(run_id)
-        async with condition:
-            condition.notify_all()
+        condition = self._conditions.get(run_id)
+        if condition is not None:
+            async with condition:
+                condition.notify_all()
 
     async def query_events(
         self,
@@ -147,7 +158,7 @@ class MemoryWorkflowStore(AbstractWorkflowStore):
         handle duplicate sequence numbers (which occur when multiple internal
         adapters share the same run_id).
         """
-        condition = self._get_condition(run_id)
+        condition = self._get_or_create_condition(run_id)
         # Determine starting index: skip events with sequence <= after_sequence
         all_events = self.events.get(run_id, [])
         if after_sequence >= 0:
@@ -166,14 +177,12 @@ class MemoryWorkflowStore(AbstractWorkflowStore):
                 yield event
                 cursor += 1
                 if self._is_terminal_event(event):
-                    self._conditions.pop(run_id, None)
                     return
             # Before waiting, check if the run already has a terminal event
             # that we've already passed (e.g. cursor is beyond all events but
             # the last event was terminal). This prevents hanging when a late
             # subscriber joins after the run is fully complete.
             if all_events and self._is_terminal_event(all_events[-1]):
-                self._conditions.pop(run_id, None)
                 return
             # No new events — wait for the producer to notify
             async with condition:

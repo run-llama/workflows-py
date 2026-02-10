@@ -52,14 +52,6 @@ T = TypeVar("T", bound=Event)
 EventBuffer = dict[str, list[Event]]
 
 
-# Only warn once about unserializable keys
-class UnserializableKeyWarning(Warning):
-    pass
-
-
-warnings.simplefilter("once", UnserializableKeyWarning)
-
-
 # TODO(v3) remove this class, and replace with direct references to the pre/internal/external contexts
 class Context(Generic[MODEL_T]):
     """
@@ -120,10 +112,6 @@ class Context(Generic[MODEL_T]):
         - [Event][workflows.events.Event]
         - [InMemoryStateStore][workflows.context.state_store.InMemoryStateStore]
     """
-
-    # These keys are set by pre-built workflows and
-    # are known to be unserializable in some cases.
-    known_unserializable_keys = ("memory",)
 
     # Current face - context is in exactly one state at a time
     _face: (

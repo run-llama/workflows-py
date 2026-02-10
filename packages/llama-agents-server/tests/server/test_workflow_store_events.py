@@ -13,8 +13,8 @@ from llama_agents.server import (
     AbstractWorkflowStore,
     MemoryWorkflowStore,
     SqliteWorkflowStore,
-    StoredEvent,
 )
+from llama_agents.server._store.abstract_workflow_store import StoredEvent
 from workflows.events import (
     Event,
     StopEvent,

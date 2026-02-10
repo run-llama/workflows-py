@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sqlite3
+import weakref
 from collections.abc import AsyncIterator
 from datetime import datetime
 from typing import Any, List, Sequence
@@ -27,7 +28,9 @@ class SqliteWorkflowStore(AbstractWorkflowStore):
     def __init__(self, db_path: str, poll_interval: float = 1.0) -> None:
         self.db_path = db_path
         self.poll_interval = poll_interval
-        self._conditions: dict[str, asyncio.Condition] = {}
+        self._conditions: weakref.WeakValueDictionary[str, asyncio.Condition] = (
+            weakref.WeakValueDictionary()
+        )
         self._init_db()
 
     def create_state_store(
@@ -37,10 +40,17 @@ class SqliteWorkflowStore(AbstractWorkflowStore):
             db_path=self.db_path, run_id=run_id, state_type=state_type
         )
 
-    def _get_condition(self, run_id: str) -> asyncio.Condition:
-        if run_id not in self._conditions:
-            self._conditions[run_id] = asyncio.Condition()
-        return self._conditions[run_id]
+    def _get_or_create_condition(self, run_id: str) -> asyncio.Condition:
+        """Get or create a condition for a run_id.
+
+        The caller is responsible for holding a strong reference to the
+        returned Condition for as long as it needs notifications.
+        """
+        cond = self._conditions.get(run_id)
+        if cond is None:
+            cond = asyncio.Condition()
+            self._conditions[run_id] = cond
+        return cond
 
     def _init_db(self) -> None:
         conn = sqlite3.connect(self.db_path)
@@ -144,9 +154,10 @@ class SqliteWorkflowStore(AbstractWorkflowStore):
             conn.commit()
         finally:
             conn.close()
-        condition = self._get_condition(run_id)
-        async with condition:
-            condition.notify_all()
+        condition = self._conditions.get(run_id)
+        if condition is not None:
+            async with condition:
+                condition.notify_all()
 
     async def query_events(
         self,
@@ -183,7 +194,7 @@ class SqliteWorkflowStore(AbstractWorkflowStore):
     async def subscribe_events(
         self, run_id: str, after_sequence: int = -1
     ) -> AsyncIterator[StoredEvent]:
-        condition = self._get_condition(run_id)
+        condition = self._get_or_create_condition(run_id)
         cursor = after_sequence
         while True:
             events = await self.query_events(run_id, after_sequence=cursor)
@@ -191,24 +202,16 @@ class SqliteWorkflowStore(AbstractWorkflowStore):
                 yield event
                 cursor = event.sequence
                 if self._is_terminal_event(event):
-                    self._conditions.pop(run_id, None)
                     return
             if not events:
-                # Check if terminal event already exists (subscriber joined late)
-                all_events = await self.query_events(run_id)
-                if all_events and self._is_terminal_event(all_events[-1]):
-                    self._conditions.pop(run_id, None)
-                    return
                 # Wait for notification or poll timeout
                 async with condition:
-                    fresh = await self.query_events(run_id, after_sequence=cursor)
-                    if not fresh:
-                        try:
-                            await asyncio.wait_for(
-                                condition.wait(), timeout=self.poll_interval
-                            )
-                        except TimeoutError:
-                            pass
+                    try:
+                        await asyncio.wait_for(
+                            condition.wait(), timeout=self.poll_interval
+                        )
+                    except TimeoutError:
+                        pass
 
     async def append_tick(self, run_id: str, tick_data: dict[str, Any]) -> None:
         conn = sqlite3.connect(self.db_path)
