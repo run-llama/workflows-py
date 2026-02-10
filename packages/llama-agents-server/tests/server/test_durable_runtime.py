@@ -25,11 +25,11 @@ from server_test_fixtures import wait_for_passing  # type: ignore[import]
 from workflows import Context, Workflow, step
 from workflows.context.serializers import JsonSerializer
 from workflows.context.state_store import DictState, serialize_dict_state_data
-from workflows.events import Event, StartEvent, StopEvent
+from workflows.events import Event, HumanResponseEvent, StartEvent, StopEvent
 from workflows.runtime.types.internal_state import BrokerState, EventAttempt
 
 
-class WaitableExternalEvent(Event):
+class WaitableExternalEvent(HumanResponseEvent):
     response: str
 
 
@@ -37,9 +37,12 @@ class WaitingWorkflow(Workflow):
     """Workflow that uses ctx.wait_for_event() to become idle."""
 
     @step
-    async def start_and_wait(self, ctx: Context, ev: StartEvent) -> StopEvent:
-        external = await ctx.wait_for_event(WaitableExternalEvent)
-        return StopEvent(result=f"received: {external.response}")
+    async def start_and_wait(self, ctx: Context, ev: StartEvent) -> None:
+        pass
+
+    @step
+    async def end(self, ctx: Context, ev: WaitableExternalEvent) -> StopEvent:
+        return StopEvent(result=f"received: {ev.response}")
 
 
 def _get_idle_release(server: WorkflowServer) -> IdleReleaseDecorator:
@@ -114,9 +117,7 @@ async def test_idle_handler_released_from_memory(
 ) -> None:
     """When a workflow becomes idle, its handler is released from memory."""
     server = WorkflowServer(workflow_store=memory_store)
-    server.add_workflow(
-        "test", waiting_workflow, additional_events=[WaitableExternalEvent]
-    )
+    server.add_workflow("test", waiting_workflow)
 
     async with server.contextmanager():
         handler_data = await server._service.start_workflow(
@@ -144,9 +145,7 @@ async def test_released_handler_reloaded_on_event(
 ) -> None:
     """A released idle handler is reloaded when an event is sent to it."""
     server = WorkflowServer(workflow_store=memory_store)
-    server.add_workflow(
-        "test", waiting_workflow, additional_events=[WaitableExternalEvent]
-    )
+    server.add_workflow("test", waiting_workflow)
 
     async with server.contextmanager():
         handler_data = await server._service.start_workflow(
@@ -177,9 +176,7 @@ async def test_idle_since_cleared_on_reload(
 ) -> None:
     """idle_since is cleared in the store when a handler is reloaded."""
     server = WorkflowServer(workflow_store=memory_store)
-    server.add_workflow(
-        "test", waiting_workflow, additional_events=[WaitableExternalEvent]
-    )
+    server.add_workflow("test", waiting_workflow)
 
     async with server.contextmanager():
         handler_data = await server._service.start_workflow(
@@ -384,9 +381,7 @@ async def test_destroy_aborts_active_runs(
 ) -> None:
     """destroy() should abort all active runs via _on_server_stop."""
     server = WorkflowServer(workflow_store=memory_store)
-    server.add_workflow(
-        "test", waiting_workflow, additional_events=[WaitableExternalEvent]
-    )
+    server.add_workflow("test", waiting_workflow)
 
     async with server.contextmanager():
         idle_release = _get_idle_release(server)
@@ -754,9 +749,7 @@ async def test_simple_hitl_cross_server_restart(
 
     # Server 1: start workflow, let it idle
     server1 = WorkflowServer(workflow_store=sqlite_store)
-    server1.add_workflow(
-        "test", WaitingWorkflow(), additional_events=[WaitableExternalEvent]
-    )
+    server1.add_workflow("test", WaitingWorkflow())
 
     async with server1.contextmanager():
         wf1 = server1._service._runtime.get_workflow("test")
@@ -767,9 +760,7 @@ async def test_simple_hitl_cross_server_restart(
 
     # Server 2: send event, expect completion
     server2 = WorkflowServer(workflow_store=sqlite_store)
-    server2.add_workflow(
-        "test", WaitingWorkflow(), additional_events=[WaitableExternalEvent]
-    )
+    server2.add_workflow("test", WaitingWorkflow())
 
     async with server2.contextmanager():
         await server2._service.send_event(
@@ -957,9 +948,7 @@ async def test_concurrent_send_event_to_idle_handler(
 ) -> None:
     """Two concurrent send_event calls to the same idle handler cause no unhandled exceptions."""
     server = WorkflowServer(workflow_store=memory_store)
-    server.add_workflow(
-        "test", waiting_workflow, additional_events=[WaitableExternalEvent]
-    )
+    server.add_workflow("test", waiting_workflow)
 
     async with server.contextmanager():
         handler_data = await server._service.start_workflow(
