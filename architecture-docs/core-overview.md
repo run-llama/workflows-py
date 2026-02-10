@@ -21,8 +21,7 @@ Container for step definitions. A `WorkflowMeta` metaclass collects `@step`-deco
 
 `run()` selects a runtime (explicit param > ContextVar > basic_runtime), validates steps, then delegates to `Context._workflow_run()`.
 
-- [`workflow.py:47`](../packages/llama-index-workflows/src/workflows/workflow.py#L47) — WorkflowMeta
-- [`workflow.py:379`](../packages/llama-index-workflows/src/workflows/workflow.py#L379) — `run()`
+[`workflow.py`](../packages/llama-index-workflows/src/workflows/workflow.py)
 
 ## Context Faces
 
@@ -42,10 +41,10 @@ graph LR
 
 Each face wraps an adapter from the runtime. Public methods on Context check the current face and raise `ContextStateError` if called in the wrong phase.
 
-- [`context.py:129`](../packages/llama-index-workflows/src/workflows/context/context.py#L129) — `_face` field
-- [`pre_context.py:23`](../packages/llama-index-workflows/src/workflows/context/pre_context.py#L23) — PreContext
-- [`external_context.py:33`](../packages/llama-index-workflows/src/workflows/context/external_context.py#L33) — ExternalContext
-- [`internal_context.py:34`](../packages/llama-index-workflows/src/workflows/context/internal_context.py#L34) — InternalContext
+- [`context.py`](../packages/llama-index-workflows/src/workflows/context/context.py) — Context, `_face` field
+- [`pre_context.py`](../packages/llama-index-workflows/src/workflows/context/pre_context.py) — PreContext
+- [`external_context.py`](../packages/llama-index-workflows/src/workflows/context/external_context.py) — ExternalContext
+- [`internal_context.py`](../packages/llama-index-workflows/src/workflows/context/internal_context.py) — InternalContext
 
 ## Runtime and Adapters
 
@@ -64,58 +63,34 @@ graph TB
 | InternalRunAdapter | Control loop | `wait_receive()`, `on_tick()`, `wait_for_next_task()`, `get_now()` |
 | ExternalRunAdapter | WorkflowHandler | `send_event()`, `stream_published_events()`, `get_result()`, `cancel()` |
 
-Runtimes are composable via decorators — see the server architecture doc for the decorator chain pattern.
+Runtimes are composable via decorators — see [server-architecture.md](./server-architecture.md#runtime-decorator-chain) for the decorator chain pattern.
 
-- [`plugin.py:391`](../packages/llama-index-workflows/src/workflows/runtime/types/plugin.py#L391) — Runtime ABC
-- [`plugin.py:70`](../packages/llama-index-workflows/src/workflows/runtime/types/plugin.py#L70) — InternalRunAdapter
-- [`plugin.py:236`](../packages/llama-index-workflows/src/workflows/runtime/types/plugin.py#L236) — ExternalRunAdapter
+[`plugin.py`](../packages/llama-index-workflows/src/workflows/runtime/types/plugin.py) — Runtime ABC, InternalRunAdapter, ExternalRunAdapter
 
 ## Control Loop
 
-The control loop follows a reducer pattern:
+The control loop is the core execution engine. It follows a reducer pattern where pure state transitions produce side effects as commands. The control loop is runtime-agnostic — it interacts with the outside world exclusively through `InternalRunAdapter`.
 
-```
-State + Tick --> (NewState, list[Command])
-```
-
-`_reduce_tick()` dispatches on tick type:
-
-| Tick | Purpose |
-|------|---------|
-| TickAddEvent | Route event to accepting steps, check capacity, queue overflow |
-| TickStepResult | Handle step completion — StopEvent, retry, re-run on snapshot mismatch |
-| TickCancelRun | Graceful cancellation |
-| TickPublishEvent | Publish to external event stream |
-| TickTimeout | Workflow-level timeout |
-
-Commands emitted by reducers execute sequentially: `CommandQueueEvent`, `CommandRunWorker`, `CommandCompleteRun`, `CommandHalt`, `CommandPublishEvent`, `CommandFailWorkflow`.
-
-Scheduling uses two sources: a synchronous tick buffer (drained each iteration) and a min-heap of scheduled wakeups for delays/timeouts.
-
-- [`control_loop.py:272`](../packages/llama-index-workflows/src/workflows/runtime/control_loop.py#L272) — `_ControlLoopRunner.run()`
-- [`control_loop.py:490`](../packages/llama-index-workflows/src/workflows/runtime/control_loop.py#L490) — `_reduce_tick()`
+See [control-loop.md](./control-loop.md) for the full architecture.
 
 ## Event Flow
 
-Events into the workflow (external to internal):
-
-```
-handler.send_event()
-  --> ctx.send_event()
-    --> ExternalRunAdapter.send_event()
-      --> receive_queue
-        --> control_loop via InternalRunAdapter.wait_receive()
-          --> _reduce_tick(TickAddEvent)
+```mermaid
+graph LR
+    subgraph "Events In (external to internal)"
+        H[WorkflowHandler] -->|send_event| EA[ExternalRunAdapter]
+        EA -->|receive queue| IA[InternalRunAdapter]
+        IA -->|TickAddEvent| CL[Control Loop]
+    end
 ```
 
-Events out of the workflow (internal to external):
-
-```
-ctx.write_event_to_stream()
-  --> InternalRunAdapter.write_to_event_stream()
-    --> publish_queue
-      --> ExternalRunAdapter.stream_published_events()
-        --> handler.stream_events()
+```mermaid
+graph LR
+    subgraph "Events Out (internal to external)"
+        CL2[Control Loop] -->|CommandPublishEvent| IA2[InternalRunAdapter]
+        IA2 -->|publish queue| EA2[ExternalRunAdapter]
+        EA2 -->|stream_published_events| H2[WorkflowHandler]
+    end
 ```
 
 ## WorkflowHandler
@@ -127,4 +102,4 @@ Returned by `Workflow.run()`. The user-facing handle for a running workflow.
 - `handler.send_event()` — send events into the running workflow
 - `handler.cancel_run()` — graceful cancellation
 
-[`handler.py:26`](../packages/llama-index-workflows/src/workflows/handler.py#L26) — WorkflowHandler
+[`handler.py`](../packages/llama-index-workflows/src/workflows/handler.py)
