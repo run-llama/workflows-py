@@ -58,7 +58,9 @@ class StreamingStressWorkflow(Workflow):
         return None
 
     @step
-    async def collect(self, ctx: Context, ev: WorkDone) -> StopEvent:
-        # First WorkDone ends the workflow
-        print(f"STEP:collect:{ev.item_id}:complete", flush=True)
-        return StopEvent(result={"first_done": ev.item_id})
+    async def collect(self, ctx: Context, ev: WorkDone) -> StopEvent | None:
+        results = ctx.collect_events(ev, [WorkDone] * 15)
+        if results is None:
+            return None
+        print("STEP:collect:all_done", flush=True)
+        return StopEvent(result={"collected": len(results)})
