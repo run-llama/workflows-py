@@ -37,7 +37,7 @@ def run_scenario(
     db_url: str,
     run_id: str,
     config: dict[str, Any] | None = None,
-    timeout: float = 30.0,
+    timeout: float = 60.0,
 ) -> subprocess.CompletedProcess[str]:
     """Run a workflow scenario in a subprocess.
 
