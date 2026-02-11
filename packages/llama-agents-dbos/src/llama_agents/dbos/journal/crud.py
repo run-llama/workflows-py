@@ -7,6 +7,8 @@ from __future__ import annotations
 import re
 import sqlite3
 from abc import ABC, abstractmethod
+from contextlib import contextmanager
+from typing import Iterator
 
 import asyncpg
 
@@ -80,24 +82,26 @@ class SqliteJournalCrud(JournalCrud):
         self._db_path = db_path
         self._table_ref = _quote_identifier(table_name)
 
-    async def insert(self, run_id: str, seq_num: int, task_key: str) -> None:
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
         conn = sqlite3.connect(self._db_path)
         try:
+            yield conn
+        finally:
+            conn.close()
+
+    async def insert(self, run_id: str, seq_num: int, task_key: str) -> None:
+        with self._connect() as conn:
             conn.execute(
                 f"INSERT INTO {self._table_ref} (run_id, seq_num, task_key) VALUES (?, ?, ?)",
                 (run_id, seq_num, task_key),
             )
             conn.commit()
-        finally:
-            conn.close()
 
     async def load(self, run_id: str) -> list[str]:
-        conn = sqlite3.connect(self._db_path)
-        try:
+        with self._connect() as conn:
             cursor = conn.execute(
                 f"SELECT task_key FROM {self._table_ref} WHERE run_id = ? ORDER BY seq_num ASC",
                 (run_id,),
             )
             return [row[0] for row in cursor.fetchall()]
-        finally:
-            conn.close()

@@ -7,8 +7,9 @@ import json
 import sqlite3
 import weakref
 from collections.abc import AsyncIterator
+from contextlib import contextmanager
 from datetime import datetime
-from typing import Any, List, Sequence
+from typing import Any, Iterator, List, Sequence
 
 from llama_agents.client.protocol.serializable_events import EventEnvelopeWithMetadata
 from workflows.context import JsonSerializer
@@ -39,6 +40,14 @@ class SqliteWorkflowStore(AbstractWorkflowStore):
         )
         if auto_migrate:
             self._run_migrations()
+
+    @contextmanager
+    def _connect(self) -> Iterator[sqlite3.Connection]:
+        conn = sqlite3.connect(self.db_path)
+        try:
+            yield conn
+        finally:
+            conn.close()
 
     def create_state_store(
         self,
@@ -92,53 +101,47 @@ class SqliteWorkflowStore(AbstractWorkflowStore):
                         started_at, updated_at, completed_at, idle_since FROM handlers"""
         if clauses:
             sql = f"{sql} WHERE {' AND '.join(clauses)}"
-        conn = sqlite3.connect(self.db_path)
-        try:
+        with self._connect() as conn:
             cursor = conn.cursor()
             cursor.execute(sql, tuple(params))
             rows = cursor.fetchall()
-        finally:
-            conn.close()
 
         return [_row_to_persistent_handler(row) for row in rows]
 
     async def update(self, handler: PersistentHandler) -> None:
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-
-        cursor.execute(
-            """
-            INSERT INTO handlers (handler_id, workflow_name, status, run_id, error, result,
-                                  started_at, updated_at, completed_at, idle_since)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(handler_id) DO UPDATE SET
-                workflow_name = excluded.workflow_name,
-                status = excluded.status,
-                run_id = excluded.run_id,
-                error = excluded.error,
-                result = excluded.result,
-                started_at = excluded.started_at,
-                updated_at = excluded.updated_at,
-                completed_at = excluded.completed_at,
-                idle_since = excluded.idle_since
-            """,
-            (
-                handler.handler_id,
-                handler.workflow_name,
-                handler.status,
-                handler.run_id,
-                handler.error,
-                JsonSerializer().serialize(handler.result)
-                if handler.result is not None
-                else None,
-                handler.started_at.isoformat() if handler.started_at else None,
-                handler.updated_at.isoformat() if handler.updated_at else None,
-                handler.completed_at.isoformat() if handler.completed_at else None,
-                handler.idle_since.isoformat() if handler.idle_since else None,
-            ),
-        )
-        conn.commit()
-        conn.close()
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO handlers (handler_id, workflow_name, status, run_id, error, result,
+                                      started_at, updated_at, completed_at, idle_since)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(handler_id) DO UPDATE SET
+                    workflow_name = excluded.workflow_name,
+                    status = excluded.status,
+                    run_id = excluded.run_id,
+                    error = excluded.error,
+                    result = excluded.result,
+                    started_at = excluded.started_at,
+                    updated_at = excluded.updated_at,
+                    completed_at = excluded.completed_at,
+                    idle_since = excluded.idle_since
+                """,
+                (
+                    handler.handler_id,
+                    handler.workflow_name,
+                    handler.status,
+                    handler.run_id,
+                    handler.error,
+                    JsonSerializer().serialize(handler.result)
+                    if handler.result is not None
+                    else None,
+                    handler.started_at.isoformat() if handler.started_at else None,
+                    handler.updated_at.isoformat() if handler.updated_at else None,
+                    handler.completed_at.isoformat() if handler.completed_at else None,
+                    handler.idle_since.isoformat() if handler.idle_since else None,
+                ),
+            )
+            conn.commit()
 
     async def delete(self, query: HandlerQuery) -> int:
         filter_spec = self._build_filters(query)
@@ -150,20 +153,16 @@ class SqliteWorkflowStore(AbstractWorkflowStore):
             return 0
 
         sql = f"DELETE FROM handlers WHERE {' AND '.join(clauses)}"
-        conn = sqlite3.connect(self.db_path)
-        try:
+        with self._connect() as conn:
             cursor = conn.cursor()
             cursor.execute(sql, tuple(params))
             deleted = cursor.rowcount
             conn.commit()
-        finally:
-            conn.close()
 
         return int(deleted)
 
     async def append_event(self, run_id: str, event: EventEnvelopeWithMetadata) -> None:
-        conn = sqlite3.connect(self.db_path)
-        try:
+        with self._connect() as conn:
             conn.execute(
                 """INSERT INTO events (run_id, sequence, timestamp, event_json)
                 VALUES (?, COALESCE((SELECT MAX(sequence) FROM events WHERE run_id = ?), -1) + 1, CURRENT_TIMESTAMP, ?)""",
@@ -174,8 +173,6 @@ class SqliteWorkflowStore(AbstractWorkflowStore):
                 ),
             )
             conn.commit()
-        finally:
-            conn.close()
         condition = self._conditions.get(run_id)
         if condition is not None:
             async with condition:
@@ -187,22 +184,19 @@ class SqliteWorkflowStore(AbstractWorkflowStore):
         after_sequence: int | None = None,
         limit: int | None = None,
     ) -> list[StoredEvent]:
-        conn = sqlite3.connect(self.db_path)
-        try:
-            sql = "SELECT run_id, sequence, timestamp, event_json FROM events WHERE run_id = ?"
-            params: list[Any] = [run_id]
-            if after_sequence is not None:
-                sql += " AND sequence > ?"
-                params.append(after_sequence)
-            sql += " ORDER BY sequence"
-            if limit is not None:
-                sql += " LIMIT ?"
-                params.append(limit)
+        sql = "SELECT run_id, sequence, timestamp, event_json FROM events WHERE run_id = ?"
+        params: list[Any] = [run_id]
+        if after_sequence is not None:
+            sql += " AND sequence > ?"
+            params.append(after_sequence)
+        sql += " ORDER BY sequence"
+        if limit is not None:
+            sql += " LIMIT ?"
+            params.append(limit)
+        with self._connect() as conn:
             cursor = conn.cursor()
             cursor.execute(sql, params)
             rows = cursor.fetchall()
-        finally:
-            conn.close()
         return [
             StoredEvent(
                 run_id=row[0],
@@ -236,8 +230,7 @@ class SqliteWorkflowStore(AbstractWorkflowStore):
                         pass
 
     async def append_tick(self, run_id: str, tick_data: dict[str, Any]) -> None:
-        conn = sqlite3.connect(self.db_path)
-        try:
+        with self._connect() as conn:
             conn.execute(
                 """INSERT INTO ticks (run_id, sequence, timestamp, tick_data)
                 VALUES (?, COALESCE((SELECT MAX(sequence) FROM ticks WHERE run_id = ?), -1) + 1, CURRENT_TIMESTAMP, ?)""",
@@ -248,20 +241,15 @@ class SqliteWorkflowStore(AbstractWorkflowStore):
                 ),
             )
             conn.commit()
-        finally:
-            conn.close()
 
     async def get_ticks(self, run_id: str) -> List[StoredTick]:
-        conn = sqlite3.connect(self.db_path)
-        try:
+        with self._connect() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 "SELECT run_id, sequence, timestamp, tick_data FROM ticks WHERE run_id = ? ORDER BY sequence",
                 (run_id,),
             )
             rows = cursor.fetchall()
-        finally:
-            conn.close()
         return [
             StoredTick(
                 run_id=row[0],
@@ -274,8 +262,7 @@ class SqliteWorkflowStore(AbstractWorkflowStore):
 
     def get_legacy_ctx(self, run_id: str) -> dict[str, Any] | None:
         """Read the old ctx column for a run_id, if present."""
-        conn = sqlite3.connect(self.db_path)
-        try:
+        with self._connect() as conn:
             cursor = conn.cursor()
             cursor.execute(
                 "SELECT ctx FROM handlers WHERE run_id = ?",
@@ -291,8 +278,6 @@ class SqliteWorkflowStore(AbstractWorkflowStore):
                 return data
             except (json.JSONDecodeError, TypeError):
                 return None
-        finally:
-            conn.close()
 
     def _build_filters(self, query: HandlerQuery) -> tuple[list[str], list[str]] | None:
         clauses: list[str] = []

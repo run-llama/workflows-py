@@ -93,6 +93,7 @@ def start_replica(port: int) -> subprocess.Popen[str]:
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
+        start_new_session=True,
     )
 
 
@@ -170,7 +171,7 @@ async def async_main() -> None:
         for proc in replicas:
             proc.wait()
 
-    def handle_sigint(signum: int, frame: object) -> None:
+    def handle_sigint() -> None:
         print()
         log("Interrupted. Workflow state is safe in Postgres.", YELLOW)
         log(f"Run with {BOLD}--resume{RESET} to continue where you left off.", YELLOW)
@@ -178,7 +179,7 @@ async def async_main() -> None:
         cleanup()
         os._exit(130)
 
-    signal.signal(signal.SIGINT, handle_sigint)
+    asyncio.get_running_loop().add_signal_handler(signal.SIGINT, handle_sigint)
 
     replica_a = WorkflowClient(base_url="http://localhost:8001")
     replica_b = WorkflowClient(base_url="http://localhost:8002")
