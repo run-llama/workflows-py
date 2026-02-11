@@ -84,7 +84,7 @@ def wait_for_server(port: int, timeout: float = 30.0) -> None:
 def start_workflow(port: int) -> str:
     """POST to start the counter workflow, return handler_id."""
     resp = httpx.post(
-        f"http://localhost:{port}/workflows/counter/run",
+        f"http://localhost:{port}/workflows/counter/run-nowait",
         json={},
         timeout=10.0,
     )
@@ -97,17 +97,18 @@ def start_workflow(port: int) -> str:
 
 def stream_events(port: int, handler_id: str) -> bool:
     """Stream SSE events from a replica. Returns True if workflow completed."""
-    url = f"http://localhost:{port}/workflows/counter/results/{handler_id}/stream"
+    url = f"http://localhost:{port}/events/{handler_id}"
+    params = {"sse": "true", "after_sequence": "-1"}
     print(f"Streaming events from port {port}...")
     completed = False
-    with httpx.stream("GET", url, timeout=None) as resp:
+    with httpx.stream("GET", url, params=params, timeout=None) as resp:
         resp.raise_for_status()
         for line in resp.iter_lines():
             if not line.startswith("data: "):
                 continue
             payload = json.loads(line[len("data: ") :])
-            event_type = payload.get("event_type", "")
-            event_data = payload.get("event_data", {})
+            event_type = payload.get("type", "")
+            event_data = payload.get("value", {})
             if event_type == "Tick":
                 count = event_data.get("count", "?")
                 print(f"  [Stream] Tick {count}")

@@ -890,6 +890,18 @@ class ExternalDBOSAdapter(ExternalRunAdapter):
             self._handle = await self._startup_task
             self._startup_task = None  # Clear after awaiting
         if self._handle is None:
-            # Fallback for cases where no startup task was provided
-            self._handle = await DBOS.retrieve_workflow_async(self.run_id)
+            # Fallback: workflow was started elsewhere, retrieve with retry since
+            # there can be a race between start_workflow_async completing and the
+            # workflow becoming retrievable in DBOS.
+            from dbos._error import DBOSNonExistentWorkflowError
+
+            for attempt in range(20):
+                try:
+                    self._handle = await DBOS.retrieve_workflow_async(self.run_id)
+                    break
+                except DBOSNonExistentWorkflowError:
+                    if attempt == 19:
+                        raise
+                    await asyncio.sleep(0.1 * (attempt + 1))
+        assert self._handle is not None
         return self._handle
