@@ -12,6 +12,7 @@ from typing import Any, List, Sequence
 
 from llama_agents.client.protocol.serializable_events import EventEnvelopeWithMetadata
 from workflows.context import JsonSerializer
+from workflows.context.serializers import BaseSerializer
 
 from ..abstract_workflow_store import (
     AbstractWorkflowStore,
@@ -40,11 +41,18 @@ class SqliteWorkflowStore(AbstractWorkflowStore):
             self._run_migrations()
 
     def create_state_store(
-        self, run_id: str, state_type: type[Any] | None = None
+        self,
+        run_id: str,
+        state_type: type[Any] | None = None,
+        serialized_state: dict[str, Any] | None = None,
+        serializer: BaseSerializer | None = None,
     ) -> SqliteStateStore[Any]:
-        return SqliteStateStore(
+        store = SqliteStateStore(
             db_path=self.db_path, run_id=run_id, state_type=state_type
         )
+        if serialized_state is not None and serializer is not None:
+            store._seed_from_serialized(serialized_state, serializer)
+        return store
 
     def _get_or_create_condition(self, run_id: str) -> asyncio.Condition:
         """Get or create a condition for a run_id.

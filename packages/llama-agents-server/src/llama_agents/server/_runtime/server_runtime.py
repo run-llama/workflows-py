@@ -22,7 +22,6 @@ from llama_agents.server._runtime.runtime_decorators import (
 from typing_extensions import override
 from workflows.context.serializers import BaseSerializer
 from workflows.context.state_store import (
-    InMemoryStateStore,
     StateStore,
     infer_state_type,
 )
@@ -81,44 +80,16 @@ class _ServerInternalRunAdapter(BaseInternalRunAdapterDecorator):
     def get_state_store(self) -> StateStore[Any]:
         if self._state_store is not None:
             return self._state_store
-        store = self._store.create_state_store(self.run_id, self._state_type)
-        # Seed with initial context state if provided at run start
         initial = self._runtime._initial_state.pop(self.run_id, None)
         if initial is not None:
             serialized_state, serializer = initial
-            self._seed_state(store, serialized_state, serializer)
+            store = self._store.create_state_store(
+                self.run_id, self._state_type, serialized_state, serializer
+            )
+        else:
+            store = self._store.create_state_store(self.run_id, self._state_type)
         self._state_store = store
         return store
-
-    def _seed_state(
-        self,
-        store: StateStore[Any],
-        serialized_state: dict[str, Any],
-        serializer: BaseSerializer,
-    ) -> None:
-        """Seed a state store from serialized state data.
-
-        Dispatches to the appropriate seeding mechanism based on store type.
-        InMemory stores are seeded directly. SQL-backed stores handle both
-        their own serialized references (optimized copy) and InMemory format.
-        """
-        from .._store.postgres_state_store import PostgresStateStore
-        from .._store.sqlite.sqlite_state_store import SqliteStateStore
-
-        if isinstance(store, InMemoryStateStore):
-            try:
-                seed_store = InMemoryStateStore.from_dict(serialized_state, serializer)
-                store._state = seed_store._state
-            except Exception:
-                logger.warning("Failed to seed InMemoryStateStore", exc_info=True)
-        elif isinstance(store, SqliteStateStore):
-            store._seed_from_serialized(serialized_state, serializer)
-        elif isinstance(store, PostgresStateStore):
-            store._pending_seed = (serialized_state, serializer)
-        else:
-            logger.warning(
-                "Unknown state store type %s, skipping seed", type(store).__name__
-            )
 
     @override
     async def write_to_event_stream(self, event: Event) -> None:
