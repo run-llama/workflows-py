@@ -49,6 +49,12 @@ You can read more in the [example notebook.](https://github.com/run-llama/workfl
 
 You can read more in the [example notebook.](https://github.com/run-llama/workflows-py/blob/main/examples/observability/workflows_observablitiy_langfuse.ipynb)
 
+### Opik
+
+[Opik](https://github.com/comet-ml/opik) can receive workflow traces through the same OpenTelemetry pipeline used by workflows.
+
+To configure export to Opik, use the OpenTelemetry setup above and point your exporter to Opik's OTLP endpoint. See the [Opik OpenTelemetry Python SDK guide](https://www.comet.com/docs/opik/integrations/opentelemetry-python-sdk).
+
 ## Custom Spans and Events
 
 You can define custom spans and events using the LlamaIndex dispatcher to add fine-grained tracing to your code:
