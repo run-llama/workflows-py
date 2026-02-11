@@ -104,9 +104,9 @@ class SqliteStateStore(Generic[MODEL_T]):
             now = _utc_now().isoformat()
             conn.execute(
                 """
-                INSERT OR REPLACE INTO state (run_id, state_json, state_type, state_module, created_at, updated_at)
+                INSERT OR REPLACE INTO workflow_state (run_id, state_json, state_type, state_module, created_at, updated_at)
                 SELECT ?, state_json, state_type, state_module, ?, ?
-                FROM state WHERE run_id = ?
+                FROM workflow_state WHERE run_id = ?
                 """,
                 (self._run_id, now, now, source_run_id),
             )
@@ -136,7 +136,7 @@ class SqliteStateStore(Generic[MODEL_T]):
         try:
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT state_json FROM state WHERE run_id = ?",
+                "SELECT state_json FROM workflow_state WHERE run_id = ?",
                 (self._run_id,),
             )
             row = cursor.fetchone()
@@ -161,7 +161,7 @@ class SqliteStateStore(Generic[MODEL_T]):
             state_json = self._serialize_state(state)
             conn.execute(
                 """
-                INSERT INTO state (run_id, state_json, state_type, state_module, created_at, updated_at)
+                INSERT INTO workflow_state (run_id, state_json, state_type, state_module, created_at, updated_at)
                 VALUES (?, ?, ?, ?, ?, ?)
                 ON CONFLICT(run_id) DO UPDATE SET
                     state_json = excluded.state_json,
@@ -195,7 +195,7 @@ class SqliteStateStore(Generic[MODEL_T]):
         try:
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT state_json FROM state WHERE run_id = ?",
+                "SELECT state_json FROM workflow_state WHERE run_id = ?",
                 (self._run_id,),
             )
             row = cursor.fetchone()

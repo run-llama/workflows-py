@@ -11,7 +11,7 @@ CREATE TABLE IF NOT EXISTS ticks (
 CREATE INDEX IF NOT EXISTS idx_ticks_run_id ON ticks (run_id);
 CREATE INDEX IF NOT EXISTS idx_ticks_run_id_sequence ON ticks (run_id, sequence);
 
-CREATE TABLE IF NOT EXISTS state (
+CREATE TABLE IF NOT EXISTS workflow_state (
     run_id TEXT PRIMARY KEY,
     state_json TEXT NOT NULL DEFAULT '{}',
     state_type TEXT NOT NULL DEFAULT 'DictState',

@@ -360,10 +360,11 @@ class PostgresWorkflowStore(AbstractWorkflowStore):
         condition = self._get_or_create_condition(run_id)
         cursor = after_sequence
         while True:
-            events = await self.query_events(run_id, after_sequence=cursor)
+            events = await self.query_events(run_id, after_sequence=max(cursor - 1, -1))
             for event in events:
-                yield event
-                cursor = event.sequence
+                if event.sequence > cursor:
+                    yield event
+                    cursor = event.sequence
                 if self._is_terminal_event(event):
                     return
             if not events:

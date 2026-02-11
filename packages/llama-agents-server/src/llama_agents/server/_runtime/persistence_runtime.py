@@ -257,7 +257,7 @@ class PersistenceDecorator(BaseRuntimeDecorator):
         conn = sqlite3.connect(state_store._db_path)
         try:
             row = conn.execute(
-                "SELECT 1 FROM state WHERE run_id = ?", (run_id,)
+                "SELECT 1 FROM workflow_state WHERE run_id = ?", (run_id,)
             ).fetchone()
             if row is not None:
                 return

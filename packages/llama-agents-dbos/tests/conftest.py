@@ -2,19 +2,21 @@
 # Copyright (c) 2026 LlamaIndex Inc.
 from __future__ import annotations
 
-import sqlite3
 import tempfile
 from collections.abc import Generator
 from pathlib import Path
 
 import pytest
+from llama_agents.server._store.sqlite.sqlite_workflow_store import (
+    SqliteWorkflowStore,
+)
 from llama_agents_integration_tests.postgres import (
     get_asyncpg_dsn,
 )
 from llama_agents_integration_tests.postgres import (
     postgres_container as _postgres_container,
 )
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
 from sqlalchemy.pool import StaticPool
 from testcontainers.postgres import PostgresContainer
@@ -22,65 +24,21 @@ from testcontainers.postgres import PostgresContainer
 
 @pytest.fixture
 def journal_db_path() -> Generator[str]:
-    """Create a temporary SQLite database with the journal table."""
+    """Create a temporary SQLite database with migrations applied."""
     with tempfile.TemporaryDirectory() as tmp:
         db_path = str(Path(tmp) / "test.db")
-        conn = sqlite3.connect(db_path)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS workflow_journal (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                run_id TEXT NOT NULL,
-                seq_num INTEGER NOT NULL,
-                task_key TEXT NOT NULL
-            )
-        """)
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_workflow_journal_run_id ON workflow_journal (run_id)"
-        )
-        conn.commit()
-        conn.close()
+        SqliteWorkflowStore.run_migrations(db_path)
         yield db_path
 
 
 @pytest.fixture
-def sqlite_engine() -> Engine:
-    """Create an in-memory SQLite engine with state and journal tables.
-
-    Used by tests that still depend on SqlStateStore (pending Phase 5 cleanup).
-    """
+def sqlite_engine(journal_db_path: str) -> Engine:
+    """Create a SQLAlchemy engine pointing at the migrated test database."""
     engine = create_engine(
-        "sqlite:///:memory:",
+        f"sqlite:///{journal_db_path}",
         connect_args={"check_same_thread": False},
         poolclass=StaticPool,
     )
-    with engine.begin() as conn:
-        conn.execute(
-            text("""
-            CREATE TABLE IF NOT EXISTS workflow_state (
-                run_id TEXT PRIMARY KEY,
-                state_json TEXT NOT NULL DEFAULT '{}',
-                state_type TEXT NOT NULL DEFAULT 'DictState',
-                state_module TEXT NOT NULL DEFAULT 'workflows.context.state_store',
-                created_at TEXT NOT NULL DEFAULT '',
-                updated_at TEXT NOT NULL DEFAULT ''
-            )
-        """)
-        )
-        conn.execute(
-            text("""
-            CREATE TABLE IF NOT EXISTS workflow_journal (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                run_id TEXT NOT NULL,
-                seq_num INTEGER NOT NULL,
-                task_key TEXT NOT NULL
-            )
-        """)
-        )
-        conn.execute(
-            text(
-                "CREATE INDEX IF NOT EXISTS idx_workflow_journal_run_id ON workflow_journal (run_id)"
-            )
-        )
     return engine
 
 
