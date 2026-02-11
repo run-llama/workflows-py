@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
@@ -18,13 +17,6 @@ from llama_agents.server._store.postgres_workflow_store import PostgresWorkflowS
 from workflows.events import Event, StopEvent
 
 pytestmark = [pytest.mark.no_cover, pytest.mark.asyncio]
-
-# Integration tests require TEST_POSTGRES_DSN env var
-POSTGRES_DSN = os.environ.get("TEST_POSTGRES_DSN")
-requires_postgres = pytest.mark.skipif(
-    POSTGRES_DSN is None,
-    reason="TEST_POSTGRES_DSN not set",
-)
 
 
 def _make_event() -> EventEnvelopeWithMetadata:
@@ -136,15 +128,12 @@ async def test_close_without_start_is_safe() -> None:
     await store.close()  # Should not raise
 
 
-# ── Integration tests (require real Postgres) ──────────────────────
+# ── Integration tests (require Docker) ──────────────────────────────
 
 
-@requires_postgres
-async def test_integration_migrations_idempotent() -> None:
-    from llama_agents.server._store.postgres_workflow_store import PostgresWorkflowStore
-
-    assert POSTGRES_DSN is not None
-    store = PostgresWorkflowStore(dsn=POSTGRES_DSN, schema="test_pg_store")
+@pytest.mark.docker
+async def test_integration_migrations_idempotent(postgres_dsn: str) -> None:
+    store = PostgresWorkflowStore(dsn=postgres_dsn, schema="test_pg_store")
     try:
         await store.start()
         await store.run_migrations()
@@ -153,12 +142,9 @@ async def test_integration_migrations_idempotent() -> None:
         await store.close()
 
 
-@requires_postgres
-async def test_integration_handler_crud() -> None:
-    from llama_agents.server._store.postgres_workflow_store import PostgresWorkflowStore
-
-    assert POSTGRES_DSN is not None
-    store = PostgresWorkflowStore(dsn=POSTGRES_DSN, schema="test_pg_store")
+@pytest.mark.docker
+async def test_integration_handler_crud(postgres_dsn: str) -> None:
+    store = PostgresWorkflowStore(dsn=postgres_dsn, schema="test_pg_store")
     try:
         await store.start()
         await store.run_migrations()
@@ -179,12 +165,9 @@ async def test_integration_handler_crud() -> None:
         await store.close()
 
 
-@requires_postgres
-async def test_integration_event_append_and_query() -> None:
-    from llama_agents.server._store.postgres_workflow_store import PostgresWorkflowStore
-
-    assert POSTGRES_DSN is not None
-    store = PostgresWorkflowStore(dsn=POSTGRES_DSN, schema="test_pg_store")
+@pytest.mark.docker
+async def test_integration_event_append_and_query(postgres_dsn: str) -> None:
+    store = PostgresWorkflowStore(dsn=postgres_dsn, schema="test_pg_store")
     try:
         await store.start()
         await store.run_migrations()
@@ -206,13 +189,10 @@ async def test_integration_event_append_and_query() -> None:
         await store.close()
 
 
-@requires_postgres
-async def test_integration_subscribe_events() -> None:
-    from llama_agents.server._store.postgres_workflow_store import PostgresWorkflowStore
-
-    assert POSTGRES_DSN is not None
+@pytest.mark.docker
+async def test_integration_subscribe_events(postgres_dsn: str) -> None:
     store = PostgresWorkflowStore(
-        dsn=POSTGRES_DSN, schema="test_pg_store", poll_interval=0.05
+        dsn=postgres_dsn, schema="test_pg_store", poll_interval=0.05
     )
     try:
         await store.start()

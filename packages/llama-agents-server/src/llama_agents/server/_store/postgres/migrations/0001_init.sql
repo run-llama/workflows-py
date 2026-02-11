@@ -24,8 +24,16 @@ CREATE TABLE IF NOT EXISTS wf_events (
 CREATE INDEX IF NOT EXISTS idx_wf_events_run_id ON wf_events (run_id);
 CREATE INDEX IF NOT EXISTS idx_wf_handlers_run_id ON wf_handlers (run_id);
 
-ALTER TABLE wf_events
-    ADD CONSTRAINT uq_wf_events_run_id_sequence UNIQUE (run_id, sequence);
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'uq_wf_events_run_id_sequence'
+    ) THEN
+        ALTER TABLE wf_events
+            ADD CONSTRAINT uq_wf_events_run_id_sequence UNIQUE (run_id, sequence);
+    END IF;
+END
+$$;
 
 CREATE TABLE IF NOT EXISTS workflow_state (
     run_id VARCHAR(255) PRIMARY KEY,

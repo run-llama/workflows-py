@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import os
 from typing import AsyncGenerator
 
 import asyncpg
@@ -16,12 +15,6 @@ from workflows.context.serializers import JsonSerializer
 from workflows.context.state_store import DictState, InMemoryStateStore
 
 pytestmark = [pytest.mark.no_cover, pytest.mark.asyncio]
-
-POSTGRES_DSN = os.environ.get("TEST_POSTGRES_DSN")
-requires_postgres = pytest.mark.skipif(
-    POSTGRES_DSN is None,
-    reason="TEST_POSTGRES_DSN not set",
-)
 
 SCHEMA = "test_pg_state"
 
@@ -36,9 +29,8 @@ class ExtendedCounterState(CounterState):
 
 
 @pytest.fixture
-async def pool() -> AsyncGenerator[asyncpg.Pool, None]:
-    assert POSTGRES_DSN is not None
-    p = await asyncpg.create_pool(POSTGRES_DSN, min_size=1, max_size=5)
+async def pool(postgres_dsn: str) -> AsyncGenerator[asyncpg.Pool, None]:
+    p = await asyncpg.create_pool(postgres_dsn, min_size=1, max_size=5)
     async with p.acquire() as conn:
         await conn.execute(f"CREATE SCHEMA IF NOT EXISTS {SCHEMA}")
         await conn.execute(f"""
@@ -51,13 +43,12 @@ async def pool() -> AsyncGenerator[asyncpg.Pool, None]:
                 updated_at TIMESTAMPTZ
             )
         """)
-        # Clean up from previous runs
         await conn.execute(f"DELETE FROM {SCHEMA}.workflow_state")
     yield p
     await p.close()
 
 
-@requires_postgres
+@pytest.mark.docker
 async def test_get_returns_default_dict_state(pool: asyncpg.Pool) -> None:
     store: PostgresStateStore[DictState] = PostgresStateStore(
         pool=pool, run_id="run-1", schema=SCHEMA
@@ -67,7 +58,7 @@ async def test_get_returns_default_dict_state(pool: asyncpg.Pool) -> None:
     assert dict(state) == {}
 
 
-@requires_postgres
+@pytest.mark.docker
 async def test_set_and_get_path(pool: asyncpg.Pool) -> None:
     store: PostgresStateStore[DictState] = PostgresStateStore(
         pool=pool, run_id="run-path", schema=SCHEMA
@@ -77,7 +68,7 @@ async def test_set_and_get_path(pool: asyncpg.Pool) -> None:
     assert value == 42
 
 
-@requires_postgres
+@pytest.mark.docker
 async def test_set_nested_path(pool: asyncpg.Pool) -> None:
     store: PostgresStateStore[DictState] = PostgresStateStore(
         pool=pool, run_id="run-nested", schema=SCHEMA
@@ -87,7 +78,7 @@ async def test_set_nested_path(pool: asyncpg.Pool) -> None:
     assert value == "deep"
 
 
-@requires_postgres
+@pytest.mark.docker
 async def test_get_missing_path_raises(pool: asyncpg.Pool) -> None:
     store: PostgresStateStore[DictState] = PostgresStateStore(
         pool=pool, run_id="run-missing", schema=SCHEMA
@@ -96,7 +87,7 @@ async def test_get_missing_path_raises(pool: asyncpg.Pool) -> None:
         await store.get("nonexistent")
 
 
-@requires_postgres
+@pytest.mark.docker
 async def test_get_missing_path_returns_default(pool: asyncpg.Pool) -> None:
     store: PostgresStateStore[DictState] = PostgresStateStore(
         pool=pool, run_id="run-default", schema=SCHEMA
@@ -105,7 +96,7 @@ async def test_get_missing_path_returns_default(pool: asyncpg.Pool) -> None:
     assert value == "fallback"
 
 
-@requires_postgres
+@pytest.mark.docker
 async def test_set_state_replaces_dict_state(pool: asyncpg.Pool) -> None:
     store: PostgresStateStore[DictState] = PostgresStateStore(
         pool=pool, run_id="run-replace", schema=SCHEMA
@@ -118,7 +109,7 @@ async def test_set_state_replaces_dict_state(pool: asyncpg.Pool) -> None:
     assert "x" not in state
 
 
-@requires_postgres
+@pytest.mark.docker
 async def test_typed_state_get_returns_default(pool: asyncpg.Pool) -> None:
     store: PostgresStateStore[CounterState] = PostgresStateStore(
         pool=pool, run_id="run-typed", state_type=CounterState, schema=SCHEMA
@@ -129,7 +120,7 @@ async def test_typed_state_get_returns_default(pool: asyncpg.Pool) -> None:
     assert state.label == "default"
 
 
-@requires_postgres
+@pytest.mark.docker
 async def test_typed_state_set_and_get(pool: asyncpg.Pool) -> None:
     store: PostgresStateStore[CounterState] = PostgresStateStore(
         pool=pool, run_id="run-typed-set", state_type=CounterState, schema=SCHEMA
@@ -140,7 +131,7 @@ async def test_typed_state_set_and_get(pool: asyncpg.Pool) -> None:
     assert state.label == "updated"
 
 
-@requires_postgres
+@pytest.mark.docker
 async def test_set_state_parent_type_merge(pool: asyncpg.Pool) -> None:
     store: PostgresStateStore[ExtendedCounterState] = PostgresStateStore(
         pool=pool, run_id="run-merge", state_type=ExtendedCounterState, schema=SCHEMA
@@ -154,7 +145,7 @@ async def test_set_state_parent_type_merge(pool: asyncpg.Pool) -> None:
     assert state.extra == "mine"
 
 
-@requires_postgres
+@pytest.mark.docker
 async def test_edit_state_dict(pool: asyncpg.Pool) -> None:
     store: PostgresStateStore[DictState] = PostgresStateStore(
         pool=pool, run_id="run-edit", schema=SCHEMA
@@ -166,7 +157,7 @@ async def test_edit_state_dict(pool: asyncpg.Pool) -> None:
     assert value == 1
 
 
-@requires_postgres
+@pytest.mark.docker
 async def test_edit_state_typed(pool: asyncpg.Pool) -> None:
     store: PostgresStateStore[CounterState] = PostgresStateStore(
         pool=pool, run_id="run-edit-typed", state_type=CounterState, schema=SCHEMA
@@ -177,7 +168,7 @@ async def test_edit_state_typed(pool: asyncpg.Pool) -> None:
     assert result.count == 10
 
 
-@requires_postgres
+@pytest.mark.docker
 async def test_clear_resets_state(pool: asyncpg.Pool) -> None:
     store: PostgresStateStore[DictState] = PostgresStateStore(
         pool=pool, run_id="run-clear", schema=SCHEMA
@@ -188,7 +179,7 @@ async def test_clear_resets_state(pool: asyncpg.Pool) -> None:
     assert dict(state) == {}
 
 
-@requires_postgres
+@pytest.mark.docker
 async def test_clear_resets_typed_state(pool: asyncpg.Pool) -> None:
     store: PostgresStateStore[CounterState] = PostgresStateStore(
         pool=pool, run_id="run-clear-typed", state_type=CounterState, schema=SCHEMA
@@ -200,7 +191,7 @@ async def test_clear_resets_typed_state(pool: asyncpg.Pool) -> None:
     assert state.label == "default"
 
 
-@requires_postgres
+@pytest.mark.docker
 async def test_different_run_ids_are_isolated(pool: asyncpg.Pool) -> None:
     store_a: PostgresStateStore[DictState] = PostgresStateStore(
         pool=pool, run_id="run-a", schema=SCHEMA
@@ -214,7 +205,7 @@ async def test_different_run_ids_are_isolated(pool: asyncpg.Pool) -> None:
     assert await store_b.get("x") == "from-b"
 
 
-@requires_postgres
+@pytest.mark.docker
 async def test_to_dict_returns_metadata_only(pool: asyncpg.Pool) -> None:
     store: PostgresStateStore[DictState] = PostgresStateStore(
         pool=pool, run_id="run-todict", schema=SCHEMA
@@ -227,7 +218,7 @@ async def test_to_dict_returns_metadata_only(pool: asyncpg.Pool) -> None:
     assert "state_data" not in d
 
 
-@requires_postgres
+@pytest.mark.docker
 async def test_from_dict_postgres_format(pool: asyncpg.Pool) -> None:
     store1: PostgresStateStore[DictState] = PostgresStateStore(
         pool=pool, run_id="run-fromdict", schema=SCHEMA
@@ -244,7 +235,7 @@ async def test_from_dict_postgres_format(pool: asyncpg.Pool) -> None:
     assert value is True
 
 
-@requires_postgres
+@pytest.mark.docker
 async def test_from_dict_in_memory_format_migrates(pool: asyncpg.Pool) -> None:
     serializer = JsonSerializer()
     in_memory_store = InMemoryStateStore(DictState(migrated_key="migrated_value"))

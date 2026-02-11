@@ -16,6 +16,9 @@ logger = logging.getLogger(__name__)
 
 _MIGRATIONS_PKG = "llama_agents.server._store.postgres.migrations"
 _VERSION_PATTERN = re.compile(r"--\s*migration:\s*(\d+)")
+# Arbitrary but fixed int64 used as a pg_advisory_xact_lock key so that
+# concurrent replicas serialize their migration runs.
+_LOCK_ID = 7_201_407_233_458_173
 
 
 def _iter_migration_files() -> list[Traversable]:
@@ -38,7 +41,21 @@ async def run_migrations(conn: asyncpg.Connection, schema: str | None = None) ->
 
     Each migration file should start with a `-- migration: N` line.
     Files are applied in lexicographic order and only when N > current_version.
+
+    A session-level advisory lock ensures that concurrent replicas serialize
+    their migration runs so DDL and version bookkeeping never race.
     """
+    # Acquire a session-level advisory lock *before* any DDL so that
+    # concurrent callers (e.g. multiple replicas starting up) don't race
+    # on CREATE SCHEMA / CREATE TABLE.
+    await conn.execute("SELECT pg_advisory_lock($1)", _LOCK_ID)
+    try:
+        await _run_migrations_locked(conn, schema)
+    finally:
+        await conn.execute("SELECT pg_advisory_unlock($1)", _LOCK_ID)
+
+
+async def _run_migrations_locked(conn: asyncpg.Connection, schema: str | None) -> None:
     if schema:
         await conn.execute(f"CREATE SCHEMA IF NOT EXISTS {schema}")  # noqa: S608
         await conn.execute(f"SET search_path TO {schema}")  # noqa: S608

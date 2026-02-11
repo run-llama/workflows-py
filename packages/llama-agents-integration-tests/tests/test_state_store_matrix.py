@@ -10,12 +10,14 @@ Tests the StateStore protocol across InMemoryStateStore and SqlStateStore
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 from pathlib import Path
 from typing import Any, AsyncGenerator, Generator
 
 import asyncpg
 import pytest
 from llama_agents.server._store.postgres_state_store import PostgresStateStore
+from llama_agents.server._store.sqlite.migrate import run_migrations
 from llama_agents.server._store.sqlite.sqlite_state_store import SqliteStateStore
 from pydantic import (
     BaseModel,
@@ -124,10 +126,6 @@ def sqlite_db_path(
     tmp_path_factory: pytest.TempPathFactory,
 ) -> str:
     """Module-scoped SQLite database path for state store tests."""
-    import sqlite3
-
-    from llama_agents.server._store.sqlite.migrate import run_migrations
-
     db_file: Path = tmp_path_factory.mktemp("state_store") / "test.sqlite3"
     db_path = str(db_file)
 

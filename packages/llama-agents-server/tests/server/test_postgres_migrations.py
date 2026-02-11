@@ -2,7 +2,7 @@
 # Copyright (c) 2026 LlamaIndex Inc.
 from __future__ import annotations
 
-import os
+import asyncio
 
 import asyncpg
 import pytest
@@ -13,12 +13,6 @@ from llama_agents.server._store.postgres.migrate import (
 )
 
 pytestmark = [pytest.mark.no_cover, pytest.mark.asyncio]
-
-POSTGRES_DSN = os.environ.get("TEST_POSTGRES_DSN")
-requires_postgres = pytest.mark.skipif(
-    POSTGRES_DSN is None,
-    reason="TEST_POSTGRES_DSN not set",
-)
 
 
 # ── Unit tests (no DB) ──────────────────────────────────────────────
@@ -48,25 +42,22 @@ def test_first_migration_has_version_1() -> None:
     assert _parse_target_version(sql) == 1
 
 
-# ── Integration tests (require Postgres) ────────────────────────────
+# ── Integration tests (require Docker) ──────────────────────────────
 
 
-@requires_postgres
-async def test_run_migrations_fresh_db() -> None:
-    assert POSTGRES_DSN is not None
-    conn = await asyncpg.connect(POSTGRES_DSN)
+@pytest.mark.docker
+async def test_run_migrations_fresh_db(postgres_dsn: str) -> None:
+    conn = await asyncpg.connect(postgres_dsn)
     schema = "test_migrate_fresh"
     try:
         await conn.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
         await run_migrations(conn, schema=schema)
 
-        # schema_migrations should exist and have version 1
         version = await conn.fetchval(
             f"SELECT MAX(version) FROM {schema}.schema_migrations"
         )
         assert version == 1
 
-        # Tables should exist
         tables = await conn.fetch(
             "SELECT table_name FROM information_schema.tables WHERE table_schema = $1",
             schema,
@@ -81,10 +72,9 @@ async def test_run_migrations_fresh_db() -> None:
         await conn.close()
 
 
-@requires_postgres
-async def test_run_migrations_idempotent() -> None:
-    assert POSTGRES_DSN is not None
-    conn = await asyncpg.connect(POSTGRES_DSN)
+@pytest.mark.docker
+async def test_run_migrations_idempotent(postgres_dsn: str) -> None:
+    conn = await asyncpg.connect(postgres_dsn)
     schema = "test_migrate_idempotent"
     try:
         await conn.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
@@ -96,7 +86,6 @@ async def test_run_migrations_idempotent() -> None:
         )
         assert version == 1
 
-        # Should have exactly one row in schema_migrations
         count = await conn.fetchval(f"SELECT COUNT(*) FROM {schema}.schema_migrations")
         assert count == 1
     finally:
@@ -104,16 +93,15 @@ async def test_run_migrations_idempotent() -> None:
         await conn.close()
 
 
-@requires_postgres
-async def test_run_migrations_no_schema() -> None:
-    assert POSTGRES_DSN is not None
-    conn = await asyncpg.connect(POSTGRES_DSN)
+@pytest.mark.docker
+async def test_run_migrations_no_schema(postgres_dsn: str) -> None:
+    conn = await asyncpg.connect(postgres_dsn)
     try:
-        # Clean up from any previous run
         await conn.execute("DROP TABLE IF EXISTS schema_migrations CASCADE")
         await conn.execute("DROP TABLE IF EXISTS wf_handlers CASCADE")
         await conn.execute("DROP TABLE IF EXISTS wf_events CASCADE")
         await conn.execute("DROP TABLE IF EXISTS workflow_state CASCADE")
+        await conn.execute("DROP TABLE IF EXISTS workflow_journal CASCADE")
 
         await run_migrations(conn, schema=None)
 
@@ -124,4 +112,55 @@ async def test_run_migrations_no_schema() -> None:
         await conn.execute("DROP TABLE IF EXISTS wf_handlers CASCADE")
         await conn.execute("DROP TABLE IF EXISTS wf_events CASCADE")
         await conn.execute("DROP TABLE IF EXISTS workflow_state CASCADE")
+        await conn.execute("DROP TABLE IF EXISTS workflow_journal CASCADE")
+        await conn.close()
+
+
+@pytest.mark.docker
+@pytest.mark.timeout(30)
+async def test_concurrent_migrations_with_advisory_lock(
+    postgres_dsn: str,
+) -> None:
+    """Run migrations from N concurrent connections — only one should win the
+    race; the rest should observe the lock and skip gracefully."""
+    schema = "test_concurrent_mig"
+    concurrency = 8
+
+    conn = await asyncpg.connect(postgres_dsn)
+    try:
+        await conn.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
+    finally:
+        await conn.close()
+
+    async def migrate_once() -> None:
+        c = await asyncpg.connect(postgres_dsn)
+        try:
+            await run_migrations(c, schema=schema)
+        finally:
+            await c.close()
+
+    results = await asyncio.gather(
+        *[migrate_once() for _ in range(concurrency)],
+        return_exceptions=True,
+    )
+
+    for i, result in enumerate(results):
+        assert not isinstance(result, Exception), f"Migration task {i} failed: {result}"
+
+    conn = await asyncpg.connect(postgres_dsn)
+    try:
+        count = await conn.fetchval(
+            f"SELECT COUNT(*) FROM {schema}.schema_migrations WHERE version = 1"
+        )
+        assert count == 1, f"Expected 1 migration row, got {count}"
+
+        tables = await conn.fetch(
+            "SELECT table_name FROM information_schema.tables WHERE table_schema = $1",
+            schema,
+        )
+        table_names = {r["table_name"] for r in tables}
+        assert "wf_handlers" in table_names
+        assert "wf_events" in table_names
+    finally:
+        await conn.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
         await conn.close()

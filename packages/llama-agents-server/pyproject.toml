@@ -13,7 +13,8 @@ dev = [
   "pytest-xdist>=3.8.0",
   "time-machine>=2.19.0,<3.0.0",
   "llama-agents-integration-tests",
-  "asyncpg>=0.29.0"
+  "asyncpg>=0.29.0",
+  "testcontainers[postgres]>=4.0.0"
 ]
 
 [project]
@@ -47,7 +48,13 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "module"
 asyncio_default_test_loop_scope = "module"
 testpaths = ["tests"]
-addopts = "-nauto --timeout=10"
+addopts = "-nauto --timeout=10 -m 'not docker'"
+markers = [
+  "docker: marks tests as requiring Docker (testcontainers/PostgreSQL)"
+]
+filterwarnings = [
+  "ignore:The @wait_container_is_ready decorator is deprecated:DeprecationWarning"
+]
 
 [tool.uv.build-backend]
 module-name = "llama_agents.server"
