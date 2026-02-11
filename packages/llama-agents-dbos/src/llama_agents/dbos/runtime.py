@@ -48,7 +48,7 @@ from workflows.runtime.types.ticks import WorkflowTick
 from workflows.workflow import Workflow
 
 try:
-    from dbos import DBOS, SetWorkflowID
+    from dbos import DBOS, SetWorkflowID, WorkflowHandleAsync
     from dbos._dbos import _get_dbos_instance
 except ImportError as e:
     # if 3.9, give a detailed error that dbos is not supported on this version of python
@@ -182,7 +182,7 @@ class DBOSRuntime(Runtime):
         self._schema: str | None = None
         self._workflow_store: AbstractWorkflowStore | None = None
 
-    def _track_task(self, task: asyncio.Task[None]) -> None:
+    def _track_task(self, task: asyncio.Task[Any]) -> None:
         self._tasks.append(task)
         task.add_done_callback(self._tasks.remove)
 
@@ -356,7 +356,7 @@ class DBOSRuntime(Runtime):
         # Capture values needed in the async task closure
         active_serializer = serializer or JsonSerializer()
 
-        async def _run_workflow() -> None:
+        async def _run_workflow() -> WorkflowHandleAsync[Any]:
             with SetWorkflowID(run_id):
                 # Write initial state to DB before starting workflow (non-blocking to caller)
                 if serialized_state:
@@ -387,7 +387,7 @@ class DBOSRuntime(Runtime):
                     await store.set_state(state)
 
                 try:
-                    await DBOS.start_workflow_async(
+                    return await DBOS.start_workflow_async(
                         registered.workflow_run_fn,
                         init_state,
                         start_event,
@@ -859,11 +859,12 @@ class ExternalDBOSAdapter(ExternalRunAdapter):
         self,
         run_id: str,
         polling_interval_sec: float = 1.0,
-        startup_task: asyncio.Task[None] | None = None,
+        startup_task: asyncio.Task[WorkflowHandleAsync[Any]] | None = None,
     ) -> None:
         self._run_id = run_id
         self._polling_interval_sec = polling_interval_sec
         self._startup_task = startup_task  # None means workflow already started
+        self._handle: WorkflowHandleAsync[Any] | None = None
 
     @property
     def run_id(self) -> str:
@@ -880,12 +881,15 @@ class ExternalDBOSAdapter(ExternalRunAdapter):
             yield event
 
     async def get_result(self) -> StopEvent:
-        await self._ensure_workflow_started()
-        handle = await DBOS.retrieve_workflow_async(self.run_id)
+        handle = await self._ensure_workflow_started()
         return await handle.get_result(polling_interval_sec=self._polling_interval_sec)
 
-    async def _ensure_workflow_started(self) -> None:
-        """Wait for the workflow startup task to complete if one was provided."""
+    async def _ensure_workflow_started(self) -> WorkflowHandleAsync[Any]:
+        """Wait for the workflow startup task to complete and return the handle."""
         if self._startup_task is not None:
-            await self._startup_task
+            self._handle = await self._startup_task
             self._startup_task = None  # Clear after awaiting
+        if self._handle is None:
+            # Fallback for cases where no startup task was provided
+            self._handle = await DBOS.retrieve_workflow_async(self.run_id)
+        return self._handle
