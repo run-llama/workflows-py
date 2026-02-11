@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 LlamaIndex Inc.
 
+from pkgutil import extend_path
+
 from .abstract_workflow_store import (
     AbstractWorkflowStore,
     HandlerQuery,
@@ -16,3 +18,5 @@ __all__ = [
     "PersistentHandler",
     "SqliteWorkflowStore",
 ]
+
+__path__ = extend_path(__path__, __name__)
