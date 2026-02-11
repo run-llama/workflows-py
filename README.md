@@ -103,7 +103,7 @@ Visit the [complete documentation](https://docs.llamaindex.ai/en/stable/understa
   - [OpenTelemetry + LlamaIndex](./examples/observability/workflows_observability_pt2.ipynb)
   - [Arize Phoenix + LlamaIndex](./examples/observability/workflows_observablitiy_arize_phoenix.ipynb)
   - [Langfuse + LlamaIndex](./examples/observability/workflows_observablitiy_langfuse.ipynb)
-  - [Opik via OpenTelemetry](https://www.comet.com/docs/opik/integrations/opentelemetry-python-sdk)
+  - [Opik + LlamaIndex](https://www.comet.com/docs/opik/integrations/opentelemetry-python-sdk)
 
 ## Related Packages
 
