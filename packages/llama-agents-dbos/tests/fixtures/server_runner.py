@@ -2,9 +2,9 @@
 # Copyright (c) 2026 LlamaIndex Inc.
 """Subprocess runner for DBOS + WorkflowServer integration tests.
 
-Like runner.py but runs through the full WorkflowServer decorator chain
-with the store created by DBOSRuntime, enabling end-to-end replay and
-event flow testing.
+Runs a workflow through the full WorkflowServer decorator chain with the store
+created by DBOSRuntime, enabling end-to-end event flow testing including
+interrupt/resume scenarios.
 
 Usage:
     python server_runner.py \
@@ -17,30 +17,25 @@ Usage:
         --workflow "tests.fixtures.sample_workflows.chained:ChainedWorkflow" \
         --db-url "postgresql://user:pass@localhost/db" \
         --run-id "test-001" \
-        --config '{"interrupt_on": "StepTwoEvent"}'
-
-Config modes:
-    - interrupt_on: Interrupt when event type is seen (uses os._exit(0))
-      - String form: "EventName" - interrupt on any instance
-      - Dict form: {"event": "EventName", "condition": {"field": value}}
-    - run-to-completion: Empty config or omit both fields
+        --interrupt-after StepTwoEvent
 
 Flags:
     --check-streams: After workflow completes, query dbos.streams table
                      and print STREAMS_COUNT:<N>
     --check-events:  After workflow completes, query wf_events table
                      and print EVENTS_COUNT:<N> and EVENT_JSON:<json>
+    --interrupt-after EVENT_NAME: Kill the process (os._exit) after seeing
+                     a StepStateChanged with output_event_name matching
+                     EVENT_NAME. Simulates a crash for resume testing.
 """
 
 from __future__ import annotations
 
 import argparse
 import asyncio
-import json
 import os
 import sys
 from pathlib import Path
-from typing import Any
 
 import asyncpg
 
@@ -50,11 +45,9 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from llama_agents.server import WorkflowServer  # noqa: E402
 from runner_common import (  # noqa: E402  # ty: ignore[unresolved-import]
-    get_event_class_by_name,
     import_workflow,
     setup_dbos,
 )
-from workflows.events import Event  # noqa: E402
 
 
 async def check_streams_count(db_url: str, run_id: str) -> None:
@@ -108,36 +101,18 @@ async def run_workflow_with_server(
     workflow_path: str,
     db_url: str,
     run_id: str,
-    config: dict[str, Any],
     do_check_streams: bool,
     do_check_events: bool,
+    interrupt_after: str | None = None,
 ) -> None:
     """Run workflow through the full WorkflowServer + DBOS decorator chain."""
-    workflow_class, module = import_workflow(workflow_path)
+    workflow_class, _module = import_workflow(workflow_path)
 
-    # Parse interrupt config
-    interrupt_on_config = config.get("interrupt_on")
-    interrupt_event_class: type[Event] | None = None
-    interrupt_condition: dict[str, Any] | None = None
-    if interrupt_on_config:
-        if isinstance(interrupt_on_config, str):
-            interrupt_event_name = interrupt_on_config
-        else:
-            interrupt_event_name = interrupt_on_config.get("event")
-            interrupt_condition = interrupt_on_config.get("condition")
-        interrupt_event_class = get_event_class_by_name(module, interrupt_event_name)
-        if interrupt_event_class is None:
-            print(f"ERROR:ValueError:Event class '{interrupt_event_name}' not found")
-            sys.exit(1)
-
-    # Set up DBOS
     dbos_runtime = setup_dbos(db_url, app_name="test-server-workflow")
 
-    # Create workflow instance, register with DBOS runtime
     wf = workflow_class(runtime=dbos_runtime)
     dbos_runtime.launch()
 
-    # Create store and build server runtime
     store = dbos_runtime.create_workflow_store()
     await store.start()  # type: ignore[attr-defined]
     await store.run_migrations()  # type: ignore[attr-defined]
@@ -162,33 +137,18 @@ async def run_workflow_with_server(
             actual_run_id = handler_data.run_id
             assert actual_run_id is not None
 
-            # Stream events from the store
             async for stored_event in store.subscribe_events(actual_run_id):
-                envelope = stored_event.event
-                event_type = envelope.type
+                event_type = stored_event.event.type
                 print(f"EVENT:{event_type}", flush=True)
 
-                # Check for interrupt: match on event type name.
-                # User events appear as StepStateChanged with output_event_name
-                # set to the user event class name, not as raw user events.
-                if interrupt_event_class is not None:
-                    target_name = interrupt_event_class.__name__
-                    types = (envelope.types or []) + [envelope.type]
-                    data = envelope.value or {}
-
+                # Check for interrupt: StepStateChanged events carry
+                # output_event_name as a class repr string.
+                if interrupt_after is not None:
+                    data = stored_event.event.value or {}
                     output_name = data.get("output_event_name") or ""
-                    matched = target_name in types or target_name in output_name
-
-                    if matched:
-                        should_interrupt = True
-                        if interrupt_condition:
-                            for field, expected_value in interrupt_condition.items():
-                                if data.get(field) != expected_value:
-                                    should_interrupt = False
-                                    break
-                        if should_interrupt:
-                            print("INTERRUPTING", flush=True)
-                            os._exit(0)
+                    if interrupt_after in output_name:
+                        print("INTERRUPTING", flush=True)
+                        os._exit(0)
 
             print("SUCCESS", flush=True)
 
@@ -214,9 +174,13 @@ def main() -> None:
     parser.add_argument("--workflow", required=True)
     parser.add_argument("--db-url", required=True)
     parser.add_argument("--run-id", required=True)
-    parser.add_argument("--config", default=None)
     parser.add_argument("--check-streams", action="store_true")
     parser.add_argument("--check-events", action="store_true")
+    parser.add_argument(
+        "--interrupt-after",
+        default=None,
+        help="Event name to interrupt after (simulates crash)",
+    )
 
     args = parser.parse_args()
 
@@ -225,9 +189,9 @@ def main() -> None:
             workflow_path=args.workflow,
             db_url=args.db_url,
             run_id=args.run_id,
-            config=json.loads(args.config) if args.config else {},
             do_check_streams=args.check_streams,
             do_check_events=args.check_events,
+            interrupt_after=args.interrupt_after,
         )
     )
 

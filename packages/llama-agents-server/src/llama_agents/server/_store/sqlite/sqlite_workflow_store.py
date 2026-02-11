@@ -20,18 +20,24 @@ from ..abstract_workflow_store import (
     StoredEvent,
     StoredTick,
 )
-from .migrate import run_migrations
+from .migrate import run_migrations as _run_migrations
 from .sqlite_state_store import SqliteStateStore
 
 
 class SqliteWorkflowStore(AbstractWorkflowStore):
-    def __init__(self, db_path: str, poll_interval: float = 1.0) -> None:
+    def __init__(
+        self,
+        db_path: str,
+        poll_interval: float = 1.0,
+        auto_migrate: bool = True,
+    ) -> None:
         self.db_path = db_path
         self.poll_interval = poll_interval
         self._conditions: weakref.WeakValueDictionary[str, asyncio.Condition] = (
             weakref.WeakValueDictionary()
         )
-        self._init_db()
+        if auto_migrate:
+            self._run_migrations()
 
     def create_state_store(
         self, run_id: str, state_type: type[Any] | None = None
@@ -52,10 +58,18 @@ class SqliteWorkflowStore(AbstractWorkflowStore):
             self._conditions[run_id] = cond
         return cond
 
-    def _init_db(self) -> None:
-        conn = sqlite3.connect(self.db_path)
+    def _run_migrations(self) -> None:
+        self.run_migrations(self.db_path)
+
+    @staticmethod
+    def run_migrations(db_path: str) -> None:
+        """Run all pending SQLite schema migrations.
+
+        Safe to call multiple times — only applies migrations not yet applied.
+        """
+        conn = sqlite3.connect(db_path)
         try:
-            run_migrations(conn)
+            _run_migrations(conn)
             conn.commit()
         finally:
             conn.close()

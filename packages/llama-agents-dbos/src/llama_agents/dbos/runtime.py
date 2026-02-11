@@ -10,7 +10,6 @@ with durable execution backed by DBOS.
 from __future__ import annotations
 
 import asyncio
-import concurrent.futures
 import logging
 import sys
 import time
@@ -60,12 +59,14 @@ except ImportError as e:
         ) from e
     raise
 
+from llama_agents.server._runtime.event_interceptor import EventInterceptorDecorator
 from llama_agents.server._store.abstract_workflow_store import AbstractWorkflowStore
 from llama_agents.server._store.postgres_state_store import PostgresStateStore
 from llama_agents.server._store.postgres_workflow_store import (
     PostgresWorkflowStore,
 )
 from llama_agents.server._store.sqlite.sqlite_state_store import SqliteStateStore
+from llama_agents.server._store.sqlite.sqlite_workflow_store import SqliteWorkflowStore
 from sqlalchemy.engine import URL as SaURL
 from sqlalchemy.engine import Engine
 
@@ -299,35 +300,10 @@ class DBOSRuntime(Runtime):
 
         if engine.dialect.name == "postgresql":
             dsn = _sqlalchemy_url_to_asyncpg_dsn(engine.url)
-            store = PostgresWorkflowStore(dsn=dsn, schema=schema)
-
-            async def _run_pg_migrations() -> None:
-                await store.start()
-                try:
-                    await store.run_migrations()
-                finally:
-                    await store.close()
-
-            try:
-                loop = asyncio.get_running_loop()
-            except RuntimeError:
-                loop = None
-
-            if loop is not None and loop.is_running():
-                # Already inside an async context — run in a thread to avoid
-                # "This event loop is already running" errors.
-                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                    executor.submit(lambda: asyncio.run(_run_pg_migrations())).result()
-            else:
-                asyncio.run(_run_pg_migrations())
+            PostgresWorkflowStore.run_migrations_sync(dsn, schema=schema)
         else:
-            from llama_agents.server._store.sqlite.sqlite_workflow_store import (
-                SqliteWorkflowStore,
-            )
-
             db_path = str(engine.url.database) if engine.url.database else ":memory:"
-            # SqliteWorkflowStore runs all file-based migrations in __init__
-            SqliteWorkflowStore(db_path=db_path)
+            SqliteWorkflowStore.run_migrations(db_path)
 
         self._migrations_run = True
         logger.info("Database migrations completed")
@@ -486,10 +462,6 @@ class DBOSRuntime(Runtime):
         schema = _resolve_schema(self.config, engine)
 
         if engine.dialect.name == "postgresql":
-            from llama_agents.server._store.postgres_workflow_store import (
-                PostgresWorkflowStore,
-            )
-
             dsn = _sqlalchemy_url_to_asyncpg_dsn(engine.url)
             logger.info("Using PostgresWorkflowStore (asyncpg) for workflow storage")
             self._workflow_store = PostgresWorkflowStore(
@@ -499,13 +471,9 @@ class DBOSRuntime(Runtime):
             return self._workflow_store
 
         # SQLite — use SqliteWorkflowStore
-        from llama_agents.server._store.sqlite.sqlite_workflow_store import (
-            SqliteWorkflowStore,
-        )
-
         db_path = str(engine.url.database) if engine.url.database else ":memory:"
         logger.info("Using SqliteWorkflowStore for workflow storage")
-        self._workflow_store = SqliteWorkflowStore(db_path=db_path)
+        self._workflow_store = SqliteWorkflowStore(db_path=db_path, auto_migrate=False)
         return self._workflow_store
 
     def build_server_runtime(self) -> Runtime:
@@ -520,10 +488,6 @@ class DBOSRuntime(Runtime):
         The returned runtime should be passed as the ``runtime`` argument
         to ``WorkflowServer``.
         """
-        from llama_agents.server._runtime.event_interceptor import (
-            EventInterceptorDecorator,
-        )
-
         return EventInterceptorDecorator(self)
 
     def launch(self) -> None:
@@ -584,10 +548,6 @@ class DBOSRuntime(Runtime):
                 pass
             self._pool = None
         if self._workflow_store is not None:
-            from llama_agents.server._store.postgres_workflow_store import (
-                PostgresWorkflowStore,
-            )
-
             if isinstance(self._workflow_store, PostgresWorkflowStore):
                 pool = self._workflow_store._pool
                 if pool is not None:
@@ -788,6 +748,23 @@ class InternalDBOSAdapter(InternalRunAdapter):
 
         During replay, waits for the specific task that completed in the original run.
         During fresh execution, waits for any task and records the completion order.
+
+        **Journal ordering caveat:** The journal records task completion *before*
+        the control loop publishes events produced by the completed step. If a
+        crash occurs between the journal write and the event write, replay skips
+        the step (already journaled) but the event was never persisted.
+
+        - In the standalone DBOS path, ``write_to_event_stream`` publishes to
+          DBOS streams which are separately journaled, so the gap is less of an
+          issue.
+        - In the server path, ``_ServerInternalRunAdapter`` makes event writes
+          idempotent by comparing against already-persisted events, working
+          around the ordering gap.
+        - Self-publishing events (``InputRequiredEvent`` / ``HumanInputRequired``
+          subtypes) are affected: if a crash occurs after the journal records the
+          step but before the event is published, the event is lost on replay.
+        - Proper fix: defer journal recording until after all commands from a
+          tick are processed.
 
         Args:
             task_set: List of NamedTasks with stable string keys for identification

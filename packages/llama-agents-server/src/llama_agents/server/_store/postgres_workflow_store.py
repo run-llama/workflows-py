@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import json
 import logging
 import weakref
@@ -164,6 +165,33 @@ class PostgresWorkflowStore(AbstractWorkflowStore):
         pool = await self._ensure_pool()
         async with pool.acquire() as conn:
             await _run_migrations(cast(asyncpg.Connection, conn), schema=self._schema)
+
+    @staticmethod
+    def run_migrations_sync(dsn: str, schema: str | None = None) -> None:
+        """Run migrations synchronously, handling event loop detection.
+
+        Safe to call from both sync and async contexts. When called from
+        within a running event loop, runs migrations in a background thread.
+        """
+
+        async def _migrate() -> None:
+            store = PostgresWorkflowStore(dsn=dsn, schema=schema)
+            await store.start()
+            try:
+                await store.run_migrations()
+            finally:
+                await store.close()
+
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        if loop is not None and loop.is_running():
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                executor.submit(lambda: asyncio.run(_migrate())).result()
+        else:
+            asyncio.run(_migrate())
 
     # ── Handlers ────────────────────────────────────────────────────────
 
