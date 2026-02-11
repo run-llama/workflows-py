@@ -25,6 +25,7 @@ from workflows import Context
 from workflows.context.serializers import JsonSerializer
 from workflows.events import Event, StartEvent
 from workflows.handler import WorkflowHandler
+from workflows.utils import _nanoid as nanoid
 from workflows.workflow import Workflow
 
 from ._store.abstract_workflow_store import (
@@ -202,12 +203,18 @@ class _WorkflowService:
         with instrument_tags({"handler_id": handler_id}):
             if context is None:
                 context = await self._context_from_handler_id(workflow, handler_id)
-            handler = workflow.run(
+            # Pre-generate run_id and persist the handler record BEFORE starting
+            # the workflow. This prevents a race where a fast workflow completes
+            # and tries to update_handler_status before the handler row exists,
+            # causing the status update to be silently skipped.
+            run_id = nanoid()
+            await self._runtime.run_workflow_handler(
+                handler_id, workflow.workflow_name, run_id
+            )
+            _ = workflow.run(
                 ctx=context,
                 start_event=start_event,
-            )
-            await self._runtime.run_workflow_handler(
-                handler_id, workflow.workflow_name, handler
+                run_id=run_id,
             )
             handler_data = await self.load_handler(handler_id)
             if handler_data is None:

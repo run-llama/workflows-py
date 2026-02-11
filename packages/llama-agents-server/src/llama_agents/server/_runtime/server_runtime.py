@@ -33,7 +33,6 @@ from workflows.events import (
     WorkflowFailedEvent,
     WorkflowTimedOutEvent,
 )
-from workflows.handler import WorkflowHandler
 from workflows.runtime.types.internal_state import BrokerState
 from workflows.runtime.types.plugin import (
     ExternalRunAdapter,
@@ -254,9 +253,14 @@ class ServerRuntimeDecorator(BaseRuntimeDecorator):
         self,
         handler_id: str,
         workflow_name: str,
-        handler: WorkflowHandler,
-    ) -> WorkflowHandler:
-        """Persist initial handler record to store, then notify decorator chain."""
+        run_id: str,
+    ) -> None:
+        """Persist initial handler record to store.
+
+        Must be called before the workflow is started so that
+        ``update_handler_status`` can find the handler row when
+        the workflow completes.
+        """
         started_at = datetime.now(timezone.utc)
 
         await self._retry_store_write(
@@ -265,11 +269,9 @@ class ServerRuntimeDecorator(BaseRuntimeDecorator):
                     handler_id=handler_id,
                     workflow_name=workflow_name,
                     status="running",
-                    run_id=handler.run_id,
+                    run_id=run_id,
                     started_at=started_at,
                     updated_at=started_at,
                 )
             )
         )
-
-        return handler
