@@ -212,7 +212,13 @@ class DBOSRuntime(Runtime):
 
         Called at launch() time for each tracked workflow.
         Uses workflow.workflow_name for stable DBOS registration names.
+        Idempotent: returns existing registration if already registered.
         """
+        # Return existing registration if already registered
+        existing = self._registered.get(id(workflow))
+        if existing is not None:
+            return existing
+
         # Use workflow's name directly
         name = workflow.workflow_name
 
@@ -236,9 +242,11 @@ class DBOSRuntime(Runtime):
             for step_name, step in as_step_worker_functions(workflow).items()
         }
 
-        return RegisteredWorkflow(
+        registered = RegisteredWorkflow(
             workflow=workflow, workflow_run_fn=_dbos_control_loop, steps=wrapped_steps
         )
+        self._registered[id(workflow)] = registered
+        return registered
 
     def _get_sql_engine(self) -> Engine:
         """Get the SQLAlchemy engine from DBOS for state storage.
@@ -619,6 +627,22 @@ class InternalDBOSAdapter(InternalRunAdapter):
         return self._run_id
 
     async def write_to_event_stream(self, event: Event) -> None:
+        """Record events to the workflow store, skipping duplicates on replay.
+
+        During replay, non-terminal events are skipped to avoid duplicates
+        (they were already persisted in the original run). Terminal events
+        are always written because the TaskJournal records step completion
+        *before* events are published — if a crash occurs between the journal
+        write and the event write, the terminal event was never persisted and
+        must be re-emitted so that ``subscribe_events()`` can detect workflow
+        completion. Status updates (``_handle_status_update``) are idempotent,
+        so writing them again is safe; a duplicate ``append_event`` for a
+        terminal event is harmless.
+
+        The inner adapter forwarding always happens so that runtime-level
+        concerns (e.g. idle detection, DBOS stream) still function during
+        replay.
+        """
         await DBOS.write_stream_async(_IO_STREAM_PUBLISHED_EVENTS_NAME, event)
 
     async def get_now(self) -> float:

@@ -36,13 +36,14 @@ from typing import Any
 # was renamed to fixtures/sample_workflows to avoid shadowing the real package
 sys.path.insert(0, str(Path(__file__).parent))
 
+from dbos import DBOS  # noqa: E402
 from runner_common import (  # noqa: E402  # ty: ignore[unresolved-import]
     get_event_class_by_name,
     import_workflow,
     setup_dbos,
 )
-from workflows.context import Context  # noqa: E402
 from workflows.events import Event, InputRequiredEvent, StartEvent  # noqa: E402
+from workflows.handler import WorkflowHandler  # noqa: E402
 
 
 async def run_workflow(
@@ -104,8 +105,17 @@ async def run_workflow(
     runtime.launch()
 
     try:
-        ctx = Context(wf)
-        handler = ctx._workflow_run(wf, StartEvent(), run_id=run_id)
+        # Check if the workflow already exists (i.e., we're resuming after interrupt).
+        # DBOS auto-recovers pending workflows on launch(), so we just need to
+        # attach to the existing run instead of starting a new one.
+        existing = await DBOS.get_workflow_status_async(run_id)
+        if existing is not None:
+            # Attach to the auto-recovered workflow
+            external_adapter = runtime.get_external_adapter(run_id)
+            handler = WorkflowHandler(wf, external_adapter)
+        else:
+            # Fresh run - start the workflow
+            handler = wf.run(start_event=StartEvent(), run_id=run_id)
 
         async for event in handler.stream_events():
             event_name = type(event).__name__

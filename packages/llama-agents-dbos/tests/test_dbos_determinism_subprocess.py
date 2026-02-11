@@ -78,8 +78,11 @@ def assert_no_determinism_errors(result: subprocess.CompletedProcess[str]) -> No
             f"stderr: {result.stderr}"
         )
 
-    # Catch any unhandled Python exception
-    if "Traceback (most recent call last)" in combined:
+    # Catch unhandled Python exceptions in stdout (main process output).
+    # We only check stdout because stderr may contain logged tracebacks from
+    # DBOS background tasks (e.g., SQLite locking retries) that don't affect
+    # the workflow result.
+    if "Traceback (most recent call last)" in result.stdout:
         pytest.fail(
             f"Subprocess exception!\nstdout: {result.stdout}\nstderr: {result.stderr}"
         )

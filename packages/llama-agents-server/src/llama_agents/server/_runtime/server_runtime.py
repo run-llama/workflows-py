@@ -93,22 +93,7 @@ class _ServerInternalRunAdapter(BaseInternalRunAdapterDecorator):
 
     @override
     async def write_to_event_stream(self, event: Event) -> None:
-        """Record events to the workflow store, skipping duplicates on replay.
-
-        During replay, non-terminal events are skipped to avoid duplicates
-        (they were already persisted in the original run). Terminal events
-        are always written because the TaskJournal records step completion
-        *before* events are published — if a crash occurs between the journal
-        write and the event write, the terminal event was never persisted and
-        must be re-emitted so that ``subscribe_events()`` can detect workflow
-        completion. Status updates (``_handle_status_update``) are idempotent,
-        so writing them again is safe; a duplicate ``append_event`` for a
-        terminal event is harmless.
-
-        The inner adapter forwarding always happens so that runtime-level
-        concerns (e.g. idle detection, DBOS stream) still function during
-        replay.
-        """
+        """Record events to the workflow store, skipping duplicates on replay."""
         replaying = self.is_replaying()
         is_terminal = isinstance(
             event,
