@@ -229,7 +229,13 @@ class _WorkflowService:
         try:
             await run
         except Exception:
-            pass
+            logger.error(
+                "Workflow %s (handler=%s, run=%s) raised an exception",
+                handler.workflow_name,
+                handler.handler_id,
+                handler.run_id,
+                exc_info=True,
+            )
         handler_data = await self.load_handler(handler.handler_id)
         if handler_data is None:
             raise HandlerNotFoundError()
