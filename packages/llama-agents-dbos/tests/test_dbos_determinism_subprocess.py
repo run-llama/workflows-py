@@ -378,7 +378,7 @@ def test_streaming_interrupt_resume(test_db_path: Path) -> None:
     db_url = f"sqlite+pysqlite:///{test_db_path}?check_same_thread=false"
 
     result1 = run_scenario(
-        workflow="tests.fixtures.workflows.streaming_stress:StreamingStressWorkflow",
+        workflow="tests.fixtures.workflows.streaming_interrupt:StreamingInterruptWorkflow",
         db_url=db_url,
         run_id=run_id,
         config={
@@ -393,7 +393,7 @@ def test_streaming_interrupt_resume(test_db_path: Path) -> None:
     assert "INTERRUPTING" in result1.stdout, "Should have interrupted"
 
     result2 = run_scenario(
-        workflow="tests.fixtures.workflows.streaming_stress:StreamingStressWorkflow",
+        workflow="tests.fixtures.workflows.streaming_interrupt:StreamingInterruptWorkflow",
         db_url=db_url,
         run_id=run_id,
     )

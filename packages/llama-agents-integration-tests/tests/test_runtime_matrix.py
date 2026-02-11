@@ -287,6 +287,10 @@ class NumWorkersWorkflow(Workflow):
 class CustomEventsWorkflow(Workflow):
     @step
     async def start_step(self, ev: MyStart) -> OneTestEvent:
+        # Small delay to avoid DBOS read_stream_async race condition where
+        # the workflow completes before the stream reader starts polling.
+        # See thoughts/shared/bugs/dbos-read-stream-race.md
+        await asyncio.sleep(0.05)
         return OneTestEvent()
 
     @step
