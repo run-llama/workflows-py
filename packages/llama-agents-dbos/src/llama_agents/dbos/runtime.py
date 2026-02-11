@@ -59,8 +59,17 @@ except ImportError as e:
         ) from e
     raise
 
+from llama_agents.client.protocol.serializable_events import (
+    EventEnvelopeWithMetadata,
+)
 from llama_agents.server._runtime.event_interceptor import EventInterceptorDecorator
-from llama_agents.server._store.abstract_workflow_store import AbstractWorkflowStore
+from llama_agents.server._store.abstract_workflow_store import (
+    AbstractWorkflowStore,
+    HandlerQuery,
+    PersistentHandler,
+    StoredEvent,
+    StoredTick,
+)
 from llama_agents.server._store.postgres_state_store import PostgresStateStore
 from llama_agents.server._store.postgres_workflow_store import (
     PostgresWorkflowStore,
@@ -76,6 +85,62 @@ from .journal.task_journal import TaskJournal
 STATE_TABLE_NAME = "workflow_state"
 
 logger = logging.getLogger(__name__)
+
+
+class DBOSWorkflowStore(AbstractWorkflowStore):
+    """Lazy proxy that defers dialect resolution until first use.
+
+    Wraps a factory callable that produces the real store (Postgres or Sqlite).
+    The factory is called once on first access; all abstract methods delegate
+    to the resolved store.
+    """
+
+    def __init__(self, factory: Callable[[], AbstractWorkflowStore]) -> None:
+        self._factory = factory
+        self._inner: AbstractWorkflowStore | None = None
+
+    def _resolve(self) -> AbstractWorkflowStore:
+        if self._inner is None:
+            self._inner = self._factory()
+        return self._inner
+
+    @property
+    def poll_interval(self) -> float:  # type: ignore[override]
+        return self._resolve().poll_interval
+
+    def create_state_store(
+        self,
+        run_id: str,
+        state_type: type[Any] | None = None,
+        serialized_state: dict[str, Any] | None = None,
+        serializer: BaseSerializer | None = None,
+    ) -> StateStore[Any]:
+        return self._resolve().create_state_store(
+            run_id, state_type, serialized_state, serializer
+        )
+
+    async def query(self, query: HandlerQuery) -> list[PersistentHandler]:
+        return await self._resolve().query(query)
+
+    async def update(self, handler: PersistentHandler) -> None:
+        await self._resolve().update(handler)
+
+    async def delete(self, query: HandlerQuery) -> int:
+        return await self._resolve().delete(query)
+
+    async def append_event(self, run_id: str, event: EventEnvelopeWithMetadata) -> None:
+        await self._resolve().append_event(run_id, event)
+
+    async def query_events(
+        self, run_id: str, after_sequence: int | None = None, limit: int | None = None
+    ) -> list[StoredEvent]:
+        return await self._resolve().query_events(run_id, after_sequence, limit)
+
+    async def append_tick(self, run_id: str, tick_data: dict[str, Any]) -> None:
+        await self._resolve().append_tick(run_id, tick_data)
+
+    async def get_ticks(self, run_id: str) -> list[StoredTick]:
+        return await self._resolve().get_ticks(run_id)
 
 
 class DBOSRuntimeConfig(TypedDict, total=False):
@@ -455,33 +520,28 @@ class DBOSRuntime(Runtime):
         - PostgreSQL: PostgresWorkflowStore using asyncpg with LISTEN/NOTIFY
         - SQLite: SqliteWorkflowStore using raw sqlite3
 
-        Must be called after launch(). The store is cached and closed on
-        destroy().
+        Returns a lazy proxy so this can be called before launch(). The real
+        store is resolved on first use (which happens after launch()).
         """
         if self._workflow_store is not None:
             return self._workflow_store
 
-        if not self._dbos_launched:
-            raise RuntimeError(
-                "DBOS runtime not launched. Call runtime.launch() before creating workflow store."
-            )
+        def _factory() -> AbstractWorkflowStore:
+            engine = self._get_sql_engine()
+            schema = _resolve_schema(self.config, engine)
 
-        engine = self._get_sql_engine()
-        schema = _resolve_schema(self.config, engine)
+            if engine.dialect.name == "postgresql":
+                dsn = _sqlalchemy_url_to_asyncpg_dsn(engine.url)
+                logger.info(
+                    "Using PostgresWorkflowStore (asyncpg) for workflow storage"
+                )
+                return PostgresWorkflowStore(dsn=dsn, schema=schema)
 
-        if engine.dialect.name == "postgresql":
-            dsn = _sqlalchemy_url_to_asyncpg_dsn(engine.url)
-            logger.info("Using PostgresWorkflowStore (asyncpg) for workflow storage")
-            self._workflow_store = PostgresWorkflowStore(
-                dsn=dsn,
-                schema=schema,
-            )
-            return self._workflow_store
+            db_path = str(engine.url.database) if engine.url.database else ":memory:"
+            logger.info("Using SqliteWorkflowStore for workflow storage")
+            return SqliteWorkflowStore(db_path=db_path, auto_migrate=False)
 
-        # SQLite — use SqliteWorkflowStore
-        db_path = str(engine.url.database) if engine.url.database else ":memory:"
-        logger.info("Using SqliteWorkflowStore for workflow storage")
-        self._workflow_store = SqliteWorkflowStore(db_path=db_path, auto_migrate=False)
+        self._workflow_store = DBOSWorkflowStore(_factory)
         return self._workflow_store
 
     def build_server_runtime(self) -> Runtime:
@@ -558,8 +618,13 @@ class DBOSRuntime(Runtime):
                 )
             self._pool = None
         if self._workflow_store is not None:
-            if isinstance(self._workflow_store, PostgresWorkflowStore):
-                pool = self._workflow_store._pool
+            inner = (
+                self._workflow_store._inner
+                if isinstance(self._workflow_store, DBOSWorkflowStore)
+                else self._workflow_store
+            )
+            if isinstance(inner, PostgresWorkflowStore):
+                pool = inner._pool
                 if pool is not None:
                     try:
                         pool.terminate()
@@ -568,8 +633,8 @@ class DBOSRuntime(Runtime):
                             "Failed to terminate workflow store pool during destroy",
                             exc_info=True,
                         )
-                self._workflow_store._pool = None
-                self._workflow_store._listen_conn = None
+                inner._pool = None
+                inner._listen_conn = None
             self._workflow_store = None
         for task in self._tasks:
             if not task.done():

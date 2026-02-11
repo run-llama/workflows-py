@@ -81,11 +81,6 @@ async def main() -> None:
 
     runtime = DBOSRuntime()
     counter = CounterWorkflow(runtime=runtime)
-    # TODO: runtime.launch() is required before create_workflow_store() and
-    # build_server_runtime() because they need the resolved DB connection.
-    # This should be lazier — ideally WorkflowServer accepts a DBOSRuntime
-    # directly and defers store/runtime creation until server start.
-    runtime.launch()
     store = runtime.create_workflow_store()
     server_runtime = runtime.build_server_runtime()
 

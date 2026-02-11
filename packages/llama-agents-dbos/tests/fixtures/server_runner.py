@@ -114,8 +114,6 @@ async def run_workflow_with_server(
     dbos_runtime.launch()
 
     store = dbos_runtime.create_workflow_store()
-    await store.start()  # type: ignore[attr-defined]
-    await store.run_migrations()  # type: ignore[attr-defined]
 
     server_runtime = dbos_runtime.build_server_runtime()
 
@@ -126,7 +124,7 @@ async def run_workflow_with_server(
     )
     server.add_workflow("test", wf)
 
-    schema = getattr(store, "_schema", None)
+    schema = dbos_runtime._schema
 
     try:
         async with server.contextmanager():
@@ -162,7 +160,6 @@ async def run_workflow_with_server(
         print(f"ERROR:{type(e).__name__}:{e}", flush=True)
         raise
     finally:
-        await store.close()  # type: ignore[attr-defined]
         dbos_runtime.destroy()
 
 
