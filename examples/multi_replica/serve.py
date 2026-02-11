@@ -80,16 +80,19 @@ async def main() -> None:
     )
 
     runtime = DBOSRuntime()
-    counter = CounterWorkflow(runtime=runtime)
-    store = runtime.create_workflow_store()
-    server_runtime = runtime.build_server_runtime()
 
-    server = WorkflowServer(workflow_store=store, runtime=server_runtime)
-    server.add_workflow("counter", counter)
+    server = WorkflowServer(
+        workflow_store=runtime.create_workflow_store(),
+        runtime=runtime.build_server_runtime(),
+    )
+    server.add_workflow("counter", CounterWorkflow(runtime=runtime))
 
     print(f"Serving on port {args.port}")
-    async with server.contextmanager() as server:
+    await server.start()
+    try:
         await server.serve(host="0.0.0.0", port=args.port)
+    finally:
+        await server.stop()
 
 
 if __name__ == "__main__":

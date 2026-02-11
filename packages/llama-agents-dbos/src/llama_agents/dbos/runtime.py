@@ -242,6 +242,7 @@ class DBOSRuntime(Runtime):
 
         # Native driver resources (resolved at launch time)
         self._pool: asyncpg.Pool | None = None
+        self._pool_lock: asyncio.Lock = asyncio.Lock()
         self._dsn: str | None = None  # asyncpg DSN for lazy pool creation
         self._db_path: str | None = None  # sqlite path
         self._schema: str | None = None
@@ -347,12 +348,15 @@ class DBOSRuntime(Runtime):
         """
         if self._pool is not None:
             return self._pool
-        if self._dsn is None:
-            raise RuntimeError(
-                "No asyncpg DSN configured. Either not launched or using sqlite dialect."
-            )
-        self._pool = await asyncpg.create_pool(dsn=self._dsn)
-        return self._pool
+        async with self._pool_lock:
+            if self._pool is not None:
+                return self._pool
+            if self._dsn is None:
+                raise RuntimeError(
+                    "No asyncpg DSN configured. Either not launched or using sqlite dialect."
+                )
+            self._pool = await asyncpg.create_pool(dsn=self._dsn)
+            return self._pool
 
     def run_migrations(self) -> None:
         """Run database migrations for all workflow tables.

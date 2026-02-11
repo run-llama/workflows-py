@@ -21,7 +21,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
+import asyncio
 import os
 import signal
 import subprocess
@@ -31,6 +31,7 @@ from datetime import datetime
 from pathlib import Path
 
 import httpx
+from llama_agents.client import WorkflowClient
 
 _DIR = Path(__file__).parent
 _HANDLER_FILE = _DIR / ".last_handler_id"
@@ -111,47 +112,36 @@ def wait_for_server(port: int, timeout: float = 30.0) -> None:
 # -- Workflow operations ------------------------------------------------------
 
 
-def start_workflow(port: int) -> str:
-    resp = httpx.post(
-        f"http://localhost:{port}/workflows/counter/run-nowait",
-        json={},
-        timeout=10.0,
-    )
-    resp.raise_for_status()
-    return resp.json()["handler_id"]
+async def start_workflow(client: WorkflowClient) -> str:
+    handler = await client.run_workflow_nowait("counter")
+    return handler.handler_id
 
 
-def stream_events(port: int, handler_id: str, resume: bool = False) -> bool:
-    url = f"http://localhost:{port}/events/{handler_id}"
-    # On fresh start, replay all events. On resume, only new events.
-    after = "now" if resume else "-1"
-    params = {"sse": "true", "after_sequence": after}
+async def stream_events(
+    client: WorkflowClient, handler_id: str, resume: bool = False
+) -> bool:
+    after: int | str = "now" if resume else -1
     completed = False
-    with httpx.stream("GET", url, params=params, timeout=None) as resp:
-        resp.raise_for_status()
-        for line in resp.iter_lines():
-            if not line.startswith("data: "):
-                continue
-            payload = json.loads(line[len("data: ") :])
-            event_type = payload.get("type", "")
-            event_data = payload.get("value", {})
-            if event_type == "Tick":
-                count = event_data.get("count", "?")
-                bar = "#" * int(count) + "." * (20 - int(count))
-                log(f"Tick {count:>2}/20  [{bar}]", CYAN)
-            elif event_type == "CounterResult":
-                final = event_data.get("final_count", "?")
-                log(f"Done! final_count={final}", GREEN)
-                completed = True
-            else:
-                log(f"{event_type}: {event_data}", DIM)
+    async for event in client.get_workflow_events(handler_id, after_sequence=after):
+        event_type = event.type
+        event_data = event.value or {}
+        if event_type == "Tick":
+            count = event_data.get("count", "?")
+            bar = "#" * int(count) + "." * (20 - int(count))
+            log(f"Tick {count:>2}/20  [{bar}]", CYAN)
+        elif event_type == "CounterResult":
+            final = event_data.get("final_count", "?")
+            log(f"Done! final_count={final}", GREEN)
+            completed = True
+        else:
+            log(f"{event_type}: {event_data}", DIM)
     return completed
 
 
 # -- Main ---------------------------------------------------------------------
 
 
-def main() -> None:
+async def async_main() -> None:
     parser = argparse.ArgumentParser(description="Multi-Replica Demo")
     parser.add_argument("--resume", action="store_true", help="Resume last workflow")
     parser.add_argument("--clean", action="store_true", help="Tear down everything")
@@ -190,6 +180,9 @@ def main() -> None:
 
     signal.signal(signal.SIGINT, handle_sigint)
 
+    replica_a = WorkflowClient(base_url="http://localhost:8001")
+    replica_b = WorkflowClient(base_url="http://localhost:8002")
+
     try:
         # --- Postgres ---
         start_postgres()
@@ -217,7 +210,7 @@ def main() -> None:
             log(f"{DIM}DBOS recovers the workflow on the owning replica{RESET}", DIM)
         else:
             log("Triggering counter workflow on Replica A (:8001)...", BLUE)
-            handler_id = start_workflow(8001)
+            handler_id = await start_workflow(replica_a)
             _HANDLER_FILE.write_text(handler_id)
             log(f"Workflow started  handler_id={BOLD}{handler_id}{RESET}", GREEN)
 
@@ -226,7 +219,7 @@ def main() -> None:
         log(f"{DIM}Events flow: Replica A -> Postgres -> Replica B -> here{RESET}", DIM)
         print()
 
-        completed = stream_events(8002, handler_id, resume=args.resume)
+        completed = await stream_events(replica_b, handler_id, resume=args.resume)
 
         print()
         if completed:
@@ -236,6 +229,10 @@ def main() -> None:
         print()
     finally:
         cleanup()
+
+
+def main() -> None:
+    asyncio.run(async_main())
 
 
 if __name__ == "__main__":
