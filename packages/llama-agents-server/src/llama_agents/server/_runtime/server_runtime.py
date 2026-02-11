@@ -95,17 +95,8 @@ class _ServerInternalRunAdapter(BaseInternalRunAdapterDecorator):
     async def write_to_event_stream(self, event: Event) -> None:
         """Record events to the workflow store, skipping duplicates on replay."""
         replaying = self.is_replaying()
-        is_terminal = isinstance(
-            event,
-            (
-                StopEvent,
-                WorkflowFailedEvent,
-                WorkflowTimedOutEvent,
-                WorkflowCancelledEvent,
-            ),
-        )
 
-        if not replaying or is_terminal:
+        if not replaying:
             if isinstance(event, WorkflowFailedEvent):
                 await self._runtime._handle_status_update(
                     run_id=self.run_id,
