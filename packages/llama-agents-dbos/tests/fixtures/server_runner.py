@@ -55,8 +55,8 @@ async def check_streams_count(db_url: str, run_id: str) -> None:
     try:
         dsn = db_url
         if "+psycopg2" in dsn or "+psycopg" in dsn:
-            dsn = dsn.split("+")[0] + dsn.split("://", 1)[1]
             dsn = "postgresql://" + dsn.split("://", 1)[1]
+
 
         conn = await asyncpg.connect(dsn)
         try:
