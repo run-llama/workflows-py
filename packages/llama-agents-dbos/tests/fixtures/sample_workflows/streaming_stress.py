@@ -32,7 +32,7 @@ class FanOutComplete(Event):
 
 class StreamingStressWorkflow(Workflow):
     @step
-    async def fan_out(self, ctx: Context, ev: StartEvent) -> FanOutComplete:
+    async def fan_out(self, ctx: Context, ev: StartEvent) -> WorkItem | FanOutComplete:
         # Fire many stream writes and internal events concurrently
         # This creates many background tasks that call DBOS operations
         for i in range(15):

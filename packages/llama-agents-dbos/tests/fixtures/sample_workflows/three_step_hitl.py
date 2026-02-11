@@ -7,7 +7,12 @@ from __future__ import annotations
 from pydantic import Field
 from workflows.context import Context
 from workflows.decorators import step
-from workflows.events import Event, InputRequiredEvent, StartEvent, StopEvent
+from workflows.events import (
+    HumanResponseEvent,
+    InputRequiredEvent,
+    StartEvent,
+    StopEvent,
+)
 from workflows.workflow import Workflow
 
 
@@ -15,7 +20,7 @@ class NameInputEvent(InputRequiredEvent):
     prefix: str = Field(default="Name: ")
 
 
-class NameResponseEvent(Event):
+class NameResponseEvent(HumanResponseEvent):
     response: str = Field(default="")
 
 
@@ -23,7 +28,7 @@ class QuestInputEvent(InputRequiredEvent):
     prefix: str = Field(default="Quest: ")
 
 
-class QuestResponseEvent(Event):
+class QuestResponseEvent(HumanResponseEvent):
     response: str = Field(default="")
 
 

@@ -36,7 +36,7 @@ class FanOutComplete(Event):
 
 class StreamingInterruptWorkflow(Workflow):
     @step
-    async def fan_out(self, ctx: Context, ev: StartEvent) -> FanOutComplete:
+    async def fan_out(self, ctx: Context, ev: StartEvent) -> WorkItem | FanOutComplete:
         for i in range(15):
             ctx.write_event_to_stream(ProgressEvent(progress=i))
             ctx.send_event(WorkItem(item_id=i))
