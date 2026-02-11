@@ -28,6 +28,9 @@ uv run dev -p server -p client
 uv run dev -- -k test_name
 ```
 
+For more advanced scenarios, you can always `cd packages/some-package` and use pytest directly. The dev tool just provides additional package level test parallelism, and more curated cross package test output to avoid context bloat.
+
+
 ### Linting & Formatting
 ```bash
 uv run pre-commit run -a
