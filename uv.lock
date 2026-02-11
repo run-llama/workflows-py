@@ -1737,39 +1737,43 @@ name = "llama-agents-dbos"
 version = "0.1.0"
 source = { editable = "packages/llama-agents-dbos" }
 dependencies = [
-    { name = "asyncpg" },
     { name = "dbos", marker = "python_full_version >= '3.10'" },
-    { name = "llama-agents-server" },
+    { name = "llama-agents-server", extra = ["asyncpg"] },
     { name = "llama-index-workflows" },
 ]
 
 [package.dev-dependencies]
 dev = [
     { name = "basedpyright" },
+    { name = "llama-agents-integration-tests" },
     { name = "pytest" },
     { name = "pytest-asyncio" },
     { name = "pytest-cov" },
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
+    { name = "testcontainers", version = "4.13.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.9.2'" },
+    { name = "testcontainers", version = "4.13.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.9.2' and python_full_version < '3.10'" },
+    { name = "testcontainers", version = "4.14.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
     { name = "ty" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "asyncpg", specifier = ">=0.31.0" },
     { name = "dbos", marker = "python_full_version >= '3.10'", specifier = ">=2.11.0" },
-    { name = "llama-agents-server", editable = "packages/llama-agents-server" },
+    { name = "llama-agents-server", extras = ["asyncpg"], editable = "packages/llama-agents-server" },
     { name = "llama-index-workflows", editable = "packages/llama-index-workflows" },
 ]
 
 [package.metadata.requires-dev]
 dev = [
     { name = "basedpyright", specifier = ">=1.31.1" },
+    { name = "llama-agents-integration-tests", editable = "packages/llama-agents-integration-tests" },
     { name = "pytest", specifier = ">=8.4.0" },
     { name = "pytest-asyncio", specifier = ">=1.0.0" },
     { name = "pytest-cov", specifier = ">=6.1.1" },
     { name = "pytest-timeout", specifier = ">=2.4.0" },
     { name = "pytest-xdist", specifier = ">=3.0.0" },
+    { name = "testcontainers", extras = ["postgres"], specifier = ">=4.0.0" },
     { name = "ty", specifier = ">=0.0.1,<0.0.9" },
 ]
 

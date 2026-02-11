@@ -14,8 +14,6 @@ from pydantic import BaseModel
 from workflows.context.serializers import JsonSerializer
 from workflows.context.state_store import DictState, InMemoryStateStore
 
-pytestmark = [pytest.mark.no_cover, pytest.mark.asyncio]
-
 SCHEMA = "test_pg_state"
 
 

@@ -168,13 +168,20 @@ async def run_workflow_with_server(
                 event_type = envelope.type
                 print(f"EVENT:{event_type}", flush=True)
 
-                # Check for interrupt: match on event type name
+                # Check for interrupt: match on event type name.
+                # User events appear as StepStateChanged with output_event_name
+                # set to the user event class name, not as raw user events.
                 if interrupt_event_class is not None:
+                    target_name = interrupt_event_class.__name__
                     types = (envelope.types or []) + [envelope.type]
-                    if interrupt_event_class.__name__ in types:
+                    data = envelope.value or {}
+
+                    output_name = data.get("output_event_name") or ""
+                    matched = target_name in types or target_name in output_name
+
+                    if matched:
                         should_interrupt = True
                         if interrupt_condition:
-                            data = envelope.value or {}
                             for field, expected_value in interrupt_condition.items():
                                 if data.get(field) != expected_value:
                                     should_interrupt = False

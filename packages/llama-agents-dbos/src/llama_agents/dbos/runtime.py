@@ -62,6 +62,9 @@ except ImportError as e:
 
 from llama_agents.server._store.abstract_workflow_store import AbstractWorkflowStore
 from llama_agents.server._store.postgres_state_store import PostgresStateStore
+from llama_agents.server._store.postgres_workflow_store import (
+    PostgresWorkflowStore,
+)
 from llama_agents.server._store.sqlite.sqlite_state_store import SqliteStateStore
 from sqlalchemy.engine import URL as SaURL
 from sqlalchemy.engine import Engine
@@ -158,6 +161,7 @@ class DBOSRuntime(Runtime):
                 state_table_name: State table name. Default "workflow_state".
                 journal_table_name: Journal table name. Default "workflow_journal".
         """
+        super().__init__()
         self.config: DBOSRuntimeConfig = dict(kwargs)  # type: ignore[assignment]
 
         # Workflow tracking state
@@ -294,10 +298,6 @@ class DBOSRuntime(Runtime):
         schema = _resolve_schema(self.config, engine)
 
         if engine.dialect.name == "postgresql":
-            from llama_agents.server._store.postgres_workflow_store import (
-                PostgresWorkflowStore,
-            )
-
             dsn = _sqlalchemy_url_to_asyncpg_dsn(engine.url)
             store = PostgresWorkflowStore(dsn=dsn, schema=schema)
 

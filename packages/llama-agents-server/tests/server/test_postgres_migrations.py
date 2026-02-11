@@ -12,9 +12,6 @@ from llama_agents.server._store.postgres.migrate import (
     run_migrations,
 )
 
-pytestmark = [pytest.mark.no_cover, pytest.mark.asyncio]
-
-
 # ── Unit tests (no DB) ──────────────────────────────────────────────
 
 

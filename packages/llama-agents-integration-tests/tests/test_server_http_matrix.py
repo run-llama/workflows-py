@@ -179,14 +179,117 @@ def _get_backend_params() -> list[Any]:
 
 
 @pytest.fixture(scope="module")
-def postgres_container() -> Any:
+def postgres_container(request: Any) -> Any:
+    # Only start the container when docker-marked tests will actually run
+    if not any(
+        item.get_closest_marker("docker")
+        for item in request.session.items
+        if item.module is request.module
+    ):
+        yield None
+        return
     with PostgresContainer("postgres:17", driver=None) as container:
         yield container
 
 
+def _add_all_workflows(server: WorkflowServer) -> None:
+    server.add_workflow("SimpleTestWorkflow", SimpleTestWorkflow())
+    server.add_workflow("StreamingWorkflow", StreamingWorkflow())
+    server.add_workflow("InteractiveWorkflow", InteractiveWorkflow())
+    server.add_workflow("CumulativeWorkflow", CumulativeWorkflow())
+    server.add_workflow("WaitingWorkflow", WaitingWorkflow())
+
+
+_pg_server_state: dict[str, Any] = {}
+
+
+async def _start_postgres_server(
+    postgres_container: Any,
+) -> tuple[str, WorkflowServer]:
+    """Start a persistent postgres-backed server (called once per module)."""
+    connection_url = postgres_container.get_connection_url()
+    dbos_config: DBOSConfig = {
+        "name": "wf-server-http-pg",
+        "system_database_url": connection_url,
+        "run_admin_server": False,
+        "notification_listener_polling_interval_sec": 0.01,
+    }
+    DBOS(config=dbos_config)
+    runtime = DBOSRuntime(polling_interval_sec=0.01)
+    runtime.launch()
+    store = runtime.create_workflow_store()
+    server_runtime = runtime.build_server_runtime()
+
+    server = WorkflowServer(workflow_store=store, runtime=server_runtime)
+    _add_all_workflows(server)
+    await server.start()
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.bind(("127.0.0.1", 0))
+    sock.listen(128)
+    port = sock.getsockname()[1]
+
+    config = uvicorn.Config(
+        server.app, host="127.0.0.1", port=port, log_level="error", loop="asyncio"
+    )
+    uv_server = uvicorn.Server(config)
+    serve_task = asyncio.create_task(uv_server.serve(sockets=[sock]))
+
+    base_url = f"http://127.0.0.1:{port}"
+    async with httpx.AsyncClient(base_url=base_url, timeout=1.0) as client:
+        for _ in range(50):
+            try:
+                resp = await client.get("/health")
+                if resp.status_code == 200:
+                    break
+            except Exception:
+                pass
+            await asyncio.sleep(0.01)
+        else:
+            uv_server.should_exit = True
+            await serve_task
+            raise RuntimeError("Postgres live server did not start in time")
+
+    _pg_server_state["runtime"] = runtime
+    _pg_server_state["uv_server"] = uv_server
+    _pg_server_state["serve_task"] = serve_task
+    _pg_server_state["sock"] = sock
+    _pg_server_state["server"] = server
+    _pg_server_state["base_url"] = base_url
+    return base_url, server
+
+
+async def _stop_postgres_server() -> None:
+    if "uv_server" in _pg_server_state:
+        _pg_server_state["uv_server"].should_exit = True
+        try:
+            await _pg_server_state["serve_task"]
+        except Exception:
+            pass
+        _pg_server_state["sock"].close()
+        await _pg_server_state["server"].stop()
+        _pg_server_state.clear()
+
+
+@pytest.fixture(scope="module")
+async def postgres_server(
+    postgres_container: Any,
+) -> AsyncGenerator[tuple[str, WorkflowServer] | None, None]:
+    """Module-scoped postgres server — DBOS is created and destroyed once."""
+    if postgres_container is None:
+        yield None
+        return
+    result = await _start_postgres_server(postgres_container)
+    yield result
+    await _stop_postgres_server()
+
+
 @pytest.fixture
 async def backend_server(
-    request: Any, tmp_path: Path, postgres_container: Any
+    request: Any,
+    tmp_path: Path,
+    postgres_server: tuple[str, WorkflowServer] | None,
 ) -> AsyncGenerator[tuple[str, WorkflowServer], None]:
     backend = request.param
 
@@ -195,11 +298,7 @@ async def backend_server(
         def factory() -> WorkflowServer:
             store = MemoryWorkflowStore()
             server = WorkflowServer(workflow_store=store)
-            server.add_workflow("SimpleTestWorkflow", SimpleTestWorkflow())
-            server.add_workflow("StreamingWorkflow", StreamingWorkflow())
-            server.add_workflow("InteractiveWorkflow", InteractiveWorkflow())
-            server.add_workflow("CumulativeWorkflow", CumulativeWorkflow())
-            server.add_workflow("WaitingWorkflow", WaitingWorkflow())
+            _add_all_workflows(server)
             return server
 
         async with live_server(factory) as (base_url, server):
@@ -211,46 +310,15 @@ async def backend_server(
         def factory() -> WorkflowServer:
             store = SqliteWorkflowStore(db_path=str(db_path))
             server = WorkflowServer(workflow_store=store)
-            server.add_workflow("SimpleTestWorkflow", SimpleTestWorkflow())
-            server.add_workflow("StreamingWorkflow", StreamingWorkflow())
-            server.add_workflow("InteractiveWorkflow", InteractiveWorkflow())
-            server.add_workflow("CumulativeWorkflow", CumulativeWorkflow())
-            server.add_workflow("WaitingWorkflow", WaitingWorkflow())
+            _add_all_workflows(server)
             return server
 
         async with live_server(factory) as (base_url, server):
             yield base_url, server
 
     elif backend == "postgres":
-        connection_url = postgres_container.get_connection_url()
-        dbos_config: DBOSConfig = {
-            "name": "wf-server-http-pg",
-            "system_database_url": connection_url,
-            "run_admin_server": False,
-            "notification_listener_polling_interval_sec": 0.01,
-        }
-        DBOS(config=dbos_config)
-        dbos_runtime = DBOSRuntime(polling_interval_sec=0.01)
-        dbos_runtime.launch()
-        store = dbos_runtime.create_workflow_store()
-
-        def factory() -> WorkflowServer:
-            server = WorkflowServer(
-                workflow_store=store,
-                runtime=dbos_runtime.build_server_runtime(),
-            )
-            server.add_workflow("SimpleTestWorkflow", SimpleTestWorkflow())
-            server.add_workflow("StreamingWorkflow", StreamingWorkflow())
-            server.add_workflow("InteractiveWorkflow", InteractiveWorkflow())
-            server.add_workflow("CumulativeWorkflow", CumulativeWorkflow())
-            server.add_workflow("WaitingWorkflow", WaitingWorkflow())
-            return server
-
-        async with live_server(factory) as (base_url, server):
-            try:
-                yield base_url, server
-            finally:
-                dbos_runtime.destroy()
+        assert postgres_server is not None
+        yield postgres_server
 
     else:
         raise ValueError(f"Unknown backend: {backend}")

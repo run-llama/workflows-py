@@ -88,12 +88,11 @@ def postgres_container() -> Generator[PostgresContainer, None, None]:
 
 
 @pytest.fixture(scope="module")
-async def postgres_pool(
+def postgres_dsn(
     postgres_container: PostgresContainer,
-) -> AsyncGenerator[asyncpg.Pool, None]:
-    """Module-scoped asyncpg pool for PostgreSQL state store tests."""
+) -> str:
+    """Module-scoped PostgreSQL DSN for state store tests."""
     connection_url = postgres_container.get_connection_url()
-    # Convert to asyncpg format: postgresql://user:pass@host:port/db
     if "postgresql+psycopg2://" in connection_url:
         connection_url = connection_url.replace(
             "postgresql+psycopg2://", "postgresql://"
@@ -102,23 +101,26 @@ async def postgres_pool(
         connection_url = connection_url.replace(
             "postgresql+psycopg://", "postgresql://"
         )
+    return connection_url
 
-    pool = await asyncpg.create_pool(dsn=connection_url)
 
-    # Create schema and table
+async def _create_postgres_pool(dsn: str) -> asyncpg.Pool:
+    """Create a pool and ensure schema/table exist."""
+    pool = await asyncpg.create_pool(dsn=dsn)
+    assert pool is not None
     async with pool.acquire() as conn:
         await conn.execute("CREATE SCHEMA IF NOT EXISTS dbos")
         await conn.execute("""
             CREATE TABLE IF NOT EXISTS dbos.workflow_state (
-                run_id TEXT PRIMARY KEY,
-                state_json TEXT NOT NULL DEFAULT '{}',
-                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                run_id VARCHAR(255) PRIMARY KEY,
+                state_json TEXT NOT NULL,
+                state_type VARCHAR(255),
+                state_module VARCHAR(255),
+                created_at TIMESTAMPTZ,
+                updated_at TIMESTAMPTZ
             )
         """)
-
-    yield pool
-    await pool.close()
+    return pool
 
 
 @pytest.fixture(scope="module")
@@ -172,9 +174,11 @@ async def state_store(
         store = SqliteStateStore(db_path=sqlite_db_path, run_id=run_id)
         yield store
     elif request.param == "postgres":
-        pool: asyncpg.Pool = request.getfixturevalue("postgres_pool")
+        dsn: str = request.getfixturevalue("postgres_dsn")
+        pool = await _create_postgres_pool(dsn)
         store = PostgresStateStore(pool=pool, run_id=run_id, schema="dbos")
         yield store
+        await pool.close()
 
 
 @pytest.fixture(params=_get_sql_params())
@@ -186,8 +190,10 @@ async def sql_store_factory(
     if request.param == "sqlite":
         yield "sqlite", sqlite_db_path, None
     elif request.param == "postgres":
-        pool: asyncpg.Pool = request.getfixturevalue("postgres_pool")
+        dsn: str = request.getfixturevalue("postgres_dsn")
+        pool = await _create_postgres_pool(dsn)
         yield "postgres", "dbos", pool
+        await pool.close()
 
 
 @pytest.fixture(params=_get_store_params())
@@ -215,7 +221,8 @@ async def custom_state_store(
         await store.set_state(initial_state)
         yield store
     elif request.param == "postgres":
-        pool: asyncpg.Pool = request.getfixturevalue("postgres_pool")
+        dsn: str = request.getfixturevalue("postgres_dsn")
+        pool = await _create_postgres_pool(dsn)
         store = PostgresStateStore(
             pool=pool,
             run_id=run_id,
@@ -224,6 +231,7 @@ async def custom_state_store(
         )
         await store.set_state(initial_state)
         yield store
+        await pool.close()
 
 
 # -- Basic Operations Tests --
@@ -536,23 +544,25 @@ async def test_sql_custom_state_persistence(
 
 @pytest.mark.docker
 @pytest.mark.asyncio
-async def test_postgres_uses_dbos_schema(postgres_pool: asyncpg.Pool) -> None:
+async def test_postgres_uses_dbos_schema(postgres_dsn: str) -> None:
     """Test that PostgresStateStore with schema='dbos' uses the table in the dbos schema."""
-    run_id = "pg-schema-test"
-    store = PostgresStateStore(pool=postgres_pool, run_id=run_id, schema="dbos")
+    pool = await _create_postgres_pool(postgres_dsn)
+    try:
+        run_id = "pg-schema-test"
+        store = PostgresStateStore(pool=pool, run_id=run_id, schema="dbos")
 
-    # Access state - table should already exist from fixture
-    await store.set("test", "value")
+        await store.set("test", "value")
 
-    # Verify the table exists in the dbos schema
-    async with postgres_pool.acquire() as conn:
-        exists = await conn.fetchval(
-            """
-            SELECT EXISTS (
-                SELECT FROM information_schema.tables
-                WHERE table_schema = 'dbos'
-                AND table_name = 'workflow_state'
+        async with pool.acquire() as conn:
+            exists = await conn.fetchval(
+                """
+                SELECT EXISTS (
+                    SELECT FROM information_schema.tables
+                    WHERE table_schema = 'dbos'
+                    AND table_name = 'workflow_state'
+                )
+                """
             )
-            """
-        )
-        assert exists is True
+            assert exists is True
+    finally:
+        await pool.close()

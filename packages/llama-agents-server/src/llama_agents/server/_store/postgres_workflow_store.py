@@ -252,7 +252,7 @@ class PostgresWorkflowStore(AbstractWorkflowStore):
                 INSERT INTO {self._events_ref} (run_id, sequence, timestamp, event_json)
                 VALUES (
                     $1,
-                    COALESCE((SELECT MAX(sequence) FROM {self._events_ref} WHERE run_id = $4), -1) + 1,
+                    COALESCE((SELECT MAX(sequence) FROM {self._events_ref} WHERE run_id = $1::varchar), -1) + 1,
                     $2,
                     $3
                 )
@@ -260,7 +260,6 @@ class PostgresWorkflowStore(AbstractWorkflowStore):
                 run_id,
                 now,
                 event_json,
-                run_id,
             )
             await conn.execute(
                 "SELECT pg_notify($1, $2)",

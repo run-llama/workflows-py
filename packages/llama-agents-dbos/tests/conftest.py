@@ -8,9 +8,16 @@ from collections.abc import Generator
 from pathlib import Path
 
 import pytest
+from llama_agents_integration_tests.postgres import (
+    get_asyncpg_dsn,
+)
+from llama_agents_integration_tests.postgres import (
+    postgres_container as _postgres_container,
+)
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.pool import StaticPool
+from testcontainers.postgres import PostgresContainer
 
 
 @pytest.fixture
@@ -75,3 +82,16 @@ def sqlite_engine() -> Engine:
             )
         )
     return engine
+
+
+@pytest.fixture(scope="module")
+def postgres_container() -> Generator[PostgresContainer, None, None]:
+    """Module-scoped PostgreSQL container for docker-marked tests."""
+    with _postgres_container() as pg:
+        yield pg
+
+
+@pytest.fixture(scope="module")
+def postgres_dsn(postgres_container: PostgresContainer) -> str:
+    """Return a plain postgresql:// DSN suitable for asyncpg."""
+    return get_asyncpg_dsn(postgres_container)

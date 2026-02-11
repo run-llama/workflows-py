@@ -16,8 +16,6 @@ from llama_agents.server._store.abstract_workflow_store import (
 from llama_agents.server._store.postgres_workflow_store import PostgresWorkflowStore
 from workflows.events import Event, StopEvent
 
-pytestmark = [pytest.mark.no_cover, pytest.mark.asyncio]
-
 
 def _make_event() -> EventEnvelopeWithMetadata:
     class TestEvent(Event):

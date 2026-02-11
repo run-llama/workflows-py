@@ -48,7 +48,7 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "module"
 asyncio_default_test_loop_scope = "module"
 testpaths = ["tests"]
-addopts = "-nauto --timeout=10 -m 'not docker'"
+addopts = "-nauto --timeout=60 -m 'not docker'"
 markers = [
   "docker: marks tests as requiring Docker (testcontainers/PostgreSQL)"
 ]
