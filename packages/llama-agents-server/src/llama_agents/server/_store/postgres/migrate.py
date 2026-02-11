@@ -20,6 +20,16 @@ _VERSION_PATTERN = re.compile(r"--\s*migration:\s*(\d+)")
 # concurrent replicas serialize their migration runs.
 _LOCK_ID = 7_201_407_233_458_173
 
+_VALID_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _quote_identifier(name: str) -> str:
+    """Quote a SQL identifier, raising on invalid names."""
+    if not _VALID_IDENTIFIER.match(name):
+        msg = f"Invalid SQL identifier: {name!r}"
+        raise ValueError(msg)
+    return f'"{name}"'
+
 
 def _iter_migration_files() -> list[Traversable]:
     """Yield packaged SQL migration files in lexicographic order."""
@@ -57,8 +67,9 @@ async def run_migrations(conn: asyncpg.Connection, schema: str | None = None) ->
 
 async def _run_migrations_locked(conn: asyncpg.Connection, schema: str | None) -> None:
     if schema:
-        await conn.execute(f"CREATE SCHEMA IF NOT EXISTS {schema}")  # noqa: S608
-        await conn.execute(f"SET search_path TO {schema}")  # noqa: S608
+        quoted = _quote_identifier(schema)
+        await conn.execute(f"CREATE SCHEMA IF NOT EXISTS {quoted}")
+        await conn.execute(f"SET search_path TO {quoted}")
 
     await conn.execute("""
         CREATE TABLE IF NOT EXISTS schema_migrations (

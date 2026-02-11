@@ -122,11 +122,13 @@ class PostgresWorkflowStore(AbstractWorkflowStore):
                     self._notify_channel, self._on_notify
                 )
             except Exception:
-                pass
+                logger.debug("Failed to remove listener during close", exc_info=True)
             try:
                 await self._pool.release(self._listen_conn)  # type: ignore[union-attr]
             except Exception:
-                pass
+                logger.debug(
+                    "Failed to release listen connection during close", exc_info=True
+                )
             self._listen_conn = None
         if self._pool is not None:
             await self._pool.close()
@@ -277,31 +279,41 @@ class PostgresWorkflowStore(AbstractWorkflowStore):
 
     # ── Events ──────────────────────────────────────────────────────────
 
+    _MAX_SEQUENCE_RETRIES = 5
+
     async def append_event(self, run_id: str, event: EventEnvelopeWithMetadata) -> None:
         now = _utc_now()
         event_json = event.model_dump_json()
 
         pool = await self._ensure_pool()
-        async with pool.acquire() as conn:
-            await conn.execute(
-                f"""
-                INSERT INTO {self._events_ref} (run_id, sequence, timestamp, event_json)
-                VALUES (
-                    $1,
-                    COALESCE((SELECT MAX(sequence) FROM {self._events_ref} WHERE run_id = $1::varchar), -1) + 1,
-                    $2,
-                    $3
+        insert_sql = f"""
+            INSERT INTO {self._events_ref} (run_id, sequence, timestamp, event_json)
+            VALUES (
+                $1,
+                COALESCE((SELECT MAX(sequence) FROM {self._events_ref} WHERE run_id = $1::varchar), -1) + 1,
+                $2,
+                $3
+            )
+        """
+        # Retry on unique constraint violation from concurrent sequence assignment
+        for attempt in range(self._MAX_SEQUENCE_RETRIES):
+            try:
+                async with pool.acquire() as conn:
+                    await conn.execute(insert_sql, run_id, now, event_json)
+                    await conn.execute(
+                        "SELECT pg_notify($1, $2)",
+                        self._notify_channel,
+                        run_id,
+                    )
+                    return
+            except asyncpg.UniqueViolationError:
+                if attempt == self._MAX_SEQUENCE_RETRIES - 1:
+                    raise
+                logger.debug(
+                    "Sequence conflict for run_id=%s, retrying (attempt %d)",
+                    run_id,
+                    attempt + 1,
                 )
-                """,
-                run_id,
-                now,
-                event_json,
-            )
-            await conn.execute(
-                "SELECT pg_notify($1, $2)",
-                self._notify_channel,
-                run_id,
-            )
 
     async def query_events(
         self,
@@ -380,29 +392,27 @@ class PostgresWorkflowStore(AbstractWorkflowStore):
 
         def add_in_clause(column: str, values: Sequence[str]) -> None:
             nonlocal param_idx
-            if len(values) == 0:
-                raise ValueError("Empty IN clause")
             placeholders = ", ".join([f"${param_idx + i}" for i in range(len(values))])
             clauses.append(f"{column} IN ({placeholders})")
             params.extend(values)
             param_idx += len(values)
 
-        try:
-            if query.workflow_name_in is not None:
-                add_in_clause("workflow_name", query.workflow_name_in)
-            if query.handler_id_in is not None:
-                add_in_clause("handler_id", query.handler_id_in)
-            if query.run_id_in is not None:
-                add_in_clause("run_id", query.run_id_in)
-            if query.status_in is not None:
-                add_in_clause("status", query.status_in)
-            if query.is_idle is not None:
-                if query.is_idle:
-                    clauses.append("idle_since IS NOT NULL")
-                else:
-                    clauses.append("idle_since IS NULL")
-        except ValueError:
-            return None
+        for field, column in [
+            (query.workflow_name_in, "workflow_name"),
+            (query.handler_id_in, "handler_id"),
+            (query.run_id_in, "run_id"),
+            (query.status_in, "status"),
+        ]:
+            if field is not None:
+                if len(field) == 0:
+                    return None
+                add_in_clause(column, field)
+
+        if query.is_idle is not None:
+            if query.is_idle:
+                clauses.append("idle_since IS NOT NULL")
+            else:
+                clauses.append("idle_since IS NULL")
 
         return clauses, params
 

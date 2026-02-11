@@ -545,7 +545,9 @@ class DBOSRuntime(Runtime):
             try:
                 self._pool.terminate()
             except Exception:
-                pass
+                logger.debug(
+                    "Failed to terminate asyncpg pool during destroy", exc_info=True
+                )
             self._pool = None
         if self._workflow_store is not None:
             if isinstance(self._workflow_store, PostgresWorkflowStore):
@@ -554,7 +556,10 @@ class DBOSRuntime(Runtime):
                     try:
                         pool.terminate()
                     except Exception:
-                        pass
+                        logger.debug(
+                            "Failed to terminate workflow store pool during destroy",
+                            exc_info=True,
+                        )
                 self._workflow_store._pool = None
                 self._workflow_store._listen_conn = None
             self._workflow_store = None
@@ -691,14 +696,14 @@ class InternalDBOSAdapter(InternalRunAdapter):
                 self._state_store = PostgresStateStore(
                     pool=self._resolved_pool,
                     run_id=self._run_id,
-                    state_type=cast(Any, self._state_type),
+                    state_type=cast(type[Any], self._state_type),
                     schema=self._schema,
                 )
             elif self._db_path is not None:
                 self._state_store = SqliteStateStore(
                     db_path=self._db_path,
                     run_id=self._run_id,
-                    state_type=cast(Any, self._state_type),
+                    state_type=cast(type[Any], self._state_type),
                 )
             else:
                 raise RuntimeError(
