@@ -61,7 +61,7 @@ root = "packages/llama-agents-integration-tests"
 pythonVersion = "3.13"
 
 [[tool.basedpyright.executionEnvironments]]
-root = "packages/llama-index-workflows-dbos"
+root = "packages/llama-agents-dbos"
 pythonVersion = "3.10"
 
 [[tool.basedpyright.executionEnvironments]]
@@ -136,13 +136,21 @@ llama-index-utils-workflow = {workspace = true}
 llama-index-workflows = {workspace = true}
 llama-agents-client = {workspace = true}
 llama-agents-server = {workspace = true}
+llama-agents-dbos = {workspace = true}
 
 [tool.uv.workspace]
+exclude = [
+]
 members = [
-  "docs/api_docs",
-  "packages/llama-agents-integration-tests",
-  "packages/llama-index-utils-workflow",
+  # core
   "packages/llama-index-workflows",
+  # extensions
   "packages/llama-agents-client",
-  "packages/llama-agents-server"
+  "packages/llama-agents-server",
+  "packages/llama-index-utils-workflow",
+  # integrations
+  "packages/llama-agents-dbos",
+  # internal
+  "docs/api_docs",
+  "packages/llama-agents-integration-tests"
 ]

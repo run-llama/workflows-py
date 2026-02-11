@@ -25,8 +25,11 @@ jobs:
             llama-agents-dev,
             llama-agents-client,
             llama-agents-server,
+            "llama-agents-dbos"
           ]
         exclude:
+          - package: llama-agents-dbos
+            python-version: "3.9"
           # Integration tests on 3.14 run in test-docker job with cross-package coverage
           - package: llama-agents-integration-tests
             python-version: "3.9"
@@ -56,6 +59,8 @@ jobs:
             package_dir: packages/llama-agents-client
           - package: llama-agents-server
             package_dir: packages/llama-agents-server
+          - package: llama-agents-dbos
+            package_dir: packages/llama-agents-dbos
 
     steps:
       - uses: actions/checkout@v4
