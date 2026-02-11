@@ -19,7 +19,6 @@ import os
 import signal
 import subprocess
 import sys
-import threading
 import time
 from pathlib import Path
 
@@ -97,10 +96,13 @@ def start_workflow(port: int) -> str:
     return handler_id
 
 
-def stream_events(port: int, handler_id: str) -> bool:
+def stream_events(port: int, handler_id: str, resume: bool = False) -> bool:
     """Stream SSE events from a replica. Returns True if workflow completed."""
     url = f"http://localhost:{port}/events/{handler_id}"
-    params = {"sse": "true", "after_sequence": "-1"}
+    # On fresh start, get all events from the beginning.
+    # On resume, start from "now" to only see new events going forward.
+    after = "now" if resume else "-1"
+    params = {"sse": "true", "after_sequence": after}
     print(f"Streaming events from port {port}...")
     completed = False
     with httpx.stream("GET", url, params=params, timeout=None) as resp:
@@ -146,21 +148,14 @@ def main() -> None:
 
     def cleanup() -> None:
         for proc in replicas:
-            try:
-                proc.terminate()
-                proc.wait(timeout=5)
-            except Exception:
-                proc.kill()
+            proc.kill()
+        for proc in replicas:
+            proc.wait()
 
     def handle_sigint(signum: int, frame: object) -> None:
         print("\nInterrupted. Use --resume to continue.")
         cleanup()
-
-        def delayed_exit() -> None:
-            time.sleep(0.1)
-            os._exit(130)
-
-        threading.Thread(target=delayed_exit, daemon=True).start()
+        os._exit(130)
 
     signal.signal(signal.SIGINT, handle_sigint)
 
@@ -185,7 +180,7 @@ def main() -> None:
             _HANDLER_FILE.write_text(handler_id)
 
         # Stream from replica B
-        completed = stream_events(8002, handler_id)
+        completed = stream_events(8002, handler_id, resume=args.resume)
         if completed:
             print("\nWorkflow completed successfully across replicas!")
             if _HANDLER_FILE.exists():

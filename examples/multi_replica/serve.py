@@ -27,21 +27,29 @@ class Tick(Event):
     count: int = Field(description="Current count")
 
 
+class WaitDone(Event):
+    count: int = Field(description="Current count after waiting")
+
+
 class CounterResult(StopEvent):
     final_count: int = Field(description="Final counter value")
 
 
 class CounterWorkflow(Workflow):
-    """Counts to 20 with 1s delays, emitting Tick stream events."""
+    """Counts to 20 with 1s delays, emitting Tick stream events.
+
+    Split into a slow wait step and a fast tick step so that
+    the stream event is the last thing written before the next
+    wait. This minimizes duplicate ticks on DBOS replay.
+    """
 
     @step
-    async def start(self, ctx: Context, ev: StartEvent) -> Tick:
-        await ctx.store.set("count", 0)
-        print("[Start] Initializing counter to 0")
-        return Tick(count=0)
+    async def start(self, ctx: Context, ev: StartEvent) -> WaitDone:
+        print("[Start] Initializing counter")
+        return WaitDone(count=0)
 
     @step
-    async def increment(self, ctx: Context, ev: Tick) -> Tick | CounterResult:
+    async def tick(self, ctx: Context, ev: WaitDone) -> Tick | CounterResult:
         count = ev.count + 1
         await ctx.store.set("count", count)
         ctx.write_event_to_stream(Tick(count=count))
@@ -49,9 +57,12 @@ class CounterWorkflow(Workflow):
 
         if count >= 20:
             return CounterResult(final_count=count)
-
-        await asyncio.sleep(1.0)
         return Tick(count=count)
+
+    @step
+    async def wait(self, ctx: Context, ev: Tick) -> WaitDone:
+        await asyncio.sleep(1.0)
+        return WaitDone(count=ev.count)
 
 
 async def main() -> None:
@@ -64,6 +75,7 @@ async def main() -> None:
             "name": "multi-replica",
             "system_database_url": POSTGRES_DSN,
             "run_admin_server": False,
+            "executor_id": f"replica-{args.port}",
         }
     )
 
@@ -78,7 +90,7 @@ async def main() -> None:
     server_runtime = runtime.build_server_runtime()
 
     server = WorkflowServer(workflow_store=store, runtime=server_runtime)
-    server.add_workflow("counter", counter, additional_events=[Tick])
+    server.add_workflow("counter", counter)
 
     print(f"Serving on port {args.port}")
     async with server.contextmanager() as server:
