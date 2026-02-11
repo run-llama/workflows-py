@@ -37,7 +37,7 @@ def run_scenario(
     db_url: str,
     run_id: str,
     config: dict[str, Any] | None = None,
-    timeout: float = 60.0,
+    timeout: float = 45.0,
 ) -> subprocess.CompletedProcess[str]:
     """Run a workflow scenario in a subprocess.
 
@@ -46,7 +46,8 @@ def run_scenario(
         db_url: SQLite database URL
         run_id: Unique run ID for the workflow
         config: Optional config dict with interrupt_on and/or respond settings
-        timeout: Subprocess timeout in seconds
+        timeout: Subprocess timeout in seconds. Keep below pytest-timeout (60s)
+            so we can capture output on timeout instead of losing it.
 
     Returns:
         CompletedProcess with stdout and stderr captured.
@@ -63,7 +64,16 @@ def run_scenario(
     ]
     if config:
         cmd.extend(["--config", json.dumps(config)])
-    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired as e:
+        stdout = e.stdout.decode() if isinstance(e.stdout, bytes) else (e.stdout or "")
+        stderr = e.stderr.decode() if isinstance(e.stderr, bytes) else (e.stderr or "")
+        pytest.fail(
+            f"Subprocess timed out after {timeout}s\n"
+            f"stdout:\n{stdout}\n"
+            f"stderr:\n{stderr}"
+        )
 
 
 def assert_no_determinism_errors(result: subprocess.CompletedProcess[str]) -> None:
