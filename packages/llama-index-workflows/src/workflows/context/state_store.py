@@ -623,7 +623,9 @@ def deserialize_dict_state_data(
 
 
 def deserialize_state_from_dict(
-    serialized_state: dict[str, Any], serializer: "BaseSerializer"
+    serialized_state: dict[str, Any],
+    serializer: "BaseSerializer",
+    state_type: type[BaseModel] | None = None,
 ) -> BaseModel:
     """Deserialize state from a serialized payload.
 
@@ -634,6 +636,9 @@ def deserialize_state_from_dict(
         serialized_state: The payload from to_dict(), containing state_data,
             state_type, and state_module.
         serializer: Strategy to decode stored values.
+        state_type: Optional explicit state type. When provided, uses
+            issubclass to determine if it's DictState. When omitted, falls
+            back to reading state_type from the dict.
 
     Returns:
         The deserialized state model instance.
@@ -645,7 +650,16 @@ def deserialize_state_from_dict(
     state_type_name = serialized_state.get("state_type", "DictState")
 
     if state_type_name == "DictState":
-        return deserialize_dict_state_data(state_data, serializer)
+        _data_serialized = state_data.get("_data", {})
+        deserialized_data = {}
+        for key, value in _data_serialized.items():
+            try:
+                deserialized_data[key] = serializer.deserialize(value)
+            except Exception as e:
+                raise ValueError(
+                    f"Failed to deserialize state value for key {key}: {e}"
+                )
+        return DictState(_data=deserialized_data)
     else:
         return serializer.deserialize(state_data)
 

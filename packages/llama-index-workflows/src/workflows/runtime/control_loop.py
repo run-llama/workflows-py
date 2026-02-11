@@ -134,6 +134,11 @@ class _ControlLoopRunner:
         self._task_keys: dict[asyncio.Task[TickStepResult], tuple[str, int]] = {}
         # Whether a TickIdleCheck is currently in tick_buffer
         self._idle_check_pending = False
+        # Gate to prevent workers from executing their step function until the
+        # main loop is parked in wait_for_next_task. This ensures deterministic
+        # DBOS step ordering by preventing interleaving of worker steps with
+        # main loop _durable_time() calls.
+        self._worker_gate = asyncio.Event()
 
     def schedule_tick(self, tick: WorkflowTick, at_time: float) -> None:
         """Schedule a tick to be processed at a specific time."""
@@ -183,6 +188,11 @@ class _ControlLoopRunner:
                     )
                 snapshot = worker.shared_state
                 step_fn: StepWorkerFunction = self.step_workers[command.step_name]
+
+                # Wait for the main loop to signal it's safe to execute.
+                # This prevents worker DBOS steps from interleaving with
+                # main loop _durable_time() calls.
+                await self._worker_gate.wait()
 
                 result = await step_fn(
                     state=snapshot,
@@ -256,6 +266,9 @@ class _ControlLoopRunner:
 
     async def cleanup_tasks(self) -> None:
         """Cancel and cleanup all running worker tasks."""
+        # Open the gate so workers waiting on it can receive cancellation
+        self._worker_gate.set()
+
         # Signal adapter to stop waiting
         try:
             await self.adapter.close()
@@ -367,10 +380,15 @@ class _ControlLoopRunner:
                 ]
                 named_tasks.append(NamedTask.pull(pull_sequence, pull_task))
 
-                # Wait for next task completion (adapter controls ordering for replay)
-                completed_task = await self.adapter.wait_for_next_task(
-                    named_tasks, timeout
-                )
+                # Open the gate so workers can execute their step functions,
+                # then wait for next task completion.
+                self._worker_gate.set()
+                try:
+                    completed_task = await self.adapter.wait_for_next_task(
+                        named_tasks, timeout
+                    )
+                finally:
+                    self._worker_gate.clear()
 
                 if completed_task is None:
                     # Timeout - process scheduled ticks
