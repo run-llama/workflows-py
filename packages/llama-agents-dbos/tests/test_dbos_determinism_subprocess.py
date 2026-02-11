@@ -313,6 +313,7 @@ def test_sequential_hitl_interrupt_resume(test_db_path: Path) -> None:
 # =============================================================================
 
 
+@pytest.mark.timeout(60)
 @pytest.mark.parametrize("iteration", range(5))
 def test_parallel_steps_stress(test_db_path: Path, iteration: int) -> None:
     """Stress test parallel steps - run 5 times to catch timing issues."""
@@ -331,6 +332,7 @@ def test_parallel_steps_stress(test_db_path: Path, iteration: int) -> None:
     assert_no_determinism_errors(result)
 
 
+@pytest.mark.timeout(60)
 @pytest.mark.parametrize("iteration", range(5))
 def test_concurrent_workers_stress(test_db_path: Path, iteration: int) -> None:
     """Stress test concurrent workers - run 5 times to catch timing issues."""
@@ -405,6 +407,7 @@ def test_streaming_interrupt_resume(test_db_path: Path) -> None:
     )
 
 
+@pytest.mark.timeout(60)
 @pytest.mark.parametrize("iteration", range(5))
 def test_streaming_stress_repeated(test_db_path: Path, iteration: int) -> None:
     """Stress test streaming - run 5 times to catch timing issues."""
