@@ -24,6 +24,7 @@ jobs:
         run: uv run pre-commit run -a
 
       - name: Auto-fix PR if needed
+        if: ${{ secrets.CI_BOT_APP_ID != '' }}
         uses: ./.github/actions/pr-fix-comment
         with:
           app-id: ${{ secrets.CI_BOT_APP_ID }}
