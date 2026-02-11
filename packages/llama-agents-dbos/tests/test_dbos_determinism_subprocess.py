@@ -74,6 +74,7 @@ def run_scenario(
             f"stdout:\n{stdout}\n"
             f"stderr:\n{stderr}"
         )
+        raise AssertionError("unreachable")  # pytest.fail always raises  # noqa: B904
 
 
 def assert_no_determinism_errors(result: subprocess.CompletedProcess[str]) -> None:

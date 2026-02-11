@@ -153,9 +153,14 @@ def main() -> None:
                 proc.kill()
 
     def handle_sigint(signum: int, frame: object) -> None:
-        print("\nInterrupted.")
+        print("\nInterrupted. Use --resume to continue.")
         cleanup()
-        sys.exit(130)
+
+        def delayed_exit() -> None:
+            time.sleep(0.1)
+            os._exit(130)
+
+        threading.Thread(target=delayed_exit, daemon=True).start()
 
     signal.signal(signal.SIGINT, handle_sigint)
 

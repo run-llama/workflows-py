@@ -69,6 +69,10 @@ async def main() -> None:
 
     runtime = DBOSRuntime()
     counter = CounterWorkflow(runtime=runtime)
+    # TODO: runtime.launch() is required before create_workflow_store() and
+    # build_server_runtime() because they need the resolved DB connection.
+    # This should be lazier — ideally WorkflowServer accepts a DBOSRuntime
+    # directly and defers store/runtime creation until server start.
     runtime.launch()
     store = runtime.create_workflow_store()
     server_runtime = runtime.build_server_runtime()
@@ -77,7 +81,8 @@ async def main() -> None:
     server.add_workflow("counter", counter, additional_events=[Tick])
 
     print(f"Serving on port {args.port}")
-    await server.serve(host="0.0.0.0", port=args.port)
+    async with server.contextmanager() as server:
+        await server.serve(host="0.0.0.0", port=args.port)
 
 
 if __name__ == "__main__":
