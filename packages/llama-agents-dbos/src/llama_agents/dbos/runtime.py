@@ -696,9 +696,11 @@ class InternalDBOSAdapter(InternalRunAdapter):
         return self._run_id
 
     async def write_to_event_stream(self, event: Event) -> None:
+        logger.debug("DBOS_OP: write_stream %s", type(event).__name__)
         await DBOS.write_stream_async(_IO_STREAM_PUBLISHED_EVENTS_NAME, event)
 
     async def get_now(self) -> float:
+        logger.debug("DBOS_OP: step _durable_time")
         return _durable_time()
 
     async def send_event(self, tick: WorkflowTick) -> None:
@@ -726,9 +728,14 @@ class InternalDBOSAdapter(InternalRunAdapter):
             raise asyncio.CancelledError("Adapter closed")
 
         # Timeout 1x per day at least. This will just cause a wakeup loop of the control loop.
+        logger.debug("DBOS_OP: recv start (timeout=%s)", timeout_seconds)
         result = await DBOS.recv_async(
             _IO_STREAM_TICK_TOPIC,
             timeout_seconds=timeout_seconds or _UNBOUNDED_WAIT_TIMEOUT_SECONDS,
+        )
+        logger.debug(
+            "DBOS_OP: recv complete (result=%s)",
+            type(result).__name__ if result is not None else None,
         )
         if result is None:
             return WaitResultTimeout()
@@ -743,6 +750,7 @@ class InternalDBOSAdapter(InternalRunAdapter):
             return
         self._closed = True
 
+        logger.debug("DBOS_OP: close (sending shutdown signal)")
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(
             None,
@@ -882,6 +890,7 @@ class InternalDBOSAdapter(InternalRunAdapter):
                     await asyncio.wait_for(asyncio.shield(target_task), timeout=timeout)
                 except (asyncio.TimeoutError, TimeoutError):
                     return None
+                logger.debug("DBOS_OP: journal advance key=%s", expected_key)
                 journal.advance()
                 return target_task
 
@@ -894,6 +903,7 @@ class InternalDBOSAdapter(InternalRunAdapter):
 
         completed = done.pop()
         key = NamedTask.get_key(task_set, completed)
+        logger.debug("DBOS_OP: journal record key=%s", key)
         await journal.record(key)
 
         return completed
@@ -925,6 +935,7 @@ class ExternalDBOSAdapter(ExternalRunAdapter):
         return self._run_id
 
     async def send_event(self, tick: WorkflowTick) -> None:
+        logger.debug("DBOS_OP: send tick to %s", self._run_id)
         await DBOS.send_async(self._run_id, tick, topic=_IO_STREAM_TICK_TOPIC)
 
     async def stream_published_events(self) -> AsyncGenerator[Event, None]:

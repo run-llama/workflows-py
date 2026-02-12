@@ -367,6 +367,12 @@ class _ControlLoopRunner:
                     pull_task = asyncio.create_task(_single_pull(self.adapter))
                     pull_sequence = self._pull_sequence
                     self._pull_sequence += 1
+                    # Yield so the pull task runs its first synchronous section
+                    # (including DBOS function_id acquisition) before workers
+                    # are released. This ensures deterministic function_id
+                    # ordering between the pull task and worker tasks, which is
+                    # required for DBOS replay correctness.
+                    await asyncio.sleep(0)
                 else:
                     # Retrieve the sequence from last time
                     pull_sequence = self._pull_sequence - 1

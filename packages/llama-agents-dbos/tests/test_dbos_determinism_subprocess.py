@@ -64,6 +64,7 @@ def run_scenario(
     ]
     if config:
         cmd.extend(["--config", json.dumps(config)])
+    cmd.append("--debug")
     try:
         return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired as e:
@@ -438,3 +439,50 @@ def test_streaming_stress_repeated(test_db_path: Path, iteration: int) -> None:
         f"Iteration {iteration} failed.\nstdout: {result.stdout}\nstderr: {result.stderr}"
     )
     assert_no_determinism_errors(result)
+
+
+# =============================================================================
+# Stress test: HITL interrupt/resume repeated to catch timing issues
+# =============================================================================
+
+
+@pytest.mark.timeout(120)
+@pytest.mark.parametrize("iteration", range(10))
+def test_determinism_stress_hitl_interrupt_resume(
+    test_db_path: Path, iteration: int
+) -> None:
+    """Stress test HITL interrupt/resume - run 10 times to catch timing issues."""
+    run_id = f"test-determinism-stress-{iteration}"
+    db_url = f"sqlite+pysqlite:///{test_db_path}?check_same_thread=false"
+
+    result1 = run_scenario(
+        workflow="tests.fixtures.sample_workflows.hitl:TestWorkflow",
+        db_url=db_url,
+        run_id=run_id,
+        config={"interrupt_on": "AskInputEvent"},
+    )
+
+    assert "INTERRUPTING" in result1.stdout, (
+        f"Iteration {iteration}: Should have interrupted.\n"
+        f"stdout: {result1.stdout}\nstderr: {result1.stderr}"
+    )
+
+    result2 = run_scenario(
+        workflow="tests.fixtures.sample_workflows.hitl:TestWorkflow",
+        db_url=db_url,
+        run_id=run_id,
+        config={
+            "respond": {
+                "AskInputEvent": {
+                    "event": "UserInput",
+                    "fields": {"response": "test_input"},
+                }
+            }
+        },
+    )
+
+    assert_no_determinism_errors(result2)
+    assert "SUCCESS" in result2.stdout, (
+        f"Iteration {iteration}: Resume should succeed.\n"
+        f"stdout: {result2.stdout}\nstderr: {result2.stderr}"
+    )
