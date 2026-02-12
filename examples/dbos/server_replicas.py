@@ -13,9 +13,9 @@ backed by a shared Postgres database with DBOS.
   - --resume picks up exactly where it left off via DBOS recovery
 
 Usage:
-    python examples/multi_replica/run.py              # Start new
-    python examples/multi_replica/run.py --resume     # Resume after Ctrl+C
-    python examples/multi_replica/run.py --clean      # Tear down everything
+    python examples/dbos/server_replicas.py              # Start new
+    python examples/dbos/server_replicas.py --resume     # Resume after Ctrl+C
+    python examples/dbos/server_replicas.py --clean      # Tear down everything
 """
 
 from __future__ import annotations
@@ -89,7 +89,7 @@ def start_postgres() -> None:
 
 def start_replica(port: int) -> subprocess.Popen[str]:
     return subprocess.Popen(
-        [sys.executable, str(_DIR / "serve.py"), "--port", str(port)],
+        [sys.executable, str(_DIR / "_replica.py"), "--port", str(port)],
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
