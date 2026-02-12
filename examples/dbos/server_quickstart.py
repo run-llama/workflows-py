@@ -95,7 +95,7 @@ async def main() -> None:
     server.add_workflow("counter", CounterWorkflow(runtime=runtime))
 
     print("Serving on http://localhost:8000")
-    print("Try: curl -X POST http://localhost:8000/workflows/counter/run")
+    print(f"Try: curl -X POST http://localhost:8000/workflows/counter/run -d '{}'")
     await server.start()
     try:
         await server.serve(host="0.0.0.0", port=8000)
