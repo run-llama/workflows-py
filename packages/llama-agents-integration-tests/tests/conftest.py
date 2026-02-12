@@ -9,6 +9,9 @@ from llama_agents_integration_tests.helpers import (
     make_text_response,
     response_generator_from_list,
 )
+from llama_agents_integration_tests.postgres import (
+    postgres_container as _postgres_container,
+)
 from llama_index.core.agent.workflow import (
     AgentWorkflow,
     FunctionAgent,
@@ -145,8 +148,8 @@ def postgres_container() -> Generator[PostgresContainer, None, None]:
 
     Requires Docker to be running. Used by tests marked with @pytest.mark.docker.
     """
-    with PostgresContainer("postgres:16", driver=None) as postgres:
-        yield postgres
+    with _postgres_container() as pg:
+        yield pg
 
 
 @pytest.fixture(scope="module")

@@ -10,7 +10,13 @@ import random
 from pydantic import Field
 from workflows.context import Context
 from workflows.decorators import step
-from workflows.events import Event, InputRequiredEvent, StartEvent, StopEvent
+from workflows.events import (
+    Event,
+    HumanResponseEvent,
+    InputRequiredEvent,
+    StartEvent,
+    StopEvent,
+)
 from workflows.workflow import Workflow
 
 
@@ -22,7 +28,7 @@ class WaitForInputEvent(InputRequiredEvent):
     prompt: str = Field(default="")
 
 
-class UserContinueEvent(Event):
+class UserContinueEvent(HumanResponseEvent):
     continue_value: str = Field(default="")
 
 

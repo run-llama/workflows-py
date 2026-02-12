@@ -348,9 +348,7 @@ async def test_run_workflow_handler_persists_initial_record() -> None:
     decorator = ServerRuntimeDecorator(StubRuntime(), store=store)
     decorator._persistence_backoff = [0, 0]
 
-    mock_handler = MagicMock(run_id="test-run")
-
-    await decorator.run_workflow_handler("h-init", "my_workflow", mock_handler)
+    await decorator.run_workflow_handler("h-init", "my_workflow", "test-run")
 
     found = await store.query(HandlerQuery(handler_id_in=["h-init"]))
     assert len(found) == 1

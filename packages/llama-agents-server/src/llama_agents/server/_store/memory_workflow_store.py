@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import weakref
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
 from typing import Any, Dict, List
 
 from llama_agents.client.protocol.serializable_events import EventEnvelopeWithMetadata
+from workflows.context.serializers import BaseSerializer
 from workflows.context.state_store import DictState, InMemoryStateStore
 
 from .abstract_workflow_store import (
@@ -16,6 +18,8 @@ from .abstract_workflow_store import (
     StoredEvent,
     StoredTick,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _matches_query(handler: PersistentHandler, query: HandlerQuery) -> bool:
@@ -63,12 +67,27 @@ class MemoryWorkflowStore(AbstractWorkflowStore):
         )
 
     def create_state_store(
-        self, run_id: str, state_type: type[Any] | None = None
+        self,
+        run_id: str,
+        state_type: type[Any] | None = None,
+        serialized_state: dict[str, Any] | None = None,
+        serializer: BaseSerializer | None = None,
     ) -> InMemoryStateStore[Any]:
         if run_id not in self.state_stores:
-            self.state_stores[run_id] = InMemoryStateStore(
-                state_type() if state_type else DictState()
-            )
+            if serialized_state is not None and serializer is not None:
+                try:
+                    self.state_stores[run_id] = InMemoryStateStore.from_dict(
+                        serialized_state, serializer
+                    )
+                except Exception:
+                    logger.warning("Failed to seed InMemoryStateStore", exc_info=True)
+                    self.state_stores[run_id] = InMemoryStateStore(
+                        state_type() if state_type else DictState()
+                    )
+            else:
+                self.state_stores[run_id] = InMemoryStateStore(
+                    state_type() if state_type else DictState()
+                )
         return self.state_stores[run_id]
 
     async def query(self, query: HandlerQuery) -> List[PersistentHandler]:

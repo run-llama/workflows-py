@@ -10,11 +10,15 @@ Tests the StateStore protocol across InMemoryStateStore and SqlStateStore
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 from pathlib import Path
 from typing import Any, AsyncGenerator, Generator
 
+import asyncpg
 import pytest
-from llama_agents.dbos.state_store import SqlStateStore
+from llama_agents.server._store.postgres_state_store import PostgresStateStore
+from llama_agents.server._store.sqlite.migrate import run_migrations
+from llama_agents.server._store.sqlite.sqlite_state_store import SqliteStateStore
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -22,8 +26,6 @@ from pydantic import (
     field_serializer,
     field_validator,
 )
-from sqlalchemy import create_engine
-from sqlalchemy.engine import Engine
 from testcontainers.postgres import PostgresContainer
 from workflows.context.serializers import JsonSerializer
 from workflows.context.state_store import DictState, InMemoryStateStore, StateStore
@@ -86,35 +88,58 @@ def postgres_container() -> Generator[PostgresContainer, None, None]:
 
 
 @pytest.fixture(scope="module")
-def postgres_engine(
+def postgres_dsn(
     postgres_container: PostgresContainer,
-) -> Generator[Engine, None, None]:
-    """Module-scoped PostgreSQL engine for state store tests."""
-    # Get connection URL and convert to use psycopg (psycopg3) driver
+) -> str:
+    """Module-scoped PostgreSQL DSN for state store tests."""
     connection_url = postgres_container.get_connection_url()
-    # Replace postgresql:// or postgresql+psycopg2:// with postgresql+psycopg://
     if "postgresql+psycopg2://" in connection_url:
         connection_url = connection_url.replace(
-            "postgresql+psycopg2://", "postgresql+psycopg://"
+            "postgresql+psycopg2://", "postgresql://"
         )
-    elif connection_url.startswith("postgresql://"):
+    elif "postgresql+psycopg://" in connection_url:
         connection_url = connection_url.replace(
-            "postgresql://", "postgresql+psycopg://", 1
+            "postgresql+psycopg://", "postgresql://"
         )
-    engine = create_engine(connection_url)
-    yield engine
-    engine.dispose()
+    return connection_url
+
+
+async def _create_postgres_pool(dsn: str) -> asyncpg.Pool:
+    """Create a pool and ensure schema/table exist."""
+    pool = await asyncpg.create_pool(dsn=dsn)
+    assert pool is not None
+    async with pool.acquire() as conn:
+        await conn.execute("CREATE SCHEMA IF NOT EXISTS dbos")
+        await conn.execute("""
+            CREATE TABLE IF NOT EXISTS dbos.workflow_state (
+                run_id VARCHAR(255) PRIMARY KEY,
+                state_json TEXT NOT NULL,
+                state_type VARCHAR(255),
+                state_module VARCHAR(255),
+                created_at TIMESTAMPTZ,
+                updated_at TIMESTAMPTZ
+            )
+        """)
+    return pool
 
 
 @pytest.fixture(scope="module")
-def sqlite_engine(
+def sqlite_db_path(
     tmp_path_factory: pytest.TempPathFactory,
-) -> Generator[Engine, None, None]:
-    """Module-scoped SQLite engine for state store tests."""
+) -> str:
+    """Module-scoped SQLite database path for state store tests."""
     db_file: Path = tmp_path_factory.mktemp("state_store") / "test.sqlite3"
-    engine = create_engine(f"sqlite:///{db_file}?check_same_thread=false")
-    yield engine
-    engine.dispose()
+    db_path = str(db_file)
+
+    # Run migrations to create tables
+    conn = sqlite3.connect(db_path)
+    try:
+        run_migrations(conn)
+        conn.commit()
+    finally:
+        conn.close()
+
+    return db_path
 
 
 def _get_store_params() -> list[Any]:
@@ -137,7 +162,7 @@ def _get_sql_params() -> list[Any]:
 @pytest.fixture(params=_get_store_params())
 async def state_store(
     request: pytest.FixtureRequest,
-    sqlite_engine: Engine,
+    sqlite_db_path: str,
 ) -> AsyncGenerator[StateStore[DictState], None]:
     """Parametrized fixture yielding a fresh StateStore for each test."""
     # Use unique run_id per test to avoid state bleeding
@@ -146,31 +171,35 @@ async def state_store(
     if request.param == "in_memory":
         yield InMemoryStateStore(DictState())
     elif request.param == "sqlite":
-        store = SqlStateStore(run_id=run_id, engine=sqlite_engine)
+        store = SqliteStateStore(db_path=sqlite_db_path, run_id=run_id)
         yield store
     elif request.param == "postgres":
-        pg_engine: Engine = request.getfixturevalue("postgres_engine")
-        store = SqlStateStore(run_id=run_id, engine=pg_engine, schema="dbos")
+        dsn: str = request.getfixturevalue("postgres_dsn")
+        pool = await _create_postgres_pool(dsn)
+        store = PostgresStateStore(pool=pool, run_id=run_id, schema="dbos")
         yield store
+        await pool.close()
 
 
 @pytest.fixture(params=_get_sql_params())
-async def sql_engine_and_schema(
+async def sql_store_factory(
     request: pytest.FixtureRequest,
-    sqlite_engine: Engine,
-) -> AsyncGenerator[tuple[Engine, str | None], None]:
-    """Parametrized fixture yielding (engine, schema) for SQL backend tests."""
+    sqlite_db_path: str,
+) -> AsyncGenerator[tuple[str, str | None, asyncpg.Pool | None], None]:
+    """Parametrized fixture yielding (backend, db_path_or_schema, pool) for SQL backend tests."""
     if request.param == "sqlite":
-        yield sqlite_engine, None
+        yield "sqlite", sqlite_db_path, None
     elif request.param == "postgres":
-        pg_engine: Engine = request.getfixturevalue("postgres_engine")
-        yield pg_engine, "dbos"
+        dsn: str = request.getfixturevalue("postgres_dsn")
+        pool = await _create_postgres_pool(dsn)
+        yield "postgres", "dbos", pool
+        await pool.close()
 
 
 @pytest.fixture(params=_get_store_params())
 async def custom_state_store(
     request: pytest.FixtureRequest,
-    sqlite_engine: Engine,
+    sqlite_db_path: str,
 ) -> AsyncGenerator[StateStore[MyState], None]:
     """Parametrized fixture yielding a StateStore with custom typed state."""
     run_id = f"test-custom-{id(request)}"
@@ -184,23 +213,25 @@ async def custom_state_store(
     if request.param == "in_memory":
         yield InMemoryStateStore(initial_state)
     elif request.param == "sqlite":
-        store = SqlStateStore(
+        store = SqliteStateStore(
+            db_path=sqlite_db_path,
             run_id=run_id,
             state_type=MyState,
-            engine=sqlite_engine,
         )
         await store.set_state(initial_state)
         yield store
     elif request.param == "postgres":
-        pg_engine: Engine = request.getfixturevalue("postgres_engine")
-        store = SqlStateStore(
+        dsn: str = request.getfixturevalue("postgres_dsn")
+        pool = await _create_postgres_pool(dsn)
+        store = PostgresStateStore(
+            pool=pool,
             run_id=run_id,
             state_type=MyState,
-            engine=pg_engine,
             schema="dbos",
         )
         await store.set_state(initial_state)
         yield store
+        await pool.close()
 
 
 # -- Basic Operations Tests --
@@ -387,29 +418,40 @@ async def test_to_dict_from_dict_roundtrip(state_store: StateStore[DictState]) -
 
 @pytest.mark.asyncio
 async def test_sql_persistence(
-    sql_engine_and_schema: tuple[Engine, str | None],
+    sql_store_factory: tuple[str, str, asyncpg.Pool | None],
 ) -> None:
     """Test that state persists across store instances."""
-    engine, schema = sql_engine_and_schema
+    backend, db_path_or_schema, pool = sql_store_factory
     run_id = "persistence-test"
 
-    store1 = SqlStateStore(run_id=run_id, engine=engine, schema=schema)
-    await store1.set("persistent_key", "persistent_value")
+    if backend == "sqlite":
+        store1 = SqliteStateStore(db_path=db_path_or_schema, run_id=run_id)
+        await store1.set("persistent_key", "persistent_value")
+        store2 = SqliteStateStore(db_path=db_path_or_schema, run_id=run_id)
+    else:
+        assert pool is not None
+        store1 = PostgresStateStore(pool=pool, run_id=run_id, schema=db_path_or_schema)
+        await store1.set("persistent_key", "persistent_value")
+        store2 = PostgresStateStore(pool=pool, run_id=run_id, schema=db_path_or_schema)
 
-    store2 = SqlStateStore(run_id=run_id, engine=engine, schema=schema)
     result = await store2.get("persistent_key")
-
     assert result == "persistent_value"
 
 
 @pytest.mark.asyncio
 async def test_sql_isolation(
-    sql_engine_and_schema: tuple[Engine, str | None],
+    sql_store_factory: tuple[str, str, asyncpg.Pool | None],
 ) -> None:
     """Test that different run_ids have isolated state."""
-    engine, schema = sql_engine_and_schema
-    store1 = SqlStateStore(run_id="run-1", engine=engine, schema=schema)
-    store2 = SqlStateStore(run_id="run-2", engine=engine, schema=schema)
+    backend, db_path_or_schema, pool = sql_store_factory
+
+    if backend == "sqlite":
+        store1 = SqliteStateStore(db_path=db_path_or_schema, run_id="run-1")
+        store2 = SqliteStateStore(db_path=db_path_or_schema, run_id="run-2")
+    else:
+        assert pool is not None
+        store1 = PostgresStateStore(pool=pool, run_id="run-1", schema=db_path_or_schema)
+        store2 = PostgresStateStore(pool=pool, run_id="run-2", schema=db_path_or_schema)
 
     await store1.set("key", "value1")
     await store2.set("key", "value2")
@@ -420,12 +462,18 @@ async def test_sql_isolation(
 
 @pytest.mark.asyncio
 async def test_sql_concurrent_edits(
-    sql_engine_and_schema: tuple[Engine, str | None],
+    sql_store_factory: tuple[str, str, asyncpg.Pool | None],
 ) -> None:
     """Test concurrent edit_state calls are serialized correctly."""
-    engine, schema = sql_engine_and_schema
+    backend, db_path_or_schema, pool = sql_store_factory
     run_id = "concurrent-test"
-    store = SqlStateStore(run_id=run_id, engine=engine, schema=schema)
+
+    if backend == "sqlite":
+        store = SqliteStateStore(db_path=db_path_or_schema, run_id=run_id)
+    else:
+        assert pool is not None
+        store = PostgresStateStore(pool=pool, run_id=run_id, schema=db_path_or_schema)
+
     await store.set("counter", 0)
 
     async def increment() -> None:
@@ -442,10 +490,10 @@ async def test_sql_concurrent_edits(
 
 @pytest.mark.asyncio
 async def test_sql_custom_state_persistence(
-    sql_engine_and_schema: tuple[Engine, str | None],
+    sql_store_factory: tuple[str, str, asyncpg.Pool | None],
 ) -> None:
     """Test that custom typed state persists correctly."""
-    engine, schema = sql_engine_and_schema
+    backend, db_path_or_schema, pool = sql_store_factory
     run_id = "custom-persistence-test"
 
     initial_state = MyState(
@@ -455,21 +503,36 @@ async def test_sql_custom_state_persistence(
         age=100,
     )
 
-    store1 = SqlStateStore(
-        run_id=run_id,
-        state_type=MyState,
-        engine=engine,
-        schema=schema,
-    )
-    await store1.set_state(initial_state)
-    await store1.set("name", "Modified")
+    if backend == "sqlite":
+        store1 = SqliteStateStore(
+            db_path=db_path_or_schema,
+            run_id=run_id,
+            state_type=MyState,
+        )
+        await store1.set_state(initial_state)
+        await store1.set("name", "Modified")
+        store2 = SqliteStateStore(
+            db_path=db_path_or_schema,
+            run_id=run_id,
+            state_type=MyState,
+        )
+    else:
+        assert pool is not None
+        store1 = PostgresStateStore(
+            pool=pool,
+            run_id=run_id,
+            state_type=MyState,
+            schema=db_path_or_schema,
+        )
+        await store1.set_state(initial_state)
+        await store1.set("name", "Modified")
+        store2 = PostgresStateStore(
+            pool=pool,
+            run_id=run_id,
+            state_type=MyState,
+            schema=db_path_or_schema,
+        )
 
-    store2 = SqlStateStore(
-        run_id=run_id,
-        state_type=MyState,
-        engine=engine,
-        schema=schema,
-    )
     state = await store2.get_state()
 
     assert state.name == "Modified"
@@ -481,24 +544,25 @@ async def test_sql_custom_state_persistence(
 
 @pytest.mark.docker
 @pytest.mark.asyncio
-async def test_postgres_uses_dbos_schema(postgres_engine: Engine) -> None:
-    """Test that SqlStateStore with schema='dbos' creates the table in the dbos schema."""
-    run_id = "pg-schema-test"
-    store = SqlStateStore(run_id=run_id, engine=postgres_engine, schema="dbos")
+async def test_postgres_uses_dbos_schema(postgres_dsn: str) -> None:
+    """Test that PostgresStateStore with schema='dbos' uses the table in the dbos schema."""
+    pool = await _create_postgres_pool(postgres_dsn)
+    try:
+        run_id = "pg-schema-test"
+        store = PostgresStateStore(pool=pool, run_id=run_id, schema="dbos")
 
-    # Trigger table creation by accessing state
-    await store.set("test", "value")
+        await store.set("test", "value")
 
-    # Verify the table was created in the dbos schema
-    with postgres_engine.connect() as conn:
-        result = conn.exec_driver_sql(
-            """
-            SELECT EXISTS (
-                SELECT FROM information_schema.tables
-                WHERE table_schema = 'dbos'
-                AND table_name = 'workflow_state'
+        async with pool.acquire() as conn:
+            exists = await conn.fetchval(
+                """
+                SELECT EXISTS (
+                    SELECT FROM information_schema.tables
+                    WHERE table_schema = 'dbos'
+                    AND table_name = 'workflow_state'
+                )
+                """
             )
-            """
-        )
-        exists = result.scalar()
-        assert exists is True
+            assert exists is True
+    finally:
+        await pool.close()
