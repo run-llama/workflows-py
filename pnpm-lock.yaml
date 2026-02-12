@@ -93,6 +93,8 @@ importers:
         specifier: workspace:*
         version: link:../llama-index-workflows
 
+  packages/llama-agents-dbos: {}
+
   packages/llama-agents-server:
     dependencies:
       llama-agents-client:
