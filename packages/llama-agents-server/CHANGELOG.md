@@ -1,5 +1,11 @@
 # llama-agents-server
 
+## 0.2.0-rc.2
+
+### Minor Changes
+
+- 6ccdebd: Refactor server internals from monolithic handler to composable runtime decorators (ServerRuntimeDecorator, PersistenceDecorator, IdleReleaseDecorator) enabling pluggable server runtimes
+
 ## 0.2.0-rc.1
 
 ### Minor Changes
