@@ -29,6 +29,7 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 import httpx
 from llama_agents.client import WorkflowClient
@@ -59,8 +60,20 @@ def log(msg: str, color: str = DIM) -> None:
 # -- Infrastructure -----------------------------------------------------------
 
 
-def run_cmd(*args: str, **kwargs: object) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(args, check=True, text=True, capture_output=True, **kwargs)  # type: ignore[arg-type]
+def run_cmd(*args: str, **kwargs: Any) -> subprocess.CompletedProcess[str]:
+    try:
+        return subprocess.run(
+            args, check=True, text=True, capture_output=True, **kwargs
+        )
+    except subprocess.CalledProcessError as e:
+        parts = [f"Command failed: {' '.join(args)}"]
+        if e.stdout:
+            parts.append(f"stdout:\n{e.stdout}")
+        if e.stderr:
+            parts.append(f"stderr:\n{e.stderr}")
+        raise subprocess.CalledProcessError(
+            e.returncode, e.cmd, e.stdout, e.stderr
+        ) from RuntimeError("\n".join(parts))
 
 
 def start_postgres() -> None:
