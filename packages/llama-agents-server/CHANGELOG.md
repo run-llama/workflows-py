@@ -1,5 +1,20 @@
 # llama-agents-server
 
+## 0.2.0-rc.1
+
+### Minor Changes
+
+- 528d562: Add tick storage, event storage with SSE subscription, per-run state stores, and centralized handler status transitions to AbstractWorkflowStore and SQLite/memory implementations
+
+### Patch Changes
+
+- Updated dependencies [528d562]
+- Updated dependencies [e981f73]
+- Updated dependencies [b515a46]
+- Updated dependencies [7433d4c]
+  - llama-agents-client@0.2.0-rc.0
+  - llama-index-workflows@2.15.0-rc.0
+
 ## 0.2.0-rc.0
 
 ### Minor Changes
