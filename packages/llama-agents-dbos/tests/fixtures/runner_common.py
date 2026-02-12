@@ -9,6 +9,7 @@ as a side effect, so that runner scripts can import workflows, llama_agents, etc
 from __future__ import annotations
 
 import importlib
+import sqlite3 as _sqlite3
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -56,8 +57,27 @@ def get_event_class_by_name(module: ModuleType, name: str) -> type[Event] | None
     return None
 
 
+def _enable_sqlite_wal(db_url: str) -> None:
+    """Pre-create SQLite database with WAL mode for concurrent access.
+
+    WAL mode allows concurrent readers during writes, preventing
+    "database is locked" errors when DBOS runs many async operations
+    (steps, stream writes, polling) against the same SQLite file.
+    """
+    if "sqlite" not in db_url:
+        return
+    # Extract file path from URL like "sqlite+pysqlite:///path?params"
+    path = db_url.split("///", 1)[-1].split("?", 1)[0]
+    if not path or path == ":memory:":
+        return
+    conn = _sqlite3.connect(path)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.close()
+
+
 def setup_dbos(db_url: str, app_name: str = "test-workflow") -> DBOSRuntime:
     """Set up DBOS with the given database URL and return a DBOSRuntime."""
+    _enable_sqlite_wal(db_url)
     config: DBOSConfig = {
         "name": app_name,
         "system_database_url": db_url,
