@@ -398,7 +398,18 @@ class _WorkflowAPI:
 
         try:
             handler_data = await self._service.await_workflow(started)
-            status = 200 if handler_data.status == "completed" else 500
+            if handler_data.status == "completed":
+                status = 200
+            else:
+                logger.error(
+                    "Workflow %s finished with status=%s error=%s (handler=%s, run=%s)",
+                    handler_data.workflow_name,
+                    handler_data.status,
+                    handler_data.error,
+                    handler_data.handler_id,
+                    handler_data.run_id,
+                )
+                status = 500
         except Exception as e:
             logger.error(f"Error running workflow: {e}", exc_info=True)
             handler_data = await self._service.load_handler(handler_id)

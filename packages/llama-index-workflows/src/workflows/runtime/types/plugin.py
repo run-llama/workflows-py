@@ -24,6 +24,7 @@ from typing import (
 )
 
 from workflows.context.state_store import StateStore
+from workflows.events import Event, StartEvent, StopEvent
 from workflows.runtime.types.named_task import NamedTask
 
 if TYPE_CHECKING:
@@ -32,8 +33,6 @@ if TYPE_CHECKING:
     from workflows.runtime.types.internal_state import BrokerState
     from workflows.runtime.types.step_function import StepWorkerFunction
     from workflows.workflow import Workflow
-
-from workflows.events import Event, StartEvent, StopEvent
 from workflows.runtime.types.ticks import TickCancelRun, WorkflowTick
 
 # Context variable for implicit runtime scoping
@@ -180,6 +179,14 @@ class InternalRunAdapter(ABC):
         sync state). Default is no-op.
         """
         pass
+
+    def is_replaying(self) -> bool:
+        """Whether the adapter is currently replaying recorded operations.
+
+        During replay, side effects like persisting events to external stores
+        should be skipped to avoid duplicates. Default is False (live execution).
+        """
+        return False
 
     async def on_tick(self, tick: WorkflowTick) -> None:
         """

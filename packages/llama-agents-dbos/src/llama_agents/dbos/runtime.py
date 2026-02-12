@@ -13,9 +13,11 @@ import asyncio
 import logging
 import sys
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Any, AsyncGenerator, TypedDict
+from typing import Any, AsyncGenerator, TypedDict, cast
 
+import asyncpg
 from llama_index_instrumentation.dispatcher import active_instrument_tags
 from pydantic import BaseModel
 from typing_extensions import Unpack
@@ -46,7 +48,7 @@ from workflows.runtime.types.ticks import WorkflowTick
 from workflows.workflow import Workflow
 
 try:
-    from dbos import DBOS, SetWorkflowID
+    from dbos import DBOS, SetWorkflowID, WorkflowHandleAsync
     from dbos._dbos import _get_dbos_instance
 except ImportError as e:
     # if 3.9, give a detailed error that dbos is not supported on this version of python
@@ -57,13 +59,88 @@ except ImportError as e:
         ) from e
     raise
 
+from llama_agents.client.protocol.serializable_events import (
+    EventEnvelopeWithMetadata,
+)
+from llama_agents.server._runtime.event_interceptor import EventInterceptorDecorator
+from llama_agents.server._store.abstract_workflow_store import (
+    AbstractWorkflowStore,
+    HandlerQuery,
+    PersistentHandler,
+    StoredEvent,
+    StoredTick,
+)
+from llama_agents.server._store.postgres_state_store import PostgresStateStore
+from llama_agents.server._store.postgres_workflow_store import (
+    PostgresWorkflowStore,
+)
+from llama_agents.server._store.sqlite.sqlite_state_store import SqliteStateStore
+from llama_agents.server._store.sqlite.sqlite_workflow_store import SqliteWorkflowStore
+from sqlalchemy.engine import URL as SaURL
 from sqlalchemy.engine import Engine
 
-from .journal.crud import JOURNAL_TABLE_NAME, JournalCrud
+from .journal.crud import JOURNAL_TABLE_NAME, PostgresJournalCrud, SqliteJournalCrud
 from .journal.task_journal import TaskJournal
-from .state_store import STATE_TABLE_NAME, SqlStateStore
+
+STATE_TABLE_NAME = "workflow_state"
 
 logger = logging.getLogger(__name__)
+
+
+class DBOSWorkflowStore(AbstractWorkflowStore):
+    """Lazy proxy that defers dialect resolution until first use.
+
+    Wraps a factory callable that produces the real store (Postgres or Sqlite).
+    The factory is called once on first access; all abstract methods delegate
+    to the resolved store.
+    """
+
+    def __init__(self, factory: Callable[[], AbstractWorkflowStore]) -> None:
+        self._factory = factory
+        self._inner: AbstractWorkflowStore | None = None
+
+    def _resolve(self) -> AbstractWorkflowStore:
+        if self._inner is None:
+            self._inner = self._factory()
+        return self._inner
+
+    @property
+    def poll_interval(self) -> float:  # type: ignore[override]
+        return self._resolve().poll_interval
+
+    def create_state_store(
+        self,
+        run_id: str,
+        state_type: type[Any] | None = None,
+        serialized_state: dict[str, Any] | None = None,
+        serializer: BaseSerializer | None = None,
+    ) -> StateStore[Any]:
+        return self._resolve().create_state_store(
+            run_id, state_type, serialized_state, serializer
+        )
+
+    async def query(self, query: HandlerQuery) -> list[PersistentHandler]:
+        return await self._resolve().query(query)
+
+    async def update(self, handler: PersistentHandler) -> None:
+        await self._resolve().update(handler)
+
+    async def delete(self, query: HandlerQuery) -> int:
+        return await self._resolve().delete(query)
+
+    async def append_event(self, run_id: str, event: EventEnvelopeWithMetadata) -> None:
+        await self._resolve().append_event(run_id, event)
+
+    async def query_events(
+        self, run_id: str, after_sequence: int | None = None, limit: int | None = None
+    ) -> list[StoredEvent]:
+        return await self._resolve().query_events(run_id, after_sequence, limit)
+
+    async def append_tick(self, run_id: str, tick_data: dict[str, Any]) -> None:
+        await self._resolve().append_tick(run_id, tick_data)
+
+    async def get_ticks(self, run_id: str) -> list[StoredTick]:
+        return await self._resolve().get_ticks(run_id)
 
 
 class DBOSRuntimeConfig(TypedDict, total=False):
@@ -93,6 +170,18 @@ def _resolve_schema(config: DBOSRuntimeConfig, engine: Engine) -> str | None:
         return config["schema"]
     is_postgres = engine.dialect.name == "postgresql"
     return "dbos" if is_postgres else None
+
+
+def _sqlalchemy_url_to_asyncpg_dsn(url: SaURL) -> str:
+    """Convert a SQLAlchemy URL to an asyncpg-compatible DSN.
+
+    Strips dialect driver suffixes (e.g. postgresql+psycopg2 -> postgresql)
+    and renders the URL as a plain connection string.
+    """
+    # url is a sqlalchemy.engine.URL object
+    # Set the drivername to plain 'postgresql' for asyncpg
+    plain_url = url.set(drivername="postgresql")
+    return plain_url.render_as_string(hide_password=False)
 
 
 # Very long timeout for unbounded waits - encourages workflow to sleep.
@@ -138,6 +227,7 @@ class DBOSRuntime(Runtime):
                 state_table_name: State table name. Default "workflow_state".
                 journal_table_name: Journal table name. Default "workflow_journal".
         """
+        super().__init__()
         self.config: DBOSRuntimeConfig = dict(kwargs)  # type: ignore[assignment]
 
         # Workflow tracking state
@@ -150,7 +240,15 @@ class DBOSRuntime(Runtime):
         self._sql_engine: Engine | None = None
         self._migrations_run = False
 
-    def _track_task(self, task: asyncio.Task[None]) -> None:
+        # Native driver resources (resolved at launch time)
+        self._pool: asyncpg.Pool | None = None
+        self._pool_lock: asyncio.Lock = asyncio.Lock()
+        self._dsn: str | None = None  # asyncpg DSN for lazy pool creation
+        self._db_path: str | None = None  # sqlite path
+        self._schema: str | None = None
+        self._workflow_store: AbstractWorkflowStore | None = None
+
+    def _track_task(self, task: asyncio.Task[Any]) -> None:
         self._tasks.append(task)
         task.add_done_callback(self._tasks.remove)
 
@@ -180,7 +278,13 @@ class DBOSRuntime(Runtime):
 
         Called at launch() time for each tracked workflow.
         Uses workflow.workflow_name for stable DBOS registration names.
+        Idempotent: returns existing registration if already registered.
         """
+        # Return existing registration if already registered
+        existing = self._registered.get(id(workflow))
+        if existing is not None:
+            return existing
+
         # Use workflow's name directly
         name = workflow.workflow_name
 
@@ -191,6 +295,10 @@ class DBOSRuntime(Runtime):
             start_event: StartEvent | None = None,
             tags: dict[str, Any] = {},
         ) -> StopEvent:
+            # Eagerly resolve the asyncpg pool so the adapter can use it
+            # synchronously in get_state_store / is_replaying.
+            if self._dsn is not None:
+                await self._ensure_pool()
             workflow_run_fn = create_workflow_run_function(workflow)
             return await workflow_run_fn(init_state, start_event, tags)
 
@@ -200,9 +308,11 @@ class DBOSRuntime(Runtime):
             for step_name, step in as_step_worker_functions(workflow).items()
         }
 
-        return RegisteredWorkflow(
+        registered = RegisteredWorkflow(
             workflow=workflow, workflow_run_fn=_dbos_control_loop, steps=wrapped_steps
         )
+        self._registered[id(workflow)] = registered
+        return registered
 
     def _get_sql_engine(self) -> Engine:
         """Get the SQLAlchemy engine from DBOS for state storage.
@@ -231,11 +341,28 @@ class DBOSRuntime(Runtime):
         self._sql_engine = sys_db.engine
         return self._sql_engine
 
-    def run_migrations(self) -> None:
-        """Run database migrations for workflow state and journal tables.
+    async def _ensure_pool(self) -> asyncpg.Pool:
+        """Get or lazily create the asyncpg connection pool.
 
-        Creates the workflow_state and workflow_journal tables if they don't exist.
-        Idempotent - safe to call multiple times.
+        Only valid for postgres dialect. Raises RuntimeError for sqlite.
+        """
+        if self._pool is not None:
+            return self._pool
+        async with self._pool_lock:
+            if self._pool is not None:
+                return self._pool
+            if self._dsn is None:
+                raise RuntimeError(
+                    "No asyncpg DSN configured. Either not launched or using sqlite dialect."
+                )
+            self._pool = await asyncpg.create_pool(dsn=self._dsn)
+            return self._pool
+
+    def run_migrations(self) -> None:
+        """Run database migrations for all workflow tables.
+
+        Uses the file-based migration system to create/update workflow store,
+        state, and journal tables. Idempotent - safe to call multiple times.
 
         Can be called explicitly before launch() when run_migrations_on_launch=False,
         allowing for custom migration timing (e.g., during application startup).
@@ -247,19 +374,16 @@ class DBOSRuntime(Runtime):
 
         engine = self._get_sql_engine()
         schema = _resolve_schema(self.config, engine)
-        state_table = self.config.get("state_table_name", DEFAULT_STATE_TABLE_NAME)
-        journal_table = self.config.get(
-            "journal_table_name", DEFAULT_JOURNAL_TABLE_NAME
-        )
 
-        SqlStateStore.run_migrations(engine, table_name=state_table, schema=schema)
-
-        # Create workflow_journal table
-        journal_crud = JournalCrud(table_name=journal_table, schema=schema)
-        journal_crud.run_migrations(engine)
+        if engine.dialect.name == "postgresql":
+            dsn = _sqlalchemy_url_to_asyncpg_dsn(engine.url)
+            PostgresWorkflowStore.run_migrations_sync(dsn, schema=schema)
+        else:
+            db_path = str(engine.url.database) if engine.url.database else ":memory:"
+            SqliteWorkflowStore.run_migrations(db_path)
 
         self._migrations_run = True
-        logger.info("Database migrations completed (workflow_state, workflow_journal)")
+        logger.info("Database migrations completed")
 
     def run_workflow(
         self,
@@ -299,23 +423,30 @@ class DBOSRuntime(Runtime):
             )
 
         # Capture values needed in the async task closure
-        engine = self._get_sql_engine()
         active_serializer = serializer or JsonSerializer()
 
-        async def _run_workflow() -> None:
+        async def _run_workflow() -> WorkflowHandleAsync[Any]:
             with SetWorkflowID(run_id):
                 # Write initial state to DB before starting workflow (non-blocking to caller)
                 if serialized_state:
-                    store = SqlStateStore(
-                        run_id=run_id,
-                        engine=engine,
-                        state_type=infer_state_type(workflow),
-                        serializer=active_serializer,
-                        schema=_resolve_schema(self.config, engine),
-                        table_name=self.config.get(
-                            "state_table_name", DEFAULT_STATE_TABLE_NAME
-                        ),
-                    )
+                    if self._dsn is not None:
+                        pool = await self._ensure_pool()
+                        store: StateStore[Any] = PostgresStateStore(
+                            pool=pool,
+                            run_id=run_id,
+                            state_type=infer_state_type(workflow),
+                            serializer=active_serializer,
+                            schema=self._schema,
+                        )
+                    elif self._db_path is not None:
+                        store = SqliteStateStore(
+                            db_path=self._db_path,
+                            run_id=run_id,
+                            state_type=infer_state_type(workflow),
+                            serializer=active_serializer,
+                        )
+                    else:
+                        raise RuntimeError("No pool or db_path configured.")
                     # Deserialize and save the initial state
                     state = deserialize_state_from_dict(
                         serialized_state,
@@ -325,7 +456,7 @@ class DBOSRuntime(Runtime):
                     await store.set_state(state)
 
                 try:
-                    await DBOS.start_workflow_async(
+                    return await DBOS.start_workflow_async(
                         registered.workflow_run_fn,
                         init_state,
                         start_event,
@@ -367,13 +498,16 @@ class DBOSRuntime(Runtime):
             run_id,
             engine,
             state_type,
-            schema=_resolve_schema(self.config, engine),
+            schema=self._schema,
             state_table_name=self.config.get(
                 "state_table_name", DEFAULT_STATE_TABLE_NAME
             ),
             journal_table_name=self.config.get(
                 "journal_table_name", DEFAULT_JOURNAL_TABLE_NAME
             ),
+            ensure_pool=self._ensure_pool if self._dsn is not None else None,
+            pool=self._pool,
+            db_path=self._db_path,
         )
 
     def get_external_adapter(self, run_id: str) -> ExternalRunAdapter:
@@ -382,6 +516,51 @@ class DBOSRuntime(Runtime):
                 "DBOS runtime not launched. Call runtime.launch() before running workflows."
             )
         return ExternalDBOSAdapter(run_id, self.config.get("polling_interval_sec", 1.0))
+
+    def create_workflow_store(self) -> AbstractWorkflowStore:
+        """Return the cached workflow store, creating it on first call.
+
+        Detects the engine dialect and creates the appropriate store:
+        - PostgreSQL: PostgresWorkflowStore using asyncpg with LISTEN/NOTIFY
+        - SQLite: SqliteWorkflowStore using raw sqlite3
+
+        Returns a lazy proxy so this can be called before launch(). The real
+        store is resolved on first use (which happens after launch()).
+        """
+        if self._workflow_store is not None:
+            return self._workflow_store
+
+        def _factory() -> AbstractWorkflowStore:
+            engine = self._get_sql_engine()
+            schema = _resolve_schema(self.config, engine)
+
+            if engine.dialect.name == "postgresql":
+                dsn = _sqlalchemy_url_to_asyncpg_dsn(engine.url)
+                logger.info(
+                    "Using PostgresWorkflowStore (asyncpg) for workflow storage"
+                )
+                return PostgresWorkflowStore(dsn=dsn, schema=schema)
+
+            db_path = str(engine.url.database) if engine.url.database else ":memory:"
+            logger.info("Using SqliteWorkflowStore for workflow storage")
+            return SqliteWorkflowStore(db_path=db_path, auto_migrate=False)
+
+        self._workflow_store = DBOSWorkflowStore(_factory)
+        return self._workflow_store
+
+    def build_server_runtime(self) -> Runtime:
+        """Build the decorator chain for use with WorkflowServer.
+
+        Wraps the DBOS runtime with:
+        - EventInterceptorDecorator (blocks events from reaching DBOS streams)
+
+        DBOS handles persistence and resumption internally, and idle detection
+        is not supported (would require cancelling and resuming a new workflow).
+
+        The returned runtime should be passed as the ``runtime`` argument
+        to ``WorkflowServer``.
+        """
+        return EventInterceptorDecorator(self)
 
     def launch(self) -> None:
         """
@@ -403,6 +582,16 @@ class DBOSRuntime(Runtime):
         DBOS.launch()
         self._dbos_launched = True
 
+        # Resolve native driver config from SQLAlchemy engine
+        engine = self._get_sql_engine()
+        self._schema = _resolve_schema(self.config, engine)
+        if engine.dialect.name == "postgresql":
+            self._dsn = _sqlalchemy_url_to_asyncpg_dsn(engine.url)
+        else:
+            self._db_path = (
+                str(engine.url.database) if engine.url.database else ":memory:"
+            )
+
         # Run migrations after DBOS is launched (if configured)
         if self.config.get("run_migrations_on_launch", True):
             self.run_migrations()
@@ -421,12 +610,44 @@ class DBOSRuntime(Runtime):
         self._dbos_launched = False
         self._sql_engine = None
         self._migrations_run = False
+        self._dsn = None
+        self._db_path = None
+        self._schema = None
+        if self._pool is not None:
+            try:
+                self._pool.terminate()
+            except Exception:
+                logger.debug(
+                    "Failed to terminate asyncpg pool during destroy", exc_info=True
+                )
+            self._pool = None
+        if self._workflow_store is not None:
+            inner = (
+                self._workflow_store._inner
+                if isinstance(self._workflow_store, DBOSWorkflowStore)
+                else self._workflow_store
+            )
+            if isinstance(inner, PostgresWorkflowStore):
+                pool = inner._pool
+                if pool is not None:
+                    try:
+                        pool.terminate()
+                    except Exception:
+                        logger.debug(
+                            "Failed to terminate workflow store pool during destroy",
+                            exc_info=True,
+                        )
+                inner._pool = None
+                inner._listen_conn = None
+            self._workflow_store = None
         for task in self._tasks:
             if not task.done():
                 task.cancel()
         if destroy_dbos:
             DBOS.destroy()
 
+
+EnsurePoolFn = Callable[[], Awaitable[asyncpg.Pool]]
 
 _IO_STREAM_PUBLISHED_EVENTS_NAME = "published_events"
 _IO_STREAM_TICK_TOPIC = "ticks"
@@ -452,6 +673,9 @@ class InternalDBOSAdapter(InternalRunAdapter):
         schema: str | None = None,
         state_table_name: str = DEFAULT_STATE_TABLE_NAME,
         journal_table_name: str = DEFAULT_JOURNAL_TABLE_NAME,
+        ensure_pool: EnsurePoolFn | None = None,
+        pool: asyncpg.Pool | None = None,
+        db_path: str | None = None,
     ) -> None:
         self._run_id = run_id
         self._engine = engine
@@ -459,8 +683,11 @@ class InternalDBOSAdapter(InternalRunAdapter):
         self._schema = schema
         self._state_table_name = state_table_name
         self._journal_table_name = journal_table_name
+        self._ensure_pool = ensure_pool
+        self._resolved_pool: asyncpg.Pool | None = pool
+        self._db_path = db_path
         self._closed = False
-        self._state_store: SqlStateStore[Any] | None = None
+        self._state_store: StateStore[Any] | None = None
         # Journal for deterministic task ordering - lazily initialized
         self._journal: TaskJournal | None = None
 
@@ -524,26 +751,74 @@ class InternalDBOSAdapter(InternalRunAdapter):
             ),
         )
 
-    def _get_or_create_state_store(self) -> SqlStateStore[Any]:
-        """Get or lazily create the state store."""
-        if self._state_store is None:
-            self._state_store = SqlStateStore(
-                run_id=self._run_id,
-                engine=self._engine,
-                state_type=self._state_type,
-                schema=self._schema,
-                table_name=self._state_table_name,
+    async def _resolve_pool(self) -> asyncpg.Pool:
+        """Resolve the asyncpg pool, lazily creating it via the runtime callback."""
+        if self._resolved_pool is not None:
+            return self._resolved_pool
+        if self._ensure_pool is None:
+            raise RuntimeError(
+                "No asyncpg pool configured. Either not launched or using sqlite dialect."
             )
+        self._resolved_pool = await self._ensure_pool()
+        return self._resolved_pool
+
+    def _get_or_create_state_store(self) -> StateStore[Any]:
+        """Get or lazily create the state store.
+
+        For PostgreSQL, the pool must be resolved first via _resolve_pool().
+        Call _ensure_resources() before accessing the state store.
+        """
+        if self._state_store is None:
+            if self._resolved_pool is not None:
+                self._state_store = PostgresStateStore(
+                    pool=self._resolved_pool,
+                    run_id=self._run_id,
+                    state_type=cast(type[Any], self._state_type),
+                    schema=self._schema,
+                )
+            elif self._db_path is not None:
+                self._state_store = SqliteStateStore(
+                    db_path=self._db_path,
+                    run_id=self._run_id,
+                    state_type=cast(type[Any], self._state_type),
+                )
+            else:
+                raise RuntimeError(
+                    "No pool or db_path configured for state store. "
+                    "Ensure the runtime pool is initialized before accessing state."
+                )
         return self._state_store
 
     def get_state_store(self) -> StateStore[Any] | None:
         return self._get_or_create_state_store()
 
+    def is_replaying(self) -> bool:
+        if (
+            self._journal is None
+            and self._resolved_pool is None
+            and self._db_path is None
+        ):
+            return False
+        journal = self._get_or_create_journal()
+        return journal.is_replaying()
+
     def _get_or_create_journal(self) -> TaskJournal:
         """Get or lazily create the task journal."""
         if self._journal is None:
-            crud = JournalCrud(table_name=self._journal_table_name, schema=self._schema)
-            self._journal = TaskJournal(self._run_id, self._engine, crud)
+            if self._resolved_pool is not None:
+                crud = PostgresJournalCrud(
+                    pool=self._resolved_pool,
+                    table_name=self._journal_table_name,
+                    schema=self._schema,
+                )
+            elif self._db_path is not None:
+                crud = SqliteJournalCrud(
+                    db_path=self._db_path,
+                    table_name=self._journal_table_name,
+                )
+            else:
+                raise RuntimeError("No pool or db_path configured for journal.")
+            self._journal = TaskJournal(self._run_id, crud)
         return self._journal
 
     async def wait_for_next_task(
@@ -556,6 +831,23 @@ class InternalDBOSAdapter(InternalRunAdapter):
         During replay, waits for the specific task that completed in the original run.
         During fresh execution, waits for any task and records the completion order.
 
+        **Journal ordering caveat:** The journal records task completion *before*
+        the control loop publishes events produced by the completed step. If a
+        crash occurs between the journal write and the event write, replay skips
+        the step (already journaled) but the event was never persisted.
+
+        - In the standalone DBOS path, ``write_to_event_stream`` publishes to
+          DBOS streams which are separately journaled, so the gap is less of an
+          issue.
+        - In the server path, ``_ServerInternalRunAdapter`` makes event writes
+          idempotent by comparing against already-persisted events, working
+          around the ordering gap.
+        - Self-publishing events (``InputRequiredEvent`` / ``HumanInputRequired``
+          subtypes) are affected: if a crash occurs after the journal records the
+          step but before the event is published, the event is lost on replay.
+        - Proper fix: defer journal recording until after all commands from a
+          tick are processed.
+
         Args:
             task_set: List of NamedTasks with stable string keys for identification
             timeout: Timeout in seconds, None for no timeout
@@ -566,6 +858,10 @@ class InternalDBOSAdapter(InternalRunAdapter):
         tasks = NamedTask.all_tasks(task_set)
         if not tasks:
             return None
+
+        # Ensure pool is resolved before journal creation (needed for postgres)
+        if self._ensure_pool is not None and self._resolved_pool is None:
+            await self._resolve_pool()
 
         journal = self._get_or_create_journal()
         await journal.load()
@@ -616,11 +912,12 @@ class ExternalDBOSAdapter(ExternalRunAdapter):
         self,
         run_id: str,
         polling_interval_sec: float = 1.0,
-        startup_task: asyncio.Task[None] | None = None,
+        startup_task: asyncio.Task[WorkflowHandleAsync[Any]] | None = None,
     ) -> None:
         self._run_id = run_id
         self._polling_interval_sec = polling_interval_sec
         self._startup_task = startup_task  # None means workflow already started
+        self._handle: WorkflowHandleAsync[Any] | None = None
 
     @property
     def run_id(self) -> str:
@@ -637,12 +934,27 @@ class ExternalDBOSAdapter(ExternalRunAdapter):
             yield event
 
     async def get_result(self) -> StopEvent:
-        await self._ensure_workflow_started()
-        handle = await DBOS.retrieve_workflow_async(self.run_id)
+        handle = await self._ensure_workflow_started()
         return await handle.get_result(polling_interval_sec=self._polling_interval_sec)
 
-    async def _ensure_workflow_started(self) -> None:
-        """Wait for the workflow startup task to complete if one was provided."""
+    async def _ensure_workflow_started(self) -> WorkflowHandleAsync[Any]:
+        """Wait for the workflow startup task to complete and return the handle."""
         if self._startup_task is not None:
-            await self._startup_task
+            self._handle = await self._startup_task
             self._startup_task = None  # Clear after awaiting
+        if self._handle is None:
+            # Fallback: workflow was started elsewhere, retrieve with retry since
+            # there can be a race between start_workflow_async completing and the
+            # workflow becoming retrievable in DBOS.
+            from dbos._error import DBOSNonExistentWorkflowError
+
+            for attempt in range(20):
+                try:
+                    self._handle = await DBOS.retrieve_workflow_async(self.run_id)
+                    break
+                except DBOSNonExistentWorkflowError:
+                    if attempt == 19:
+                        raise
+                    await asyncio.sleep(0.1 * (attempt + 1))
+        assert self._handle is not None
+        return self._handle

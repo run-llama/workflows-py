@@ -22,8 +22,10 @@ from llama_agents.client.protocol.serializable_events import (
 from llama_agents.server._runtime.server_runtime import ServerRuntimeDecorator
 from llama_index_instrumentation.dispatcher import instrument_tags
 from workflows import Context
+from workflows.context.serializers import JsonSerializer
 from workflows.events import Event, StartEvent
 from workflows.handler import WorkflowHandler
+from workflows.utils import _nanoid as nanoid
 from workflows.workflow import Workflow
 
 from ._store.abstract_workflow_store import (
@@ -199,12 +201,20 @@ class _WorkflowService:
         context: Context | None = None,
     ) -> HandlerData:
         with instrument_tags({"handler_id": handler_id}):
-            handler = workflow.run(
+            if context is None:
+                context = await self._context_from_handler_id(workflow, handler_id)
+            # Pre-generate run_id and persist the handler record BEFORE starting
+            # the workflow. This prevents a race where a fast workflow completes
+            # and tries to update_handler_status before the handler row exists,
+            # causing the status update to be silently skipped.
+            run_id = nanoid()
+            await self._runtime.run_workflow_handler(
+                handler_id, workflow.workflow_name, run_id
+            )
+            _ = workflow.run(
                 ctx=context,
                 start_event=start_event,
-            )
-            await self._runtime.run_workflow_handler(
-                handler_id, workflow.workflow_name, handler
+                run_id=run_id,
             )
             handler_data = await self.load_handler(handler_id)
             if handler_data is None:
@@ -219,7 +229,13 @@ class _WorkflowService:
         try:
             await run
         except Exception:
-            pass
+            logger.error(
+                "Workflow %s (handler=%s, run=%s) raised an exception",
+                handler.workflow_name,
+                handler.handler_id,
+                handler.run_id,
+                exc_info=True,
+            )
         handler_data = await self.load_handler(handler.handler_id)
         if handler_data is None:
             raise HandlerNotFoundError()
@@ -240,6 +256,42 @@ class _WorkflowService:
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
+
+    async def _context_from_handler_id(
+        self, workflow: Workflow, handler_id: str
+    ) -> Context | None:
+        """Look up a completed handler's final state and build a Context from it.
+
+        Returns the lightweight serialized state reference so that SQL-backed
+        stores can do an optimized copy rather than round-tripping through memory.
+
+        Returns None if the handler doesn't exist, isn't completed, or has no state.
+        """
+        found = await self._store.query(HandlerQuery(handler_id_in=[handler_id]))
+        if not found:
+            return None
+        handler = found[0]
+        if not is_terminal_status(handler.status) or handler.run_id is None:
+            return None
+
+        try:
+            serializer = JsonSerializer()
+            old_state_store = self._store.create_state_store(handler.run_id)
+            state_dict = old_state_store.to_dict(serializer)
+            if not state_dict:
+                return None
+            return Context.from_dict(
+                workflow=workflow,
+                data={"version": 1, "state": state_dict},
+                serializer=serializer,
+            )
+        except Exception:
+            logger.warning(
+                "Failed to read state from previous handler %s",
+                handler_id,
+                exc_info=True,
+            )
+            return None
 
     def _workflow_run_handler(self, workflow_name: str, run_id: str) -> WorkflowHandler:
         workflow = self._runtime.get_workflow(workflow_name)

@@ -20,6 +20,7 @@ from pydantic import (
     field_validator,
 )
 from workflows.context import JsonSerializer
+from workflows.context.serializers import BaseSerializer
 from workflows.context.state_store import StateStore
 from workflows.events import StopEvent
 
@@ -110,9 +111,17 @@ class AbstractWorkflowStore(ABC):
 
     @abstractmethod
     def create_state_store(
-        self, run_id: str, state_type: type[Any] | None = None
+        self,
+        run_id: str,
+        state_type: type[Any] | None = None,
+        serialized_state: dict[str, Any] | None = None,
+        serializer: BaseSerializer | None = None,
     ) -> StateStore[Any]:
-        """Create a persistent state store for the given run. see e.g. InMemoryStateStore for a reference implementation."""
+        """Create a persistent state store for the given run.
+
+        If *serialized_state* and *serializer* are provided, the store is
+        seeded from the serialized data during construction.
+        """
 
     @abstractmethod
     async def query(self, query: HandlerQuery) -> List[PersistentHandler]: ...

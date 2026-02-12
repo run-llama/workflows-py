@@ -8,6 +8,7 @@ import asyncio
 import json
 import sqlite3
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -1027,3 +1028,69 @@ async def test_failed_workflow_after_reload(
         handler = await wait_handler_status(memory_store, "fail-reload-1", "failed")
         assert handler.error is not None
         assert "Error response received" in handler.error
+
+
+# --- State persistence across handler runs (counter pattern) ---
+
+
+class IncrementEvent(HumanResponseEvent):
+    pass
+
+
+class CounterWorkflow(Workflow):
+    """Workflow that increments a persistent counter each time it receives an event."""
+
+    @step
+    async def start(self, ctx: Context, ev: StartEvent) -> None:
+        count = await ctx.store.get("count", 0)
+        await ctx.store.set("count", count + 1)
+
+    @step
+    async def wait_and_increment(self, ctx: Context, ev: IncrementEvent) -> StopEvent:
+        count = await ctx.store.get("count", 0)
+        new_count = count + 1
+        await ctx.store.set("count", new_count)
+        return StopEvent(result=f"count={new_count}")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "store_factory",
+    [
+        pytest.param(lambda tmp: MemoryWorkflowStore(), id="memory"),
+        pytest.param(
+            lambda tmp: SqliteWorkflowStore(str(tmp / "test.db")), id="sqlite"
+        ),
+    ],
+)
+async def test_counter_state_persists_across_idle_reload(
+    tmp_path: Path,
+    store_factory: Any,
+) -> None:
+    """A counter workflow increments on start, goes idle, reloads on event,
+    and the count reflects both increments."""
+    store = store_factory(tmp_path)
+    handler_id = "counter-1"
+
+    wf = CounterWorkflow()
+    server = WorkflowServer(workflow_store=store, idle_timeout=0.01)
+    server.add_workflow("counter", wf, additional_events=[IncrementEvent])
+
+    async with server.contextmanager():
+        handler_data = await server._service.start_workflow(wf, handler_id)
+        run_id = handler_data.run_id
+        assert run_id is not None
+
+        idle_release = _get_idle_release(server)
+        await wait_run_released(idle_release, run_id)
+
+        # Verify count=1 after the start step
+        state_store = store.create_state_store(run_id)
+        assert await state_store.get("count") == 1
+
+        # Send event to reload and increment again
+        await server._service.send_event(handler_id, IncrementEvent())
+
+        handler = await wait_handler_status(store, handler_id, "completed")
+        assert handler.result is not None
+        assert handler.result.result == "count=2"
