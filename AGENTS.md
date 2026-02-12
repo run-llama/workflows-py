@@ -42,6 +42,13 @@ uv run pre-commit run -a
 - `packages/llama-index-workflows/tests/` - Test suite
 - `examples/` - Usage examples
 
+## Architecture
+
+See `architecture-docs/` for high-level architectural overviews:
+- [`core-overview.md`](architecture-docs/core-overview.md) — Workflow, Context, Runtime, and event flow
+- [`control-loop.md`](architecture-docs/control-loop.md) — The reducer-based execution engine
+- [`server-architecture.md`](architecture-docs/server-architecture.md) — HTTP server, persistence, and runtime decorators
+
 ## Key Components
 - **Workflow** - Main orchestration class
 - **Context** - State management across workflow steps
