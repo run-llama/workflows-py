@@ -28,63 +28,41 @@ The **store** is the shared persistence layer — the runtime writes to it, the 
 **`_WorkflowService`** — Application logic. Starts workflows, manages handler lifecycle, coordinates event sending and cancellation. Bridges the API to the runtime.
 [`_service.py`](../packages/llama-agents-server/src/llama_agents/server/_service.py)
 
-**`ServerRuntimeDecorator`** — Runtime decorator. Records every published event to the store and tracks handler status (running → completed/failed/cancelled).
-[`server_runtime.py`](../packages/llama-agents-server/src/llama_agents/server/_runtime/server_runtime.py)
-
-**`DurableDecorator`** — Runtime decorator. Persists ticks for state reconstruction. Releases idle workflows from memory and reloads them on demand when new events arrive.
-[`durable_runtime.py`](../packages/llama-agents-server/src/llama_agents/server/_runtime/durable_runtime.py)
+**Runtime decorators** — A chain of decorators that add server concerns (event recording, tick persistence, idle release, etc.) on top of a base runtime. See the section below.
+[`_runtime/`](../packages/llama-agents-server/src/llama_agents/server/_runtime/) — standard server decorators
 
 **`AbstractWorkflowStore`** — Persistence contract shared by all layers above.
 [`abstract_workflow_store.py`](../packages/llama-agents-server/src/llama_agents/server/_store/abstract_workflow_store.py)
 
 ## Runtime Decorator Chain
 
-Runtimes compose via decoration. Each decorator wraps a `Runtime` and its adapters (see [core-overview.md — Runtime and Adapters](./core-overview.md#runtime-and-adapters)), overriding only the methods it needs:
+Runtimes compose via decoration. Each decorator wraps a `Runtime` and its adapters (see [core-overview.md — Runtime and Adapters](./core-overview.md#runtime-and-adapters)), overriding only the methods it needs to add a specific concern — event recording to a store, tick persistence for replay, idle detection and memory release, etc.
 
 ```mermaid
 graph LR
-    Server["ServerRuntimeDecorator"] -->|wraps| Durable["DurableDecorator"]
-    Durable -->|wraps| Inner["BasicRuntime"]
+    Outer["Server decorators\n(one per concern)"] -->|wraps| Inner["Base Runtime\n(BasicRuntime, DBOSRuntime, etc.)"]
 ```
 
-`WorkflowServer` assembles this by default:
+`WorkflowServer` assembles a default decorator chain on top of whatever base runtime is provided. The base runtime is swappable — pass `runtime=` to `WorkflowServer` to use a different one (BasicRuntime, DBOSRuntime, or a custom implementation). See `server.py` for how the default chain is assembled.
 
-```python
-inner = DurableDecorator(basic_runtime, store=store)
-runtime = ServerRuntimeDecorator(inner, store=store)
-```
-
-**What's swappable:** The inner runtime. Pass `runtime=` to `WorkflowServer` to replace `DurableDecorator(basic_runtime)` with anything — a custom runtime, a differently-configured durable stack, etc. `ServerRuntimeDecorator` always wraps the outermost layer.
-
-**Writing a decorator:** Extend `BaseRuntimeDecorator` and optionally `BaseInternalRunAdapterDecorator` / `BaseExternalRunAdapterDecorator`. These forward all methods to `self._inner` — override only what you need.
+**Writing a decorator:** Extend `BaseRuntimeDecorator` and optionally `BaseInternalRunAdapterDecorator` / `BaseExternalRunAdapterDecorator`. These forward all methods to the inner runtime/adapter — override only what you need.
 [`runtime_decorators.py`](../packages/llama-agents-server/src/llama_agents/server/_runtime/runtime_decorators.py)
-
-### What each decorator adds
-
-**ServerRuntimeDecorator** intercepts `InternalRunAdapter.write_to_event_stream()`:
-- Serializes every published event and appends it to the store's event log
-- Detects terminal events (`StopEvent`, `WorkflowFailedEvent`, etc.) and updates the handler's status
-
-**DurableDecorator** intercepts both adapters:
-- `InternalRunAdapter.on_tick()` — persists every control loop tick to the store
-- `InternalRunAdapter.write_to_event_stream()` — detects `WorkflowIdleEvent`, schedules memory release
-- `ExternalRunAdapter.send_event()` — if the workflow was released, reloads it from stored ticks before delivering the event
 
 ## Persistence (WorkflowStore)
 
 The store is the system's source of truth for anything that survives a restart or an idle-release cycle. All layers depend on it:
 
-| What's stored | Written by | Read by | Purpose |
-|---|---|---|---|
-| Handler records | ServerRuntimeDecorator | Service, API | Lifecycle tracking (status, timestamps, result) |
-| Event log | ServerRuntimeDecorator | API (stream), Store (subscribe) | Resumable event streaming to clients |
-| Ticks | DurableDecorator | DurableDecorator | Rebuild workflow state after idle release or restart |
-| State stores | DurableDecorator | Workflow steps | Persistent key-value state per run |
+| What's stored | Purpose |
+|---|---|
+| Handler records | Lifecycle tracking (status, timestamps, result) |
+| Event log | Resumable event streaming to clients |
+| Ticks | Rebuild workflow state after idle release or restart |
+| State stores | Persistent key-value state per run |
 
 Two implementations:
-- **`MemoryWorkflowStore`** — In-process dicts + `asyncio.Condition` for live subscriptions. No persistence across restarts.
+- **`MemoryWorkflowStore`** — In-process dicts. No persistence across restarts.
   [`memory_workflow_store.py`](../packages/llama-agents-server/src/llama_agents/server/_store/memory_workflow_store.py)
-- **`SqliteWorkflowStore`** — SQLite-backed. Survives restarts. Condition + polling hybrid for subscriptions.
+- **`SqliteWorkflowStore`** — SQLite-backed. Survives restarts.
   [`sqlite_workflow_store.py`](../packages/llama-agents-server/src/llama_agents/server/_store/sqlite/sqlite_workflow_store.py)
 
 ## Resumable Event Streams
@@ -94,8 +72,7 @@ Events flow from step functions to clients through the store, which acts as both
 ```mermaid
 graph LR
     Step["Step function"] -->|"ctx.write_event_to_stream()"| IA["InternalRunAdapter"]
-    IA -->|"write_to_event_stream()"| Server["ServerRuntimeDecorator"]
-    Server -->|"append_event()"| Store["WorkflowStore"]
+    IA -->|decorator intercepts| Store["WorkflowStore"]
     Store -->|"subscribe_events(cursor)"| API["_WorkflowAPI"]
     API -->|SSE| Client
 ```
@@ -113,8 +90,8 @@ A special `"now"` cursor skips all historical events and streams only new ones.
 
 ## Server Lifecycle
 
-**Start:** `WorkflowServer.start()` → `DurableDecorator.launch()` queries the store for handlers with `status=running, is_idle=False` and resumes each by rebuilding context from stored ticks and calling `workflow.run()`.
+**Start:** `WorkflowServer.start()` queries the store for handlers with `status=running` that aren't idle, and resumes each by rebuilding context from stored ticks.
 
 **Stop:** `WorkflowServer.stop()` aborts all active control loops. Handler records remain in the store — they'll resume on next start.
 
-**Idle release:** When the [control loop detects](./control-loop.md#key-design-decisions) all steps are waiting on external input, it publishes `WorkflowIdleEvent`. The DurableDecorator releases the workflow from memory. When a new event arrives for that workflow, it reloads from ticks transparently.
+**Idle release:** When the [control loop detects](./control-loop.md#key-design-decisions) all steps are waiting on external input, it publishes `WorkflowIdleEvent`. Runtime decorators can use this signal to release the workflow from memory. When a new event arrives for that workflow, it reloads from ticks transparently.

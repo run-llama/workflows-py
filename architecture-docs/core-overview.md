@@ -36,9 +36,7 @@ The adapters are the key abstraction boundary. Everything on the client side goe
 
 ## Workflow
 
-Container for step definitions. A `WorkflowMeta` metaclass collects `@step`-decorated methods into `_step_functions`.
-
-`run()` selects a runtime (explicit param > ContextVar > basic_runtime), validates steps, then delegates to `Context._workflow_run()`.
+Container for step definitions. `run()` selects a runtime, validates steps, and delegates to the runtime for execution.
 
 [`workflow.py`](../packages/llama-index-workflows/src/workflows/workflow.py)
 
@@ -52,18 +50,15 @@ graph LR
     External -.->|"per step worker"| Internal[InternalContext]
 ```
 
-| Face | When | Used By | Key Operations |
-|------|------|---------|----------------|
-| PreContext | Before `run()` | Setup code | Configuration, serialization, state store init |
-| ExternalContext | After `run()` | Handler / caller | `send_event()`, `stream_events()` |
-| InternalContext | During step execution | Step functions | `collect_events()`, `wait_for_event()`, `write_event_to_stream()` |
+| Face | When | Used By |
+|------|------|---------|
+| PreContext | Before `run()` | Setup code — configuration, serialization, state store init |
+| ExternalContext | After `run()` | Handler / caller — sending events, streaming |
+| InternalContext | During step execution | Step functions — collecting events, publishing to stream |
 
 Each face wraps an adapter from the runtime. Public methods on Context check the current face and raise `ContextStateError` if called in the wrong phase.
 
-- [`context.py`](../packages/llama-index-workflows/src/workflows/context/context.py) — Context, `_face` field
-- [`pre_context.py`](../packages/llama-index-workflows/src/workflows/context/pre_context.py) — PreContext
-- [`external_context.py`](../packages/llama-index-workflows/src/workflows/context/external_context.py) — ExternalContext
-- [`internal_context.py`](../packages/llama-index-workflows/src/workflows/context/internal_context.py) — InternalContext
+[`context/`](../packages/llama-index-workflows/src/workflows/context/) — Context implementation and all face types
 
 ## Runtime and Adapters
 
@@ -77,12 +72,9 @@ graph TB
     InternalRunAdapter --- run_id
 ```
 
-| Adapter | Used By | Key Methods |
-|---------|---------|-------------|
-| InternalRunAdapter | Control loop | `wait_receive()`, `on_tick()`, `wait_for_next_task()`, `get_now()` |
-| ExternalRunAdapter | WorkflowHandler | `send_event()`, `stream_published_events()`, `get_result()`, `cancel()` |
+The **InternalRunAdapter** is used by the control loop — it handles receiving ticks, publishing events, timing, and task coordination. The **ExternalRunAdapter** is used by the WorkflowHandler — it handles sending events in, streaming published events out, getting results, and cancellation.
 
-Runtimes are composable via decorators — see [server-architecture.md](./server-architecture.md#runtime-decorator-chain) for the decorator chain pattern.
+Multiple base runtimes exist. `BasicRuntime` is the default in-memory asyncio runtime in the core package. `DBOSRuntime` provides durable distributed execution backed by a database. More runtimes can be added by implementing the `Runtime` ABC. Runtimes are also composable via decorators — see [server-architecture.md](./server-architecture.md#runtime-decorator-chain) for that pattern.
 
 [`plugin.py`](../packages/llama-index-workflows/src/workflows/runtime/types/plugin.py) — Runtime ABC, InternalRunAdapter, ExternalRunAdapter
 
@@ -99,14 +91,14 @@ graph LR
     subgraph "Events In (external to internal)"
         H[WorkflowHandler] -->|send_event| EA[ExternalRunAdapter]
         EA -->|receive queue| IA[InternalRunAdapter]
-        IA -->|TickAddEvent| CL[Control Loop]
+        IA -->|tick| CL[Control Loop]
     end
 ```
 
 ```mermaid
 graph LR
     subgraph "Events Out (internal to external)"
-        CL2[Control Loop] -->|CommandPublishEvent| IA2[InternalRunAdapter]
+        CL2[Control Loop] -->|command| IA2[InternalRunAdapter]
         IA2 -->|publish queue| EA2[ExternalRunAdapter]
         EA2 -->|stream_published_events| H2[WorkflowHandler]
     end
