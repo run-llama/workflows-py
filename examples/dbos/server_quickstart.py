@@ -1,3 +1,12 @@
+# /// script
+# requires-python = ">=3.10"
+# dependencies = [
+#     "llama-index-workflows==2.15.0rc0",
+#     "llama-agents-server==0.2.0rc2",
+#     "llama-agents-client==0.2.0rc0",
+#     "llama-agents-dbos==0.1.0rc0",
+# ]
+# ///
 """
 Quick-start: durable workflow server with DBOS.
 
