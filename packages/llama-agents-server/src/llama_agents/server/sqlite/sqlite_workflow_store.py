@@ -18,8 +18,14 @@ class SqliteWorkflowStore(AbstractWorkflowStore):
         self.db_path = db_path
         self._init_db()
 
+    def _connect(self) -> sqlite3.Connection:
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=30000")
+        return conn
+
     def _init_db(self) -> None:
-        conn = sqlite3.connect(self.db_path)
+        conn = self._connect()
         try:
             run_migrations(conn)
             conn.commit()
@@ -36,7 +42,7 @@ class SqliteWorkflowStore(AbstractWorkflowStore):
                         started_at, updated_at, completed_at, idle_since, ctx FROM handlers"""
         if clauses:
             sql = f"{sql} WHERE {' AND '.join(clauses)}"
-        conn = sqlite3.connect(self.db_path)
+        conn = self._connect()
         try:
             cursor = conn.cursor()
             cursor.execute(sql, tuple(params))
@@ -47,44 +53,45 @@ class SqliteWorkflowStore(AbstractWorkflowStore):
         return [_row_to_persistent_handler(row) for row in rows]
 
     async def update(self, handler: PersistentHandler) -> None:
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-
-        cursor.execute(
-            """
-            INSERT INTO handlers (handler_id, workflow_name, status, run_id, error, result,
-                                  started_at, updated_at, completed_at, idle_since, ctx)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(handler_id) DO UPDATE SET
-                workflow_name = excluded.workflow_name,
-                status = excluded.status,
-                run_id = excluded.run_id,
-                error = excluded.error,
-                result = excluded.result,
-                started_at = excluded.started_at,
-                updated_at = excluded.updated_at,
-                completed_at = excluded.completed_at,
-                idle_since = excluded.idle_since,
-                ctx = excluded.ctx
-            """,
-            (
-                handler.handler_id,
-                handler.workflow_name,
-                handler.status,
-                handler.run_id,
-                handler.error,
-                JsonSerializer().serialize(handler.result)
-                if handler.result is not None
-                else None,
-                handler.started_at.isoformat() if handler.started_at else None,
-                handler.updated_at.isoformat() if handler.updated_at else None,
-                handler.completed_at.isoformat() if handler.completed_at else None,
-                handler.idle_since.isoformat() if handler.idle_since else None,
-                json.dumps(handler.ctx),
-            ),
-        )
-        conn.commit()
-        conn.close()
+        conn = self._connect()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO handlers (handler_id, workflow_name, status, run_id, error, result,
+                                      started_at, updated_at, completed_at, idle_since, ctx)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(handler_id) DO UPDATE SET
+                    workflow_name = excluded.workflow_name,
+                    status = excluded.status,
+                    run_id = excluded.run_id,
+                    error = excluded.error,
+                    result = excluded.result,
+                    started_at = excluded.started_at,
+                    updated_at = excluded.updated_at,
+                    completed_at = excluded.completed_at,
+                    idle_since = excluded.idle_since,
+                    ctx = excluded.ctx
+                """,
+                (
+                    handler.handler_id,
+                    handler.workflow_name,
+                    handler.status,
+                    handler.run_id,
+                    handler.error,
+                    JsonSerializer().serialize(handler.result)
+                    if handler.result is not None
+                    else None,
+                    handler.started_at.isoformat() if handler.started_at else None,
+                    handler.updated_at.isoformat() if handler.updated_at else None,
+                    handler.completed_at.isoformat() if handler.completed_at else None,
+                    handler.idle_since.isoformat() if handler.idle_since else None,
+                    json.dumps(handler.ctx),
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
 
     async def delete(self, query: HandlerQuery) -> int:
         filter_spec = self._build_filters(query)
@@ -96,7 +103,7 @@ class SqliteWorkflowStore(AbstractWorkflowStore):
             return 0
 
         sql = f"DELETE FROM handlers WHERE {' AND '.join(clauses)}"
-        conn = sqlite3.connect(self.db_path)
+        conn = self._connect()
         try:
             cursor = conn.cursor()
             cursor.execute(sql, tuple(params))
