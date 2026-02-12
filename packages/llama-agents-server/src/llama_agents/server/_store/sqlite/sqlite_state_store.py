@@ -82,6 +82,38 @@ class SqliteStateStore(Generic[MODEL_T]):
         state = deserialize_state_from_dict(serialized_state, self._serializer)
         self._save_state(state)  # type: ignore[arg-type]
 
+    def _seed_from_serialized(
+        self, serialized_state: dict[str, Any], serializer: BaseSerializer
+    ) -> None:
+        """Seed this store from serialized state data.
+
+        Handles both sqlite references (SQL-level copy) and InMemory format.
+        """
+        store_type = serialized_state.get("store_type")
+        if store_type == "sqlite":
+            source_run_id = serialized_state.get("run_id")
+            if source_run_id and source_run_id != self._run_id:
+                self._copy_state_from_run(source_run_id)
+        else:
+            self._write_in_memory_state(serialized_state)
+
+    def _copy_state_from_run(self, source_run_id: str) -> None:
+        """Copy state from another run_id using SQL INSERT...SELECT."""
+        conn = self._connect()
+        try:
+            now = _utc_now().isoformat()
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO workflow_state (run_id, state_json, state_type, state_module, created_at, updated_at)
+                SELECT ?, state_json, state_type, state_module, ?, ?
+                FROM workflow_state WHERE run_id = ?
+                """,
+                (self._run_id, now, now, source_run_id),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
     def _serialize_state(self, state: MODEL_T) -> str:
         """Serialize state model to JSON string."""
         if isinstance(state, DictState):
@@ -104,7 +136,7 @@ class SqliteStateStore(Generic[MODEL_T]):
         try:
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT state_json FROM state WHERE run_id = ?",
+                "SELECT state_json FROM workflow_state WHERE run_id = ?",
                 (self._run_id,),
             )
             row = cursor.fetchone()
@@ -129,7 +161,7 @@ class SqliteStateStore(Generic[MODEL_T]):
             state_json = self._serialize_state(state)
             conn.execute(
                 """
-                INSERT INTO state (run_id, state_json, state_type, state_module, created_at, updated_at)
+                INSERT INTO workflow_state (run_id, state_json, state_type, state_module, created_at, updated_at)
                 VALUES (?, ?, ?, ?, ?, ?)
                 ON CONFLICT(run_id) DO UPDATE SET
                     state_json = excluded.state_json,
@@ -163,7 +195,7 @@ class SqliteStateStore(Generic[MODEL_T]):
         try:
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT state_json FROM state WHERE run_id = ?",
+                "SELECT state_json FROM workflow_state WHERE run_id = ?",
                 (self._run_id,),
             )
             row = cursor.fetchone()

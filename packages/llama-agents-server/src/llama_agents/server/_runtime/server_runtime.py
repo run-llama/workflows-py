@@ -22,7 +22,6 @@ from llama_agents.server._runtime.runtime_decorators import (
 from typing_extensions import override
 from workflows.context.serializers import BaseSerializer
 from workflows.context.state_store import (
-    InMemoryStateStore,
     StateStore,
     infer_state_type,
 )
@@ -34,7 +33,6 @@ from workflows.events import (
     WorkflowFailedEvent,
     WorkflowTimedOutEvent,
 )
-from workflows.handler import WorkflowHandler
 from workflows.runtime.types.internal_state import BrokerState
 from workflows.runtime.types.plugin import (
     ExternalRunAdapter,
@@ -81,46 +79,50 @@ class _ServerInternalRunAdapter(BaseInternalRunAdapterDecorator):
     def get_state_store(self) -> StateStore[Any]:
         if self._state_store is not None:
             return self._state_store
-        store = self._store.create_state_store(self.run_id, self._state_type)
-        # Seed with initial context state if provided at run start
         initial = self._runtime._initial_state.pop(self.run_id, None)
-        if initial is not None and isinstance(store, InMemoryStateStore):
-            store._state = initial
+        if initial is not None:
+            serialized_state, serializer = initial
+            store = self._store.create_state_store(
+                self.run_id, self._state_type, serialized_state, serializer
+            )
+        else:
+            store = self._store.create_state_store(self.run_id, self._state_type)
         self._state_store = store
         return store
 
     @override
     async def write_to_event_stream(self, event: Event) -> None:
-        """
-        Monitors for writes to the event stream that indicate a workflow has terminated.
-        """
-        if isinstance(event, WorkflowFailedEvent):
-            await self._runtime._handle_status_update(
-                run_id=self.run_id,
-                status="failed",
-                error=event.exception_message,
-            )
-        elif isinstance(event, WorkflowTimedOutEvent):
-            await self._runtime._handle_status_update(
-                run_id=self.run_id,
-                status="failed",
-                error=f"Workflow timed out after {event.timeout}s",
-            )
-        elif isinstance(event, WorkflowCancelledEvent):
-            await self._runtime._handle_status_update(
-                run_id=self.run_id, status="cancelled"
-            )
-        elif isinstance(event, StopEvent):
-            await self._runtime._handle_status_update(
-                run_id=self.run_id,
-                status="completed",
-                result=event,
-            )
+        """Record events to the workflow store, skipping duplicates on replay."""
+        replaying = self.is_replaying()
 
-        envelope = EventEnvelopeWithMetadata.from_event(event)
-        await self._store.append_event(self.run_id, envelope)
+        if not replaying:
+            if isinstance(event, WorkflowFailedEvent):
+                await self._runtime._handle_status_update(
+                    run_id=self.run_id,
+                    status="failed",
+                    error=event.exception_message,
+                )
+            elif isinstance(event, WorkflowTimedOutEvent):
+                await self._runtime._handle_status_update(
+                    run_id=self.run_id,
+                    status="failed",
+                    error=f"Workflow timed out after {event.timeout}s",
+                )
+            elif isinstance(event, WorkflowCancelledEvent):
+                await self._runtime._handle_status_update(
+                    run_id=self.run_id, status="cancelled"
+                )
+            elif isinstance(event, StopEvent):
+                await self._runtime._handle_status_update(
+                    run_id=self.run_id,
+                    status="completed",
+                    result=event,
+                )
 
-        # Forward to inner adapter (e.g. _DurableInternalRunAdapter for idle detection)
+            envelope = EventEnvelopeWithMetadata.from_event(event)
+            await self._store.append_event(self.run_id, envelope)
+
+        # Always forward to inner adapter (e.g. idle detection, DBOS stream)
         await super().write_to_event_stream(event)
 
 
@@ -220,18 +222,20 @@ class ServerRuntimeDecorator(BaseRuntimeDecorator):
         serialized_state: dict[str, Any] | None = None,
         serializer: BaseSerializer | None = None,
     ) -> ExternalRunAdapter:
+        # Intercept serialized state: we handle seeding ourselves in get_state_store
+        # so non-InMemory formats don't leak to the base runtime.
+        passthrough_state = serialized_state
         if serialized_state and serializer:
-            try:
-                seed_store = InMemoryStateStore.from_dict(serialized_state, serializer)
-                self._initial_state[run_id] = seed_store._state
-            except Exception:
-                pass
+            self._initial_state[run_id] = (serialized_state, serializer)
+            store_type = serialized_state.get("store_type")
+            if store_type is not None and store_type != "in_memory":
+                passthrough_state = None
         return super().run_workflow(
             run_id,
             workflow,
             init_state,
             start_event=start_event,
-            serialized_state=serialized_state,
+            serialized_state=passthrough_state,
             serializer=serializer,
         )
 
@@ -249,9 +253,14 @@ class ServerRuntimeDecorator(BaseRuntimeDecorator):
         self,
         handler_id: str,
         workflow_name: str,
-        handler: WorkflowHandler,
-    ) -> WorkflowHandler:
-        """Persist initial handler record to store, then notify decorator chain."""
+        run_id: str,
+    ) -> None:
+        """Persist initial handler record to store.
+
+        Must be called before the workflow is started so that
+        ``update_handler_status`` can find the handler row when
+        the workflow completes.
+        """
         started_at = datetime.now(timezone.utc)
 
         await self._retry_store_write(
@@ -260,11 +269,9 @@ class ServerRuntimeDecorator(BaseRuntimeDecorator):
                     handler_id=handler_id,
                     workflow_name=workflow_name,
                     status="running",
-                    run_id=handler.run_id,
+                    run_id=run_id,
                     started_at=started_at,
                     updated_at=started_at,
                 )
             )
         )
-
-        return handler

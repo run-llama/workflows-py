@@ -4,11 +4,6 @@
 
 from __future__ import annotations
 
-import asyncio
-from typing import Any
-
-from sqlalchemy.engine import Engine
-
 from .crud import JournalCrud
 
 
@@ -27,41 +22,29 @@ class TaskJournal:
     def __init__(
         self,
         run_id: str,
-        engine: Engine | None = None,
         crud: JournalCrud | None = None,
     ) -> None:
         """Initialize the task journal.
 
         Args:
             run_id: Workflow run ID for this journal.
-            engine: SQLAlchemy engine. If None, operates in-memory only.
-            crud: Journal CRUD operations. If None, uses default JournalCrud().
+            crud: Journal CRUD operations. If None, operates in-memory only.
         """
         self._run_id = run_id
-        self._engine = engine
-        self._crud = crud or JournalCrud()
+        self._crud = crud
         self._entries: list[str] | None = None  # Lazy loaded
         self._replay_index: int = 0
-
-    async def _run_sync(self, fn: Any, *args: Any) -> Any:
-        """Run a synchronous function in the default executor."""
-        loop = asyncio.get_event_loop()
-        return await loop.run_in_executor(None, fn, *args)
 
     async def load(self) -> None:
         """Load journal from database. Idempotent - only loads once."""
         if self._entries is not None:
             return
 
-        if self._engine is None:
+        if self._crud is None:
             self._entries = []
             return
 
-        def _load_sync() -> list[str]:
-            with self._engine.connect() as conn:  # type: ignore[union-attr]
-                return self._crud.load(conn, self._run_id)
-
-        self._entries = await self._run_sync(_load_sync)
+        self._entries = await self._crud.load(self._run_id)
 
     def is_replaying(self) -> bool:
         """True if there are more journal entries to replay."""
@@ -84,13 +67,8 @@ class TaskJournal:
         self._entries.append(key)
         self._replay_index += 1
 
-        if self._engine is not None:
-
-            def _insert_sync() -> None:
-                with self._engine.begin() as conn:  # type: ignore[union-attr]
-                    self._crud.insert(conn, self._run_id, seq_num, key)
-
-            await self._run_sync(_insert_sync)
+        if self._crud is not None:
+            await self._crud.insert(self._run_id, seq_num, key)
 
     def advance(self) -> None:
         """Advance replay index after processing a replayed task."""

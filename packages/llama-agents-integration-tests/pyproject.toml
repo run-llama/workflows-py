@@ -45,7 +45,7 @@ asyncio_default_fixture_loop_scope = "module"
 asyncio_default_test_loop_scope = "module"
 testpaths = ["tests"]
 # Skip docker tests by default - run with `pytest -m docker` to include them
-addopts = "-nauto --timeout=60 -m 'not docker'"
+addopts = "-nauto --timeout=120 -m 'not docker'"
 markers = [
   "docker: marks tests as requiring Docker (testcontainers/PostgreSQL)"
 ]

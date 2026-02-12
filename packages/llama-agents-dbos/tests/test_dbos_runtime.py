@@ -10,26 +10,18 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import suppress
-from pathlib import Path
-from typing import Any, Generator, cast
+from typing import Any, Generator
 from unittest.mock import patch
 
 import pytest
 from dbos import DBOS, DBOSConfig
 from llama_agents.dbos import DBOSRuntime
+from llama_agents.dbos.journal.crud import SqliteJournalCrud
 from llama_agents.dbos.journal.task_journal import TaskJournal
 from llama_agents.dbos.runtime import InternalDBOSAdapter
-from llama_agents.dbos.state_store import (
-    SqlSerializedState,
-    SqlStateStore,
-    parse_serialized_state,
-)
 from pydantic import Field
-from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
-from sqlalchemy.pool import QueuePool
 from workflows.context import Context
-from workflows.context.state_store import InMemorySerializedState
 from workflows.decorators import step
 from workflows.events import Event, StartEvent, StopEvent
 from workflows.runtime.types.named_task import NamedTask
@@ -261,16 +253,20 @@ async def test_run_workflow_does_not_create_store(dbos_runtime: DBOSRuntime) -> 
 
 @pytest.mark.asyncio
 async def test_replay_wait_for_next_task_timeout_returns_none(
+    journal_db_path: str,
     sqlite_engine: Engine,
 ) -> None:
     """Replay wait timeout should return None and not raise."""
     run_id = "replay-timeout-run"
 
-    journal = TaskJournal(run_id, sqlite_engine)
+    crud = SqliteJournalCrud(db_path=journal_db_path)
+    journal = TaskJournal(run_id, crud)
     await journal.load()
     await journal.record("step_a:0")
 
-    adapter = InternalDBOSAdapter(run_id=run_id, engine=sqlite_engine)
+    adapter = InternalDBOSAdapter(
+        run_id=run_id, engine=sqlite_engine, db_path=journal_db_path
+    )
     task = asyncio.create_task(asyncio.sleep(5.0))
 
     try:
@@ -283,113 +279,3 @@ async def test_replay_wait_for_next_task_timeout_returns_none(
         task.cancel()
         with suppress(asyncio.CancelledError):
             await task
-
-
-# ============================================================================
-# SqlSerializedState and parse_serialized_state Tests
-# ============================================================================
-
-
-def test_parse_serialized_state_sql_store_type() -> None:
-    """Test that store_type='sql' parses as SqlSerializedState."""
-    serialized = {
-        "store_type": "sql",
-        "run_id": "run-12345",
-        "schema": "public",
-    }
-
-    result = parse_serialized_state(serialized)
-
-    assert isinstance(result, SqlSerializedState)
-    assert result.store_type == "sql"
-    assert result.run_id == "run-12345"
-    assert result.db_schema == "public"
-
-
-def test_parse_serialized_state_sql_with_null_schema() -> None:
-    """Test that SqlSerializedState accepts null schema."""
-    serialized = {
-        "store_type": "sql",
-        "run_id": "run-67890",
-        "schema": None,
-    }
-
-    result = parse_serialized_state(serialized)
-
-    assert isinstance(result, SqlSerializedState)
-    assert result.db_schema is None
-
-
-def test_parse_serialized_state_in_memory_format() -> None:
-    """Test that in_memory format is still handled."""
-    serialized = {
-        "store_type": "in_memory",
-        "state_type": "DictState",
-        "state_module": "workflows.context.state_store",
-        "state_data": {"_data": {"counter": 42}},
-    }
-
-    result = parse_serialized_state(serialized)
-
-    assert isinstance(result, InMemorySerializedState)
-    assert result.store_type == "in_memory"
-
-
-def test_parse_serialized_state_unknown_store_type_raises() -> None:
-    """Test that unknown store_type raises ValueError."""
-    serialized = {
-        "store_type": "redis",  # Unknown store type
-        "state_type": "SomeState",
-        "state_module": "some.module",
-    }
-
-    with pytest.raises(ValueError, match="Unknown store_type"):
-        parse_serialized_state(serialized)
-
-
-@pytest.mark.asyncio
-async def test_edit_state_rolls_back_and_closes_on_error(sqlite_engine: Engine) -> None:
-    """Errors inside edit_state should rollback/close and leave store usable."""
-    store = SqlStateStore(run_id="state-run", engine=sqlite_engine)
-
-    with pytest.raises(RuntimeError, match="boom"):
-        async with store.edit_state() as state:
-            state["transient"] = "value"
-            raise RuntimeError("boom")
-
-    assert await store.get("transient", default=None) is None
-
-    await store.set("after", "ok")
-    assert await store.get("after") == "ok"
-
-    with sqlite_engine.connect() as conn:
-        raw = conn.connection
-        assert not bool(getattr(raw, "in_transaction", False))
-
-
-@pytest.mark.asyncio
-async def test_edit_state_failure_releases_checked_out_connection(
-    tmp_path: Path,
-) -> None:
-    """Failed edit_state should not leak checked-out pooled connections."""
-    db_file = tmp_path / "state.sqlite3"
-    engine = create_engine(
-        f"sqlite:///{db_file}",
-        connect_args={"check_same_thread": False},
-        poolclass=QueuePool,
-    )
-    store = SqlStateStore(run_id="pool-run", engine=engine)
-    pool = cast(QueuePool, engine.pool)
-
-    assert pool.checkedout() == 0
-
-    with pytest.raises(ValueError, match="force failure"):
-        async with store.edit_state() as state:
-            state["x"] = 1
-            raise ValueError("force failure")
-
-    assert pool.checkedout() == 0
-
-    await store.set("y", 2)
-    assert await store.get("y") == 2
-    assert pool.checkedout() == 0

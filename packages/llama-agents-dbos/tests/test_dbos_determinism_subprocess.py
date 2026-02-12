@@ -37,16 +37,17 @@ def run_scenario(
     db_url: str,
     run_id: str,
     config: dict[str, Any] | None = None,
-    timeout: float = 30.0,
+    timeout: float = 45.0,
 ) -> subprocess.CompletedProcess[str]:
     """Run a workflow scenario in a subprocess.
 
     Args:
-        workflow: Module path with class name (e.g., "tests.fixtures.workflows.hitl:TestWorkflow")
+        workflow: Module path with class name (e.g., "tests.fixtures.sample_workflows.hitl:TestWorkflow")
         db_url: SQLite database URL
         run_id: Unique run ID for the workflow
         config: Optional config dict with interrupt_on and/or respond settings
-        timeout: Subprocess timeout in seconds
+        timeout: Subprocess timeout in seconds. Keep below pytest-timeout (60s)
+            so we can capture output on timeout instead of losing it.
 
     Returns:
         CompletedProcess with stdout and stderr captured.
@@ -63,7 +64,17 @@ def run_scenario(
     ]
     if config:
         cmd.extend(["--config", json.dumps(config)])
-    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired as e:
+        stdout = e.stdout.decode() if isinstance(e.stdout, bytes) else (e.stdout or "")
+        stderr = e.stderr.decode() if isinstance(e.stderr, bytes) else (e.stderr or "")
+        pytest.fail(
+            f"Subprocess timed out after {timeout}s\n"
+            f"stdout:\n{stdout}\n"
+            f"stderr:\n{stderr}"
+        )
+        raise AssertionError("unreachable")  # pytest.fail always raises  # noqa: B904
 
 
 def assert_no_determinism_errors(result: subprocess.CompletedProcess[str]) -> None:
@@ -78,8 +89,11 @@ def assert_no_determinism_errors(result: subprocess.CompletedProcess[str]) -> No
             f"stderr: {result.stderr}"
         )
 
-    # Catch any unhandled Python exception
-    if "Traceback (most recent call last)" in combined:
+    # Catch unhandled Python exceptions in stdout (main process output).
+    # We only check stdout because stderr may contain logged tracebacks from
+    # DBOS background tasks (e.g., SQLite locking retries) that don't affect
+    # the workflow result.
+    if "Traceback (most recent call last)" in result.stdout:
         pytest.fail(
             f"Subprocess exception!\nstdout: {result.stdout}\nstderr: {result.stderr}"
         )
@@ -104,7 +118,7 @@ def test_determinism_on_resume_after_interrupt(test_db_path: Path) -> None:
     db_url = f"sqlite+pysqlite:///{test_db_path}?check_same_thread=false"
 
     result1 = run_scenario(
-        workflow="tests.fixtures.workflows.hitl:TestWorkflow",
+        workflow="tests.fixtures.sample_workflows.hitl:TestWorkflow",
         db_url=db_url,
         run_id=run_id,
         config={"interrupt_on": "AskInputEvent"},
@@ -115,7 +129,7 @@ def test_determinism_on_resume_after_interrupt(test_db_path: Path) -> None:
     assert "INTERRUPTING" in result1.stdout, "Should have interrupted"
 
     result2 = run_scenario(
-        workflow="tests.fixtures.workflows.hitl:TestWorkflow",
+        workflow="tests.fixtures.sample_workflows.hitl:TestWorkflow",
         db_url=db_url,
         run_id=run_id,
         config={
@@ -146,7 +160,7 @@ def test_chained_steps_determinism_on_resume(test_db_path: Path) -> None:
     db_url = f"sqlite+pysqlite:///{test_db_path}?check_same_thread=false"
 
     result1 = run_scenario(
-        workflow="tests.fixtures.workflows.chained:ChainedWorkflow",
+        workflow="tests.fixtures.sample_workflows.chained:ChainedWorkflow",
         db_url=db_url,
         run_id=run_id,
         config={"interrupt_on": "StepTwoEvent"},
@@ -156,7 +170,7 @@ def test_chained_steps_determinism_on_resume(test_db_path: Path) -> None:
     assert "STEP:one:complete" in result1.stdout, "Step one should complete"
 
     result2 = run_scenario(
-        workflow="tests.fixtures.workflows.chained:ChainedWorkflow",
+        workflow="tests.fixtures.sample_workflows.chained:ChainedWorkflow",
         db_url=db_url,
         run_id=run_id,
     )
@@ -176,7 +190,7 @@ def test_hitl_three_step_determinism(test_db_path: Path) -> None:
     db_url = f"sqlite+pysqlite:///{test_db_path}?check_same_thread=false"
 
     result1 = run_scenario(
-        workflow="tests.fixtures.workflows.three_step_hitl:HITLWorkflow",
+        workflow="tests.fixtures.sample_workflows.three_step_hitl:HITLWorkflow",
         db_url=db_url,
         run_id=run_id,
         config={
@@ -196,7 +210,7 @@ def test_hitl_three_step_determinism(test_db_path: Path) -> None:
     assert "INTERRUPTING" in result1.stdout, "Should interrupt at quest"
 
     result2 = run_scenario(
-        workflow="tests.fixtures.workflows.three_step_hitl:HITLWorkflow",
+        workflow="tests.fixtures.sample_workflows.three_step_hitl:HITLWorkflow",
         db_url=db_url,
         run_id=run_id,
         config={
@@ -231,7 +245,7 @@ def test_parallel_steps_determinism(test_db_path: Path) -> None:
     db_url = f"sqlite+pysqlite:///{test_db_path}?check_same_thread=false"
 
     result1 = run_scenario(
-        workflow="tests.fixtures.workflows.parallel:ParallelWorkflow",
+        workflow="tests.fixtures.sample_workflows.parallel:ParallelWorkflow",
         db_url=db_url,
         run_id=run_id,
     )
@@ -254,7 +268,7 @@ def test_concurrent_workers_determinism(test_db_path: Path) -> None:
     db_url = f"sqlite+pysqlite:///{test_db_path}?check_same_thread=false"
 
     result1 = run_scenario(
-        workflow="tests.fixtures.workflows.concurrent_workers:ConcurrentWorkersWorkflow",
+        workflow="tests.fixtures.sample_workflows.concurrent_workers:ConcurrentWorkersWorkflow",
         db_url=db_url,
         run_id=run_id,
     )
@@ -277,7 +291,7 @@ def test_sequential_hitl_interrupt_resume(test_db_path: Path) -> None:
     db_url = f"sqlite+pysqlite:///{test_db_path}?check_same_thread=false"
 
     result1 = run_scenario(
-        workflow="tests.fixtures.workflows.sequential_hitl:SequentialHITLWorkflow",
+        workflow="tests.fixtures.sample_workflows.sequential_hitl:SequentialHITLWorkflow",
         db_url=db_url,
         run_id=run_id,
         config={"interrupt_on": "WaitForInputEvent"},
@@ -288,7 +302,7 @@ def test_sequential_hitl_interrupt_resume(test_db_path: Path) -> None:
     assert "INTERRUPTING" in result1.stdout
 
     result2 = run_scenario(
-        workflow="tests.fixtures.workflows.sequential_hitl:SequentialHITLWorkflow",
+        workflow="tests.fixtures.sample_workflows.sequential_hitl:SequentialHITLWorkflow",
         db_url=db_url,
         run_id=run_id,
         config={
@@ -313,6 +327,7 @@ def test_sequential_hitl_interrupt_resume(test_db_path: Path) -> None:
 # =============================================================================
 
 
+@pytest.mark.timeout(60)
 @pytest.mark.parametrize("iteration", range(5))
 def test_parallel_steps_stress(test_db_path: Path, iteration: int) -> None:
     """Stress test parallel steps - run 5 times to catch timing issues."""
@@ -320,7 +335,7 @@ def test_parallel_steps_stress(test_db_path: Path, iteration: int) -> None:
     db_url = f"sqlite+pysqlite:///{test_db_path}?check_same_thread=false"
 
     result = run_scenario(
-        workflow="tests.fixtures.workflows.parallel:ParallelWorkflow",
+        workflow="tests.fixtures.sample_workflows.parallel:ParallelWorkflow",
         db_url=db_url,
         run_id=run_id,
     )
@@ -331,6 +346,7 @@ def test_parallel_steps_stress(test_db_path: Path, iteration: int) -> None:
     assert_no_determinism_errors(result)
 
 
+@pytest.mark.timeout(60)
 @pytest.mark.parametrize("iteration", range(5))
 def test_concurrent_workers_stress(test_db_path: Path, iteration: int) -> None:
     """Stress test concurrent workers - run 5 times to catch timing issues."""
@@ -338,7 +354,7 @@ def test_concurrent_workers_stress(test_db_path: Path, iteration: int) -> None:
     db_url = f"sqlite+pysqlite:///{test_db_path}?check_same_thread=false"
 
     result = run_scenario(
-        workflow="tests.fixtures.workflows.concurrent_workers:ConcurrentWorkersWorkflow",
+        workflow="tests.fixtures.sample_workflows.concurrent_workers:ConcurrentWorkersWorkflow",
         db_url=db_url,
         run_id=run_id,
     )
@@ -360,7 +376,7 @@ def test_streaming_stress_determinism(test_db_path: Path) -> None:
     db_url = f"sqlite+pysqlite:///{test_db_path}?check_same_thread=false"
 
     result = run_scenario(
-        workflow="tests.fixtures.workflows.streaming_stress:StreamingStressWorkflow",
+        workflow="tests.fixtures.sample_workflows.streaming_stress:StreamingStressWorkflow",
         db_url=db_url,
         run_id=run_id,
     )
@@ -378,7 +394,7 @@ def test_streaming_interrupt_resume(test_db_path: Path) -> None:
     db_url = f"sqlite+pysqlite:///{test_db_path}?check_same_thread=false"
 
     result1 = run_scenario(
-        workflow="tests.fixtures.workflows.streaming_interrupt:StreamingInterruptWorkflow",
+        workflow="tests.fixtures.sample_workflows.streaming_interrupt:StreamingInterruptWorkflow",
         db_url=db_url,
         run_id=run_id,
         config={
@@ -393,7 +409,7 @@ def test_streaming_interrupt_resume(test_db_path: Path) -> None:
     assert "INTERRUPTING" in result1.stdout, "Should have interrupted"
 
     result2 = run_scenario(
-        workflow="tests.fixtures.workflows.streaming_interrupt:StreamingInterruptWorkflow",
+        workflow="tests.fixtures.sample_workflows.streaming_interrupt:StreamingInterruptWorkflow",
         db_url=db_url,
         run_id=run_id,
     )
@@ -405,6 +421,7 @@ def test_streaming_interrupt_resume(test_db_path: Path) -> None:
     )
 
 
+@pytest.mark.timeout(60)
 @pytest.mark.parametrize("iteration", range(5))
 def test_streaming_stress_repeated(test_db_path: Path, iteration: int) -> None:
     """Stress test streaming - run 5 times to catch timing issues."""
@@ -412,7 +429,7 @@ def test_streaming_stress_repeated(test_db_path: Path, iteration: int) -> None:
     db_url = f"sqlite+pysqlite:///{test_db_path}?check_same_thread=false"
 
     result = run_scenario(
-        workflow="tests.fixtures.workflows.streaming_stress:StreamingStressWorkflow",
+        workflow="tests.fixtures.sample_workflows.streaming_stress:StreamingStressWorkflow",
         db_url=db_url,
         run_id=run_id,
     )

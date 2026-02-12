@@ -106,12 +106,9 @@ jobs:
           python-version: "3.14"
           enable-cache: true
 
-      - name: Run non-Docker tests with coverage
-        run: uv run --all-extras --directory packages/llama-agents-integration-tests -- pytest -m "not docker" --cov --cov-report=
-
       - name: Run Docker tests with coverage (append)
         # Use longer timeout for Docker tests since container startup can take 30-60s in CI
-        run: uv run --all-extras --directory packages/llama-agents-integration-tests -- pytest --timeout=120 -m docker --cov --cov-append --cov-report=xml
+        run: uv run --all-extras --all-packages dev --timeout=120 -m docker --cov --cov-append --cov-report=xml
 
       - name: Report Coveralls
         uses: coverallsapp/github-action@v2

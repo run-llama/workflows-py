@@ -137,6 +137,9 @@ class BaseInternalRunAdapterDecorator(InternalRunAdapter):
     async def finalize_step(self) -> None:
         await self._decorated.finalize_step()
 
+    def is_replaying(self) -> bool:
+        return self._decorated.is_replaying()
+
     async def on_tick(self, tick: WorkflowTick) -> None:
         await self._decorated.on_tick(tick)
 
