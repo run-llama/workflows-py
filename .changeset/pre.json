@@ -6,9 +6,17 @@
     "llama-agents-client": "0.1.2",
     "llama-agents-server": "0.1.2",
     "llama-index-utils-workflow": "0.9.1",
-    "llama-index-workflows": "2.14.1"
+    "llama-index-workflows": "2.14.1",
+    "llama-agents-dbos": "0.0.0"
   },
   "changesets": [
-    "itchy-crabs-report"
+    "bright-waves-crash",
+    "itchy-crabs-report",
+    "mighty-apricots-matter",
+    "modern-planets-tan",
+    "neat-chicken-bake",
+    "rich-lizards-sing",
+    "soft-snails-reply",
+    "warm-doors-glow"
   ]
 }
