@@ -1,5 +1,18 @@
 # llama-agents-client
 
+## 0.2.0-rc.0
+
+### Minor Changes
+
+- 528d562: Add SSE event streaming with sequence-based cursors and automatic reconnection on connection drop
+
+### Patch Changes
+
+- Updated dependencies [e981f73]
+- Updated dependencies [b515a46]
+- Updated dependencies [7433d4c]
+  - llama-index-workflows@2.15.0-rc.0
+
 ## 0.1.2
 
 ### Patch Changes

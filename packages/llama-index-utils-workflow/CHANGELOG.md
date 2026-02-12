@@ -1,5 +1,14 @@
 # llama-index-utils-workflow
 
+## 0.9.2-rc.0
+
+### Patch Changes
+
+- Updated dependencies [e981f73]
+- Updated dependencies [b515a46]
+- Updated dependencies [7433d4c]
+  - llama-index-workflows@2.15.0-rc.0
+
 ## 0.9.1
 
 ### Patch Changes

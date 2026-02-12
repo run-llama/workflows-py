@@ -1,5 +1,16 @@
 # llama-index-workflows
 
+## 2.15.0-rc.0
+
+### Minor Changes
+
+- b515a46: Make WorkflowTick serializable, and support switching workflow name and runtime before launch
+
+### Patch Changes
+
+- e981f73: Fix idle detection only working for wait_for_event, not for steps waiting on InputRequiredEvent
+- 7433d4c: Add fix for double send when waiter event and accepted event match
+
 ## 2.14.1
 
 ### Patch Changes
