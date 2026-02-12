@@ -701,20 +701,6 @@ class InternalDBOSAdapter(InternalRunAdapter):
     async def get_now(self) -> float:
         return _durable_time()
 
-    @property
-    def defer_send_event(self) -> bool:
-        return True
-
-    async def send_event(self, tick: WorkflowTick) -> None:
-        # With defer_send_event=True, ctx.send_event() no longer calls this from
-        # within steps. This is only called from the control loop or external code.
-        # The run_in_executor remains as a safety net for any remaining callers.
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(
-            None,
-            lambda: DBOS.send(self._run_id, tick, topic=_IO_STREAM_TICK_TOPIC),
-        )
-
     async def wait_receive(
         self,
         timeout_seconds: float | None = None,

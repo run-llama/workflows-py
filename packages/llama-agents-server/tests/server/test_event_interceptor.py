@@ -20,7 +20,6 @@ from workflows.runtime.types.plugin import (
     WaitResult,
     WaitResultTimeout,
 )
-from workflows.runtime.types.ticks import WorkflowTick
 from workflows.workflow import Workflow
 
 
@@ -29,7 +28,6 @@ class _RecordingInternalAdapter(InternalRunAdapter):
 
     def __init__(self) -> None:
         self.events_written: list[Event] = []
-        self.ticks_sent: list[WorkflowTick] = []
         self.closed = False
 
     @property
@@ -41,9 +39,6 @@ class _RecordingInternalAdapter(InternalRunAdapter):
 
     async def get_now(self) -> float:
         return 1.0
-
-    async def send_event(self, tick: WorkflowTick) -> None:
-        self.ticks_sent.append(tick)
 
     async def wait_receive(self, timeout_seconds: float | None = None) -> WaitResult:
         return WaitResultTimeout()

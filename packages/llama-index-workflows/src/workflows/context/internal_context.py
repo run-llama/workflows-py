@@ -25,7 +25,7 @@ from workflows.runtime.types.ticks import TickAddEvent
 
 if TYPE_CHECKING:
     from workflows.events import Event
-    from workflows.runtime.types.plugin import InternalRunAdapter
+    from workflows.runtime.types.plugin import ImmediateSendEvent, InternalRunAdapter
     from workflows.workflow import Workflow
 
 T = TypeVar("T", bound="Event")
@@ -41,6 +41,7 @@ class InternalContext(Generic[MODEL_T]):
     """
 
     _internal_adapter: InternalRunAdapter
+    _immediate_sender: ImmediateSendEvent | None
     _workflow: Workflow
     _workers: list[asyncio.Task[Any]]
 
@@ -50,6 +51,7 @@ class InternalContext(Generic[MODEL_T]):
         workflow: Workflow,
     ) -> None:
         self._internal_adapter = internal_adapter
+        self._immediate_sender = internal_adapter.get_immediate_sender()
         self._workflow = workflow
         self._workers = []
 
@@ -161,14 +163,14 @@ class InternalContext(Generic[MODEL_T]):
         if step is not None:
             self._workflow._validate_valid_step_message(step, message)
 
-        if self._internal_adapter.defer_send_event:
-            self._add_result(SendEvent(event=message, step_name=step))
-        else:
+        if self._immediate_sender is not None:
             self._execute_task(
-                self._internal_adapter.send_event(
+                self._immediate_sender.send_event(
                     TickAddEvent(event=message, step_name=step)
                 )
             )
+        else:
+            self._add_result(SendEvent(event=message, step_name=step))
 
     async def wait_for_event(
         self,

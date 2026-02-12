@@ -25,6 +25,7 @@ from workflows.runtime.types.internal_state import BrokerState
 from workflows.runtime.types.named_task import NamedTask
 from workflows.runtime.types.plugin import (
     ExternalRunAdapter,
+    ImmediateSendEvent,
     InternalRunAdapter,
     RegisteredWorkflow,
     Runtime,
@@ -119,8 +120,8 @@ class BaseInternalRunAdapterDecorator(InternalRunAdapter):
     async def get_now(self) -> float:
         return await self._decorated.get_now()
 
-    async def send_event(self, tick: WorkflowTick) -> None:
-        await self._decorated.send_event(tick)
+    def get_immediate_sender(self) -> ImmediateSendEvent | None:
+        return self._decorated.get_immediate_sender()
 
     async def wait_receive(
         self,

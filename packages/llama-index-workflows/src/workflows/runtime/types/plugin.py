@@ -21,6 +21,7 @@ from typing import (
     Literal,
     Protocol,
     Union,
+    runtime_checkable,
 )
 
 from workflows.context.state_store import StateStore
@@ -64,6 +65,18 @@ class RegisteredWorkflow:
     workflow: Workflow
     workflow_run_fn: WorkflowRunFunction
     steps: dict[str, StepWorkerFunction]
+
+
+@runtime_checkable
+class ImmediateSendEvent(Protocol):
+    """Opt-in protocol for adapters that support immediate fire-and-forget send_event.
+
+    When an adapter implements this, ctx.send_event() dispatches events as async
+    tasks immediately rather than deferring them to step completion. The basic
+    asyncio runtime implements this; durable runtimes typically do not.
+    """
+
+    async def send_event(self, tick: WorkflowTick) -> None: ...
 
 
 class InternalRunAdapter(ABC):
@@ -117,17 +130,6 @@ class InternalRunAdapter(ABC):
         ...
 
     @abstractmethod
-    async def send_event(self, tick: WorkflowTick) -> None:
-        """
-        Send a tick into the workflow's own mailbox from within the control loop.
-
-        Called from inside the workflow (e.g., from step functions via ctx.send_event)
-        to inject events back into the workflow's execution. The tick will be
-        received by wait_receive() on the next iteration.
-        """
-        ...
-
-    @abstractmethod
     async def wait_receive(
         self,
         timeout_seconds: float | None = None,
@@ -152,15 +154,15 @@ class InternalRunAdapter(ABC):
         """
         ...
 
-    @property
-    def defer_send_event(self) -> bool:
-        """Whether send_event should be deferred to step completion.
+    def get_immediate_sender(self) -> ImmediateSendEvent | None:
+        """Return an ImmediateSendEvent if this adapter supports immediate dispatch.
 
-        When True, ctx.send_event() accumulates events as step results
-        instead of sending immediately. Required for deterministic replay.
-        Default is False (fire-and-forget).
+        Adapters that implement ImmediateSendEvent are auto-detected.
+        Decorators should override to forward to the inner adapter.
         """
-        return False
+        if isinstance(self, ImmediateSendEvent):
+            return self
+        return None
 
     async def close(self) -> None:
         """
