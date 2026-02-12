@@ -9,7 +9,6 @@ real Ctrl+C interruptions during workflow execution.
 from __future__ import annotations
 
 import json
-import sqlite3
 import subprocess
 import sys
 from pathlib import Path
@@ -29,12 +28,8 @@ def log_on_failure(result: subprocess.CompletedProcess[str], label: str) -> None
 
 @pytest.fixture
 def test_db_path(tmp_path: Path) -> Path:
-    """Create a temporary database path with WAL mode for concurrent access."""
-    db_path = tmp_path / "dbos_test.sqlite3"
-    conn = sqlite3.connect(str(db_path))
-    conn.execute("PRAGMA journal_mode=WAL")
-    conn.close()
-    return db_path
+    """Create a temporary database path."""
+    return tmp_path / "dbos_test.sqlite3"
 
 
 def run_scenario(
