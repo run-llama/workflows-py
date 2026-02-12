@@ -13,9 +13,9 @@ backed by a shared Postgres database with DBOS.
   - --resume picks up exactly where it left off via DBOS recovery
 
 Usage:
-    python examples/multi_replica/run.py              # Start new
-    python examples/multi_replica/run.py --resume     # Resume after Ctrl+C
-    python examples/multi_replica/run.py --clean      # Tear down everything
+    python examples/dbos/server_replicas.py              # Start new
+    python examples/dbos/server_replicas.py --resume     # Resume after Ctrl+C
+    python examples/dbos/server_replicas.py --clean      # Tear down everything
 """
 
 from __future__ import annotations
@@ -29,6 +29,7 @@ import sys
 import time
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 import httpx
 from llama_agents.client import WorkflowClient
@@ -59,8 +60,20 @@ def log(msg: str, color: str = DIM) -> None:
 # -- Infrastructure -----------------------------------------------------------
 
 
-def run_cmd(*args: str, **kwargs: object) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(args, check=True, text=True, capture_output=True, **kwargs)  # type: ignore[arg-type]
+def run_cmd(*args: str, **kwargs: Any) -> subprocess.CompletedProcess[str]:
+    try:
+        return subprocess.run(
+            args, check=True, text=True, capture_output=True, **kwargs
+        )
+    except subprocess.CalledProcessError as e:
+        parts = [f"Command failed: {' '.join(args)}"]
+        if e.stdout:
+            parts.append(f"stdout:\n{e.stdout}")
+        if e.stderr:
+            parts.append(f"stderr:\n{e.stderr}")
+        raise subprocess.CalledProcessError(
+            e.returncode, e.cmd, e.stdout, e.stderr
+        ) from RuntimeError("\n".join(parts))
 
 
 def start_postgres() -> None:
@@ -89,7 +102,7 @@ def start_postgres() -> None:
 
 def start_replica(port: int) -> subprocess.Popen[str]:
     return subprocess.Popen(
-        [sys.executable, str(_DIR / "serve.py"), "--port", str(port)],
+        [sys.executable, str(_DIR / "_replica.py"), "--port", str(port)],
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
