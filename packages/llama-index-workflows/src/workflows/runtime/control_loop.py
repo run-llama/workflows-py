@@ -57,6 +57,7 @@ from workflows.runtime.types.results import (
     AddWaiter,
     DeleteCollectedEvent,
     DeleteWaiter,
+    SendEvent,
     StepWorkerFailed,
     StepWorkerResult,
     StepWorkerState,
@@ -754,6 +755,10 @@ def _process_step_result_tick(
                 if result.waiter_event:
                     commands.append(CommandPublishEvent(event=result.waiter_event))
 
+        elif isinstance(result, SendEvent):
+            commands.append(
+                CommandQueueEvent(event=result.event, step_name=result.step_name)
+            )
         elif isinstance(result, DeleteWaiter):
             if did_complete_step:  # allow retries to grab the waiter events
                 # indicates that a run has obtained the waiting event, and it can be deleted from the collected waiters state

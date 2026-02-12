@@ -152,6 +152,16 @@ class InternalRunAdapter(ABC):
         """
         ...
 
+    @property
+    def defer_send_event(self) -> bool:
+        """Whether send_event should be deferred to step completion.
+
+        When True, ctx.send_event() accumulates events as step results
+        instead of sending immediately. Required for deterministic replay.
+        Default is False (fire-and-forget).
+        """
+        return False
+
     async def close(self) -> None:
         """
         Signal shutdown to wake any blocked wait operations.

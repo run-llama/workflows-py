@@ -15,6 +15,8 @@ from workflows.runtime.types.results import (
     AddWaiter,
     DeleteCollectedEvent,
     DeleteWaiter,
+    SendEvent,
+    StepFunctionResult,
     StepWorkerContext,
     StepWorkerStateContextVar,
     WaitingForEvent,
@@ -149,16 +151,24 @@ class InternalContext(Generic[MODEL_T]):
         step_ctx.returns.return_values.append(DeleteCollectedEvent(event_id=buffer_id))
         return total
 
+    def _add_result(self, result: StepFunctionResult) -> None:
+        """Append a result to the current step's return values."""
+        step_ctx = self._get_step_ctx(fn="_add_result")
+        step_ctx.returns.return_values.append(result)
+
     def send_event(self, message: Event, step: str | None = None) -> None:
         """Send an event to trigger another step."""
         if step is not None:
             self._workflow._validate_valid_step_message(step, message)
 
-        self._execute_task(
-            self._internal_adapter.send_event(
-                TickAddEvent(event=message, step_name=step)
+        if self._internal_adapter.defer_send_event:
+            self._add_result(SendEvent(event=message, step_name=step))
+        else:
+            self._execute_task(
+                self._internal_adapter.send_event(
+                    TickAddEvent(event=message, step_name=step)
+                )
             )
-        )
 
     async def wait_for_event(
         self,

@@ -154,6 +154,15 @@ class AddCollectedEvent(BaseModel):
     event: SerializableEvent
 
 
+class SendEvent(BaseModel):
+    """Returned when send_event is deferred to step completion."""
+
+    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
+    type: Literal["send_event"] = "send_event"
+    event: SerializableEvent
+    step_name: str | None = None
+
+
 class AddWaiter(BaseModel, Generic[EventType]):
     """Returned after a waiter has been added, and is not yet resolved."""
 
@@ -193,4 +202,5 @@ StepFunctionResult = Union[
     DeleteCollectedEvent,
     AddWaiter[Event],
     DeleteWaiter,
+    SendEvent,
 ]
