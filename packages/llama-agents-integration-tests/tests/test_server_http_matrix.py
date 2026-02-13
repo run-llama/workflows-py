@@ -188,7 +188,7 @@ def postgres_container(request: Any) -> Any:
     ):
         yield None
         return
-    with PostgresContainer("postgres:17", driver=None) as container:
+    with PostgresContainer("postgres:16", driver=None) as container:
         yield container
 
 
