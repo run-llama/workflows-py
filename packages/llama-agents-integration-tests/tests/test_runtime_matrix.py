@@ -13,6 +13,7 @@ with the 'docker' pytest marker. Run with `pytest -m docker` to include it.
 from __future__ import annotations
 
 import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, AsyncGenerator, Generator
 
@@ -73,7 +74,13 @@ def postgres_container() -> Generator[PostgresContainer, None, None]:
 def dbos_runtime_sqlite(
     tmp_path_factory: pytest.TempPathFactory,
 ) -> Generator[DBOSRuntime, None, None]:
-    """Function-scoped DBOS runtime with SQLite backend (fresh DB per test)."""
+    """Function-scoped DBOS runtime with SQLite backend (fresh DB per test).
+
+    DBOS.destroy() shuts down its executor which it also installs as the event
+    loop's default executor. Since the event loop is module-scoped, we must
+    restore a fresh default executor after destroy to avoid poisoning subsequent
+    tests that use run_in_executor(None, ...).
+    """
     db_file: Path = tmp_path_factory.mktemp("dbos") / "dbos_test.sqlite3"
     system_db_url: str = f"sqlite+pysqlite:///{db_file}?check_same_thread=false"
     config: DBOSConfig = {
@@ -88,6 +95,10 @@ def dbos_runtime_sqlite(
         yield runtime
     finally:
         runtime.destroy()
+        # DBOS sets itself as the default executor and destroy() shuts it down.
+        # Restore a fresh executor so the module-scoped event loop remains usable.
+        loop = asyncio.get_event_loop()
+        loop.set_default_executor(ThreadPoolExecutor())
 
 
 @pytest.fixture(scope="module")
