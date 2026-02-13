@@ -281,104 +281,121 @@ curl -X POST http://localhost:80/handlers/someUniqueId123/cancel?purge=true
 }
 ```
 
-## Using `WorkflowClient` to Interact with Servers
+## Persistence
 
-In order to interact with a deployed `WorkflowServer` programmatically, beyond the raw API calls detailed above, we also provide a `WorkflowClient` class.
-
-`WorkflowClient` provides methods for listing available workflows and workflow handlers, verifying the health of the server, running a workflow (both synchronously and asynchronously), streaming events and sending events.
-
-Assuming you are running the server example from above, we can use `WorkflowClient` in the following way:
+Handler state is in-memory by default. To survive restarts, pass a `SqliteWorkflowStore`:
 
 ```python
-from llama_agents.client import WorkflowClient
+from llama_agents.server import SqliteWorkflowStore, WorkflowServer
 
-async def main():
-    client = WorkflowClient(base_url="http://0.0.0.0:8080")
-    workflows = await client.list_workflows()
-    print("===== AVAILABLE WORKFLOWS ====")
-    print(workflows)
-    await client.is_healthy()  # will raise an exception if the server is not healthy
-    handler = await client.run_workflow_nowait(
-        "greet",
-        start_event=StartEvent(name="John"),
-        context=None,
+store = SqliteWorkflowStore(db_path="handlers.db")
+server = WorkflowServer(workflow_store=store)
+```
+
+That's it — status, context snapshots, and results are persisted to SQLite. Running workflows resume from their last checkpoint after a restart.
+
+For multi-process deployments, implement `AbstractWorkflowStore` backed by a shared database.
+
+### Example: resumable processing workflow
+
+This workflow processes inputs one at a time, checkpointing progress after each. If the server restarts mid-run, it picks up where it left off.
+
+```python
+import asyncio
+from llama_agents.server import SqliteWorkflowStore, WorkflowServer
+from pydantic import BaseModel, Field
+from workflows import Context, Workflow, step
+from workflows.events import Event, StartEvent, StopEvent
+
+
+class ProgressEvent(Event):
+    item: str
+    index: int
+    total: int
+
+
+class ProcessInput(StartEvent):
+    inputs: list[str] = Field(
+        default_factory=lambda: ["alpha", "beta", "gamma"]
     )
-    handler_id = handler.handler_id
-    print("==== STARTING THE WORKFLOW ===")
-    print(f"Workflow running with handler ID: {handler_id}")
-    print("=== STREAMING EVENTS ===")
 
-    async for event in client.get_workflow_events(handler_id=handler_id):
-        print("Received data:", event)
-    result = await client.get_handler(handler_id)
 
-    print(f"Final result: {result.result} (status: {result.status})")
+class ProcessOutput(StopEvent):
+    processed: list[str]
+
+
+class ProcessingState(BaseModel):
+    processed: list[str] = Field(default_factory=list)
+
+
+class DurableProcessingWorkflow(Workflow):
+    @step
+    async def process_inputs(
+        self, ev: ProcessInput, ctx: Context[ProcessingState]
+    ) -> ProcessOutput:
+        state = await ctx.store.get_state()
+        processed = list(state.processed)
+
+        for i, item in enumerate(ev.inputs):
+            if item in processed:
+                continue
+
+            await asyncio.sleep(1)  # simulate work
+            result = f"processed:{item}"
+            processed.append(result)
+
+            async with ctx.store.edit_state() as s:
+                s.processed = list(processed)
+
+            ctx.write_event_to_stream(
+                ProgressEvent(item=result, index=i + 1, total=len(ev.inputs))
+            )
+
+        return ProcessOutput(processed=processed)
+
+
+async def main() -> None:
+    store = SqliteWorkflowStore(db_path="durable_handlers.db")
+    server = WorkflowServer(workflow_store=store)
+    server.add_workflow("processing", DurableProcessingWorkflow(timeout=120))
+    await server.serve(host="localhost", port=8000)
+
 
 if __name__ == "__main__":
-    import asyncio
     asyncio.run(main())
 ```
 
-You can use the client also to interactively run human-in-the-loop workflows, like this one:
+Start the server, then kick off a run (or resume one already in progress):
 
 ```python
-from workflows import Workflow, step
-from workflows.context import Context
-from workflows.events import (
-    StartEvent,
-    StopEvent,
-    InputRequiredEvent,
-    HumanResponseEvent,
-)
-from llama_agents.server import WorkflowServer
-
-class RequestEvent(InputRequiredEvent):
-    prompt: str
-
-class ResponseEvent(HumanResponseEvent):
-    response: str
-
-class OutEvent(StopEvent):
-    output: str
-
-class HumanInTheLoopWorkflow(Workflow):
-    @step
-    async def prompt_human(self, ev: StartEvent, ctx: Context) -> RequestEvent:
-        return RequestEvent(prompt="What is your name?")
-
-    @step
-    async def greet_human(self, ev: ResponseEvent) -> OutEvent:
-        return OutEvent(output=f"Hello, {ev.response}")
-
-server = WorkflowServer()
-server.add_workflow("human", HumanInTheLoopWorkflow(timeout=1000))
-await server.serve("0.0.0.0", "8080")
-```
-
-You can now run the workflow and, when the human interaction is required, send the human response back:
-
-```python
+import asyncio
 from llama_agents.client import WorkflowClient
 
-client = WorkflowClient(base_url="http://0.0.0.0:8080")
-handler = await client.run_workflow_nowait("human")
-handler_id = handler.handler_id
-print(handler_id)
-async for event in client.get_workflow_events(handler_id=handler_id):
-    if "RequestEvent" == event.type:
-        print(
-            "Workflow is requiring human input:",
-            event.value.get("prompt", ""),
-        )
-        name = input("Reply here: ")
-        sent_event = await client.send_event(
-            handler_id=handler_id,
-            event=ResponseEvent(response=name.capitalize().strip()),
-        )
-        msg = "Event has been sent" if sent_event else "Event failed to send"
-        print(msg)
-result = await client.get_handler(handler_id)
-print(f"Workflow complete with status: {result.status})")
-res = OutEvent.model_validate(result.result)
-print("Received final message:", res.output)
+
+async def main() -> None:
+    client = WorkflowClient(base_url="http://localhost:8000")
+
+    # Resume an existing run, or start a new one
+    handlers = await client.get_handlers(
+        workflow_name=["processing"], status=["running"]
+    )
+    if handlers.handlers:
+        handler_id = handlers.handlers[0].handler_id
+        print(f"Resuming {handler_id}")
+    else:
+        h = await client.run_workflow_nowait("processing")
+        handler_id = h.handler_id
+        print(f"Started {handler_id}")
+
+    async for event in client.get_workflow_events(handler_id):
+        print(f"  [{event.type}] {event.value}")
+
+    result = await client.get_handler(handler_id)
+    print(f"Done: {result.result}")
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
 ```
+
+Stop the server mid-run with `Ctrl+C`, restart it, and run the client again — it picks up where it left off.

@@ -28,4 +28,4 @@ Get from zero to a working pipeline quickly. Start from templates, configure and
 
 **[@llamaindex/ui](/python/llamaagents/llamactl/ui-hooks/)**: React hooks for workflow-powered frontends. Deploy alongside your backend with `llamactl`.
 
-**[Workflows Client](/python/llamaagents/workflows/deployment/#using-workflowclient-to-interact-with-servers)**: Call deployed workflows via REST API or typed Python client.
+**[Workflows Client](/python/llamaagents/workflows/client/)**: Call deployed workflows via REST API or typed Python client.
