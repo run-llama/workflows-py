@@ -1,5 +1,12 @@
 # llama-index-workflows
 
+## 2.14.2
+
+### Patch Changes
+
+- 3590913: Fix span tracking in observability tooling
+- 7433d4c: Add fix for double send when waiter event and accepted event match
+
 ## 2.14.1
 
 ### Patch Changes
