@@ -69,11 +69,11 @@ def postgres_container() -> Generator[PostgresContainer, None, None]:
         yield postgres
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture
 def dbos_runtime_sqlite(
     tmp_path_factory: pytest.TempPathFactory,
 ) -> Generator[DBOSRuntime, None, None]:
-    """Module-scoped DBOS runtime with SQLite backend."""
+    """Function-scoped DBOS runtime with SQLite backend (fresh DB per test)."""
     db_file: Path = tmp_path_factory.mktemp("dbos") / "dbos_test.sqlite3"
     system_db_url: str = f"sqlite+pysqlite:///{db_file}?check_same_thread=false"
     config: DBOSConfig = {
