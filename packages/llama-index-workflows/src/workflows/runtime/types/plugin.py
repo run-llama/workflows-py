@@ -25,7 +25,12 @@ from typing import (
 
 from workflows.context.state_store import StateStore
 from workflows.events import Event, StartEvent, StopEvent
-from workflows.runtime.types.named_task import NamedTask
+from workflows.runtime.types.named_task import (
+    NamedTask,
+    PendingStart,
+    all_tasks,
+    pick_highest_priority,
+)
 
 if TYPE_CHECKING:
     from workflows.context.context import Context
@@ -57,6 +62,14 @@ class WaitResultTimeout:
 
 
 WaitResult = Union[WaitResultTick, WaitResultTimeout]
+
+
+@dataclass
+class WaitForNextTaskResult:
+    """Result from wait_for_next_task containing the completed task and newly started tasks."""
+
+    completed: asyncio.Task[Any] | None
+    started: list[NamedTask]
 
 
 @dataclass
@@ -201,43 +214,36 @@ class InternalRunAdapter(ABC):
 
     async def wait_for_next_task(
         self,
-        task_set: list[NamedTask],
+        running: list[NamedTask],
+        pending: list[PendingStart],
         timeout: float | None = None,
-    ) -> asyncio.Task[Any] | None:
+    ) -> WaitForNextTaskResult:
         """Wait for and return the next task that should complete.
 
+        The adapter is responsible for starting pending coroutines as asyncio tasks.
+        This allows adapters to control task startup ordering (e.g., for deterministic
+        function_id acquisition in DBOS).
+
         Args:
-            task_set: List of NamedTasks with stable string keys for identification.
-                      The order indicates priority - first items should be returned first
-                      when multiple tasks complete simultaneously.
-            timeout: Timeout in seconds, None for no timeout
+            running: Already-started tasks from previous iterations.
+            pending: Coroutines to start this iteration.
+            timeout: Timeout in seconds, None for no timeout.
 
         Returns:
-            The completed task, or None on timeout.
+            WaitForNextTaskResult with the completed task and newly started NamedTasks.
 
-        IMPORTANT: Must return at most ONE task per call.
-
-        Default implementation uses asyncio.wait(FIRST_COMPLETED) and returns
-        the highest-priority completed task (workers before pull).
-        Custom adapters may override to coordinate based on journal for
-        deterministic replay, using the stable keys from NamedTask to identify tasks.
+        IMPORTANT: Must return at most ONE completed task per call.
         """
-        tasks = NamedTask.all_tasks(task_set)
+        started = [p.start(asyncio.create_task(p.coro)) for p in pending]
+        all_named = running + started
+        tasks = all_tasks(all_named)
         if not tasks:
-            return None
+            return WaitForNextTaskResult(None, started)
         done, _ = await asyncio.wait(
-            tasks,
-            timeout=timeout,
-            return_when=asyncio.FIRST_COMPLETED,
+            tasks, timeout=timeout, return_when=asyncio.FIRST_COMPLETED
         )
-        if not done:
-            return None
-        # Return the highest-priority completed task (first in task_set order)
-        for named_task in task_set:
-            if named_task.task in done:
-                return named_task.task
-        # Fallback (shouldn't happen)
-        return done.pop()
+        completed = pick_highest_priority(all_named, done) if done else None
+        return WaitForNextTaskResult(completed, started)
 
 
 class ExternalRunAdapter(ABC):

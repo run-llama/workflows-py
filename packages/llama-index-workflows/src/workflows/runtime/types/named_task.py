@@ -6,76 +6,116 @@
 from __future__ import annotations
 
 from asyncio import Task
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Coroutine, Union
 
 # Key prefix for pull tasks
 PULL_PREFIX = "__pull__"
 
 
 @dataclass
-class NamedTask:
-    """An asyncio task with a stable string key for identification.
+class WorkerTask:
+    """An asyncio worker task with structured identity."""
 
-    Keys are strings like "step_name:worker_id" for workers or "__pull__:0" for pull.
-    """
-
-    key: str
+    step_name: str
+    worker_id: int
     task: Task[Any]
 
-    @staticmethod
-    def worker(step_name: str, worker_id: int, task: Task[Any]) -> NamedTask:
-        """Create a NamedTask for a worker."""
-        return NamedTask(f"{step_name}:{worker_id}", task)
+    @property
+    def key(self) -> str:
+        return f"{self.step_name}:{self.worker_id}"
 
-    @staticmethod
-    def pull(sequence: int, task: Task[Any]) -> NamedTask:
-        """Create a NamedTask for a pull task."""
-        return NamedTask(f"{PULL_PREFIX}:{sequence}", task)
 
-    def is_pull(self) -> bool:
-        """Check if this is a pull task."""
-        return self.key.startswith(f"{PULL_PREFIX}:")
+@dataclass
+class PullTask:
+    """An asyncio pull task with sequence identity."""
 
-    @staticmethod
-    def all_tasks(named_tasks: list[NamedTask]) -> set[Task[Any]]:
-        """Extract all tasks for use with asyncio.wait."""
-        return {nt.task for nt in named_tasks}
+    sequence: int
+    task: Task[Any]
 
-    @staticmethod
-    def find_by_key(named_tasks: list[NamedTask], key: str) -> Task[Any] | None:
-        """Find a task by its key, returns None if not found."""
-        for nt in named_tasks:
-            if nt.key == key:
-                return nt.task
+    @property
+    def key(self) -> str:
+        return f"{PULL_PREFIX}:{self.sequence}"
+
+
+NamedTask = Union[WorkerTask, PullTask]
+
+
+def all_tasks(named_tasks: Sequence[NamedTask]) -> set[Task[Any]]:
+    """Extract all tasks for use with asyncio.wait."""
+    return {nt.task for nt in named_tasks}
+
+
+def find_by_key(named_tasks: Sequence[NamedTask], key: str) -> Task[Any] | None:
+    """Find a task by its key, returns None if not found."""
+    for nt in named_tasks:
+        if nt.key == key:
+            return nt.task
+    return None
+
+
+def get_key(named_tasks: Sequence[NamedTask], task: Task[Any]) -> str:
+    """Get the key for a task. Raises KeyError if not found."""
+    for nt in named_tasks:
+        if nt.task is task:
+            return nt.key
+    raise KeyError(f"Task {task} not found")
+
+
+def pick_highest_priority(
+    named_tasks: Sequence[NamedTask], done: set[Task[Any]]
+) -> Task[Any] | None:
+    """Return highest priority completed task from done set.
+
+    Priority is determined by list order - tasks earlier in the list
+    have higher priority. Workers should be listed before pull.
+
+    Returns None if done is empty.
+    Raises ValueError if done is non-empty but no tasks match (indicates bug).
+    """
+    if not done:
         return None
+    for nt in named_tasks:
+        if nt.task in done:
+            return nt.task
+    raise ValueError(
+        f"No tasks in done set match named_tasks. "
+        f"done={done}, named_tasks={[nt.key for nt in named_tasks]}"
+    )
 
-    @staticmethod
-    def get_key(named_tasks: list[NamedTask], task: Task[Any]) -> str:
-        """Get the key for a task. Raises KeyError if not found."""
-        for nt in named_tasks:
-            if nt.task is task:
-                return nt.key
-        raise KeyError(f"Task {task} not found")
 
-    @staticmethod
-    def pick_highest_priority(
-        named_tasks: list[NamedTask], done: set[Task[Any]]
-    ) -> Task[Any] | None:
-        """Return highest priority completed task from done set.
+@dataclass
+class PendingWorker:
+    """A worker coroutine that hasn't been started yet."""
 
-        Priority is determined by list order - tasks earlier in the list
-        have higher priority. Workers should be listed before pull.
+    step_name: str
+    worker_id: int
+    coro: Coroutine[Any, Any, Any]
 
-        Returns None if done is empty.
-        Raises ValueError if done is non-empty but no tasks match (indicates bug).
-        """
-        if not done:
-            return None
-        for nt in named_tasks:
-            if nt.task in done:
-                return nt.task
-        raise ValueError(
-            f"No tasks in done set match named_tasks. "
-            f"done={done}, named_tasks={[nt.key for nt in named_tasks]}"
-        )
+    @property
+    def key(self) -> str:
+        return f"{self.step_name}:{self.worker_id}"
+
+    def start(self, task: Task[Any]) -> WorkerTask:
+        """Convert to a started WorkerTask."""
+        return WorkerTask(self.step_name, self.worker_id, task)
+
+
+@dataclass
+class PendingPull:
+    """A pull coroutine that hasn't been started yet."""
+
+    sequence: int
+    coro: Coroutine[Any, Any, Any]
+
+    @property
+    def key(self) -> str:
+        return f"{PULL_PREFIX}:{self.sequence}"
+
+    def start(self, task: Task[Any]) -> PullTask:
+        """Convert to a started PullTask."""
+        return PullTask(self.sequence, task)
+
+
+PendingStart = Union[PendingWorker, PendingPull]

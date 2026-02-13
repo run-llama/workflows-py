@@ -46,7 +46,13 @@ from workflows.runtime.types.internal_state import (
     InProgressState,
     InternalStepWorkerState,
 )
-from workflows.runtime.types.named_task import NamedTask
+from workflows.runtime.types.named_task import (
+    PendingPull,
+    PendingStart,
+    PendingWorker,
+    PullTask,
+    WorkerTask,
+)
 from workflows.runtime.types.plugin import (
     InternalRunAdapter,
     WaitResultTick,
@@ -134,11 +140,8 @@ class _ControlLoopRunner:
         self._task_keys: dict[asyncio.Task[TickStepResult], tuple[str, int]] = {}
         # Whether a TickIdleCheck is currently in tick_buffer
         self._idle_check_pending = False
-        # Gate to prevent workers from executing their step function until the
-        # main loop is parked in wait_for_next_task. This ensures deterministic
-        # DBOS step ordering by preventing interleaving of worker steps with
-        # main loop _durable_time() calls.
-        self._worker_gate = asyncio.Event()
+        # Pending worker coroutines not yet started (started by adapter in wait_for_next_task)
+        self._pending_workers: list[PendingStart] = []
 
     def schedule_tick(self, tick: WorkflowTick, at_time: float) -> None:
         """Schedule a tick to be processed at a specific time."""
@@ -166,10 +169,11 @@ class _ControlLoopRunner:
         return due
 
     def run_worker(self, command: CommandRunWorker) -> None:
-        """Run a worker for a step function.
+        """Queue a worker for a step function.
 
-        Step workers run concurrently as asyncio tasks. When they complete,
-        they return TickStepResult for the main loop to process via asyncio.wait.
+        Workers are stored as pending coroutines and started by the adapter
+        in wait_for_next_task, which allows the adapter to control startup
+        ordering for deterministic execution.
         """
 
         async def _run_worker() -> TickStepResult:
@@ -188,11 +192,6 @@ class _ControlLoopRunner:
                     )
                 snapshot = worker.shared_state
                 step_fn: StepWorkerFunction = self.step_workers[command.step_name]
-
-                # Wait for the main loop to signal it's safe to execute.
-                # This prevents worker DBOS steps from interleaving with
-                # main loop _durable_time() calls.
-                await self._worker_gate.wait()
 
                 result = await step_fn(
                     state=snapshot,
@@ -220,10 +219,9 @@ class _ControlLoopRunner:
                     ],
                 )
 
-        task = asyncio.create_task(_run_worker())
-        # Track key separately for building NamedTask list
-        self._task_keys[task] = (command.step_name, command.id)
-        self.worker_tasks.add(task)
+        self._pending_workers.append(
+            PendingWorker(command.step_name, command.id, _run_worker())
+        )
 
     async def process_command(self, command: WorkflowCommand) -> None | StopEvent:
         """Process a single command returned from tick reduction."""
@@ -265,9 +263,11 @@ class _ControlLoopRunner:
             raise ValueError(f"Unknown command type: {type(command)}")
 
     async def cleanup_tasks(self) -> None:
-        """Cancel and cleanup all running worker tasks."""
-        # Open the gate so workers waiting on it can receive cancellation
-        self._worker_gate.set()
+        """Cancel and cleanup all running worker tasks and pending coroutines."""
+        # Close pending coroutines that were never started
+        for p in self._pending_workers:
+            p.coro.close()
+        self._pending_workers.clear()
 
         # Signal adapter to stop waiting
         try:
@@ -362,33 +362,49 @@ class _ControlLoopRunner:
                 # Calculate timeout for next scheduled wakeup
                 timeout = self.next_wakeup_timeout(now)
 
-                # Ensure pull_task exists
+                # Build pending list: new workers + pull if needed
+                pending: list[PendingStart] = list(self._pending_workers)
+                self._pending_workers.clear()
+
                 if pull_task is None:
-                    pull_task = asyncio.create_task(_single_pull(self.adapter))
                     pull_sequence = self._pull_sequence
                     self._pull_sequence += 1
+                    pending.append(
+                        PendingPull(pull_sequence, _single_pull(self.adapter))
+                    )
                 else:
-                    # Retrieve the sequence from last time
                     pull_sequence = self._pull_sequence - 1
 
-                # Build list of NamedTasks with workers first (higher priority), then pull
-                named_tasks: list[NamedTask] = [
-                    NamedTask.worker(key[0], key[1], task)
+                # Build running list from existing tasks
+                running: list[WorkerTask | PullTask] = [
+                    WorkerTask(key[0], key[1], task)
                     for task in self.worker_tasks
                     for key in [self._task_keys.get(task)]
                     if key is not None
                 ]
-                named_tasks.append(NamedTask.pull(pull_sequence, pull_task))
+                if pull_task is not None:
+                    running.append(PullTask(pull_sequence, pull_task))
 
-                # Open the gate so workers can execute their step functions,
-                # then wait for next task completion.
-                self._worker_gate.set()
-                try:
-                    completed_task = await self.adapter.wait_for_next_task(
-                        named_tasks, timeout
+                result = await self.adapter.wait_for_next_task(
+                    running, pending, timeout
+                )
+
+                if len(result.started) != len(pending):
+                    raise RuntimeError(
+                        f"Adapter started {len(result.started)} tasks but "
+                        f"{len(pending)} were pending. Every pending coroutine "
+                        f"must be started."
                     )
-                finally:
-                    self._worker_gate.clear()
+
+                # Merge started tasks into tracking
+                for nt in result.started:
+                    if isinstance(nt, PullTask):
+                        pull_task = nt.task
+                    elif isinstance(nt, WorkerTask):
+                        self.worker_tasks.add(nt.task)
+                        self._task_keys[nt.task] = (nt.step_name, nt.worker_id)
+
+                completed_task = result.completed
 
                 if completed_task is None:
                     # Timeout - process scheduled ticks
