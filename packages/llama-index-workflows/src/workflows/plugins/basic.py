@@ -15,6 +15,7 @@ if TYPE_CHECKING:
     from workflows.workflow import Workflow
 
 from llama_index_instrumentation.dispatcher import active_instrument_tags
+from llama_index_instrumentation.span import active_span_id
 
 from workflows.context.serializers import BaseSerializer, JsonSerializer
 from workflows.context.state_store import (
@@ -284,13 +285,20 @@ class BasicRuntime(Runtime):
         queues = self._get_or_create_queues(run_id, init_state)
         queues.state_store = state_store
 
+        # Capture parent span ID and instrument tags BEFORE creating the task
+        # (they won't be inherited by the background task)
+        captured_tags = {**active_instrument_tags.get()}
+        parent_span_id = active_span_id.get()
+        if parent_span_id is not None:
+            captured_tags["parent_span_id"] = parent_span_id
+
         async def run_with_concurrency_limit() -> StopEvent:
             # Capture strong reference to queues for the task's lifetime,
             # enabling fire-and-forget even if the caller drops the external adapter.
             _ = queues
             async with self._maybe_acquire_max_concurrent_runs(workflow, run_id):
                 return await registered.workflow_run_fn(
-                    init_state, start_event, active_instrument_tags.get()
+                    init_state, start_event, captured_tags
                 )
 
         with setting_run_id(run_id):

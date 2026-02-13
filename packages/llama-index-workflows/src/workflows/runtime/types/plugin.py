@@ -602,5 +602,5 @@ class WorkflowRunFunction(Protocol):
         self,
         init_state: BrokerState,
         start_event: StartEvent | None = None,
-        tags: dict[str, Any] = {},
+        tags: dict[str, Any] | None = None,
     ) -> Coroutine[None, None, StopEvent]: ...

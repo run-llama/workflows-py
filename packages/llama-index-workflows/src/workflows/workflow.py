@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import logging
+import uuid
 from dataclasses import dataclass, field
 from typing import (
     TYPE_CHECKING,
@@ -13,6 +15,9 @@ from typing import (
 )
 
 from llama_index_instrumentation import get_dispatcher
+from llama_index_instrumentation.dispatcher import active_instrument_tags
+from llama_index_instrumentation.events.span import SpanDropEvent
+from llama_index_instrumentation.span import active_span_id
 from pydantic import ValidationError
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -355,7 +360,6 @@ class Workflow(metaclass=WorkflowMeta):
             logger.debug(e)
             raise WorkflowRuntimeError(msg)
 
-    @dispatcher.span
     def run(
         self,
         ctx: Context | None = None,
@@ -410,24 +414,91 @@ class Workflow(metaclass=WorkflowMeta):
         """
         from workflows.context import Context
 
-        # Validate the workflow
-        self._validate()
+        # Manually manage span to keep it open until workflow completes
+        # llama-index-instrumentation currently does not manage Awaitable's well (i.e. the workflow handler)
+        # this pattern is unusual enough to special case it here
+        # First, generate span ID
+        cls_name = self.__class__.__name__
+        span_id = f"{cls_name}.run-{uuid.uuid4()}"
 
-        # Extract run_id before passing remaining kwargs to start event
-        run_id = kwargs.pop("run_id", None)
+        # Get parent span ID for nesting
+        parent_span_id = active_span_id.get()
 
-        # If a previous context is provided, pass its serialized form
-        ctx = ctx if ctx is not None else Context(self)
-        # TODO(v3) - remove dependency on is running for choosing whether to send a StartEvent.
-        # Is not an easily synchronously queryable property.
-        start_event_instance: StartEvent | None = (
-            None
-            if ctx.is_running
-            else self._get_start_event_instance(start_event, **kwargs)
+        # Create bound args for span_enter/exit
+        bound_args = inspect.signature(self.run).bind(
+            ctx=ctx, start_event=start_event, **kwargs
         )
-        return ctx._workflow_run(
-            workflow=self, start_event=start_event_instance, run_id=run_id
+
+        # Set active span and notify span handlers
+        span_token = active_span_id.set(span_id)
+
+        dispatcher.span_enter(
+            id_=span_id,
+            bound_args=bound_args,
+            instance=self,
+            parent_id=parent_span_id,
+            tags=active_instrument_tags.get(),
         )
+
+        try:
+            # Validate the workflow
+            self._validate()
+
+            # Extract run_id before passing remaining kwargs to start event
+            run_id = kwargs.pop("run_id", None)
+
+            # If a previous context is provided, pass its serialized form
+            ctx = ctx if ctx is not None else Context(self)
+            # TODO(v3) - remove dependency on is running for choosing whether to send a StartEvent.
+            # Is not an easily synchronously queryable property.
+            start_event_instance: StartEvent | None = (
+                None
+                if ctx.is_running
+                else self._get_start_event_instance(start_event, **kwargs)
+            )
+            handler = ctx._workflow_run(
+                workflow=self, start_event=start_event_instance, run_id=run_id
+            )
+
+            # Add callback to close span when workflow completes
+            def _on_workflow_complete(task: asyncio.Task[Any]) -> None:
+                try:
+                    # Get result or exception
+                    if task.cancelled():
+                        result = None
+                    else:
+                        try:
+                            result = task.result()
+                        except Exception:
+                            result = None
+
+                    # Notify span exit
+                    dispatcher.span_exit(
+                        id_=span_id,
+                        bound_args=bound_args,
+                        instance=self,
+                        result=result,
+                    )
+                finally:
+                    # Reset span token
+                    try:
+                        active_span_id.reset(span_token)
+                    except ValueError:
+                        # Token might be from different context, ignore
+                        pass
+
+            # Attach callback to the handler's result task
+            handler._result_task.add_done_callback(_on_workflow_complete)
+
+            return handler
+        except BaseException as e:
+            # If run() fails, drop the span
+            dispatcher.event(SpanDropEvent(span_id=span_id, err_str=str(e)))
+            dispatcher.span_drop(
+                id_=span_id, bound_args=bound_args, instance=self, err=e
+            )
+            active_span_id.reset(span_token)
+            raise
 
     def _validate_resource_configs(self) -> list[str]:
         """Validate all resource configs (including nested ones) by loading them."""
