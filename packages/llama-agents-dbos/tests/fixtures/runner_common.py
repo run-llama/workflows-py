@@ -9,7 +9,6 @@ as a side effect, so that runner scripts can import workflows, llama_agents, etc
 from __future__ import annotations
 
 import importlib
-import sqlite3
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -67,99 +66,3 @@ def setup_dbos(db_url: str, app_name: str = "test-workflow") -> DBOSRuntime:
     }
     DBOS(config=config)
     return DBOSRuntime(polling_interval_sec=0.01)
-
-
-def dump_dbos_operations(db_url: str, run_id: str) -> None:
-    """Dump DBOS operations from the database for debugging.
-
-    Extracts the SQLite file path from the db_url, connects to the database,
-    and prints all tables with their row counts, plus full contents of any
-    operation-related tables.
-
-    Args:
-        db_url: SQLite database URL (format: sqlite+pysqlite:///path/to/db?...)
-        run_id: Workflow run ID to filter for
-    """
-    try:
-        # Extract file path from URL (e.g., "sqlite+pysqlite:///path/to/db?...")
-        # Remove the scheme prefix
-        if ":///" in db_url:
-            path_part = db_url.split(":///", 1)[1]
-            # Remove any query parameters
-            db_path = path_part.split("?", 1)[0]
-        else:
-            print(f"Could not parse db_url: {db_url}")
-            return
-
-        # Check if file exists
-        if not Path(db_path).exists():
-            print(f"Database file does not exist: {db_path}")
-            return
-
-        # Connect to SQLite database
-        conn = sqlite3.connect(db_path)
-        cursor = conn.cursor()
-
-        print("\n" + "=" * 80)
-        print(f"DBOS DATABASE DUMP - run_id: {run_id}")
-        print(f"Database: {db_path}")
-        print("=" * 80)
-
-        # Get all table names
-        cursor.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
-        )
-        tables = [row[0] for row in cursor.fetchall()]
-
-        # Print table list with row counts
-        print("\nTABLES:")
-        for table in tables:
-            cursor.execute(f"SELECT COUNT(*) FROM {table}")
-            count = cursor.fetchone()[0]
-            print(f"  {table}: {count} rows")
-
-        # Dump contents of relevant tables
-        operation_tables = [
-            t
-            for t in tables
-            if "operation" in t.lower()
-            or "step" in t.lower()
-            or "journal" in t.lower()
-            or "stream" in t.lower()
-        ]
-
-        for table in operation_tables:
-            print(f"\n{'-' * 80}")
-            print(f"TABLE: {table}")
-            print(f"{'-' * 80}")
-
-            # Get column names
-            cursor.execute(f"PRAGMA table_info({table})")
-            columns = [row[1] for row in cursor.fetchall()]
-            print(f"Columns: {', '.join(columns)}")
-
-            # Fetch all rows
-            cursor.execute(f"SELECT * FROM {table}")
-            rows = cursor.fetchall()
-
-            if not rows:
-                print("  (no rows)")
-            else:
-                # Print each row
-                for i, row in enumerate(rows, 1):
-                    print(f"\nRow {i}:")
-                    for col, val in zip(columns, row):
-                        # Truncate long values for readability
-                        val_str = str(val)
-                        if len(val_str) > 200:
-                            val_str = val_str[:200] + "..."
-                        print(f"  {col}: {val_str}")
-
-        print("\n" + "=" * 80)
-        print("END DBOS DATABASE DUMP")
-        print("=" * 80 + "\n")
-
-        conn.close()
-
-    except Exception as e:
-        print(f"Error dumping DBOS operations: {type(e).__name__}: {e}")

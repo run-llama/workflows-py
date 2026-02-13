@@ -27,7 +27,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import logging
 import os
 import sys
 from pathlib import Path
@@ -39,7 +38,6 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from dbos import DBOS  # noqa: E402
 from runner_common import (  # noqa: E402  # ty: ignore[unresolved-import]
-    dump_dbos_operations,
     get_event_class_by_name,
     import_workflow,
     setup_dbos,
@@ -156,7 +154,6 @@ async def run_workflow(
         raise
 
     finally:
-        dump_dbos_operations(db_url, run_id)
         runtime.destroy()
 
 
@@ -169,14 +166,8 @@ def main() -> None:
     parser.add_argument("--db-url", required=True)
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--config", default=None)
-    parser.add_argument("--debug", action="store_true", help="Enable DEBUG logging")
 
     args = parser.parse_args()
-
-    if args.debug:
-        logging.basicConfig(
-            level=logging.DEBUG, stream=sys.stderr, format="%(name)s %(message)s"
-        )
 
     asyncio.run(
         run_workflow(
