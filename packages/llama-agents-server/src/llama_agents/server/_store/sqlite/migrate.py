@@ -37,6 +37,11 @@ def run_migrations(conn: sqlite3.Connection) -> None:
     Each migration file should start with a `PRAGMA user_version=N;` line.
     Files are applied in lexicographic order and only when N > current_version.
     """
+    # Enable WAL mode for concurrent read/write access. This is a file-level
+    # setting that persists across connections, preventing "database is locked"
+    # errors when multiple async tasks access the same database.
+    conn.execute("PRAGMA journal_mode=WAL")
+
     cur = conn.cursor()
     current_version_row = cur.execute("PRAGMA user_version").fetchone()
     current_version = int(current_version_row[0]) if current_version_row else 0
