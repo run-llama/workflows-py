@@ -29,7 +29,13 @@ from workflows.context.state_store import (
 )
 from workflows.events import Event, StartEvent, StopEvent
 from workflows.runtime.types.internal_state import BrokerState
-from workflows.runtime.types.named_task import NamedTask, PendingStart
+from workflows.runtime.types.named_task import (
+    NamedTask,
+    PendingStart,
+    all_tasks,
+    find_by_key,
+    get_key,
+)
 from workflows.runtime.types.plugin import (
     ExternalRunAdapter,
     InternalRunAdapter,
@@ -849,11 +855,11 @@ class InternalDBOSAdapter(InternalRunAdapter):
         # deterministic function_id ordering for DBOS replay.
         started: list[NamedTask] = []
         for p in pending:
-            started.append(NamedTask(p.key, asyncio.create_task(p.coro)))
+            started.append(p.start(asyncio.create_task(p.coro)))
             await asyncio.sleep(0)
 
         all_named = running + started
-        tasks = NamedTask.all_tasks(all_named)
+        tasks = all_tasks(all_named)
         if not tasks:
             return WaitForNextTaskResult(None, started)
 
@@ -867,7 +873,7 @@ class InternalDBOSAdapter(InternalRunAdapter):
         expected_key = journal.next_expected_key()
         if expected_key is not None:
             # Replay mode: wait for specific task
-            target_task = NamedTask.find_by_key(all_named, expected_key)
+            target_task = find_by_key(all_named, expected_key)
 
             if target_task is None:
                 logger.warning(
@@ -891,7 +897,7 @@ class InternalDBOSAdapter(InternalRunAdapter):
             return WaitForNextTaskResult(None, started)
 
         completed = done.pop()
-        key = NamedTask.get_key(all_named, completed)
+        key = get_key(all_named, completed)
         await journal.record(key)
 
         return WaitForNextTaskResult(completed, started)

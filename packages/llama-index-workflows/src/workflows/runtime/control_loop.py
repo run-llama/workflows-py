@@ -46,7 +46,13 @@ from workflows.runtime.types.internal_state import (
     InProgressState,
     InternalStepWorkerState,
 )
-from workflows.runtime.types.named_task import NamedTask, PendingStart
+from workflows.runtime.types.named_task import (
+    PendingPull,
+    PendingStart,
+    PendingWorker,
+    PullTask,
+    WorkerTask,
+)
 from workflows.runtime.types.plugin import (
     InternalRunAdapter,
     WaitResultTick,
@@ -214,7 +220,7 @@ class _ControlLoopRunner:
                 )
 
         self._pending_workers.append(
-            PendingStart.worker(command.step_name, command.id, _run_worker())
+            PendingWorker(command.step_name, command.id, _run_worker())
         )
 
     async def process_command(self, command: WorkflowCommand) -> None | StopEvent:
@@ -364,34 +370,39 @@ class _ControlLoopRunner:
                     pull_sequence = self._pull_sequence
                     self._pull_sequence += 1
                     pending.append(
-                        PendingStart.pull(pull_sequence, _single_pull(self.adapter))
+                        PendingPull(pull_sequence, _single_pull(self.adapter))
                     )
                 else:
                     pull_sequence = self._pull_sequence - 1
 
                 # Build running list from existing tasks
-                running: list[NamedTask] = [
-                    NamedTask.worker(key[0], key[1], task)
+                running: list[WorkerTask | PullTask] = [
+                    WorkerTask(key[0], key[1], task)
                     for task in self.worker_tasks
                     for key in [self._task_keys.get(task)]
                     if key is not None
                 ]
                 if pull_task is not None:
-                    running.append(NamedTask.pull(pull_sequence, pull_task))
+                    running.append(PullTask(pull_sequence, pull_task))
 
                 result = await self.adapter.wait_for_next_task(
                     running, pending, timeout
                 )
 
+                if len(result.started) != len(pending):
+                    raise RuntimeError(
+                        f"Adapter started {len(result.started)} tasks but "
+                        f"{len(pending)} were pending. Every pending coroutine "
+                        f"must be started."
+                    )
+
                 # Merge started tasks into tracking
                 for nt in result.started:
-                    if nt.is_pull():
+                    if isinstance(nt, PullTask):
                         pull_task = nt.task
-                    else:
+                    elif isinstance(nt, WorkerTask):
                         self.worker_tasks.add(nt.task)
-                        # Parse key back to (step_name, worker_id)
-                        parts = nt.key.rsplit(":", 1)
-                        self._task_keys[nt.task] = (parts[0], int(parts[1]))
+                        self._task_keys[nt.task] = (nt.step_name, nt.worker_id)
 
                 completed_task = result.completed
 

@@ -25,7 +25,12 @@ from typing import (
 
 from workflows.context.state_store import StateStore
 from workflows.events import Event, StartEvent, StopEvent
-from workflows.runtime.types.named_task import NamedTask, PendingStart
+from workflows.runtime.types.named_task import (
+    NamedTask,
+    PendingStart,
+    all_tasks,
+    pick_highest_priority,
+)
 
 if TYPE_CHECKING:
     from workflows.context.context import Context
@@ -229,15 +234,15 @@ class InternalRunAdapter(ABC):
 
         IMPORTANT: Must return at most ONE completed task per call.
         """
-        started = [NamedTask(p.key, asyncio.create_task(p.coro)) for p in pending]
+        started = [p.start(asyncio.create_task(p.coro)) for p in pending]
         all_named = running + started
-        tasks = NamedTask.all_tasks(all_named)
+        tasks = all_tasks(all_named)
         if not tasks:
             return WaitForNextTaskResult(None, started)
         done, _ = await asyncio.wait(
             tasks, timeout=timeout, return_when=asyncio.FIRST_COMPLETED
         )
-        completed = NamedTask.pick_highest_priority(all_named, done) if done else None
+        completed = pick_highest_priority(all_named, done) if done else None
         return WaitForNextTaskResult(completed, started)
 
 
