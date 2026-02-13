@@ -29,12 +29,13 @@ from workflows.context.state_store import (
 )
 from workflows.events import Event, StartEvent, StopEvent
 from workflows.runtime.types.internal_state import BrokerState
-from workflows.runtime.types.named_task import NamedTask
+from workflows.runtime.types.named_task import NamedTask, PendingStart
 from workflows.runtime.types.plugin import (
     ExternalRunAdapter,
     InternalRunAdapter,
     RegisteredWorkflow,
     Runtime,
+    WaitForNextTaskResult,
     WaitResult,
     WaitResultTick,
     WaitResultTimeout,
@@ -831,41 +832,38 @@ class InternalDBOSAdapter(InternalRunAdapter):
 
     async def wait_for_next_task(
         self,
-        task_set: list[NamedTask],
+        running: list[NamedTask],
+        pending: list[PendingStart],
         timeout: float | None = None,
-    ) -> asyncio.Task[Any] | None:
+    ) -> WaitForNextTaskResult:
         """Wait for and return the next task that should complete.
+
+        Starts each pending coroutine with an ``asyncio.sleep(0)`` yield between
+        them so that every task's synchronous preamble (including DBOS function_id
+        acquisition) runs in deterministic order.
 
         During replay, waits for the specific task that completed in the original run.
         During fresh execution, waits for any task and records the completion order.
 
-        **Journal ordering caveat:** The journal records task completion *before*
-        the control loop publishes events produced by the completed step. If a
-        crash occurs between the journal write and the event write, replay skips
-        the step (already journaled) but the event was never persisted.
-
-        - In the standalone DBOS path, ``write_to_event_stream`` publishes to
-          DBOS streams which are separately journaled, so the gap is less of an
-          issue.
-        - In the server path, ``_ServerInternalRunAdapter`` makes event writes
-          idempotent by comparing against already-persisted events, working
-          around the ordering gap.
-        - Self-publishing events (``InputRequiredEvent`` / ``HumanInputRequired``
-          subtypes) are affected: if a crash occurs after the journal records the
-          step but before the event is published, the event is lost on replay.
-        - Proper fix: defer journal recording until after all commands from a
-          tick are processed.
-
         Args:
-            task_set: List of NamedTasks with stable string keys for identification
-            timeout: Timeout in seconds, None for no timeout
+            running: Already-started tasks from previous iterations.
+            pending: Coroutines to start this iteration.
+            timeout: Timeout in seconds, None for no timeout.
 
         Returns:
-            The completed task, or None on timeout.
+            WaitForNextTaskResult with completed task and newly started NamedTasks.
         """
-        tasks = NamedTask.all_tasks(task_set)
+        # Start each pending coroutine with a yield between each to ensure
+        # deterministic function_id ordering for DBOS replay.
+        started: list[NamedTask] = []
+        for p in pending:
+            started.append(NamedTask(p.key, asyncio.create_task(p.coro)))
+            await asyncio.sleep(0)
+
+        all_named = running + started
+        tasks = NamedTask.all_tasks(all_named)
         if not tasks:
-            return None
+            return WaitForNextTaskResult(None, started)
 
         # Ensure pool is resolved before journal creation (needed for postgres)
         if self._ensure_pool is not None and self._resolved_pool is None:
@@ -877,7 +875,7 @@ class InternalDBOSAdapter(InternalRunAdapter):
         expected_key = journal.next_expected_key()
         if expected_key is not None:
             # Replay mode: wait for specific task
-            target_task = NamedTask.find_by_key(task_set, expected_key)
+            target_task = NamedTask.find_by_key(all_named, expected_key)
 
             if target_task is None:
                 logger.warning(
@@ -889,24 +887,24 @@ class InternalDBOSAdapter(InternalRunAdapter):
                 try:
                     await asyncio.wait_for(asyncio.shield(target_task), timeout=timeout)
                 except (asyncio.TimeoutError, TimeoutError):
-                    return None
+                    return WaitForNextTaskResult(None, started)
                 logger.debug("DBOS_OP: journal advance key=%s", expected_key)
                 journal.advance()
-                return target_task
+                return WaitForNextTaskResult(target_task, started)
 
         # Fresh execution: wait for first, record it
         done, _ = await asyncio.wait(
             tasks, timeout=timeout, return_when=asyncio.FIRST_COMPLETED
         )
         if not done:
-            return None
+            return WaitForNextTaskResult(None, started)
 
         completed = done.pop()
-        key = NamedTask.get_key(task_set, completed)
+        key = NamedTask.get_key(all_named, completed)
         logger.debug("DBOS_OP: journal record key=%s", key)
         await journal.record(key)
 
-        return completed
+        return WaitForNextTaskResult(completed, started)
 
 
 class ExternalDBOSAdapter(ExternalRunAdapter):

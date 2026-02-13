@@ -272,9 +272,10 @@ async def test_replay_wait_for_next_task_timeout_returns_none(
     try:
         result = await adapter.wait_for_next_task(
             [NamedTask.worker("step_a", 0, task)],
+            [],
             timeout=0.01,
         )
-        assert result is None
+        assert result.completed is None
     finally:
         task.cancel()
         with suppress(asyncio.CancelledError):

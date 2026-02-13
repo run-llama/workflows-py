@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from asyncio import Task
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Coroutine
 
 # Key prefix for pull tasks
 PULL_PREFIX = "__pull__"
@@ -79,3 +79,21 @@ class NamedTask:
             f"No tasks in done set match named_tasks. "
             f"done={done}, named_tasks={[nt.key for nt in named_tasks]}"
         )
+
+
+@dataclass
+class PendingStart:
+    """A coroutine that hasn't been started yet."""
+
+    key: str
+    coro: Coroutine[Any, Any, Any]
+
+    @staticmethod
+    def pull(sequence: int, coro: Coroutine[Any, Any, Any]) -> PendingStart:
+        return PendingStart(f"{PULL_PREFIX}:{sequence}", coro)
+
+    @staticmethod
+    def worker(
+        step_name: str, worker_id: int, coro: Coroutine[Any, Any, Any]
+    ) -> PendingStart:
+        return PendingStart(f"{step_name}:{worker_id}", coro)
