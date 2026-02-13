@@ -124,7 +124,7 @@ class MockRunAdapter(
             workers={},
         )
 
-    def on_tick(self, tick: WorkflowTick) -> None:
+    async def on_tick(self, tick: WorkflowTick) -> None:
         """Record a tick for replay."""
         self._ticks.append(tick)
 

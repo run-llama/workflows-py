@@ -1,11 +1,11 @@
+from __future__ import annotations
+
 from pathlib import Path
 
 import pytest
-from llama_agents.server.abstract_workflow_store import (
+from llama_agents.server import (
     HandlerQuery,
     PersistentHandler,
-)
-from llama_agents.server.sqlite.sqlite_workflow_store import (
     SqliteWorkflowStore,
 )
 from workflows.events import StopEvent
@@ -20,7 +20,6 @@ async def test_update_and_query_returns_inserted_handler(tmp_path: Path) -> None
         handler_id="h1",
         workflow_name="wf_a",
         status="running",
-        ctx={"state": {"x": 1, "y": [1, 2, 3]}},
     )
 
     await store.update(handler)
@@ -35,7 +34,6 @@ async def test_update_and_query_returns_inserted_handler(tmp_path: Path) -> None
     assert found.handler_id == "h1"
     assert found.workflow_name == "wf_a"
     assert found.status == "running"
-    assert found.ctx == {"state": {"x": 1, "y": [1, 2, 3]}}
 
 
 @pytest.mark.asyncio
@@ -49,17 +47,15 @@ async def test_update_on_conflict_overwrites_existing_row(tmp_path: Path) -> Non
             handler_id="h2",
             workflow_name="wf_b",
             status="running",
-            ctx={"k": "v1"},
         )
     )
 
-    # Update same handler_id (completed) with new ctx
+    # Update same handler_id (completed)
     await store.update(
         PersistentHandler(
             handler_id="h2",
             workflow_name="wf_b",
             status="completed",
-            ctx={"k": "v2", "n": 42},
         )
     )
 
@@ -69,7 +65,7 @@ async def test_update_on_conflict_overwrites_existing_row(tmp_path: Path) -> Non
     )
     assert result_in_progress == []
 
-    # Should be returned for completed=True with latest ctx
+    # Should be returned for completed=True with latest values
     result_completed = await store.query(
         HandlerQuery(workflow_name_in=["wf_b"], status_in=["completed"])
     )
@@ -78,7 +74,6 @@ async def test_update_on_conflict_overwrites_existing_row(tmp_path: Path) -> Non
     assert found.handler_id == "h2"
     assert found.workflow_name == "wf_b"
     assert found.status == "completed"
-    assert found.ctx == {"k": "v2", "n": 42}
 
 
 @pytest.mark.asyncio
@@ -91,7 +86,6 @@ async def test_delete_filters_by_query(tmp_path: Path) -> None:
             handler_id="delete-me",
             workflow_name="wf_delete",
             status="completed",
-            ctx={"val": 1},
         )
     )
     await store.update(
@@ -99,7 +93,6 @@ async def test_delete_filters_by_query(tmp_path: Path) -> None:
             handler_id="keep-me",
             workflow_name="wf_keep",
             status="running",
-            ctx={"val": 2},
         )
     )
 
@@ -121,7 +114,6 @@ async def test_delete_noop_on_empty_filter(tmp_path: Path) -> None:
             handler_id="delete-me",
             workflow_name="wf_delete",
             status="completed",
-            ctx={},
         )
     )
 
@@ -145,7 +137,6 @@ async def test_query_filters_by_handler_id_and_empty_lists(tmp_path: Path) -> No
                 handler_id=hid,
                 workflow_name=wf,
                 status="running",
-                ctx={"seed": hid},
             )
         )
 
@@ -193,7 +184,6 @@ async def test_update_pydantic_result_serialization(
         workflow_name="wf_pyd",
         status="completed",
         result=event,
-        ctx={"state": {"ok": True}},
     )
 
     # This would raise TypeError if the store used json.dumps(handler.result)

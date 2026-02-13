@@ -32,6 +32,9 @@ if TYPE_CHECKING:
 
 MAX_DEPTH = 1000
 
+# Keys set by pre-built workflows that are known to be unserializable in some cases.
+KNOWN_UNSERIALIZABLE_KEYS: tuple[str, ...] = ("memory",)
+
 
 class InMemorySerializedState(BaseModel):
     """Serialized state containing actual data (from InMemoryStateStore)."""
@@ -81,7 +84,7 @@ def parse_in_memory_state(
 def serialize_dict_state_data(
     state: DictState,
     serializer: BaseSerializer,
-    known_unserializable_keys: tuple[str, ...] = (),
+    known_unserializable_keys: tuple[str, ...] = KNOWN_UNSERIALIZABLE_KEYS,
 ) -> dict[str, Any]:
     """Serialize DictState items to {"_data": {...}} format.
 
@@ -115,7 +118,7 @@ def serialize_dict_state_data(
 def create_in_memory_payload(
     state: BaseModel,
     serializer: BaseSerializer,
-    known_unserializable_keys: tuple[str, ...] = (),
+    known_unserializable_keys: tuple[str, ...] = KNOWN_UNSERIALIZABLE_KEYS,
 ) -> InMemorySerializedState:
     """Create InMemorySerializedState from any state model.
 
@@ -190,6 +193,121 @@ def assign_path_step(obj: Any, segment: str, value: Any) -> None:
 
     # Fallback to attribute assignment
     setattr(obj, segment, value)
+
+
+def get_by_path(state: Any, path: str, default: Any = Ellipsis) -> Any:
+    """Get a nested value from state using a dot-separated path.
+
+    Args:
+        state: The root state object.
+        path: Dot-separated path, e.g. "user.profile.name".
+        default: If provided, return this when the path does not exist;
+            otherwise, raise ValueError.
+
+    Returns:
+        The resolved value.
+
+    Raises:
+        ValueError: If the path is invalid and no default is provided,
+            or if path depth exceeds MAX_DEPTH.
+    """
+    segments = path.split(".") if path else []
+    if len(segments) > MAX_DEPTH:
+        raise ValueError(f"Path length exceeds {MAX_DEPTH} segments")
+
+    try:
+        value: Any = state
+        for segment in segments:
+            value = traverse_path_step(value, segment)
+    except Exception:
+        if default is not Ellipsis:
+            return default
+        raise ValueError(f"Path '{path}' not found in state")
+    return value
+
+
+def set_by_path(state: Any, path: str, value: Any) -> None:
+    """Set a nested value on state using a dot-separated path.
+
+    Intermediate dicts are created as needed.
+
+    Args:
+        state: The root state object (mutated in place).
+        path: Dot-separated path to write.
+        value: Value to assign.
+
+    Raises:
+        ValueError: If the path is empty or exceeds MAX_DEPTH.
+    """
+    if not path:
+        raise ValueError("Path cannot be empty")
+
+    segments = path.split(".")
+    if len(segments) > MAX_DEPTH:
+        raise ValueError(f"Path length exceeds {MAX_DEPTH} segments")
+
+    current = state
+    for segment in segments[:-1]:
+        try:
+            current = traverse_path_step(current, segment)
+        except (KeyError, AttributeError, IndexError, TypeError):
+            intermediate: Any = {}
+            assign_path_step(current, segment, intermediate)
+            current = intermediate
+
+    assign_path_step(current, segments[-1], value)
+
+
+def merge_state(current_state: MODEL_T, incoming: BaseModel) -> MODEL_T:
+    """Replace or merge incoming state onto current state.
+
+    If incoming is the same type (or subclass) of current, it replaces directly.
+    If current's type is a subclass of incoming's type (parent provided),
+    fields are merged preserving child-specific fields.
+
+    Args:
+        current_state: The existing state.
+        incoming: The new state to apply.
+
+    Returns:
+        The resulting state after merge/replace.
+
+    Raises:
+        ValueError: If the types are not compatible.
+    """
+    current_type = type(current_state)
+    new_type = type(incoming)
+
+    if isinstance(incoming, current_type):
+        return incoming  # type: ignore[return-value]
+    elif issubclass(current_type, new_type):
+        parent_data = incoming.model_dump()
+        return current_type.model_validate(
+            {**current_state.model_dump(), **parent_data}
+        )
+    else:
+        raise ValueError(
+            f"State must be of type {current_type.__name__} or a parent type, "
+            f"got {new_type.__name__}"
+        )
+
+
+def create_cleared_state(state_type: Type[MODEL_T]) -> MODEL_T:
+    """Create a default instance of the state type, wrapping ValidationError.
+
+    Args:
+        state_type: The state model class to instantiate.
+
+    Returns:
+        A new default instance.
+
+    Raises:
+        ValueError: If the model cannot be instantiated from defaults.
+    """
+    try:
+        return state_type()
+    except ValidationError:
+        raise ValueError("State must have defaults for all fields")
 
 
 # Only warn once about unserializable keys
@@ -332,10 +450,6 @@ class InMemoryStateStore(Generic[MODEL_T]):
         - [Context.store][workflows.context.context.Context.store]
     """
 
-    # These keys are set by pre-built workflows and
-    # are known to be unserializable in some cases.
-    known_unserializable_keys = ("memory",)
-
     state_type: Type[MODEL_T]
 
     def __init__(self, initial_state: MODEL_T):
@@ -377,27 +491,8 @@ class InMemoryStateStore(Generic[MODEL_T]):
         Raises:
             ValueError: If the types are not compatible (neither same nor parent).
         """
-        current_type = type(self._state)
-        new_type = type(state)
-
-        if isinstance(state, current_type):
-            # Exact match or subclass - direct replacement
-            async with self._lock:
-                self._state = state
-        elif issubclass(current_type, new_type):
-            # Parent type provided - merge fields onto current state
-            # This preserves child-specific fields while updating parent fields
-            async with self._lock:
-                # Get the fields from the parent type and update them on the current state
-                parent_data = state.model_dump()
-                self._state = current_type.model_validate(
-                    {**self._state.model_dump(), **parent_data}
-                )
-        else:
-            raise ValueError(
-                f"State must be of type {current_type.__name__} or a parent type, "
-                f"got {new_type.__name__}"
-            )
+        async with self._lock:
+            self._state = merge_state(self._state, state)
 
     def to_dict(self, serializer: "BaseSerializer") -> dict[str, Any]:
         """Serialize the state and model metadata for persistence.
@@ -414,9 +509,7 @@ class InMemoryStateStore(Generic[MODEL_T]):
             dict[str, Any]: A payload suitable for
             [from_dict][workflows.context.state_store.InMemoryStateStore.from_dict].
         """
-        payload = create_in_memory_payload(
-            self._state, serializer, self.known_unserializable_keys
-        )
+        payload = create_in_memory_payload(self._state, serializer)
         return payload.model_dump()
 
     @classmethod
@@ -465,9 +558,6 @@ class InMemoryStateStore(Generic[MODEL_T]):
     async def get(self, path: str, default: Any = Ellipsis) -> Any:
         """Get a nested value using dot-separated paths.
 
-        Supports dict keys, list indices, and attribute access transparently at
-        each segment.
-
         Args:
             path (str): Dot-separated path, e.g. "user.profile.name".
             default (Any): If provided, return this when the path does not
@@ -480,29 +570,11 @@ class InMemoryStateStore(Generic[MODEL_T]):
             ValueError: If the path is invalid and no default is provided or if
                 the path depth exceeds limits.
         """
-        segments = path.split(".") if path else []
-        if len(segments) > MAX_DEPTH:
-            raise ValueError(f"Path length exceeds {MAX_DEPTH} segments")
-
         async with self._lock:
-            try:
-                value: Any = self._state
-                for segment in segments:
-                    value = traverse_path_step(value, segment)
-            except Exception:
-                if default is not Ellipsis:
-                    return default
-
-                msg = f"Path '{path}' not found in state"
-                raise ValueError(msg)
-
-        return value
+            return get_by_path(self._state, path, default)
 
     async def set(self, path: str, value: Any) -> None:
         """Set a nested value using dot-separated paths.
-
-        Intermediate containers are created as needed. Dicts, lists, tuples, and
-        Pydantic models are supported where appropriate.
 
         Args:
             path (str): Dot-separated path to write.
@@ -511,28 +583,8 @@ class InMemoryStateStore(Generic[MODEL_T]):
         Raises:
             ValueError: If the path is empty or exceeds the maximum depth.
         """
-        if not path:
-            raise ValueError("Path cannot be empty")
-
-        segments = path.split(".")
-        if len(segments) > MAX_DEPTH:
-            raise ValueError(f"Path length exceeds {MAX_DEPTH} segments")
-
         async with self._lock:
-            current = self._state
-
-            # Navigate/create intermediate segments
-            for segment in segments[:-1]:
-                try:
-                    current = traverse_path_step(current, segment)
-                except (KeyError, AttributeError, IndexError, TypeError):
-                    # Create intermediate object and assign it
-                    intermediate: Any = {}
-                    assign_path_step(current, segment, intermediate)
-                    current = intermediate
-
-            # Assign the final value
-            assign_path_step(current, segments[-1], value)
+            set_by_path(self._state, path, value)
 
     async def clear(self) -> None:
         """Reset the state to its type defaults.
@@ -541,14 +593,39 @@ class InMemoryStateStore(Generic[MODEL_T]):
             ValueError: If the model type cannot be instantiated from defaults
                 (i.e., fields missing default values).
         """
+        await self.set_state(create_cleared_state(self._state.__class__))
+
+
+def deserialize_dict_state_data(
+    data: dict[str, Any],
+    serializer: BaseSerializer,
+) -> DictState:
+    """Deserialize DictState from {"_data": {...}} format.
+
+    Args:
+        data: Dict with {"_data": {...}} structure containing serialized values.
+        serializer: Strategy for decoding values.
+
+    Returns:
+        DictState with deserialized values.
+
+    Raises:
+        ValueError: If deserialization fails for any key.
+    """
+    _data_serialized = data.get("_data", {})
+    deserialized_data = {}
+    for key, value in _data_serialized.items():
         try:
-            await self.set_state(self._state.__class__())
-        except ValidationError:
-            raise ValueError("State must have defaults for all fields")
+            deserialized_data[key] = serializer.deserialize(value)
+        except Exception as e:
+            raise ValueError(f"Failed to deserialize state value for key {key}: {e}")
+    return DictState(_data=deserialized_data)
 
 
 def deserialize_state_from_dict(
-    serialized_state: dict[str, Any], serializer: "BaseSerializer"
+    serialized_state: dict[str, Any],
+    serializer: "BaseSerializer",
+    state_type: type[BaseModel] | None = None,
 ) -> BaseModel:
     """Deserialize state from a serialized payload.
 
@@ -559,6 +636,9 @@ def deserialize_state_from_dict(
         serialized_state: The payload from to_dict(), containing state_data,
             state_type, and state_module.
         serializer: Strategy to decode stored values.
+        state_type: Optional explicit state type. When provided, uses
+            issubclass to determine if it's DictState. When omitted, falls
+            back to reading state_type from the dict.
 
     Returns:
         The deserialized state model instance.

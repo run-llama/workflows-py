@@ -1,0 +1,229 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 LlamaIndex Inc.
+from __future__ import annotations
+
+import asyncio
+import logging
+from abc import ABC, abstractmethod
+from collections.abc import AsyncIterator
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from enum import Enum
+from typing import Any, List, Literal, Protocol, runtime_checkable
+
+from llama_agents.client.protocol.serializable_events import (
+    EventEnvelopeWithMetadata,
+)
+from pydantic import (
+    BaseModel,
+    field_serializer,
+    field_validator,
+)
+from workflows.context import JsonSerializer
+from workflows.context.serializers import BaseSerializer
+from workflows.context.state_store import StateStore
+from workflows.events import StopEvent
+
+logger = logging.getLogger(__name__)
+
+Status = Literal["running", "completed", "failed", "cancelled"]
+
+TERMINAL_STATUSES: frozenset[Status] = frozenset(("completed", "failed", "cancelled"))
+
+
+def is_terminal_status(status: Status) -> bool:
+    return status in TERMINAL_STATUSES
+
+
+class _Unset(Enum):
+    UNSET = "UNSET"
+
+
+_UNSET = _Unset.UNSET
+
+
+@dataclass()
+class HandlerQuery:
+    # Matches if any of the handler_ids match
+    handler_id_in: List[str] | None = None
+    # Matches if any of the run_ids match
+    run_id_in: List[str] | None = None
+    # Matches if any of the workflow_names match
+    workflow_name_in: List[str] | None = None
+    # Matches if the status flag matches
+    status_in: List[Status] | None = None
+    # True = only idle handlers, False = only non-idle handlers, None = all
+    is_idle: bool | None = None
+
+
+class PersistentHandler(BaseModel):
+    handler_id: str
+    workflow_name: str
+    status: Status
+    run_id: str | None = None
+    error: str | None = None
+    result: StopEvent | None = None
+    started_at: datetime | None = None
+    updated_at: datetime | None = None
+    completed_at: datetime | None = None
+    idle_since: datetime | None = None
+
+    @field_validator("result", mode="before")
+    @classmethod
+    def _parse_stop_event(cls, data: Any) -> StopEvent | None:
+        if isinstance(data, StopEvent):
+            return data
+        elif isinstance(data, dict):
+            deserialized = JsonSerializer().deserialize_value(data)
+            if isinstance(deserialized, StopEvent):
+                return deserialized
+            else:
+                return StopEvent(result=data)
+        elif data is None:
+            return None
+        else:
+            return StopEvent(result=data)
+
+    @field_serializer("result", mode="plain")
+    def _serialize_stop_event(self, data: StopEvent | None) -> Any:
+        if data is None:
+            return None
+        result = JsonSerializer().serialize_value(data)
+        return result
+
+
+class StoredTick(BaseModel):
+    run_id: str
+    sequence: int
+    timestamp: datetime
+    tick_data: dict[str, Any]
+
+
+class StoredEvent(BaseModel):
+    run_id: str
+    sequence: int
+    timestamp: datetime
+    event: EventEnvelopeWithMetadata
+
+
+class AbstractWorkflowStore(ABC):
+    poll_interval: float = 0.1
+
+    @abstractmethod
+    def create_state_store(
+        self,
+        run_id: str,
+        state_type: type[Any] | None = None,
+        serialized_state: dict[str, Any] | None = None,
+        serializer: BaseSerializer | None = None,
+    ) -> StateStore[Any]:
+        """Create a persistent state store for the given run.
+
+        If *serialized_state* and *serializer* are provided, the store is
+        seeded from the serialized data during construction.
+        """
+
+    @abstractmethod
+    async def query(self, query: HandlerQuery) -> List[PersistentHandler]: ...
+
+    @abstractmethod
+    async def update(self, handler: PersistentHandler) -> None: ...
+
+    @abstractmethod
+    async def delete(self, query: HandlerQuery) -> int: ...
+
+    @abstractmethod
+    async def append_event(
+        self, run_id: str, event: EventEnvelopeWithMetadata
+    ) -> None: ...
+
+    @abstractmethod
+    async def query_events(
+        self, run_id: str, after_sequence: int | None = None, limit: int | None = None
+    ) -> list[StoredEvent]: ...
+
+    @abstractmethod
+    async def append_tick(self, run_id: str, tick_data: dict[str, Any]) -> None: ...
+
+    @abstractmethod
+    async def get_ticks(self, run_id: str) -> list[StoredTick]: ...
+
+    async def update_handler_status(
+        self,
+        run_id: str,
+        *,
+        status: Status | None = None,
+        result: StopEvent | None = None,
+        error: str | None = None,
+        idle_since: datetime | None | _Unset = _UNSET,
+    ) -> None:
+        """Update status and related fields for an existing handler.
+
+        Loads the handler by run_id, updates status/timestamps/provided fields,
+        and writes back. If the handler is not found, logs a warning and returns.
+        """
+        found = await self.query(HandlerQuery(run_id_in=[run_id]))
+        if not found:
+            logger.warning("update_handler_status: run %s not found, skipping", run_id)
+            return
+        handler = found[0]
+        now = datetime.now(timezone.utc)
+        if status is not None:
+            handler.status = status
+        handler.updated_at = now
+        if status in ("completed", "failed", "cancelled"):
+            handler.completed_at = now
+        if result is not None:
+            handler.result = result
+        if error is not None:
+            handler.error = error
+        if not isinstance(idle_since, _Unset):
+            handler.idle_since = idle_since
+        await self.update(handler)
+
+    @staticmethod
+    def _is_terminal_event(event: StoredEvent) -> bool:
+        """Check if a stored event is terminal (StopEvent or subclass, etc.)."""
+
+        types = (event.event.types or []) + [event.event.type]
+        return StopEvent.__name__ in types
+
+    async def subscribe_events(
+        self, run_id: str, after_sequence: int = -1
+    ) -> AsyncIterator[StoredEvent]:
+        """Stream events starting after *after_sequence*, yielding in real time.
+
+        The default implementation polls via :meth:`query_events`.
+        :class:`MemoryWorkflowStore` overrides this with condition-based
+        notification so there is no polling.
+
+        The iterator terminates once a terminal event
+        (``StopEvent``, ``WorkflowFailedEvent``, ``WorkflowCancelledEvent``)
+        is yielded.
+        """
+        cursor = after_sequence
+        while True:
+            events = await self.query_events(run_id, after_sequence=cursor)
+            for event in events:
+                yield event
+                cursor = event.sequence
+                if self._is_terminal_event(event):
+                    return
+            if not events:
+                await asyncio.sleep(self.poll_interval)
+
+
+@runtime_checkable
+class LegacyContextStore(Protocol):
+    """Opt-in protocol for stores that can provide old serialized context data from the ctx column."""
+
+    def get_legacy_ctx(self, run_id: str) -> dict[str, Any] | None:
+        """Return the old serialized context dict for a run, or None if not available."""
+        ...
+
+
+def as_legacy_context_store(store: AbstractWorkflowStore) -> LegacyContextStore | None:
+    """Return the store as a LegacyContextStore if it supports it, else None."""
+    if isinstance(store, LegacyContextStore):
+        return store
+    return None

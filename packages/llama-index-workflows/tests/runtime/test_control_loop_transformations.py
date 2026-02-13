@@ -1,6 +1,5 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 LlamaIndex Inc.
-
 """
 Unit tests for control loop transformation functions.
 
@@ -10,7 +9,7 @@ testing them in isolation without running the full async control loop.
 
 from __future__ import annotations
 
-from typing import Any, cast
+from typing import cast
 
 import pytest
 from workflows.decorators import StepConfig
@@ -253,7 +252,7 @@ def test_step_worker_failed_with_retry(base_state: BrokerState) -> None:
     event = MyTestEvent(value=42)
     add_worker(base_state, event)
 
-    tick: TickStepResult[Any] = TickStepResult(
+    tick: TickStepResult = TickStepResult(
         step_name="test_step",
         worker_id=0,
         event=event,
@@ -278,7 +277,7 @@ def test_step_worker_failed_without_retry(base_state: BrokerState) -> None:
     event = MyTestEvent(value=42)
     add_worker(base_state, event)
 
-    tick: TickStepResult[Any] = TickStepResult(
+    tick: TickStepResult = TickStepResult(
         step_name="test_step",
         worker_id=0,
         event=event,
@@ -297,7 +296,7 @@ def test_collected_events(base_state: BrokerState) -> None:
     add_worker(base_state, event)
 
     # Add event
-    tick: TickStepResult[Any] = TickStepResult(
+    tick: TickStepResult = TickStepResult(
         step_name="test_step",
         worker_id=0,
         event=event,
@@ -334,12 +333,12 @@ def test_waiters(base_state: BrokerState) -> None:
         event_type=OtherEvent,
     )
     # Add waiter
-    tick: TickStepResult[Any] = TickStepResult(
+    tick: TickStepResult = TickStepResult(
         step_name="test_step",
         worker_id=0,
         event=event,
         result=[
-            cast(StepFunctionResult[Any], result),
+            cast(StepFunctionResult, result),
         ],
     )
     new_state, _ = _process_step_result_tick(tick, base_state, now_seconds=110.0)
@@ -634,7 +633,7 @@ def test_step_worker_failed_retry_preserves_delay(base_state: BrokerState) -> No
     event = MyTestEvent(value=42)
     add_worker(base_state, event)
 
-    tick: TickStepResult[Any] = TickStepResult(
+    tick: TickStepResult = TickStepResult(
         step_name="test_step",
         worker_id=0,
         event=event,
@@ -676,7 +675,7 @@ def test_step_worker_failed_retry_preserves_first_attempt_at(
         )
     )
 
-    tick: TickStepResult[Any] = TickStepResult(
+    tick: TickStepResult = TickStepResult(
         step_name="test_step",
         worker_id=0,
         event=event,
@@ -716,10 +715,9 @@ def test_check_idle_state_has_in_progress(base_state: BrokerState) -> None:
     assert _check_idle_state(base_state) is False
 
 
-def test_check_idle_state_no_waiters(base_state: BrokerState) -> None:
-    """A workflow with no waiters is not idle (even with empty queues)."""
-    # State is running, no queue, no in_progress, but no waiters either
-    assert _check_idle_state(base_state) is False
+def test_check_idle_state_no_work_is_idle(base_state: BrokerState) -> None:
+    """A running workflow with empty queues and no in-progress work is idle."""
+    assert _check_idle_state(base_state) is True
 
 
 def test_check_idle_state_is_idle_with_waiter(base_state: BrokerState) -> None:
@@ -736,47 +734,31 @@ def test_check_idle_state_is_idle_with_waiter(base_state: BrokerState) -> None:
     assert _check_idle_state(base_state) is True
 
 
-def test_idle_event_emitted_on_transition_to_idle(base_state: BrokerState) -> None:
-    """WorkflowIdleEvent is emitted when workflow transitions to idle."""
+def test_step_result_does_not_emit_idle(base_state: BrokerState) -> None:
+    """Step result tick never emits WorkflowIdleEvent directly.
+
+    Idle detection is handled at the runner level via TickIdleCheck, not in
+    the pure reducer. This test confirms the reducer doesn't emit idle.
+    """
     event = MyTestEvent(value=42)
     add_worker(base_state, event)
 
-    # Add a waiter so the workflow can become idle
-    waiter = StepWorkerWaiter(
-        waiter_id="w1",
-        event=event,
-        waiting_for_event=OtherEvent,
-        requirements={},
-        has_requirements=False,
-        resolved_event=None,
-    )
-    base_state.workers["test_step"].collected_waiters.append(waiter)
-
-    # Process result that completes the worker but leaves waiter active
-    result = AddWaiter(
-        waiter_id="w1",
-        waiter_event=None,
-        requirements={},
-        timeout=None,
-        event_type=OtherEvent,
-    )
-
-    tick: TickStepResult[Any] = TickStepResult[Any](
+    tick: TickStepResult = TickStepResult(
         step_name="test_step",
         worker_id=0,
         event=event,
-        result=[cast(StepFunctionResult[Any], result)],
+        result=[StepWorkerResult(result=None)],
     )
 
     new_state, commands = _process_step_result_tick(tick, base_state, now_seconds=110.0)
 
-    # Should have WorkflowIdleEvent as the last command
     idle_commands = [
         c
         for c in commands
         if isinstance(c, CommandPublishEvent) and isinstance(c.event, WorkflowIdleEvent)
     ]
-    assert len(idle_commands) == 1
+    assert len(idle_commands) == 0
+    # State IS idle (no queued work, no in-progress), but emission is the runner's job
     assert _check_idle_state(new_state) is True
 
 
@@ -853,7 +835,7 @@ def test_no_idle_event_when_work_remains(base_state: BrokerState) -> None:
         EventAttempt(event=MyTestEvent(value=99))
     )
 
-    tick: TickStepResult[Any] = TickStepResult(
+    tick: TickStepResult = TickStepResult(
         step_name="test_step",
         worker_id=0,
         event=event,
@@ -887,7 +869,7 @@ def test_no_idle_event_when_workflow_completes(base_state: BrokerState) -> None:
     base_state.workers["test_step"].collected_waiters.append(waiter)
 
     # Complete the workflow with StopEvent
-    tick: TickStepResult[Any] = TickStepResult(
+    tick: TickStepResult = TickStepResult(
         step_name="test_step",
         worker_id=0,
         event=event,

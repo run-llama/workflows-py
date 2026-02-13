@@ -11,21 +11,28 @@ dev = [
   "pytest-cov>=7.0.0",
   "pytest-timeout>=2.4.0",
   "pytest-xdist>=3.8.0",
-  "time-machine>=2.19.0,<3.0.0"
+  "time-machine>=2.19.0,<3.0.0",
+  "llama-agents-integration-tests",
+  "asyncpg>=0.29.0",
+  "testcontainers[postgres]>=4.0.0"
 ]
 
 [project]
 name = "llama-agents-server"
-version = "0.1.2"
+version = "0.2.0rc2"
 description = "HTTP server for deploying and serving LlamaIndex workflows as web services"
 readme = "README.md"
 requires-python = ">=3.9"
 dependencies = [
-  "llama-index-workflows>=2.12.0,<3.0.0",
-  "llama-agents-client>=0.1.0,<0.2.0",
+  "llama-index-workflows>=2.15.0rc0,<3.0.0",
+  "llama-agents-client>=0.2.0rc0",
   "starlette>=0.39.0",
-  "uvicorn>=0.32.0"
+  "uvicorn>=0.32.0",
+  "httpx>=0.27.0"
 ]
+
+[project.optional-dependencies]
+asyncpg = ["asyncpg>=0.29.0"]
 
 [project.scripts]
 llama-agents-server = "llama_agents.server.__main__:run_server"
@@ -41,7 +48,13 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "module"
 asyncio_default_test_loop_scope = "module"
 testpaths = ["tests"]
-addopts = "-nauto --timeout=10"
+addopts = "-nauto --timeout=60 -m 'not docker'"
+markers = [
+  "docker: marks tests as requiring Docker (testcontainers/PostgreSQL)"
+]
+filterwarnings = [
+  "ignore:The @wait_container_is_ready decorator is deprecated:DeprecationWarning"
+]
 
 [tool.uv.build-backend]
 module-name = "llama_agents.server"
@@ -49,3 +62,4 @@ module-name = "llama_agents.server"
 [tool.uv.sources]
 llama-index-workflows = {workspace = true}
 llama-agents-client = {workspace = true}
+llama-agents-integration-tests = {workspace = true}

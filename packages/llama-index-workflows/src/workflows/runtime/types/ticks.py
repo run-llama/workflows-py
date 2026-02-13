@@ -1,6 +1,5 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 LlamaIndex Inc.
-
 """
 Ticks (events) that drive the control loop.
 
@@ -16,55 +15,80 @@ events that can occur during workflow execution:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Generic, Union
+from typing import Annotated, Literal, Union
 
-from workflows.decorators import R
-from workflows.events import Event
+from pydantic import BaseModel, ConfigDict, Discriminator, TypeAdapter
 from workflows.runtime.types.results import StepFunctionResult
+from workflows.runtime.types.serialization_helpers import SerializableEvent
 
 
-@dataclass(frozen=True)
-class TickStepResult(Generic[R]):
+class TickStepResult(BaseModel):
     """When processed, executes a step function and publishes the result"""
 
+    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
+    type: Literal["step_result"] = "step_result"
     step_name: str
     worker_id: int
-    event: Event
-    result: list[StepFunctionResult[R]]
+    event: SerializableEvent
+    result: list[Annotated[StepFunctionResult, Discriminator("type")]]
 
 
-@dataclass(frozen=True)
-class TickAddEvent:
+class TickAddEvent(BaseModel):
     """When sent, adds an event to the workflow's event queue"""
 
-    event: Event
+    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
+    type: Literal["add_event"] = "add_event"
+    event: SerializableEvent
     step_name: str | None = None
     attempts: int | None = None
     first_attempt_at: float | None = None
 
 
-@dataclass(frozen=True)
-class TickCancelRun:
+class TickCancelRun(BaseModel):
     """When processed, cancels the workflow run"""
 
-    pass
+    model_config = ConfigDict(frozen=True)
+    type: Literal["cancel_run"] = "cancel_run"
 
 
-@dataclass(frozen=True)
-class TickPublishEvent:
+class TickPublishEvent(BaseModel):
     """When sent, publishes an event to workflow consumers, e.g. a UI or a callback"""
 
-    event: Event
+    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
+    type: Literal["publish_event"] = "publish_event"
+    event: SerializableEvent
 
 
-@dataclass(frozen=True)
-class TickTimeout:
+class TickTimeout(BaseModel):
     """When processed, times the workflow out, cancelling it"""
 
+    model_config = ConfigDict(frozen=True)
+    type: Literal["timeout"] = "timeout"
     timeout: float
 
 
-WorkflowTick = Union[
-    TickStepResult[R], TickAddEvent, TickCancelRun, TickPublishEvent, TickTimeout
+class TickIdleCheck(BaseModel):
+    """Scheduled after state appears idle, to re-check after async events drain.
+
+    Appended to tick_buffer when the reducer sees quiescent state. Processed
+    on the next loop iteration after asyncio.sleep(0), giving in-flight
+    ctx.send_event() calls a chance to deliver via the pull task.
+    """
+
+    model_config = ConfigDict(frozen=True)
+    type: Literal["idle_check"] = "idle_check"
+
+
+WorkflowTick = Annotated[
+    Union[
+        TickStepResult,
+        TickAddEvent,
+        TickCancelRun,
+        TickPublishEvent,
+        TickTimeout,
+        TickIdleCheck,
+    ],
+    Discriminator("type"),
 ]
+
+WorkflowTickAdapter: TypeAdapter[WorkflowTick] = TypeAdapter(WorkflowTick)

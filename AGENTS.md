@@ -28,6 +28,9 @@ uv run dev -p server -p client
 uv run dev -- -k test_name
 ```
 
+For more advanced scenarios, you can always `cd packages/some-package` and use pytest directly. The dev tool just provides additional package level test parallelism, and more curated cross package test output to avoid context bloat.
+
+
 ### Linting & Formatting
 ```bash
 uv run pre-commit run -a
@@ -38,6 +41,13 @@ uv run pre-commit run -a
 - `packages/llama-index-workflows/src/workflows/server/` - Web server implementation
 - `packages/llama-index-workflows/tests/` - Test suite
 - `examples/` - Usage examples
+
+## Architecture
+
+See `architecture-docs/` for high-level architectural overviews:
+- [`core-overview.md`](architecture-docs/core-overview.md) — Workflow, Context, Runtime, and event flow
+- [`control-loop.md`](architecture-docs/control-loop.md) — The reducer-based execution engine
+- [`server-architecture.md`](architecture-docs/server-architecture.md) — HTTP server, persistence, and runtime decorators
 
 ## Key Components
 - **Workflow** - Main orchestration class

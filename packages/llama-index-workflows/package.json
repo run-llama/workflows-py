@@ -1,6 +1,6 @@
 {
   "name": "llama-index-workflows",
-  "version": "2.14.1",
+  "version": "2.15.0-rc.0",
   "private": false,
   "license": "MIT",
   "scripts": {}

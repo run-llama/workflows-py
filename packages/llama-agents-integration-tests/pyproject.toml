@@ -24,7 +24,8 @@ readme = "README.md"
 requires-python = ">=3.9"
 dependencies = [
   "llama-index-core>=0.14.13",
-  "llama-index-workflows"
+  "llama-index-workflows",
+  "llama-agents-dbos; python_full_version > '3.9'"
 ]
 
 [tool.basedpyright]
@@ -44,7 +45,7 @@ asyncio_default_fixture_loop_scope = "module"
 asyncio_default_test_loop_scope = "module"
 testpaths = ["tests"]
 # Skip docker tests by default - run with `pytest -m docker` to include them
-addopts = "-nauto --timeout=60 -m 'not docker'"
+addopts = "-nauto --timeout=120 -m 'not docker'"
 markers = [
   "docker: marks tests as requiring Docker (testcontainers/PostgreSQL)"
 ]
@@ -55,4 +56,4 @@ filterwarnings = [
 
 [tool.uv.sources]
 llama-index-workflows = {workspace = true}
-llama-index-workflows-dbos = {workspace = true}
+llama-agents-dbos = {workspace = true}

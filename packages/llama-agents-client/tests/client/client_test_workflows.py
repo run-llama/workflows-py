@@ -35,13 +35,7 @@ class GreetingWorkflow(Workflow):
         return OutputEvent(greeting=f"{ev.greeting}{'!' * ev.exclamation_marks}")
 
 
-greeting_wf = GreetingWorkflow()
-
-
 class CrashingWorkflow(Workflow):
     @step
     async def crashing_step(self, ev: StartEvent) -> StopEvent:
         raise ValueError("Workflow crashed intentionally")
-
-
-crashing_wf = CrashingWorkflow()

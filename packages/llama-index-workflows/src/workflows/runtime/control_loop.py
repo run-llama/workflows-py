@@ -11,7 +11,6 @@ import traceback
 from dataclasses import replace
 from typing import TYPE_CHECKING
 
-from workflows.decorators import R
 from workflows.errors import (
     WorkflowCancelledByUser,
     WorkflowRuntimeError,
@@ -37,6 +36,7 @@ from workflows.runtime.types.commands import (
     CommandPublishEvent,
     CommandQueueEvent,
     CommandRunWorker,
+    CommandScheduleIdleCheck,
     WorkflowCommand,
     indicates_exit,
 )
@@ -50,7 +50,6 @@ from workflows.runtime.types.named_task import NamedTask
 from workflows.runtime.types.plugin import (
     InternalRunAdapter,
     WaitResultTick,
-    as_snapshottable_adapter,
     get_current_run,
 )
 from workflows.runtime.types.results import (
@@ -66,6 +65,7 @@ from workflows.runtime.types.results import (
 from workflows.runtime.types.ticks import (
     TickAddEvent,
     TickCancelRun,
+    TickIdleCheck,
     TickPublishEvent,
     TickStepResult,
     TickTimeout,
@@ -128,11 +128,17 @@ class _ControlLoopRunner:
         # avoiding TypeError from comparing WorkflowTick objects that don't implement __lt__
         self.scheduled_wakeups: list[tuple[float, int, WorkflowTick]] = []
         self._wakeup_sequence = 0
-        self.snapshot_adapter = as_snapshottable_adapter(adapter)
         # Pull task sequence counter for deterministic journaling
         self._pull_sequence = 0
         # Map from worker task to (step_name, worker_id) key
         self._task_keys: dict[asyncio.Task[TickStepResult], tuple[str, int]] = {}
+        # Whether a TickIdleCheck is currently in tick_buffer
+        self._idle_check_pending = False
+        # Gate to prevent workers from executing their step function until the
+        # main loop is parked in wait_for_next_task. This ensures deterministic
+        # DBOS step ordering by preventing interleaving of worker steps with
+        # main loop _durable_time() calls.
+        self._worker_gate = asyncio.Event()
 
     def schedule_tick(self, tick: WorkflowTick, at_time: float) -> None:
         """Schedule a tick to be processed at a specific time."""
@@ -182,6 +188,11 @@ class _ControlLoopRunner:
                     )
                 snapshot = worker.shared_state
                 step_fn: StepWorkerFunction = self.step_workers[command.step_name]
+
+                # Wait for the main loop to signal it's safe to execute.
+                # This prevents worker DBOS steps from interleaving with
+                # main loop _durable_time() calls.
+                await self._worker_gate.wait()
 
                 result = await step_fn(
                     state=snapshot,
@@ -245,11 +256,19 @@ class _ControlLoopRunner:
         elif isinstance(command, CommandFailWorkflow):
             await self.cleanup_tasks()
             raise command.exception
+        elif isinstance(command, CommandScheduleIdleCheck):
+            if not self._idle_check_pending:
+                self.tick_buffer.append(TickIdleCheck())
+                self._idle_check_pending = True
+            return None
         else:
             raise ValueError(f"Unknown command type: {type(command)}")
 
     async def cleanup_tasks(self) -> None:
         """Cancel and cleanup all running worker tasks."""
+        # Open the gate so workers waiting on it can receive cancellation
+        self._worker_gate.set()
+
         # Signal adapter to stop waiting
         try:
             await self.adapter.close()
@@ -330,6 +349,8 @@ class _ControlLoopRunner:
                 # Drain and process buffered ticks first (from rehydration, queue_tick, etc.)
                 while self.tick_buffer:
                     tick = self.tick_buffer.pop(0)
+                    if isinstance(tick, TickIdleCheck):
+                        self._idle_check_pending = False
                     result = await self._process_tick(tick)
                     if result is not None:
                         return result
@@ -337,6 +358,7 @@ class _ControlLoopRunner:
                 # optimization
                 if was_buffered:
                     now = await self.adapter.get_now()
+
                 # Calculate timeout for next scheduled wakeup
                 timeout = self.next_wakeup_timeout(now)
 
@@ -358,10 +380,15 @@ class _ControlLoopRunner:
                 ]
                 named_tasks.append(NamedTask.pull(pull_sequence, pull_task))
 
-                # Wait for next task completion (adapter controls ordering for replay)
-                completed_task = await self.adapter.wait_for_next_task(
-                    named_tasks, timeout
-                )
+                # Open the gate so workers can execute their step functions,
+                # then wait for next task completion.
+                self._worker_gate.set()
+                try:
+                    completed_task = await self.adapter.wait_for_next_task(
+                        named_tasks, timeout
+                    )
+                finally:
+                    self._worker_gate.clear()
 
                 if completed_task is None:
                     # Timeout - process scheduled ticks
@@ -431,8 +458,7 @@ class _ControlLoopRunner:
             )
             raise
 
-        if self.snapshot_adapter is not None:
-            self.snapshot_adapter.on_tick(tick)
+        await self.adapter.on_tick(tick)
 
         for command in commands:
             try:
@@ -495,17 +521,28 @@ def _reduce_tick(
     tick: WorkflowTick, init: BrokerState, now_seconds: float
 ) -> tuple[BrokerState, list[WorkflowCommand]]:
     if isinstance(tick, TickStepResult):
-        return _process_step_result_tick(tick, init, now_seconds)
+        state, commands = _process_step_result_tick(tick, init, now_seconds)
     elif isinstance(tick, TickAddEvent):
-        return _process_add_event_tick(tick, init, now_seconds)
+        state, commands = _process_add_event_tick(tick, init, now_seconds)
     elif isinstance(tick, TickCancelRun):
-        return _process_cancel_run_tick(tick, init)
+        state, commands = _process_cancel_run_tick(tick, init)
     elif isinstance(tick, TickPublishEvent):
-        return _process_publish_event_tick(tick, init)
+        state, commands = _process_publish_event_tick(tick, init)
     elif isinstance(tick, TickTimeout):
-        return _process_timeout_tick(tick, init)
+        state, commands = _process_timeout_tick(tick, init)
+    elif isinstance(tick, TickIdleCheck):
+        # Return early — idle check ticks don't schedule further idle checks
+        if _check_idle_state(init):
+            return init, [CommandPublishEvent(WorkflowIdleEvent())]
+        return init, []
     else:
         raise ValueError(f"Unknown tick type: {type(tick)}")
+
+    # After any non-idle-check tick, schedule an idle check if state is quiescent
+    if _check_idle_state(state):
+        commands.append(CommandScheduleIdleCheck())
+
+    return state, commands
 
 
 def rewind_in_progress(
@@ -538,13 +575,12 @@ def rewind_in_progress(
 
 
 def _check_idle_state(state: BrokerState) -> bool:
-    """Returns True if workflow is idle (waiting only on external events).
+    """Returns True if workflow is idle (no work can advance internally).
 
     A workflow is idle when:
     1. The workflow is running (hasn't completed/failed/cancelled)
     2. All steps have no pending events in their queues
     3. All steps have no workers currently executing
-    4. At least one step has an active waiter (from ctx.wait_for_event())
     """
     if not state.is_running:
         return False
@@ -553,11 +589,11 @@ def _check_idle_state(state: BrokerState) -> bool:
         if worker_state.queue or worker_state.in_progress:
             return False
 
-    return any(ws.collected_waiters for ws in state.workers.values())
+    return True
 
 
 def _process_step_result_tick(
-    tick: TickStepResult[R], init: BrokerState, now_seconds: float
+    tick: TickStepResult, init: BrokerState, now_seconds: float
 ) -> tuple[BrokerState, list[WorkflowCommand]]:
     """
     processes the results from a step function execution
@@ -755,13 +791,6 @@ def _process_step_result_tick(
                 event, tick.step_name, worker_state, now_seconds
             )
             commands.extend(subcommands)
-
-    # Check for idle transition at end of processing
-    was_idle = _check_idle_state(init)
-    now_idle = _check_idle_state(state)
-
-    if now_idle and not was_idle:
-        commands.append(CommandPublishEvent(WorkflowIdleEvent()))
 
     return state, commands
 
