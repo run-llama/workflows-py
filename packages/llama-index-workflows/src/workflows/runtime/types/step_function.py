@@ -10,6 +10,7 @@ from contextvars import copy_context
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Generic, Protocol
 
 from llama_index_instrumentation.dispatcher import instrument_tags
+from llama_index_instrumentation.span import active_span_id
 from workflows.decorators import P, R, StepConfig
 from workflows.errors import WorkflowRuntimeError
 from workflows.events import (
@@ -181,7 +182,7 @@ def create_workflow_run_function(
     async def run_workflow(
         init_state: BrokerState,
         start_event: StartEvent | None = None,
-        tags: dict[str, Any] = {},
+        tags: dict[str, Any] | None = None,
     ) -> StopEvent:
         from workflows.context.context import Context
         from workflows.context.internal_context import InternalContext
@@ -190,28 +191,43 @@ def create_workflow_run_function(
         # Set run_id context before creating internal context
         internal_ctx = Context._create_internal(workflow=workflow)
         internal_adapter = workflow._runtime.get_internal_adapter(workflow)
-        with instrument_tags(tags):
-            # defer execution to make sure the task can be captured and passed
-            # to the handler as async exception, protecting against exceptions from before_start
-            await asyncio.sleep(0)
 
-            run_ctx = RunContext(
-                workflow=workflow,
-                run_adapter=internal_adapter,
-                context=internal_ctx,
-                steps=registered.steps,
-            )
-            try:
-                with run_context(run_ctx):
-                    result = await control_loop_fn(
-                        start_event,
-                        init_state,
-                        internal_adapter.run_id,
-                    )
-                    return result
-            finally:
-                # Cancel any background tasks from InternalContext on completion or cancellation
-                if isinstance(internal_ctx._face, InternalContext):
-                    internal_ctx._face.cancel_background_tasks()
+        # Extract parent span ID if present and remove from tags
+        tags = tags or {}
+        parent_span_id = tags.pop("parent_span_id", None)
+
+        # Set parent span ID context if provided
+        parent_span_token = None
+        if parent_span_id is not None:
+            parent_span_token = active_span_id.set(parent_span_id)
+
+        try:
+            with instrument_tags(tags):
+                # defer execution to make sure the task can be captured and passed
+                # to the handler as async exception, protecting against exceptions from before_start
+                await asyncio.sleep(0)
+
+                run_ctx = RunContext(
+                    workflow=workflow,
+                    run_adapter=internal_adapter,
+                    context=internal_ctx,
+                    steps=registered.steps,
+                )
+                try:
+                    with run_context(run_ctx):
+                        result = await control_loop_fn(
+                            start_event,
+                            init_state,
+                            internal_adapter.run_id,
+                        )
+                        return result
+                finally:
+                    # Cancel any background tasks from InternalContext on completion or cancellation
+                    if isinstance(internal_ctx._face, InternalContext):
+                        internal_ctx._face.cancel_background_tasks()
+        finally:
+            # Reset parent span ID if it was set
+            if parent_span_token is not None:
+                active_span_id.reset(parent_span_token)
 
     return run_workflow
