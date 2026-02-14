@@ -570,3 +570,285 @@ def test_is_terminal_event_workflow_cancelled_event() -> None:
     # WorkflowCancelledEvent extends StopEvent, so it should be terminal
     stored = _make_stored_event(WorkflowCancelledEvent())
     assert AbstractWorkflowStore._is_terminal_event(stored) is True
+
+
+# --- max_completed history cap tests ---
+
+
+@pytest.mark.asyncio
+async def test_max_completed_default_is_1000() -> None:
+    store = MemoryWorkflowStore()
+    assert store.max_completed == 1000
+
+
+@pytest.mark.asyncio
+async def test_max_completed_none_means_unlimited() -> None:
+    store = MemoryWorkflowStore(max_completed=None)
+    assert store.max_completed is None
+
+    for i in range(50):
+        await store.update(
+            PersistentHandler(
+                handler_id=f"h{i}",
+                workflow_name="wf",
+                status="completed",
+                run_id=f"run-{i}",
+                completed_at=datetime(2024, 1, 1, 0, 0, i, tzinfo=timezone.utc),
+            )
+        )
+
+    all_handlers = await store.query(HandlerQuery())
+    assert len(all_handlers) == 50
+
+
+@pytest.mark.asyncio
+async def test_evict_oldest_completed_removes_overflow() -> None:
+    """Direct call to _evict_oldest_completed trims back to max_completed."""
+    store = MemoryWorkflowStore(max_completed=3)
+
+    for i in range(5):
+        await store.update(
+            PersistentHandler(
+                handler_id=f"h{i}",
+                workflow_name="wf",
+                status="completed",
+                run_id=f"run-{i}",
+                completed_at=datetime(2024, 1, 1, 0, 0, i, tzinfo=timezone.utc),
+            )
+        )
+
+    store._evict_oldest_completed()
+
+    remaining = await store.query(HandlerQuery())
+    ids = {h.handler_id for h in remaining}
+    assert ids == {"h2", "h3", "h4"}
+
+
+@pytest.mark.asyncio
+async def test_evict_does_not_touch_running_handlers() -> None:
+    store = MemoryWorkflowStore(max_completed=2)
+
+    for i in range(3):
+        await store.update(
+            PersistentHandler(
+                handler_id=f"running-{i}",
+                workflow_name="wf",
+                status="running",
+                run_id=f"run-r{i}",
+            )
+        )
+
+    for i in range(3):
+        await store.update(
+            PersistentHandler(
+                handler_id=f"done-{i}",
+                workflow_name="wf",
+                status="completed",
+                run_id=f"run-d{i}",
+                completed_at=datetime(2024, 1, 1, 0, 0, i, tzinfo=timezone.utc),
+            )
+        )
+
+    store._evict_oldest_completed()
+
+    remaining = await store.query(HandlerQuery())
+    ids = {h.handler_id for h in remaining}
+    assert ids == {"running-0", "running-1", "running-2", "done-1", "done-2"}
+
+
+@pytest.mark.asyncio
+async def test_evict_applies_to_all_terminal_statuses() -> None:
+    store = MemoryWorkflowStore(max_completed=2)
+
+    await store.update(
+        PersistentHandler(
+            handler_id="h-completed",
+            workflow_name="wf",
+            status="completed",
+            completed_at=datetime(2024, 1, 1, 0, 0, 0, tzinfo=timezone.utc),
+        )
+    )
+    await store.update(
+        PersistentHandler(
+            handler_id="h-failed",
+            workflow_name="wf",
+            status="failed",
+            completed_at=datetime(2024, 1, 1, 0, 0, 1, tzinfo=timezone.utc),
+        )
+    )
+    await store.update(
+        PersistentHandler(
+            handler_id="h-cancelled",
+            workflow_name="wf",
+            status="cancelled",
+            completed_at=datetime(2024, 1, 1, 0, 0, 2, tzinfo=timezone.utc),
+        )
+    )
+
+    store._evict_oldest_completed()
+
+    remaining = await store.query(HandlerQuery())
+    ids = {h.handler_id for h in remaining}
+    assert ids == {"h-failed", "h-cancelled"}
+
+
+@pytest.mark.asyncio
+async def test_evict_cleans_up_events_ticks_and_state() -> None:
+    store = MemoryWorkflowStore(max_completed=1)
+
+    store.events["run-old"] = []
+    store.ticks["run-old"] = []
+    store.create_state_store("run-old")
+
+    await store.update(
+        PersistentHandler(
+            handler_id="h-old",
+            workflow_name="wf",
+            status="completed",
+            run_id="run-old",
+            completed_at=datetime(2024, 1, 1, 0, 0, 0, tzinfo=timezone.utc),
+        )
+    )
+    assert "run-old" in store.events
+
+    await store.update(
+        PersistentHandler(
+            handler_id="h-new",
+            workflow_name="wf",
+            status="completed",
+            run_id="run-new",
+            completed_at=datetime(2024, 1, 1, 0, 0, 1, tzinfo=timezone.utc),
+        )
+    )
+
+    store._evict_oldest_completed()
+
+    assert "run-old" not in store.events
+    assert "run-old" not in store.ticks
+    assert "run-old" not in store.state_stores
+    remaining = await store.query(HandlerQuery())
+    assert len(remaining) == 1
+    assert remaining[0].handler_id == "h-new"
+
+
+# --- GC buffer behaviour ---
+
+
+@pytest.mark.asyncio
+async def test_gc_buffer_defers_eviction_until_threshold() -> None:
+    """Eviction doesn't fire on every update — it waits for the GC buffer."""
+    store = MemoryWorkflowStore(max_completed=5)
+    # threshold = 5 + max(int(5*0.1), 10) = 15
+
+    for i in range(14):
+        await store.update(
+            PersistentHandler(
+                handler_id=f"h{i}",
+                workflow_name="wf",
+                status="completed",
+                run_id=f"run-{i}",
+                completed_at=datetime(2024, 1, 1, 0, 0, i, tzinfo=timezone.utc),
+            )
+        )
+
+    # 14 terminal handlers, threshold is 15 — no eviction yet
+    remaining = await store.query(HandlerQuery())
+    assert len(remaining) == 14
+
+    # The 15th triggers the sweep, chopping back down to max_completed=5
+    await store.update(
+        PersistentHandler(
+            handler_id="h14",
+            workflow_name="wf",
+            status="completed",
+            run_id="run-14",
+            completed_at=datetime(2024, 1, 1, 0, 0, 14, tzinfo=timezone.utc),
+        )
+    )
+
+    remaining = await store.query(HandlerQuery())
+    assert len(remaining) == 5
+    ids = {h.handler_id for h in remaining}
+    assert ids == {"h10", "h11", "h12", "h13", "h14"}
+
+
+@pytest.mark.asyncio
+async def test_gc_buffer_with_large_max_uses_ratio() -> None:
+    """For large max_completed the 10% ratio is used instead of the minimum."""
+    store = MemoryWorkflowStore(max_completed=200)
+    # threshold = 200 + max(int(200*0.1), 10) = 220
+
+    for i in range(219):
+        await store.update(
+            PersistentHandler(
+                handler_id=f"h{i}",
+                workflow_name="wf",
+                status="completed",
+                run_id=f"run-{i}",
+                completed_at=datetime(2024, 1, 1, 0, 0, 0, i, tzinfo=timezone.utc),
+            )
+        )
+
+    # 219 terminal, threshold 220 — no sweep yet
+    remaining = await store.query(HandlerQuery())
+    assert len(remaining) == 219
+
+    await store.update(
+        PersistentHandler(
+            handler_id="h219",
+            workflow_name="wf",
+            status="completed",
+            run_id="run-219",
+            completed_at=datetime(2024, 1, 1, 0, 0, 0, 219, tzinfo=timezone.utc),
+        )
+    )
+
+    remaining = await store.query(HandlerQuery())
+    assert len(remaining) == 200
+
+
+@pytest.mark.asyncio
+async def test_gc_eviction_via_update_handler_status() -> None:
+    """Eviction triggers via the update_handler_status path."""
+    store = MemoryWorkflowStore(max_completed=5)
+    # threshold = 15
+
+    # Create 15 running handlers
+    for i in range(15):
+        await store.update(
+            PersistentHandler(
+                handler_id=f"h{i}",
+                workflow_name="wf",
+                status="running",
+                run_id=f"run-{i}",
+            )
+        )
+
+    # Complete all 15 — the 15th triggers the sweep
+    for i in range(15):
+        await store.update_handler_status(f"run-{i}", status="completed")
+
+    remaining = await store.query(HandlerQuery())
+    assert len(remaining) == 5
+    # The 5 most recently completed should survive
+    ids = {h.handler_id for h in remaining}
+    assert ids == {"h10", "h11", "h12", "h13", "h14"}
+
+
+@pytest.mark.asyncio
+async def test_terminal_count_tracks_deletes() -> None:
+    """Deleting terminal handlers keeps _terminal_count accurate."""
+    store = MemoryWorkflowStore(max_completed=5)
+
+    for i in range(3):
+        await store.update(
+            PersistentHandler(
+                handler_id=f"h{i}",
+                workflow_name="wf",
+                status="completed",
+            )
+        )
+    assert store._terminal_count == 3
+
+    await store.delete(HandlerQuery(handler_id_in=["h0", "h1"]))
+    assert store._terminal_count == 1
