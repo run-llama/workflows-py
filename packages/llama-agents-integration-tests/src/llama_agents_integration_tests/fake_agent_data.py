@@ -12,6 +12,7 @@ from typing import Any
 import httpx
 import pytest
 from llama_agents.server import AgentDataStore
+from llama_agents.server._store.agent_data_state_store import AgentDataStateStore
 
 
 class FakeAgentDataBackend:
@@ -138,6 +139,33 @@ def create_agent_data_store(
         project_id="test-project",
         deployment_name="test-deploy",
         collection="handlers",
+    )
+
+    original_client = store._client
+
+    def patched_client() -> httpx.AsyncClient:
+        client = original_client()
+        client._transport = httpx.MockTransport(backend.handle_request)
+        return client
+
+    monkeypatch.setattr(store, "_client", patched_client)
+    return store
+
+
+def create_agent_data_state_store(
+    backend: FakeAgentDataBackend,
+    monkeypatch: pytest.MonkeyPatch,
+    run_id: str,
+    state_type: type[Any] | None = None,
+) -> AgentDataStateStore[Any]:
+    """Create an AgentDataStateStore with httpx patched to use the fake backend."""
+    store = AgentDataStateStore(
+        base_url="https://fake-api.example.com",
+        api_key="test-key",
+        project_id="test-project",
+        deployment_name="test-deploy",
+        run_id=run_id,
+        state_type=state_type,
     )
 
     original_client = store._client

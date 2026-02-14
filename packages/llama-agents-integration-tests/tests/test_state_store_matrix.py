@@ -19,6 +19,10 @@ import pytest
 from llama_agents.server._store.postgres_state_store import PostgresStateStore
 from llama_agents.server._store.sqlite.migrate import run_migrations
 from llama_agents.server._store.sqlite.sqlite_state_store import SqliteStateStore
+from llama_agents_integration_tests.fake_agent_data import (
+    FakeAgentDataBackend,
+    create_agent_data_state_store,
+)
 from pydantic import (
     BaseModel,
     ConfigDict,
@@ -148,6 +152,7 @@ def _get_store_params() -> list[Any]:
         pytest.param("in_memory", id="in_memory"),
         pytest.param("sqlite", id="sqlite"),
         pytest.param("postgres", marks=pytest.mark.docker, id="postgres"),
+        pytest.param("agent_data", id="agent_data"),
     ]
 
 
@@ -163,6 +168,7 @@ def _get_sql_params() -> list[Any]:
 async def state_store(
     request: pytest.FixtureRequest,
     sqlite_db_path: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> AsyncGenerator[StateStore[DictState], None]:
     """Parametrized fixture yielding a fresh StateStore for each test."""
     # Use unique run_id per test to avoid state bleeding
@@ -179,6 +185,10 @@ async def state_store(
         store = PostgresStateStore(pool=pool, run_id=run_id, schema="dbos")
         yield store
         await pool.close()
+    elif request.param == "agent_data":
+        yield create_agent_data_state_store(  # type: ignore[misc]
+            FakeAgentDataBackend(), monkeypatch, run_id=run_id
+        )
 
 
 @pytest.fixture(params=_get_sql_params())
@@ -200,6 +210,7 @@ async def sql_store_factory(
 async def custom_state_store(
     request: pytest.FixtureRequest,
     sqlite_db_path: str,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> AsyncGenerator[StateStore[MyState], None]:
     """Parametrized fixture yielding a StateStore with custom typed state."""
     run_id = f"test-custom-{id(request)}"
@@ -232,6 +243,12 @@ async def custom_state_store(
         await store.set_state(initial_state)
         yield store
         await pool.close()
+    elif request.param == "agent_data":
+        store = create_agent_data_state_store(
+            FakeAgentDataBackend(), monkeypatch, run_id=run_id, state_type=MyState
+        )
+        await store.set_state(initial_state)
+        yield store  # type: ignore[misc]
 
 
 # -- Basic Operations Tests --

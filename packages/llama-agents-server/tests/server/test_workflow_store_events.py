@@ -14,11 +14,11 @@ from llama_agents.server import (
     MemoryWorkflowStore,
     SqliteWorkflowStore,
 )
+from llama_agents.server._store.abstract_workflow_store import StoredEvent
 from llama_agents_integration_tests.fake_agent_data import (
     FakeAgentDataBackend,
     create_agent_data_store,
 )
-from llama_agents.server._store.abstract_workflow_store import StoredEvent
 from workflows.events import (
     Event,
     StopEvent,
@@ -54,6 +54,7 @@ def _failed() -> WorkflowFailedEvent:
 
 def _cancelled() -> WorkflowCancelledEvent:
     return WorkflowCancelledEvent()
+
 
 async def _subscribe_and_collect(
     store: AbstractWorkflowStore,
