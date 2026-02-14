@@ -118,6 +118,7 @@ class StepWorkerResult(BaseModel):
     model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
     type: Literal["result"] = "result"
     result: SerializableOptionalEvent = None
+    step_name: str | None = None
 
 
 class StepWorkerFailed(BaseModel):
@@ -152,15 +153,6 @@ class AddCollectedEvent(BaseModel):
     type: Literal["add_collected"] = "add_collected"
     event_id: str
     event: SerializableEvent
-
-
-class SendEvent(BaseModel):
-    """Returned when send_event is deferred to step completion."""
-
-    model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
-    type: Literal["send_event"] = "send_event"
-    event: SerializableEvent
-    step_name: str | None = None
 
 
 class AddWaiter(BaseModel, Generic[EventType]):
@@ -202,5 +194,4 @@ StepFunctionResult = Union[
     DeleteCollectedEvent,
     AddWaiter[Event],
     DeleteWaiter,
-    SendEvent,
 ]

@@ -15,8 +15,6 @@ from workflows.runtime.types.results import (
     AddWaiter,
     DeleteCollectedEvent,
     DeleteWaiter,
-    SendEvent,
-    StepFunctionResult,
     StepWorkerContext,
     StepWorkerStateContextVar,
     WaitingForEvent,
@@ -25,7 +23,7 @@ from workflows.runtime.types.ticks import TickAddEvent
 
 if TYPE_CHECKING:
     from workflows.events import Event
-    from workflows.runtime.types.plugin import ImmediateSendEvent, InternalRunAdapter
+    from workflows.runtime.types.plugin import InternalRunAdapter
     from workflows.workflow import Workflow
 
 T = TypeVar("T", bound="Event")
@@ -41,7 +39,6 @@ class InternalContext(Generic[MODEL_T]):
     """
 
     _internal_adapter: InternalRunAdapter
-    _immediate_sender: ImmediateSendEvent | None
     _workflow: Workflow
     _workers: list[asyncio.Task[Any]]
 
@@ -51,7 +48,6 @@ class InternalContext(Generic[MODEL_T]):
         workflow: Workflow,
     ) -> None:
         self._internal_adapter = internal_adapter
-        self._immediate_sender = internal_adapter.get_immediate_sender()
         self._workflow = workflow
         self._workers = []
 
@@ -153,24 +149,17 @@ class InternalContext(Generic[MODEL_T]):
         step_ctx.returns.return_values.append(DeleteCollectedEvent(event_id=buffer_id))
         return total
 
-    def _add_result(self, result: StepFunctionResult) -> None:
-        """Append a result to the current step's return values."""
-        step_ctx = self._get_step_ctx(fn="_add_result")
-        step_ctx.returns.return_values.append(result)
-
     def send_event(self, message: Event, step: str | None = None) -> None:
         """Send an event to trigger another step."""
         if step is not None:
             self._workflow._validate_valid_step_message(step, message)
 
-        if self._immediate_sender is not None:
-            self._execute_task(
-                self._immediate_sender.send_event(
-                    TickAddEvent(event=message, step_name=step)
-                )
+        step_ctx = self._get_step_ctx(fn="send_event")
+        self._execute_task(
+            self._internal_adapter.send_event(
+                TickAddEvent(event=message, step_name=step), step_ctx
             )
-        else:
-            self._add_result(SendEvent(event=message, step_name=step))
+        )
 
     async def wait_for_event(
         self,

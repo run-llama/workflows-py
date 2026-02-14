@@ -21,12 +21,12 @@ from typing import (
     Literal,
     Protocol,
     Union,
-    runtime_checkable,
 )
 
 from workflows.context.state_store import StateStore
 from workflows.events import Event, StartEvent, StopEvent
 from workflows.runtime.types.named_task import NamedTask
+from workflows.runtime.types.results import StepWorkerContext
 
 if TYPE_CHECKING:
     from workflows.context.context import Context
@@ -65,18 +65,6 @@ class RegisteredWorkflow:
     workflow: Workflow
     workflow_run_fn: WorkflowRunFunction
     steps: dict[str, StepWorkerFunction]
-
-
-@runtime_checkable
-class ImmediateSendEvent(Protocol):
-    """Opt-in protocol for adapters that support immediate fire-and-forget send_event.
-
-    When an adapter implements this, ctx.send_event() dispatches events as async
-    tasks immediately rather than deferring them to step completion. The basic
-    asyncio runtime implements this; durable runtimes typically do not.
-    """
-
-    async def send_event(self, tick: WorkflowTick) -> None: ...
 
 
 class InternalRunAdapter(ABC):
@@ -130,6 +118,20 @@ class InternalRunAdapter(ABC):
         ...
 
     @abstractmethod
+    async def send_event(
+        self, tick: WorkflowTick, step_context: StepWorkerContext
+    ) -> None:
+        """
+        Send an event from within a step function.
+
+        Called by ctx.send_event() to inject events back into the workflow.
+        The step_context is provided so adapters can choose their dispatch
+        strategy — e.g. sending immediately via a queue, or appending a
+        StepWorkerResult to step_context.returns for deferred processing.
+        """
+        ...
+
+    @abstractmethod
     async def wait_receive(
         self,
         timeout_seconds: float | None = None,
@@ -153,16 +155,6 @@ class InternalRunAdapter(ABC):
         - If timeout already expired in previous run, returns immediately
         """
         ...
-
-    def get_immediate_sender(self) -> ImmediateSendEvent | None:
-        """Return an ImmediateSendEvent if this adapter supports immediate dispatch.
-
-        Adapters that implement ImmediateSendEvent are auto-detected.
-        Decorators should override to forward to the inner adapter.
-        """
-        if isinstance(self, ImmediateSendEvent):
-            return self
-        return None
 
     async def close(self) -> None:
         """

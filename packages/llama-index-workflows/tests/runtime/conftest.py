@@ -29,6 +29,7 @@ from workflows.runtime.types.plugin import (
     WaitResultTick,
     WaitResultTimeout,
 )
+from workflows.runtime.types.results import StepWorkerContext
 from workflows.runtime.types.step_function import (
     as_step_worker_functions,
     create_workflow_run_function,
@@ -148,7 +149,9 @@ class MockRunAdapter(
             if isinstance(item, StopEvent):
                 break
 
-    async def send_event(self, tick: WorkflowTick) -> None:
+    async def send_event(
+        self, tick: WorkflowTick, step_context: StepWorkerContext | None = None
+    ) -> None:
         await self._external_queue.put(tick)
 
     async def get_now(self) -> float:

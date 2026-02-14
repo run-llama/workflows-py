@@ -25,6 +25,7 @@ from workflows.runtime.types.plugin import (
     WaitResult,
     WaitResultTimeout,
 )
+from workflows.runtime.types.results import StepWorkerContext
 from workflows.runtime.types.ticks import WorkflowTick
 
 # -- Stubs -----------------------------------------------------------------
@@ -43,6 +44,11 @@ class StubInternalAdapter(InternalRunAdapter):
 
     async def get_now(self) -> float:
         return 1.0
+
+    async def send_event(
+        self, tick: WorkflowTick, step_context: StepWorkerContext
+    ) -> None:
+        pass
 
     async def wait_receive(self, timeout_seconds: float | None = None) -> WaitResult:
         return WaitResultTimeout()

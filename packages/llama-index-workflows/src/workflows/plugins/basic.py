@@ -36,6 +36,7 @@ from workflows.runtime.types.plugin import (
     WaitResultTick,
     WaitResultTimeout,
 )
+from workflows.runtime.types.results import StepWorkerContext
 from workflows.runtime.types.step_function import (
     as_step_worker_functions,
     create_workflow_run_function,
@@ -107,7 +108,9 @@ class InternalAsyncioAdapter(InternalRunAdapter, SnapshottableAdapter):
     async def get_now(self) -> float:
         return time.monotonic()
 
-    async def send_event(self, tick: WorkflowTick) -> None:
+    async def send_event(
+        self, tick: WorkflowTick, step_context: StepWorkerContext
+    ) -> None:
         self._queues.receive_queue.put_nowait(tick)
 
     async def wait_receive(

@@ -39,12 +39,13 @@ from workflows.runtime.types.plugin import (
     WaitResultTick,
     WaitResultTimeout,
 )
+from workflows.runtime.types.results import StepWorkerContext, StepWorkerResult
 from workflows.runtime.types.step_function import (
     StepWorkerFunction,
     as_step_worker_functions,
     create_workflow_run_function,
 )
-from workflows.runtime.types.ticks import WorkflowTick
+from workflows.runtime.types.ticks import TickAddEvent, WorkflowTick
 from workflows.workflow import Workflow
 
 try:
@@ -657,7 +658,7 @@ class InternalDBOSAdapter(InternalRunAdapter):
     """
     Internal DBOS adapter for the workflow control loop.
 
-    - send_event sends ticks via DBOS.send (using run_in_executor to escape step context)
+    - send_event defers events to step completion via StepWorkerResult
     - wait_receive receives ticks via DBOS.recv_async
     - write_to_event_stream publishes events via DBOS streams
     - get_now returns a durable timestamp
@@ -700,6 +701,15 @@ class InternalDBOSAdapter(InternalRunAdapter):
 
     async def get_now(self) -> float:
         return _durable_time()
+
+    async def send_event(
+        self, tick: WorkflowTick, step_context: StepWorkerContext
+    ) -> None:
+        if not isinstance(tick, TickAddEvent):
+            raise TypeError(f"Expected TickAddEvent, got {type(tick)}")
+        step_context.returns.return_values.append(
+            StepWorkerResult(result=tick.event, step_name=tick.step_name)
+        )
 
     async def wait_receive(
         self,
