@@ -57,6 +57,10 @@ def _matches_query(handler: PersistentHandler, query: HandlerQuery) -> bool:
     return True
 
 
+_GC_BUFFER_RATIO = 0.1
+_GC_BUFFER_MIN = 10
+
+
 class MemoryWorkflowStore(AbstractWorkflowStore):
     def __init__(self, max_completed: int | None = 1000) -> None:
         self.handlers: Dict[str, PersistentHandler] = {}
@@ -67,6 +71,7 @@ class MemoryWorkflowStore(AbstractWorkflowStore):
             weakref.WeakValueDictionary()
         )
         self.max_completed = max_completed
+        self._terminal_count = 0
 
     def create_state_store(
         self,
@@ -100,22 +105,50 @@ class MemoryWorkflowStore(AbstractWorkflowStore):
         ]
 
     async def update(self, handler: PersistentHandler) -> None:
+        old = self.handlers.get(handler.handler_id)
+        # When update_handler_status mutates the handler in-place before
+        # calling update(), old *is* handler — the old status is gone.
+        # Treat same-identity updates as a fresh insertion for counting.
+        was_terminal = (
+            old is not None and old is not handler and is_terminal_status(old.status)
+        )
         self.handlers[handler.handler_id] = handler
+
         if is_terminal_status(handler.status):
-            self._evict_oldest_completed()
+            if not was_terminal:
+                self._terminal_count += 1
+            self._maybe_evict()
+        elif was_terminal:
+            self._terminal_count -= 1
 
     async def delete(self, query: HandlerQuery) -> int:
         to_delete = [
-            handler_id
-            for handler_id, handler in list(self.handlers.items())
+            handler
+            for handler in self.handlers.values()
             if _matches_query(handler, query)
         ]
-        for handler_id in to_delete:
-            del self.handlers[handler_id]
+        for handler in to_delete:
+            del self.handlers[handler.handler_id]
+            if is_terminal_status(handler.status):
+                self._terminal_count -= 1
         return len(to_delete)
 
+    def _gc_threshold(self) -> int:
+        """Return the terminal count at which a GC sweep triggers."""
+        if self.max_completed is None:
+            return 0  # unreachable when None, but keeps typing happy
+        buffer = max(int(self.max_completed * _GC_BUFFER_RATIO), _GC_BUFFER_MIN)
+        return self.max_completed + buffer
+
+    def _maybe_evict(self) -> None:
+        """Trigger a GC sweep only when the terminal count exceeds the threshold."""
+        if self.max_completed is None:
+            return
+        if self._terminal_count >= self._gc_threshold():
+            self._evict_oldest_completed()
+
     def _evict_oldest_completed(self) -> None:
-        """Remove the oldest completed handlers when the cap is exceeded.
+        """Batch-evict terminal handlers back down to max_completed.
 
         Also cleans up associated events, ticks, and state stores for evicted
         handlers.
@@ -135,12 +168,12 @@ class MemoryWorkflowStore(AbstractWorkflowStore):
 
         for handler in to_evict:
             del self.handlers[handler.handler_id]
-            # Clean up associated run data
             run_id = handler.run_id
             if run_id is not None:
                 self.events.pop(run_id, None)
                 self.ticks.pop(run_id, None)
                 self.state_stores.pop(run_id, None)
+        self._terminal_count -= len(to_evict)
 
     def _get_or_create_condition(self, run_id: str) -> asyncio.Condition:
         """Get or create a condition for a run_id.
