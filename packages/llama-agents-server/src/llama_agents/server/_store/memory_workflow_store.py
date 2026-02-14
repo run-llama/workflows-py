@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import weakref
+from collections import deque
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
 from typing import Any, Dict, List
@@ -67,6 +68,7 @@ class MemoryWorkflowStore(AbstractWorkflowStore):
             weakref.WeakValueDictionary()
         )
         self.max_completed = max_completed
+        self._terminal_queue: deque[str] = deque()
 
     def create_state_store(
         self,
@@ -102,6 +104,7 @@ class MemoryWorkflowStore(AbstractWorkflowStore):
     async def update(self, handler: PersistentHandler) -> None:
         self.handlers[handler.handler_id] = handler
         if is_terminal_status(handler.status):
+            self._terminal_queue.append(handler.handler_id)
             self._evict_oldest_completed()
 
     async def delete(self, query: HandlerQuery) -> int:
@@ -117,25 +120,18 @@ class MemoryWorkflowStore(AbstractWorkflowStore):
     def _evict_oldest_completed(self) -> None:
         """Remove the oldest completed handlers when the cap is exceeded.
 
-        Also cleans up associated events, ticks, and state stores for evicted
-        handlers.
+        Uses _terminal_queue (insertion-ordered deque) for O(1) eviction
+        instead of scanning and sorting all handlers.
         """
         if self.max_completed is None:
             return
 
-        terminal = [h for h in self.handlers.values() if is_terminal_status(h.status)]
-        overflow = len(terminal) - self.max_completed
-        if overflow <= 0:
-            return
-
-        # Sort by completed_at (None sorts earliest) then by handler_id for
-        # deterministic tie-breaking.
-        terminal.sort(key=lambda h: (h.completed_at or datetime.min, h.handler_id))
-        to_evict = terminal[:overflow]
-
-        for handler in to_evict:
-            del self.handlers[handler.handler_id]
-            # Clean up associated run data
+        while len(self._terminal_queue) > self.max_completed:
+            handler_id = self._terminal_queue.popleft()
+            handler = self.handlers.pop(handler_id, None)
+            if handler is None:
+                # Already removed (e.g. via delete()), skip
+                continue
             run_id = handler.run_id
             if run_id is not None:
                 self.events.pop(run_id, None)
