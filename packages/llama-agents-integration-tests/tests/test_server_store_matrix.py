@@ -20,10 +20,12 @@ from llama_agents.server import (
     SqliteWorkflowStore,
     WorkflowServer,
 )
+from llama_agents.server._store.postgres_workflow_store import PostgresWorkflowStore
 from llama_agents_integration_tests.fake_agent_data import (
     FakeAgentDataBackend,
     create_agent_data_store,
 )
+from llama_agents_integration_tests.postgres import get_asyncpg_dsn
 from workflows import Context, Workflow, step
 from workflows.events import (
     Event,
@@ -176,7 +178,14 @@ class InteractiveWorkflow(Workflow):
 # -- Fixtures --
 
 
-@pytest.fixture(params=["memory", "sqlite", "agent_data"])
+@pytest.fixture(
+    params=[
+        "memory",
+        "sqlite",
+        "agent_data",
+        pytest.param("postgres", marks=pytest.mark.docker),
+    ]
+)
 async def server_with_store(
     request: pytest.FixtureRequest,
     tmp_path_factory: pytest.TempPathFactory,
@@ -184,12 +193,24 @@ async def server_with_store(
 ) -> AsyncGenerator[tuple[str, WorkflowServer, str], None]:
     store_type: str = request.param
 
+    pg_store: PostgresWorkflowStore | None = None
+
+    if store_type == "postgres":
+        postgres_container = request.getfixturevalue("postgres_container")
+        dsn = get_asyncpg_dsn(postgres_container)
+        pg_store = PostgresWorkflowStore(dsn=dsn)
+        await pg_store.start()
+        await pg_store.run_migrations()
+
     def make_server() -> WorkflowServer:
         if store_type == "memory":
             store = MemoryWorkflowStore()
         elif store_type == "sqlite":
             db_path = tmp_path_factory.mktemp("sqlite") / "test.db"
             store = SqliteWorkflowStore(str(db_path))
+        elif store_type == "postgres":
+            assert pg_store is not None
+            store = pg_store
         else:
             store = create_agent_data_store(FakeAgentDataBackend(), monkeypatch)
         server = WorkflowServer(workflow_store=store)
@@ -202,7 +223,11 @@ async def server_with_store(
         return server
 
     async with live_server(make_server) as (base_url, server):
-        yield base_url, server, store_type
+        try:
+            yield base_url, server, store_type
+        finally:
+            if pg_store is not None:
+                await pg_store.close()
 
 
 # -- Tests --

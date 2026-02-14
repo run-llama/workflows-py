@@ -12,7 +12,8 @@ from typing import Any, List
 
 import httpx
 from llama_agents.client.protocol.serializable_events import EventEnvelopeWithMetadata
-from workflows.context.state_store import DictState, InMemoryStateStore, StateStore
+from workflows.context.serializers import BaseSerializer
+from workflows.context.state_store import StateStore
 
 from .._keyed_lock import KeyedLock
 from .._lru_cache import LRUCache
@@ -23,6 +24,7 @@ from .abstract_workflow_store import (
     StoredEvent,
     StoredTick,
 )
+from .agent_data_state_store import AgentDataStateStore
 
 logger = logging.getLogger(__name__)
 
@@ -398,6 +400,19 @@ class AgentDataStore(AbstractWorkflowStore):
     # ------------------------------------------------------------------
 
     def create_state_store(
-        self, run_id: str, state_type: type[Any] | None = None
+        self,
+        run_id: str,
+        state_type: type[Any] | None = None,
+        serialized_state: dict[str, Any] | None = None,
+        serializer: BaseSerializer | None = None,
     ) -> StateStore[Any]:
-        return InMemoryStateStore(state_type() if state_type else DictState())
+        return AgentDataStateStore(  # type: ignore[return-value]
+            base_url=self._base_url,
+            api_key=self._api_key,
+            project_id=self._project_id,
+            deployment_name=self._deployment_name,
+            run_id=run_id,
+            state_type=state_type,
+            collection=f"{self._collection}_state",
+            client_factory=self._client,
+        )

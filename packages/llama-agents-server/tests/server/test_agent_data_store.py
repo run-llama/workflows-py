@@ -6,19 +6,20 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timezone
 
-from llama_agents.server._store.abstract_workflow_store import Status, StoredEvent
 import pytest
 from llama_agents.client.protocol.serializable_events import EventEnvelopeWithMetadata
 from llama_agents.server import (
     HandlerQuery,
     PersistentHandler,
 )
+from llama_agents.server._store.abstract_workflow_store import Status, StoredEvent
+from llama_agents.server._store.agent_data_state_store import AgentDataStateStore
 from llama_agents.server._store.agent_data_store import AgentDataStore
 from llama_agents_integration_tests.fake_agent_data import (
     FakeAgentDataBackend,
     create_agent_data_store,
 )
-from workflows.context.state_store import DictState, InMemoryStateStore
+from workflows.context.state_store import DictState
 from workflows.events import Event, StopEvent
 
 # ---------------------------------------------------------------------------
@@ -369,15 +370,14 @@ async def test_ticks_isolated_by_run_id(store: AgentDataStore) -> None:
 @pytest.mark.asyncio
 async def test_create_state_store_returns_in_memory(store: AgentDataStore) -> None:
     state_store = store.create_state_store("run-1")
-    assert isinstance(state_store, InMemoryStateStore)
+    assert isinstance(state_store, AgentDataStateStore)
 
 
 @pytest.mark.asyncio
 async def test_create_state_store_with_type(store: AgentDataStore) -> None:
     state_store = store.create_state_store("run-1", state_type=DictState)
-    assert isinstance(state_store, InMemoryStateStore)
-    state = await state_store.get_state()
-    assert isinstance(state, DictState)
+    assert isinstance(state_store, AgentDataStateStore)
+    assert state_store.state_type is DictState
 
 
 # ---------------------------------------------------------------------------
