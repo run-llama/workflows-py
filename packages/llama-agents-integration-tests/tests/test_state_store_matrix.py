@@ -186,7 +186,7 @@ async def state_store(
         yield store
         await pool.close()
     elif request.param == "agent_data":
-        yield create_agent_data_state_store(  # type: ignore[misc]
+        yield create_agent_data_state_store(
             FakeAgentDataBackend(), monkeypatch, run_id=run_id
         )
 
@@ -248,7 +248,7 @@ async def custom_state_store(
             FakeAgentDataBackend(), monkeypatch, run_id=run_id, state_type=MyState
         )
         await store.set_state(initial_state)
-        yield store  # type: ignore[misc]
+        yield store
 
 
 # -- Basic Operations Tests --
