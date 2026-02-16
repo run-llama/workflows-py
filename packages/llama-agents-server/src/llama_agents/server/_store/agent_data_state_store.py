@@ -11,7 +11,6 @@ import logging
 from contextlib import asynccontextmanager
 from typing import Any, AsyncGenerator, Generic, Literal, Type
 
-import httpx
 from pydantic import BaseModel
 from typing_extensions import TypeVar
 from workflows.context.serializers import BaseSerializer, JsonSerializer
@@ -24,6 +23,8 @@ from workflows.context.state_store import (
     serialize_dict_state_data,
     set_by_path,
 )
+
+from .agent_data_client import AgentDataClient
 
 logger = logging.getLogger(__name__)
 
@@ -48,25 +49,17 @@ class AgentDataStateStore(Generic[MODEL_T]):
     def __init__(
         self,
         *,
-        base_url: str,
-        api_key: str,
-        project_id: str,
-        deployment_name: str,
+        client: AgentDataClient,
         run_id: str,
         state_type: Type[MODEL_T] | None = None,
         collection: str = "workflow_state",
         serializer: BaseSerializer | None = None,
-        client_factory: Any | None = None,
     ) -> None:
-        self._base_url = base_url.rstrip("/")
-        self._api_key = api_key
-        self._project_id = project_id
-        self._deployment_name = deployment_name
+        self._client = client
         self._run_id = run_id
         self.state_type = state_type or DictState  # type: ignore[assignment]
         self._collection = collection
         self._serializer = serializer or JsonSerializer()
-        self._client_factory = client_factory
         # Cache the agent data item ID once found
         self._item_id: str | None = None
 
@@ -77,60 +70,6 @@ class AgentDataStateStore(Generic[MODEL_T]):
     @functools.cached_property
     def _lock(self) -> asyncio.Lock:
         return asyncio.Lock()
-
-    # ------------------------------------------------------------------
-    # HTTP helpers (same pattern as AgentDataStore)
-    # ------------------------------------------------------------------
-
-    def _headers(self) -> dict[str, str]:
-        return {
-            "Authorization": f"Bearer {self._api_key}",
-            "Content-Type": "application/json",
-        }
-
-    def _client(self) -> httpx.AsyncClient:
-        if self._client_factory is not None:
-            return self._client_factory()
-        return httpx.AsyncClient(
-            base_url=self._base_url,
-            headers=self._headers(),
-            params={"project_id": self._project_id},
-        )
-
-    async def _search(
-        self, filters: dict[str, Any] | None = None
-    ) -> list[dict[str, Any]]:
-        body: dict[str, Any] = {
-            "deployment_name": self._deployment_name,
-            "collection": self._collection,
-            "page_size": 10,
-        }
-        if filters:
-            body["filter"] = filters
-        async with self._client() as client:
-            resp = await client.post("/api/v1/beta/agent-data/:search", json=body)
-            resp.raise_for_status()
-            return resp.json().get("items", [])
-
-    async def _create(self, data: dict[str, Any]) -> dict[str, Any]:
-        body = {
-            "deployment_name": self._deployment_name,
-            "collection": self._collection,
-            "data": data,
-        }
-        async with self._client() as client:
-            resp = await client.post("/api/v1/beta/agent-data", json=body)
-            resp.raise_for_status()
-            return resp.json()
-
-    async def _update_item(self, item_id: str, data: dict[str, Any]) -> dict[str, Any]:
-        async with self._client() as client:
-            resp = await client.put(
-                f"/api/v1/beta/agent-data/{item_id}",
-                json={"data": data},
-            )
-            resp.raise_for_status()
-            return resp.json()
 
     # ------------------------------------------------------------------
     # State serialization
@@ -155,7 +94,10 @@ class AgentDataStateStore(Generic[MODEL_T]):
     # ------------------------------------------------------------------
 
     async def _load_state(self) -> MODEL_T:
-        items = await self._search({"run_id": {"eq": self._run_id}})
+        # Point lookup by run_id — only need 1 result
+        items = await self._client.search(
+            self._collection, {"run_id": {"eq": self._run_id}}, page_size=1
+        )
         if items:
             self._item_id = items[0]["id"]
             return self._deserialize_state(items[0]["data"]["state_json"])
@@ -164,7 +106,9 @@ class AgentDataStateStore(Generic[MODEL_T]):
         return state
 
     async def _load_state_or_none(self) -> MODEL_T | None:
-        items = await self._search({"run_id": {"eq": self._run_id}})
+        items = await self._client.search(
+            self._collection, {"run_id": {"eq": self._run_id}}, page_size=1
+        )
         if items:
             self._item_id = items[0]["id"]
             return self._deserialize_state(items[0]["data"]["state_json"])
@@ -179,15 +123,17 @@ class AgentDataStateStore(Generic[MODEL_T]):
             "state_module": type(state).__module__,
         }
         if self._item_id is not None:
-            await self._update_item(self._item_id, data)
+            await self._client.update_item(self._item_id, data)
         else:
-            items = await self._search({"run_id": {"eq": self._run_id}})
+            items = await self._client.search(
+                self._collection, {"run_id": {"eq": self._run_id}}, page_size=1
+            )
             if items:
                 item_id = items[0]["id"]
                 self._item_id = item_id
-                await self._update_item(item_id, data)
+                await self._client.update_item(item_id, data)
             else:
-                result = await self._create(data)
+                result = await self._client.create(self._collection, data)
                 self._item_id = result["id"]
 
     # ------------------------------------------------------------------
@@ -234,10 +180,7 @@ class AgentDataStateStore(Generic[MODEL_T]):
         serialized_state: dict[str, Any],
         serializer: BaseSerializer,
         *,
-        base_url: str,
-        api_key: str,
-        project_id: str,
-        deployment_name: str,
+        client: AgentDataClient,
         state_type: type[BaseModel] | None = None,
         run_id: str | None = None,
     ) -> AgentDataStateStore[Any]:
@@ -246,10 +189,7 @@ class AgentDataStateStore(Generic[MODEL_T]):
         parsed = AgentDataSerializedState.model_validate(serialized_state)
         effective_run_id = run_id or parsed.run_id
         return cls(
-            base_url=base_url,
-            api_key=api_key,
-            project_id=project_id,
-            deployment_name=deployment_name,
+            client=client,
             run_id=effective_run_id,
             state_type=state_type,  # type: ignore[arg-type]
             serializer=serializer,

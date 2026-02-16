@@ -1,0 +1,100 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 LlamaIndex Inc.
+"""AgentDataClient — shared HTTP client for the LlamaCloud Agent Data API."""
+
+from __future__ import annotations
+
+from typing import Any
+
+import httpx
+
+
+class AgentDataClient:
+    """HTTP client for the LlamaCloud Agent Data API.
+
+    Holds connection parameters and exposes search/create/update/delete methods.
+    Both AgentDataStore and AgentDataStateStore use this instead of duplicating
+    HTTP helpers.
+    """
+
+    def __init__(
+        self,
+        *,
+        base_url: str,
+        api_key: str,
+        project_id: str,
+        deployment_name: str,
+    ) -> None:
+        self._base_url = base_url.rstrip("/")
+        self._api_key = api_key
+        self._project_id = project_id
+        self._deployment_name = deployment_name
+
+    @property
+    def deployment_name(self) -> str:
+        return self._deployment_name
+
+    def _headers(self) -> dict[str, str]:
+        return {
+            "Authorization": f"Bearer {self._api_key}",
+            "Content-Type": "application/json",
+        }
+
+    def http_client(self) -> httpx.AsyncClient:
+        """Create a fresh async HTTP client.
+
+        Following the cloud pattern: a new client per operation to avoid
+        issues with shared state across concurrent async tasks.
+        """
+        return httpx.AsyncClient(
+            base_url=self._base_url,
+            headers=self._headers(),
+            params={"project_id": self._project_id},
+        )
+
+    async def search(
+        self,
+        collection: str,
+        filters: dict[str, Any] | None = None,
+        page_size: int = 100,
+    ) -> list[dict[str, Any]]:
+        """Search the Agent Data API and return matching items."""
+        body: dict[str, Any] = {
+            "deployment_name": self._deployment_name,
+            "collection": collection,
+            "page_size": page_size,
+        }
+        if filters:
+            body["filter"] = filters
+        async with self.http_client() as client:
+            resp = await client.post("/api/v1/beta/agent-data/:search", json=body)
+            resp.raise_for_status()
+            return resp.json().get("items", [])
+
+    async def create(self, collection: str, data: dict[str, Any]) -> dict[str, Any]:
+        """Create an item in the Agent Data API."""
+        body = {
+            "deployment_name": self._deployment_name,
+            "collection": collection,
+            "data": data,
+        }
+        async with self.http_client() as client:
+            resp = await client.post("/api/v1/beta/agent-data", json=body)
+            resp.raise_for_status()
+            return resp.json()
+
+    async def update_item(self, item_id: str, data: dict[str, Any]) -> dict[str, Any]:
+        """Update an existing item by its Agent Data API ID."""
+        async with self.http_client() as client:
+            resp = await client.put(
+                f"/api/v1/beta/agent-data/{item_id}",
+                json={"data": data},
+            )
+            resp.raise_for_status()
+            return resp.json()
+
+    async def delete_item(self, item_id: str) -> None:
+        """Delete an item by its Agent Data API ID."""
+        async with self.http_client() as client:
+            resp = await client.delete(f"/api/v1/beta/agent-data/{item_id}")
+            resp.raise_for_status()

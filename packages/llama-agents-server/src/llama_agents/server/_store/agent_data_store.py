@@ -10,7 +10,6 @@ from collections.abc import AsyncIterator
 from datetime import datetime, timezone
 from typing import Any, List
 
-import httpx
 from llama_agents.client.protocol.serializable_events import EventEnvelopeWithMetadata
 from workflows.context.serializers import BaseSerializer
 from workflows.context.state_store import StateStore
@@ -24,6 +23,7 @@ from .abstract_workflow_store import (
     StoredEvent,
     StoredTick,
 )
+from .agent_data_client import AgentDataClient
 from .agent_data_state_store import AgentDataStateStore
 
 logger = logging.getLogger(__name__)
@@ -50,10 +50,12 @@ class AgentDataStore(AbstractWorkflowStore):
         deployment_name: str,
         collection: str = "workflow_contexts",
     ) -> None:
-        self._base_url = base_url.rstrip("/")
-        self._api_key = api_key
-        self._project_id = project_id
-        self._deployment_name = deployment_name
+        self._client = AgentDataClient(
+            base_url=base_url,
+            api_key=api_key,
+            project_id=project_id,
+            deployment_name=deployment_name,
+        )
         self._collection = collection
 
         # Derived collection names for events and ticks
@@ -73,75 +75,6 @@ class AgentDataStore(AbstractWorkflowStore):
 
         # Per-run_id asyncio.Condition for event subscription
         self._conditions: dict[str, asyncio.Condition] = {}
-
-    # ------------------------------------------------------------------
-    # HTTP helpers
-    # ------------------------------------------------------------------
-
-    def _headers(self) -> dict[str, str]:
-        return {
-            "Authorization": f"Bearer {self._api_key}",
-            "Content-Type": "application/json",
-        }
-
-    def _client(self) -> httpx.AsyncClient:
-        """Create a fresh async HTTP client.
-
-        Following the cloud pattern: a new client per operation to avoid
-        issues with shared state across concurrent async tasks.
-        """
-        return httpx.AsyncClient(
-            base_url=self._base_url,
-            headers=self._headers(),
-            params={"project_id": self._project_id},
-        )
-
-    async def _search(
-        self,
-        collection: str,
-        filters: dict[str, Any] | None = None,
-        page_size: int = 100,
-    ) -> list[dict[str, Any]]:
-        """Search the Agent Data API and return matching items."""
-        body: dict[str, Any] = {
-            "deployment_name": self._deployment_name,
-            "collection": collection,
-            "page_size": page_size,
-        }
-        if filters:
-            body["filter"] = filters
-        async with self._client() as client:
-            resp = await client.post("/api/v1/beta/agent-data/:search", json=body)
-            resp.raise_for_status()
-            return resp.json().get("items", [])
-
-    async def _create(self, collection: str, data: dict[str, Any]) -> dict[str, Any]:
-        """Create an item in the Agent Data API."""
-        body = {
-            "deployment_name": self._deployment_name,
-            "collection": collection,
-            "data": data,
-        }
-        async with self._client() as client:
-            resp = await client.post("/api/v1/beta/agent-data", json=body)
-            resp.raise_for_status()
-            return resp.json()
-
-    async def _update_item(self, item_id: str, data: dict[str, Any]) -> dict[str, Any]:
-        """Update an existing item by its Agent Data API ID."""
-        async with self._client() as client:
-            resp = await client.put(
-                f"/api/v1/beta/agent-data/{item_id}",
-                json={"data": data},
-            )
-            resp.raise_for_status()
-            return resp.json()
-
-    async def _delete_item(self, item_id: str) -> None:
-        """Delete an item by its Agent Data API ID."""
-        async with self._client() as client:
-            resp = await client.delete(f"/api/v1/beta/agent-data/{item_id}")
-            resp.raise_for_status()
 
     # ------------------------------------------------------------------
     # Condition helpers (same pattern as MemoryWorkflowStore)
@@ -193,9 +126,14 @@ class AgentDataStore(AbstractWorkflowStore):
             else:
                 filters["status"] = {"includes": query.status_in}
 
-        # is_idle filter: idle_since is non-null when idle
-        # The Agent Data API doesn't have direct null checks, so we filter
-        # client-side for is_idle in query() instead.
+        if query.is_idle is not None:
+            if query.is_idle:
+                # idle_since is non-null: any ISO datetime is lexicographically > ""
+                # TODO: replace with {"idle_since": {"ne": null}} once ne operator is available
+                filters["idle_since"] = {"gt": ""}
+            else:
+                # idle_since is null/missing: eq null maps to IS NULL check
+                filters["idle_since"] = {"eq": None}
 
         return filters if filters else None
 
@@ -216,15 +154,8 @@ class AgentDataStore(AbstractWorkflowStore):
         ):
             return []
 
-        items = await self._search(self._collection, filters)
+        items = await self._client.search(self._collection, filters)
         handlers = [self._item_to_handler(item) for item in items]
-
-        # Client-side is_idle filtering (API can't filter on null/non-null)
-        if query.is_idle is not None:
-            handlers = [
-                h for h in handlers if (h.idle_since is not None) == query.is_idle
-            ]
-
         return handlers
 
     async def update(self, handler: PersistentHandler) -> None:
@@ -235,20 +166,20 @@ class AgentDataStore(AbstractWorkflowStore):
             # Check cache for existing agent_data_id
             cached_id = self._id_cache.get(handler_id)
             if cached_id is not None:
-                await self._update_item(cached_id, data)
+                await self._client.update_item(cached_id, data)
                 return
 
             # Search for existing item
-            items = await self._search(
+            items = await self._client.search(
                 self._collection,
                 {"handler_id": {"eq": handler_id}},
             )
             if items:
                 item_id = items[0]["id"]
                 self._id_cache.put(handler_id, item_id)
-                await self._update_item(item_id, data)
+                await self._client.update_item(item_id, data)
             else:
-                result = await self._create(self._collection, data)
+                result = await self._client.create(self._collection, data)
                 self._id_cache.put(handler_id, result["id"])
 
     async def delete(self, query: HandlerQuery) -> int:
@@ -259,16 +190,16 @@ class AgentDataStore(AbstractWorkflowStore):
             async with self._locks(handler_id):
                 cached_id = self._id_cache.get(handler_id)
                 if cached_id is not None:
-                    await self._delete_item(cached_id)
+                    await self._client.delete_item(cached_id)
                     self._id_cache.delete(handler_id)
                     count += 1
                 else:
-                    items = await self._search(
+                    items = await self._client.search(
                         self._collection,
                         {"handler_id": {"eq": handler_id}},
                     )
                     for item in items:
-                        await self._delete_item(item["id"])
+                        await self._client.delete_item(item["id"])
                         count += 1
                     self._id_cache.delete(handler_id)
         return count
@@ -292,7 +223,7 @@ class AgentDataStore(AbstractWorkflowStore):
             timestamp=now,
             event=event,
         )
-        await self._create(
+        await self._client.create(
             self._events_collection,
             stored.model_dump(mode="json"),
         )
@@ -311,7 +242,7 @@ class AgentDataStore(AbstractWorkflowStore):
         if after_sequence is not None:
             filters["sequence"] = {"gte": after_sequence + 1}
 
-        items = await self._search(
+        items = await self._client.search(
             self._events_collection,
             filters,
             page_size=limit or 1000,
@@ -381,13 +312,13 @@ class AgentDataStore(AbstractWorkflowStore):
             timestamp=now,
             tick_data=tick_data,
         )
-        await self._create(
+        await self._client.create(
             self._ticks_collection,
             stored.model_dump(mode="json"),
         )
 
     async def get_ticks(self, run_id: str) -> list[StoredTick]:
-        items = await self._search(
+        items = await self._client.search(
             self._ticks_collection,
             {"run_id": {"eq": run_id}},
         )
@@ -407,12 +338,8 @@ class AgentDataStore(AbstractWorkflowStore):
         serializer: BaseSerializer | None = None,
     ) -> StateStore[Any]:
         return AgentDataStateStore(  # type: ignore[return-value]
-            base_url=self._base_url,
-            api_key=self._api_key,
-            project_id=self._project_id,
-            deployment_name=self._deployment_name,
+            client=self._client,
             run_id=run_id,
             state_type=state_type,
             collection=f"{self._collection}_state",
-            client_factory=self._client,
         )
