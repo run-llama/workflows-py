@@ -9,7 +9,6 @@ every method to it. Subclasses override only the methods they need to customise.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from contextlib import contextmanager
 from typing import Any, AsyncGenerator, Generator
@@ -22,12 +21,13 @@ from workflows.events import (
     StopEvent,
 )
 from workflows.runtime.types.internal_state import BrokerState
-from workflows.runtime.types.named_task import NamedTask
+from workflows.runtime.types.named_task import NamedTask, PendingStart
 from workflows.runtime.types.plugin import (
     ExternalRunAdapter,
     InternalRunAdapter,
     RegisteredWorkflow,
     Runtime,
+    WaitForNextTaskResult,
     WaitResult,
 )
 from workflows.runtime.types.ticks import WorkflowTick
@@ -145,10 +145,11 @@ class BaseInternalRunAdapterDecorator(InternalRunAdapter):
 
     async def wait_for_next_task(
         self,
-        task_set: list[NamedTask],
+        running: list[NamedTask],
+        pending: list[PendingStart],
         timeout: float | None = None,
-    ) -> asyncio.Task[Any] | None:
-        return await self._decorated.wait_for_next_task(task_set, timeout)
+    ) -> WaitForNextTaskResult:
+        return await self._decorated.wait_for_next_task(running, pending, timeout)
 
 
 class BaseExternalRunAdapterDecorator(ExternalRunAdapter):
