@@ -60,6 +60,9 @@ def _matches_query(handler: PersistentHandler, query: HandlerQuery) -> bool:
 
 class MemoryWorkflowStore(AbstractWorkflowStore):
     def __init__(self, max_completed: int | None = 1000) -> None:
+        if max_completed is not None and max_completed < 0:
+            raise ValueError("max_completed must be >= 0 or None")
+
         self.handlers: Dict[str, PersistentHandler] = {}
         self.events: Dict[str, List[StoredEvent]] = {}
         self.ticks: Dict[str, List[StoredTick]] = {}
@@ -128,10 +131,16 @@ class MemoryWorkflowStore(AbstractWorkflowStore):
 
         while len(self._terminal_queue) > self.max_completed:
             handler_id = self._terminal_queue.popleft()
-            handler = self.handlers.pop(handler_id, None)
+            handler = self.handlers.get(handler_id)
             if handler is None:
-                # Already removed (e.g. via delete()), skip
+                # Already removed (e.g. via delete()), skip.
                 continue
+            if not is_terminal_status(handler.status):
+                # Stale terminal-queue entry for a handler_id that was upserted
+                # into a newer non-terminal row.
+                continue
+
+            self.handlers.pop(handler_id, None)
             run_id = handler.run_id
             if run_id is not None:
                 self.events.pop(run_id, None)

@@ -402,6 +402,11 @@ async def test_max_completed_none_means_unlimited() -> None:
     assert len(await store.query(HandlerQuery())) == 50
 
 
+def test_max_completed_negative_raises_value_error() -> None:
+    with pytest.raises(ValueError, match="max_completed must be >= 0 or None"):
+        MemoryWorkflowStore(max_completed=-1)
+
+
 @pytest.mark.asyncio
 async def test_max_completed_evicts_oldest_when_exceeded() -> None:
     store = MemoryWorkflowStore(max_completed=3)
@@ -510,3 +515,30 @@ async def test_max_completed_eviction_via_update_handler_status() -> None:
     assert "h0" not in ids
     assert "h1" in ids
     assert "h2" in ids
+
+
+@pytest.mark.asyncio
+async def test_max_completed_ignores_stale_terminal_queue_entries() -> None:
+    store = MemoryWorkflowStore(max_completed=1)
+
+    await _insert(
+        store,
+        handler_id="shared",
+        status="completed",
+        run_id="run-old",
+        completed_at=_ts(0),
+    )
+    await _insert(store, handler_id="shared", status="running", run_id="run-active")
+
+    await _insert(
+        store,
+        handler_id="done-2",
+        status="completed",
+        run_id="run-2",
+        completed_at=_ts(1),
+    )
+
+    handlers = await store.query(HandlerQuery())
+    by_id = {handler.handler_id: handler for handler in handlers}
+    assert set(by_id) == {"shared", "done-2"}
+    assert by_id["shared"].status == "running"
