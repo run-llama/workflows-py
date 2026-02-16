@@ -3,10 +3,12 @@
 """Integration tests for AgentDataStore against the real LlamaCloud staging API.
 
 These tests exercise edge cases that the fake backend might not faithfully
-reproduce, particularly the idle_since gt "" workaround and sequence behavior.
+reproduce
 
-Run with:
-    set -a && source .env && set +a
+Must be run with llama cloud env vars set:
+    LLAMA_CLOUD_API_KEY=...
+    LLAMA_DEPLOY_PROJECT_ID=...
+    LLAMA_CLOUD_BASE_URL=...
     uv run pytest packages/llama-agents-integration-tests/tests/test_agent_data_store_staging.py -v -m llamacloud
 """
 
@@ -93,8 +95,7 @@ async def store() -> AsyncGenerator[AgentDataStore, None]:
 
 
 @pytest.mark.asyncio
-async def test_idle_filter_gt_empty_string(store: AgentDataStore) -> None:
-    """The gt '' trick correctly distinguishes idle vs non-idle handlers."""
+async def test_idle_filter(store: AgentDataStore) -> None:
     now = datetime.now(timezone.utc)
 
     await store.update(_handler("idle-h", idle_since=now, run_id="r1"))
