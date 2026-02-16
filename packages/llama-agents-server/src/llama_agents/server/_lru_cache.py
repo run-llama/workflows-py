@@ -37,7 +37,7 @@ class LRUCache(Generic[K, V]):
             self._data.popitem(last=False)
 
     def delete(self, key: K) -> None:
-        self._data.pop(key, None)  # type: ignore[arg-type]
+        self._data.pop(key, None)
 
     def __len__(self) -> int:
         return len(self._data)

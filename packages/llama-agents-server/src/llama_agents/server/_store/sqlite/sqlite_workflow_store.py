@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import sqlite3
 import weakref
@@ -64,11 +65,6 @@ class SqliteWorkflowStore(AbstractWorkflowStore):
         return store
 
     def _get_or_create_condition(self, run_id: str) -> asyncio.Condition:
-        """Get or create a condition for a run_id.
-
-        The caller is responsible for holding a strong reference to the
-        returned Condition for as long as it needs notifications.
-        """
         cond = self._conditions.get(run_id)
         if cond is None:
             cond = asyncio.Condition()
@@ -212,22 +208,22 @@ class SqliteWorkflowStore(AbstractWorkflowStore):
     ) -> AsyncIterator[StoredEvent]:
         condition = self._get_or_create_condition(run_id)
         cursor = after_sequence
+
         while True:
-            events = await self.query_events(run_id, after_sequence=cursor)
-            for event in events:
+            async with condition:
+                batch = await self.query_events(run_id, after_sequence=cursor)
+                if not batch:
+                    with contextlib.suppress(TimeoutError):
+                        await asyncio.wait_for(
+                            condition.wait(), timeout=self.poll_interval
+                        )
+                    batch = await self.query_events(run_id, after_sequence=cursor)
+
+            for event in batch:
                 yield event
                 cursor = event.sequence
                 if self._is_terminal_event(event):
                     return
-            if not events:
-                # Wait for notification or poll timeout
-                async with condition:
-                    try:
-                        await asyncio.wait_for(
-                            condition.wait(), timeout=self.poll_interval
-                        )
-                    except TimeoutError:
-                        pass
 
     async def append_tick(self, run_id: str, tick_data: dict[str, Any]) -> None:
         with self._connect() as conn:

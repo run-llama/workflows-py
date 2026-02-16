@@ -5,7 +5,9 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
+import weakref
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
 from typing import Any, List
@@ -49,6 +51,7 @@ class AgentDataStore(AbstractWorkflowStore):
         project_id: str,
         deployment_name: str,
         collection: str = "workflow_contexts",
+        poll_interval: float = 30.0,
     ) -> None:
         self._client = AgentDataClient(
             base_url=base_url,
@@ -57,6 +60,7 @@ class AgentDataStore(AbstractWorkflowStore):
             deployment_name=deployment_name,
         )
         self._collection = collection
+        self.poll_interval = poll_interval
 
         # Derived collection names for events and ticks
         self._events_collection = f"{collection}_events"
@@ -74,16 +78,20 @@ class AgentDataStore(AbstractWorkflowStore):
         self._seq_lock = asyncio.Lock()
 
         # Per-run_id asyncio.Condition for event subscription
-        self._conditions: dict[str, asyncio.Condition] = {}
+        self._conditions: weakref.WeakValueDictionary[str, asyncio.Condition] = (
+            weakref.WeakValueDictionary()
+        )
 
     # ------------------------------------------------------------------
-    # Condition helpers (same pattern as MemoryWorkflowStore)
+    # Notification helpers
     # ------------------------------------------------------------------
 
-    def _get_condition(self, run_id: str) -> asyncio.Condition:
-        if run_id not in self._conditions:
-            self._conditions[run_id] = asyncio.Condition()
-        return self._conditions[run_id]
+    def _get_or_create_condition(self, run_id: str) -> asyncio.Condition:
+        cond = self._conditions.get(run_id)
+        if cond is None:
+            cond = asyncio.Condition()
+            self._conditions[run_id] = cond
+        return cond
 
     async def _max_sequence(self, collection: str, run_id: str) -> int:
         """Query the API for the max sequence in a collection for a run_id.
@@ -244,9 +252,10 @@ class AgentDataStore(AbstractWorkflowStore):
             stored.model_dump(mode="json"),
         )
         # Notify subscribers
-        condition = self._get_condition(run_id)
-        async with condition:
-            condition.notify_all()
+        condition = self._conditions.get(run_id)
+        if condition is not None:
+            async with condition:
+                condition.notify_all()
 
     async def query_events(
         self,
@@ -272,42 +281,31 @@ class AgentDataStore(AbstractWorkflowStore):
         return events
 
     # ------------------------------------------------------------------
-    # Event subscription (condition-based, same as MemoryWorkflowStore)
+    # Event subscription
     # ------------------------------------------------------------------
 
     async def subscribe_events(
         self, run_id: str, after_sequence: int = -1
     ) -> AsyncIterator[StoredEvent]:
-        """Condition-based subscription — no polling.
-
-        Uses the same pattern as ``MemoryWorkflowStore``: an
-        ``asyncio.Condition`` per run_id is notified by ``append_event``,
-        and subscribers wait on it.
-        """
-        condition = self._get_condition(run_id)
+        """Condition-based subscription with timeout fallback."""
+        condition = self._get_or_create_condition(run_id)
         cursor = after_sequence
 
         while True:
-            events = await self.query_events(run_id, after_sequence=cursor)
-            for event in events:
+            async with condition:
+                batch = await self.query_events(run_id, after_sequence=cursor)
+                if not batch:
+                    with contextlib.suppress(TimeoutError):
+                        await asyncio.wait_for(
+                            condition.wait(), timeout=self.poll_interval
+                        )
+                    batch = await self.query_events(run_id, after_sequence=cursor)
+
+            for event in batch:
                 yield event
                 cursor = event.sequence
                 if self._is_terminal_event(event):
-                    self._conditions.pop(run_id, None)
                     return
-
-            # Check if run already terminated (late subscriber)
-            if cursor >= 0:
-                all_events = await self.query_events(run_id)
-                if all_events and self._is_terminal_event(all_events[-1]):
-                    self._conditions.pop(run_id, None)
-                    return
-
-            async with condition:
-                # Re-check before blocking
-                new_events = await self.query_events(run_id, after_sequence=cursor)
-                if not new_events:
-                    await condition.wait()
 
     # ------------------------------------------------------------------
     # Tick journal
@@ -357,7 +355,7 @@ class AgentDataStore(AbstractWorkflowStore):
         serialized_state: dict[str, Any] | None = None,
         serializer: BaseSerializer | None = None,
     ) -> StateStore[Any]:
-        return AgentDataStateStore(  # type: ignore[return-value]
+        return AgentDataStateStore(
             client=self._client,
             run_id=run_id,
             state_type=state_type,

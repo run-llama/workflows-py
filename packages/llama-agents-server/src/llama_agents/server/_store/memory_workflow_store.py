@@ -111,11 +111,6 @@ class MemoryWorkflowStore(AbstractWorkflowStore):
         return len(to_delete)
 
     def _get_or_create_condition(self, run_id: str) -> asyncio.Condition:
-        """Get or create a condition for a run_id.
-
-        The caller is responsible for holding a strong reference to the
-        returned Condition for as long as it needs notifications.
-        """
         cond = self._conditions.get(run_id)
         if cond is None:
             cond = asyncio.Condition()
@@ -177,7 +172,6 @@ class MemoryWorkflowStore(AbstractWorkflowStore):
         handle duplicate sequence numbers (which occur when multiple internal
         adapters share the same run_id).
         """
-        condition = self._get_or_create_condition(run_id)
         # Determine starting index: skip events with sequence <= after_sequence
         all_events = self.events.get(run_id, [])
         if after_sequence >= 0:
@@ -185,26 +179,22 @@ class MemoryWorkflowStore(AbstractWorkflowStore):
             for i, e in enumerate(all_events):
                 if e.sequence <= after_sequence:
                     cursor = i + 1
-            # cursor is now the index of the first event to yield
         else:
             cursor = 0
 
+        condition = self._get_or_create_condition(run_id)
+
         while True:
-            all_events = self.events.get(run_id, [])
-            batch = all_events[cursor:]
+            async with condition:
+                all_events = self.events.get(run_id, [])
+                batch = all_events[cursor:]
+                if not batch:
+                    await condition.wait()
+                    all_events = self.events.get(run_id, [])
+                    batch = all_events[cursor:]
+
             for event in batch:
                 yield event
                 cursor += 1
                 if self._is_terminal_event(event):
                     return
-            # Before waiting, check if the run already has a terminal event
-            # that we've already passed (e.g. cursor is beyond all events but
-            # the last event was terminal). This prevents hanging when a late
-            # subscriber joins after the run is fully complete.
-            if all_events and self._is_terminal_event(all_events[-1]):
-                return
-            # No new events — wait for the producer to notify
-            async with condition:
-                all_events = self.events.get(run_id, [])
-                if len(all_events) <= cursor:
-                    await condition.wait()
