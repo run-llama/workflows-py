@@ -19,6 +19,7 @@ from llama_agents_integration_tests.fake_agent_data import (
     FakeAgentDataBackend,
     create_agent_data_store,
 )
+from workflows.context.serializers import JsonSerializer
 from workflows.context.state_store import DictState
 from workflows.events import Event, StopEvent
 
@@ -396,3 +397,83 @@ async def test_update_uses_cache_on_second_call(store: AgentDataStore) -> None:
     await store.update(make_handler(handler_id="h1", status="completed"))
     result = await store.query(HandlerQuery(handler_id_in=["h1"]))
     assert result[0].status == "completed"
+
+
+# ---------------------------------------------------------------------------
+# Bug: sequence counters reset across store instances
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_sequence_continues_after_new_store_instance(
+    backend: FakeAgentDataBackend, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A new store instance should continue sequences from existing data.
+
+    Currently fails: in-memory counters reset to 0 on new instance, producing
+    duplicate sequence numbers. See plan: 2026-02-16-agent-data-staging-fixes.md
+    """
+    store1 = create_agent_data_store(backend, monkeypatch)
+    await store1.append_event("run-1", make_envelope(seq_label=0))
+    await store1.append_event("run-1", make_envelope(seq_label=1))
+
+    # Simulate server restart: new store instance, same backend
+    store2 = create_agent_data_store(backend, monkeypatch)
+    await store2.append_event("run-1", make_envelope(seq_label=2))
+
+    events = await store2.query_events("run-1")
+    sequences = [e.sequence for e in events]
+    # Should be [0, 1, 2] with no duplicates
+    assert sequences == [0, 1, 2], (
+        f"Expected unique sequences [0, 1, 2], got {sequences}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_tick_sequence_continues_after_new_store_instance(
+    backend: FakeAgentDataBackend, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Same as above but for ticks."""
+    store1 = create_agent_data_store(backend, monkeypatch)
+    await store1.append_tick("run-1", {"step": 0})
+    await store1.append_tick("run-1", {"step": 1})
+
+    store2 = create_agent_data_store(backend, monkeypatch)
+    await store2.append_tick("run-1", {"step": 2})
+
+    ticks = await store2.get_ticks("run-1")
+    sequences = [t.sequence for t in ticks]
+    assert sequences == [0, 1, 2], (
+        f"Expected unique sequences [0, 1, 2], got {sequences}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Bug: from_dict loses collection name
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_state_store_from_dict_preserves_collection(
+    store: AgentDataStore,
+) -> None:
+    """from_dict should produce a store pointing at the same collection.
+
+    Currently fails: to_dict doesn't serialize collection, so from_dict
+    defaults to 'workflow_state' instead of the original collection.
+    See plan: 2026-02-16-agent-data-staging-fixes.md
+    """
+    state_store = store.create_state_store("run-1")
+    await state_store.set(path="key", value="hello")
+
+    serialized = state_store.to_dict(JsonSerializer())
+    restored = AgentDataStateStore.from_dict(
+        serialized,
+        JsonSerializer(),
+        client=store._client,
+        run_id="run-1",
+    )
+
+    # Should be able to read data written by the original store
+    val = await restored.get("key")
+    assert val == "hello"
