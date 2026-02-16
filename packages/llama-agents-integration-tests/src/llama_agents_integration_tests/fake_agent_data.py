@@ -39,16 +39,20 @@ class FakeAgentDataBackend:
         collection: str,
         filters: dict[str, Any] | None = None,
         page_size: int = 100,
+        order_by: str | None = None,
     ) -> list[dict[str, Any]]:
         items = self._get_items(deployment_name, collection)
-        if not filters:
-            return items[:page_size]
+        if filters:
+            matched = [item for item in items if self._matches(item["data"], filters)]
+        else:
+            matched = list(items)
 
-        matched = []
-        for item in items:
-            data = item["data"]
-            if self._matches(data, filters):
-                matched.append(item)
+        if order_by:
+            parts = order_by.split()
+            field = parts[0]
+            reverse = len(parts) > 1 and parts[1].lower() == "desc"
+            matched.sort(key=lambda item: item["data"].get(field, 0), reverse=reverse)
+
         return matched[:page_size]
 
     @staticmethod
@@ -59,6 +63,8 @@ class FakeAgentDataBackend:
                 if op == "eq" and value != expected:
                     return False
                 if op == "includes" and value not in expected:
+                    return False
+                if op == "ne" and value == expected:
                     return False
                 if op == "gt" and (value is None or value <= expected):
                     return False
@@ -107,6 +113,7 @@ class FakeAgentDataBackend:
                 body["collection"],
                 body.get("filter"),
                 body.get("page_size", 100),
+                body.get("order_by"),
             )
             return httpx.Response(200, json={"items": items})
 

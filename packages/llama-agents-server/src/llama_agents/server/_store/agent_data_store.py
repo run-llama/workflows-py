@@ -85,6 +85,21 @@ class AgentDataStore(AbstractWorkflowStore):
             self._conditions[run_id] = asyncio.Condition()
         return self._conditions[run_id]
 
+    async def _max_sequence(self, collection: str, run_id: str) -> int:
+        """Query the API for the max sequence in a collection for a run_id.
+
+        Returns -1 if no items exist.
+        """
+        items = await self._client.search(
+            collection,
+            {"run_id": {"eq": run_id}},
+            page_size=1,
+            order_by="sequence desc",
+        )
+        if items:
+            return items[0]["data"].get("sequence", -1)
+        return -1
+
     # ------------------------------------------------------------------
     # Handler CRUD
     # ------------------------------------------------------------------
@@ -128,11 +143,8 @@ class AgentDataStore(AbstractWorkflowStore):
 
         if query.is_idle is not None:
             if query.is_idle:
-                # idle_since is non-null: any ISO datetime is lexicographically > ""
-                # TODO: replace with {"idle_since": {"ne": null}} once ne operator is available
-                filters["idle_since"] = {"gt": ""}
+                filters["idle_since"] = {"ne": None}
             else:
-                # idle_since is null/missing: eq null maps to IS NULL check
                 filters["idle_since"] = {"eq": None}
 
         return filters if filters else None
@@ -210,7 +222,11 @@ class AgentDataStore(AbstractWorkflowStore):
 
     async def _next_event_sequence(self, run_id: str) -> int:
         async with self._seq_lock:
-            seq = self._event_sequences.get(run_id, -1) + 1
+            if run_id not in self._event_sequences:
+                self._event_sequences[run_id] = await self._max_sequence(
+                    self._events_collection, run_id
+                )
+            seq = self._event_sequences[run_id] + 1
             self._event_sequences[run_id] = seq
             return seq
 
@@ -299,7 +315,11 @@ class AgentDataStore(AbstractWorkflowStore):
 
     async def _next_tick_sequence(self, run_id: str) -> int:
         async with self._seq_lock:
-            seq = self._tick_sequences.get(run_id, -1) + 1
+            if run_id not in self._tick_sequences:
+                self._tick_sequences[run_id] = await self._max_sequence(
+                    self._ticks_collection, run_id
+                )
+            seq = self._tick_sequences[run_id] + 1
             self._tick_sequences[run_id] = seq
             return seq
 

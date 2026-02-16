@@ -224,12 +224,10 @@ async def test_tick_append_and_ordering(store: AgentDataStore) -> None:
 
 @pytest.mark.asyncio
 async def test_event_sequence_new_store_instance_no_collision() -> None:
-    """A new AgentDataStore instance resets in-memory sequence counters.
+    """A new AgentDataStore instance seeds sequence counters from existing data.
 
-    This documents the current behavior: a second store instance pointing
-    at the same collection will restart sequence numbers from 0, producing
-    duplicates. The client-side sort by sequence still works, but sequences
-    are not globally unique across instances.
+    The second store instance queries the max existing sequence before appending,
+    so sequences are unique across instances.
     """
     collection = _unique_collection()
     run_id = f"run-{uuid.uuid4().hex[:8]}"
@@ -259,10 +257,11 @@ async def test_event_sequence_new_store_instance_no_collision() -> None:
 
         events = await store2.query_events(run_id)
         sequences = [e.sequence for e in events]
-        assert 0 in sequences
-        assert sequences.count(0) == 2, (
-            "Expected duplicate sequence 0 from two store instances"
+        assert len(sequences) == 3
+        assert len(set(sequences)) == 3, (
+            f"Expected all unique sequences, got {sequences}"
         )
+        assert sorted(sequences) == [0, 1, 2]
     finally:
         await _cleanup_store(store1)
 

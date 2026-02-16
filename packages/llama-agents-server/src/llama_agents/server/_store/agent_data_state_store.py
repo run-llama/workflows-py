@@ -36,6 +36,7 @@ class AgentDataSerializedState(BaseModel):
 
     store_type: Literal["agent_data"] = "agent_data"
     run_id: str
+    collection: str = "workflow_state"
 
 
 class AgentDataStateStore(Generic[MODEL_T]):
@@ -171,7 +172,9 @@ class AgentDataStateStore(Generic[MODEL_T]):
             await self._save_state(state)
 
     def to_dict(self, serializer: BaseSerializer) -> dict[str, Any]:
-        payload = AgentDataSerializedState(run_id=self._run_id)
+        payload = AgentDataSerializedState(
+            run_id=self._run_id, collection=self._collection
+        )
         return payload.model_dump()
 
     @classmethod
@@ -192,5 +195,6 @@ class AgentDataStateStore(Generic[MODEL_T]):
             client=client,
             run_id=effective_run_id,
             state_type=state_type,  # type: ignore[arg-type]
+            collection=parsed.collection,
             serializer=serializer,
         )

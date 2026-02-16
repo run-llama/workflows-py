@@ -57,6 +57,7 @@ class AgentDataClient:
         collection: str,
         filters: dict[str, Any] | None = None,
         page_size: int = 100,
+        order_by: str | None = None,
     ) -> list[dict[str, Any]]:
         """Search the Agent Data API and return matching items."""
         body: dict[str, Any] = {
@@ -66,6 +67,8 @@ class AgentDataClient:
         }
         if filters:
             body["filter"] = filters
+        if order_by:
+            body["order_by"] = order_by
         async with self.http_client() as client:
             resp = await client.post("/api/v1/beta/agent-data/:search", json=body)
             resp.raise_for_status()
