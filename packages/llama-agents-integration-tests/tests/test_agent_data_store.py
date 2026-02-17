@@ -1,18 +1,13 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 LlamaIndex Inc.
-"""Integration tests for AgentDataStore against the real LlamaCloud staging API.
-
-These tests exercise edge cases that the fake backend might not faithfully
-reproduce
-
-"""
+"""Tests for AgentDataStore against both a fake backend and the real LlamaCloud API."""
 
 from __future__ import annotations
 
 import os
 import uuid
 from datetime import datetime, timezone
-from typing import AsyncGenerator
+from typing import AsyncGenerator, Callable
 
 import pytest
 from llama_agents.client.protocol.serializable_events import EventEnvelopeWithMetadata
@@ -20,14 +15,16 @@ from llama_agents.server import HandlerQuery, PersistentHandler
 from llama_agents.server._store.abstract_workflow_store import Status
 from llama_agents.server._store.agent_data_state_store import AgentDataStateStore
 from llama_agents.server._store.agent_data_store import AgentDataStore
+from llama_agents_integration_tests.fake_agent_data import (
+    FakeAgentDataBackend,
+    create_agent_data_store,
+)
 from workflows.context.state_store import DictState
 from workflows.events import Event
 
 _API_KEY = os.environ.get("LLAMA_CLOUD_API_KEY", "")
 _BASE_URL = os.environ.get("LLAMA_CLOUD_BASE_URL", "https://api.cloud.llamaindex.ai")
 _PROJECT_ID = os.environ.get("LLAMA_DEPLOY_PROJECT_ID", "")
-
-pytestmark = pytest.mark.llamacloud
 
 
 def _unique_collection() -> str:
@@ -77,11 +74,47 @@ def _event_envelope(event: Event) -> EventEnvelopeWithMetadata:
     return EventEnvelopeWithMetadata.from_event(event)
 
 
-@pytest.fixture()
-async def store() -> AsyncGenerator[AgentDataStore, None]:
-    s = _make_store()
+@pytest.fixture(
+    params=[
+        "fake",
+        pytest.param("real", marks=pytest.mark.llamacloud),
+    ]
+)
+async def store(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> AsyncGenerator[AgentDataStore, None]:
+    if request.param == "fake":
+        s = create_agent_data_store(FakeAgentDataBackend(), monkeypatch)
+    else:
+        s = _make_store()
     yield s
-    await _cleanup_store(s)
+    if request.param == "real":
+        await _cleanup_store(s)
+
+
+@pytest.fixture(
+    params=[
+        "fake",
+        pytest.param("real", marks=pytest.mark.llamacloud),
+    ]
+)
+def store_factory(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> Callable[[], AgentDataStore]:
+    if request.param == "fake":
+        backend = FakeAgentDataBackend()
+
+        def make_fake() -> AgentDataStore:
+            return create_agent_data_store(backend, monkeypatch)
+
+        return make_fake
+    else:
+        collection = _unique_collection()
+
+        def make_real() -> AgentDataStore:
+            return _make_store(collection)
+
+        return make_real
 
 
 # ---------------------------------------------------------------------------
@@ -134,7 +167,7 @@ async def test_idle_filter_after_clearing_idle_since(store: AgentDataStore) -> N
 
 @pytest.mark.asyncio
 async def test_handler_create_query_update_delete(store: AgentDataStore) -> None:
-    """Full handler lifecycle against the real API."""
+    """Full handler lifecycle."""
     h = _handler("crud-h", run_id="r1", status="running")
     await store.update(h)
 
@@ -161,7 +194,7 @@ async def test_handler_create_query_update_delete(store: AgentDataStore) -> None
 
 @pytest.mark.asyncio
 async def test_event_append_and_query_ordering(store: AgentDataStore) -> None:
-    """Events are returned in sequence order from the real API."""
+    """Events are returned in sequence order."""
     run_id = f"run-{uuid.uuid4().hex[:8]}"
 
     class Msg(Event):
@@ -178,7 +211,7 @@ async def test_event_append_and_query_ordering(store: AgentDataStore) -> None:
 
 @pytest.mark.asyncio
 async def test_event_query_after_sequence(store: AgentDataStore) -> None:
-    """after_sequence filter works against the real API."""
+    """after_sequence filter works correctly."""
     run_id = f"run-{uuid.uuid4().hex[:8]}"
 
     class Ping(Event):
@@ -219,36 +252,25 @@ async def test_tick_append_and_ordering(store: AgentDataStore) -> None:
 
 
 @pytest.mark.asyncio
-async def test_event_sequence_new_store_instance_no_collision() -> None:
+async def test_event_sequence_new_store_instance_no_collision(
+    store_factory: Callable[[], AgentDataStore],
+) -> None:
     """A new AgentDataStore instance seeds sequence counters from existing data.
 
     The second store instance queries the max existing sequence before appending,
     so sequences are unique across instances.
     """
-    collection = _unique_collection()
     run_id = f"run-{uuid.uuid4().hex[:8]}"
 
     class Note(Event):
         text: str
 
-    store1 = AgentDataStore(
-        base_url=_BASE_URL,
-        api_key=_API_KEY,
-        project_id=_PROJECT_ID,
-        deployment_name="_public",
-        collection=collection,
-    )
+    store1 = store_factory()
     try:
         await store1.append_event(run_id, _event_envelope(Note(text="from-store1-0")))
         await store1.append_event(run_id, _event_envelope(Note(text="from-store1-1")))
 
-        store2 = AgentDataStore(
-            base_url=_BASE_URL,
-            api_key=_API_KEY,
-            project_id=_PROJECT_ID,
-            deployment_name="_public",
-            collection=collection,
-        )
+        store2 = store_factory()
         await store2.append_event(run_id, _event_envelope(Note(text="from-store2-0")))
 
         events = await store2.query_events(run_id)
@@ -269,7 +291,7 @@ async def test_event_sequence_new_store_instance_no_collision() -> None:
 
 @pytest.mark.asyncio
 async def test_state_store_set_get_round_trip(store: AgentDataStore) -> None:
-    """State store persists and loads state from the real API."""
+    """State store persists and loads state."""
     run_id = f"run-{uuid.uuid4().hex[:8]}"
     state_store = store.create_state_store(run_id)
 
@@ -324,7 +346,7 @@ async def test_state_store_edit_state_context_manager(store: AgentDataStore) -> 
 
 @pytest.mark.asyncio
 async def test_query_by_status_and_workflow_name(store: AgentDataStore) -> None:
-    """Multi-field queries work against the real API."""
+    """Multi-field queries work correctly."""
     await store.update(
         _handler("h1", workflow_name="wf-a", status="running", run_id="r1")
     )
