@@ -101,6 +101,18 @@ class FakeAgentDataBackend:
                     return
         raise ValueError(f"Item {item_id} not found")
 
+    def delete_many(
+        self,
+        deployment_name: str,
+        collection: str,
+        filters: dict[str, Any],
+    ) -> int:
+        items = self._get_items(deployment_name, collection)
+        matched = [item for item in items if self._matches(item["data"], filters)]
+        for item in matched:
+            items.remove(item)
+        return len(matched)
+
     def handle_request(self, request: httpx.Request) -> httpx.Response:
         """Route an httpx.Request to the appropriate handler."""
         path = request.url.path
@@ -116,6 +128,15 @@ class FakeAgentDataBackend:
                 body.get("order_by"),
             )
             return httpx.Response(200, json={"items": items})
+
+        if method == "POST" and path == "/api/v1/beta/agent-data/:delete":
+            body = json.loads(request.content)
+            count = self.delete_many(
+                body["deployment_name"],
+                body["collection"],
+                body.get("filter", {}),
+            )
+            return httpx.Response(200, json={"deleted_count": count})
 
         if method == "POST" and path == "/api/v1/beta/agent-data":
             body = json.loads(request.content)

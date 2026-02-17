@@ -129,10 +129,10 @@ class AgentDataStateStore(Generic[MODEL_T]):
             return self._deserialize_state(record.data)
         return None
 
-    async def _save_state(self, state: MODEL_T) -> None:
+    async def _save_state(self, state: BaseModel) -> None:
         record = _StoredStateRecord(
             run_id=self._run_id,
-            data=self._serialize_state(state),
+            data=self._serialize_state(state),  # type: ignore[arg-type]
         )
         payload = record.model_dump()
         if self._item_id is not None:
@@ -165,7 +165,7 @@ class AgentDataStateStore(Generic[MODEL_T]):
             await self._save_state(state)
             return
         merged = merge_state(current, state)
-        await self._save_state(merged)  # type: ignore[arg-type]
+        await self._save_state(merged)
 
     async def get(self, path: str, default: Any = ...) -> Any:
         state = await self._load_state()

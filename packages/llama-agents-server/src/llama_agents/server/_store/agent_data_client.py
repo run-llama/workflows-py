@@ -101,3 +101,19 @@ class AgentDataClient:
         async with self.http_client() as client:
             resp = await client.delete(f"/api/v1/beta/agent-data/{item_id}")
             resp.raise_for_status()
+
+    async def delete_many(
+        self,
+        collection: str,
+        filters: dict[str, Any],
+    ) -> int:
+        """Delete items matching the given filters. Returns the number deleted."""
+        body: dict[str, Any] = {
+            "deployment_name": self._deployment_name,
+            "collection": collection,
+            "filter": filters,
+        }
+        async with self.http_client() as client:
+            resp = await client.post("/api/v1/beta/agent-data/:delete", json=body)
+            resp.raise_for_status()
+            return resp.json().get("deleted_count", 0)

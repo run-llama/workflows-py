@@ -196,13 +196,17 @@ class AgentDataStore(AbstractWorkflowStore):
         if filters is None:
             return 0
 
+        # Invalidate cached IDs for matching handlers before bulk delete
         items = await self._client.search(self._collection, filters or None)
         for item in items:
             handler_id = item["data"].get("handler_id")
             if handler_id:
                 self._id_cache.delete(handler_id)
-            await self._client.delete_item(item["id"])
-        return len(items)
+
+        if not items:
+            return 0
+
+        return await self._client.delete_many(self._collection, filters or {})
 
     # ------------------------------------------------------------------
     # Event journal
