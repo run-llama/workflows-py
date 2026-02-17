@@ -30,6 +30,16 @@ logger = logging.getLogger(__name__)
 
 MODEL_T = TypeVar("MODEL_T", bound=BaseModel, default=DictState)  # type: ignore[reportGeneralTypeIssues]
 
+_FIELD_RUN_ID = "run_id"
+_FIELD_DATA = "data"
+
+
+class _StoredStateRecord(BaseModel):
+    """Validates the shape persisted in the Agent Data API."""
+
+    run_id: str
+    data: str
+
 
 class AgentDataSerializedState(BaseModel):
     """Serialized state referencing an agent data store."""
@@ -94,47 +104,51 @@ class AgentDataStateStore(Generic[MODEL_T]):
     # Load / save through API
     # ------------------------------------------------------------------
 
-    async def _load_state(self) -> MODEL_T:
-        # Point lookup by run_id — only need 1 result
+    async def _load_record(self) -> _StoredStateRecord | None:
         items = await self._client.search(
-            self._collection, {"run_id": {"eq": self._run_id}}, page_size=1
+            self._collection,
+            {_FIELD_RUN_ID: {"eq": self._run_id}},
+            page_size=1,
         )
-        if items:
-            self._item_id = items[0]["id"]
-            return self._deserialize_state(items[0]["data"]["state_json"])
+        if not items:
+            return None
+        self._item_id = items[0]["id"]
+        return _StoredStateRecord.model_validate(items[0]["data"])
+
+    async def _load_state(self) -> MODEL_T:
+        record = await self._load_record()
+        if record is not None:
+            return self._deserialize_state(record.data)
         state = self._create_default_state()
         await self._save_state(state)
         return state
 
     async def _load_state_or_none(self) -> MODEL_T | None:
-        items = await self._client.search(
-            self._collection, {"run_id": {"eq": self._run_id}}, page_size=1
-        )
-        if items:
-            self._item_id = items[0]["id"]
-            return self._deserialize_state(items[0]["data"]["state_json"])
+        record = await self._load_record()
+        if record is not None:
+            return self._deserialize_state(record.data)
         return None
 
     async def _save_state(self, state: MODEL_T) -> None:
-        state_json = self._serialize_state(state)
-        data = {
-            "run_id": self._run_id,
-            "state_json": state_json,
-            "state_type": type(state).__name__,
-            "state_module": type(state).__module__,
-        }
+        record = _StoredStateRecord(
+            run_id=self._run_id,
+            data=self._serialize_state(state),
+        )
+        payload = record.model_dump()
         if self._item_id is not None:
-            await self._client.update_item(self._item_id, data)
+            await self._client.update_item(self._item_id, payload)
         else:
             items = await self._client.search(
-                self._collection, {"run_id": {"eq": self._run_id}}, page_size=1
+                self._collection,
+                {_FIELD_RUN_ID: {"eq": self._run_id}},
+                page_size=1,
             )
             if items:
                 item_id = items[0]["id"]
                 self._item_id = item_id
-                await self._client.update_item(item_id, data)
+                await self._client.update_item(item_id, payload)
             else:
-                result = await self._client.create(self._collection, data)
+                result = await self._client.create(self._collection, payload)
                 self._item_id = result["id"]
 
     # ------------------------------------------------------------------

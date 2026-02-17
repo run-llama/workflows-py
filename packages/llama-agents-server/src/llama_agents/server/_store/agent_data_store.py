@@ -113,41 +113,36 @@ class AgentDataStore(AbstractWorkflowStore):
     # ------------------------------------------------------------------
 
     @staticmethod
+    def _in_filter(field: str, values: list[Any] | None) -> tuple[bool, dict[str, Any]]:
+        """Build an ``includes`` filter for *field*.
+
+        Returns ``(ok, filter_fragment)`` where *ok* is ``False`` when the
+        caller should short-circuit with "match nothing" (empty list).
+        """
+        if values is None:
+            return True, {}
+        if len(values) == 0:
+            return False, {}
+        return True, {field: {"includes": values}}
+
+    @staticmethod
     def _build_handler_filters(query: HandlerQuery) -> dict[str, Any] | None:
-        """Convert a HandlerQuery to Agent Data API filter format."""
+        """Convert a HandlerQuery to Agent Data API filter format.
+
+        Returns ``{}`` for "match everything" or ``None`` for "match nothing".
+        """
         filters: dict[str, Any] = {}
 
-        if query.handler_id_in is not None:
-            if len(query.handler_id_in) == 0:
-                return None  # empty list → match nothing
-            if len(query.handler_id_in) == 1:
-                filters["handler_id"] = {"eq": query.handler_id_in[0]}
-            else:
-                filters["handler_id"] = {"includes": query.handler_id_in}
-
-        if query.run_id_in is not None:
-            if len(query.run_id_in) == 0:
+        for field, values in [
+            ("handler_id", query.handler_id_in),
+            ("run_id", query.run_id_in),
+            ("workflow_name", query.workflow_name_in),
+            ("status", query.status_in),
+        ]:
+            ok, fragment = AgentDataStore._in_filter(field, values)
+            if not ok:
                 return None
-            if len(query.run_id_in) == 1:
-                filters["run_id"] = {"eq": query.run_id_in[0]}
-            else:
-                filters["run_id"] = {"includes": query.run_id_in}
-
-        if query.workflow_name_in is not None:
-            if len(query.workflow_name_in) == 0:
-                return None
-            if len(query.workflow_name_in) == 1:
-                filters["workflow_name"] = {"eq": query.workflow_name_in[0]}
-            else:
-                filters["workflow_name"] = {"includes": query.workflow_name_in}
-
-        if query.status_in is not None:
-            if len(query.status_in) == 0:
-                return None
-            if len(query.status_in) == 1:
-                filters["status"] = {"eq": query.status_in[0]}
-            else:
-                filters["status"] = {"includes": query.status_in}
+            filters.update(fragment)
 
         if query.is_idle is not None:
             if query.is_idle:
@@ -155,7 +150,7 @@ class AgentDataStore(AbstractWorkflowStore):
             else:
                 filters["idle_since"] = {"eq": None}
 
-        return filters if filters else None
+        return filters
 
     @staticmethod
     def _item_to_handler(item: dict[str, Any]) -> PersistentHandler:
@@ -165,16 +160,10 @@ class AgentDataStore(AbstractWorkflowStore):
 
     async def query(self, query: HandlerQuery) -> List[PersistentHandler]:
         filters = self._build_handler_filters(query)
-        # None means an empty filter list was given → match nothing
-        if filters is None and (
-            query.handler_id_in is not None
-            or query.run_id_in is not None
-            or query.workflow_name_in is not None
-            or query.status_in is not None
-        ):
+        if filters is None:
             return []
 
-        items = await self._client.search(self._collection, filters)
+        items = await self._client.search(self._collection, filters or None)
         handlers = [self._item_to_handler(item) for item in items]
         return handlers
 
@@ -203,26 +192,17 @@ class AgentDataStore(AbstractWorkflowStore):
                 self._id_cache.put(handler_id, result["id"])
 
     async def delete(self, query: HandlerQuery) -> int:
-        handlers = await self.query(query)
-        count = 0
-        for handler in handlers:
-            handler_id = handler.handler_id
-            async with self._locks(handler_id):
-                cached_id = self._id_cache.get(handler_id)
-                if cached_id is not None:
-                    await self._client.delete_item(cached_id)
-                    self._id_cache.delete(handler_id)
-                    count += 1
-                else:
-                    items = await self._client.search(
-                        self._collection,
-                        {"handler_id": {"eq": handler_id}},
-                    )
-                    for item in items:
-                        await self._client.delete_item(item["id"])
-                        count += 1
-                    self._id_cache.delete(handler_id)
-        return count
+        filters = self._build_handler_filters(query)
+        if filters is None:
+            return 0
+
+        items = await self._client.search(self._collection, filters or None)
+        for item in items:
+            handler_id = item["data"].get("handler_id")
+            if handler_id:
+                self._id_cache.delete(handler_id)
+            await self._client.delete_item(item["id"])
+        return len(items)
 
     # ------------------------------------------------------------------
     # Event journal
@@ -251,9 +231,7 @@ class AgentDataStore(AbstractWorkflowStore):
             self._events_collection,
             stored.model_dump(mode="json"),
         )
-        # Notify subscribers
-        condition = self._conditions.get(run_id)
-        if condition is not None:
+        if condition := self._conditions.get(run_id):
             async with condition:
                 condition.notify_all()
 
@@ -271,11 +249,10 @@ class AgentDataStore(AbstractWorkflowStore):
             self._events_collection,
             filters,
             page_size=limit or 1000,
+            order_by="sequence",
         )
 
         events = [StoredEvent.model_validate(item["data"]) for item in items]
-        # Sort client-side (API may not guarantee order)
-        events.sort(key=lambda e: e.sequence)
         if limit is not None:
             events = events[:limit]
         return events
@@ -336,13 +313,27 @@ class AgentDataStore(AbstractWorkflowStore):
         )
 
     async def get_ticks(self, run_id: str) -> list[StoredTick]:
-        items = await self._client.search(
-            self._ticks_collection,
-            {"run_id": {"eq": run_id}},
-        )
-        ticks = [StoredTick.model_validate(item["data"]) for item in items]
-        ticks.sort(key=lambda t: t.sequence)
-        return ticks
+        page_size = 100
+        all_items: list[dict[str, Any]] = []
+        last_sequence = -1
+
+        while True:
+            filters: dict[str, Any] = {
+                "run_id": {"eq": run_id},
+                "sequence": {"gt": last_sequence},
+            }
+            page = await self._client.search(
+                self._ticks_collection,
+                filters,
+                page_size=page_size,
+                order_by="sequence",
+            )
+            all_items.extend(page)
+            if len(page) < page_size:
+                break
+            last_sequence = page[-1]["data"]["sequence"]
+
+        return [StoredTick.model_validate(item["data"]) for item in all_items]
 
     # ------------------------------------------------------------------
     # State store
