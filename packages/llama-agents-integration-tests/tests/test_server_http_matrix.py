@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import asyncio
 import socket
-import time
 from pathlib import Path
 from typing import Any, AsyncGenerator
 
@@ -17,6 +16,7 @@ from dbos import DBOS, DBOSConfig
 from llama_agents.client.client import WorkflowClient
 from llama_agents.dbos import DBOSRuntime
 from llama_agents.server import MemoryWorkflowStore, SqliteWorkflowStore, WorkflowServer
+from llama_agents_integration_tests.server_test_utils import wait_for_passing
 from testcontainers.postgres import PostgresContainer
 from workflows import Context, Workflow, step
 from workflows.events import (
@@ -93,24 +93,6 @@ class WaitingWorkflow(Workflow):
     async def start_and_wait(self, ctx: Context, ev: StartEvent) -> StopEvent:
         external = await ctx.wait_for_event(WaitableExternalEvent)
         return StopEvent(result=f"received: {external.response}")
-
-
-# Helper functions
-async def wait_for_passing(
-    func: Any, max_duration: float = 5.0, interval: float = 0.05
-) -> Any:
-    start_time = time.monotonic()
-    last_exception = None
-    while time.monotonic() - start_time < max_duration:
-        remaining = max_duration - (time.monotonic() - start_time)
-        try:
-            return await asyncio.wait_for(func(), timeout=remaining)
-        except Exception as e:
-            last_exception = e
-            await asyncio.sleep(interval)
-    raise last_exception or TimeoutError(
-        f"wait_for_passing timed out after {max_duration}s"
-    )
 
 
 class live_server:

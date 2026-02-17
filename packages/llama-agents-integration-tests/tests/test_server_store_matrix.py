@@ -7,9 +7,8 @@ from __future__ import annotations
 
 import asyncio
 import socket
-import time
 from contextlib import asynccontextmanager
-from typing import Any, AsyncGenerator, Awaitable, Callable, TypeVar
+from typing import Any, AsyncGenerator, Callable
 
 import httpx
 import pytest
@@ -26,6 +25,7 @@ from llama_agents_integration_tests.fake_agent_data import (
     create_agent_data_store,
 )
 from llama_agents_integration_tests.postgres import get_asyncpg_dsn
+from llama_agents_integration_tests.server_test_utils import wait_for_passing
 from workflows import Context, Workflow, step
 from workflows.events import (
     Event,
@@ -35,9 +35,6 @@ from workflows.events import (
     StopEvent,
 )
 
-T = TypeVar("T")
-
-
 # -- Utilities --
 
 
@@ -46,25 +43,6 @@ async def _get_handler_raw(base_url: str, handler_id: str) -> dict[str, Any]:
     async with httpx.AsyncClient(base_url=base_url, timeout=5.0) as client:
         resp = await client.get(f"/handlers/{handler_id}")
         return resp.json()  # type: ignore[no-any-return]
-
-
-async def wait_for_passing(
-    func: Callable[[], Awaitable[T]],
-    max_duration: float = 5.0,
-    interval: float = 0.05,
-) -> T:
-    start_time = time.monotonic()
-    last_exception: Exception | None = None
-    while time.monotonic() - start_time < max_duration:
-        remaining_duration = max_duration - (time.monotonic() - start_time)
-        try:
-            return await asyncio.wait_for(func(), timeout=remaining_duration)
-        except Exception as e:
-            last_exception = e
-            await asyncio.sleep(interval)
-    if last_exception:
-        raise last_exception
-    raise TimeoutError(f"Timed out after {max_duration}s")
 
 
 @asynccontextmanager
@@ -402,21 +380,13 @@ async def test_cursor_resume(
     assert result.status == "completed"
     handler_id = result.handler_id
 
-    # Now fetch events with after_sequence to get only later events
-    async with httpx.AsyncClient(base_url=base_url, timeout=5.0) as http_client:
-        async with http_client.stream(
-            "GET",
-            f"/events/{handler_id}",
-            params={"sse": "false", "after_sequence": "1"},
-            headers={"Connection": "keep-alive"},
-        ) as response:
-            lines = []
-            async for line in response.aiter_lines():
-                if line.strip():
-                    lines.append(line)
+    # Fetch events after sequence 1 using client API
+    events = []
+    async for ev in client.get_workflow_events(handler_id, after_sequence=1):
+        events.append(ev)
 
     # Should have events after sequence 1 (i.e. sequence 2+ and StopEvent)
-    assert len(lines) >= 1
+    assert len(events) >= 1
 
 
 @pytest.mark.asyncio
@@ -439,25 +409,71 @@ async def test_concurrent_workflows(
     await wait_for_passing(all_completed)
 
 
-# -- Durability tests (sqlite only) --
+# -- Durability tests (parameterized across durable stores) --
+
+
+@pytest.fixture(
+    params=[
+        "sqlite",
+        "agent_data",
+        pytest.param("postgres", marks=pytest.mark.docker),
+    ]
+)
+def durable_server_factory(
+    request: pytest.FixtureRequest,
+    tmp_path_factory: pytest.TempPathFactory,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Callable[[], WorkflowServer]:
+    """Factory that creates a WorkflowServer with a durable store.
+
+    Calling the factory multiple times reuses the same underlying storage,
+    which is essential for restart/reload tests.
+    """
+    store_type: str = request.param
+
+    if store_type == "sqlite":
+        db_path = str(tmp_path_factory.mktemp("sqlite_durable") / "test.db")
+
+        def make_server() -> WorkflowServer:
+            store = SqliteWorkflowStore(db_path)
+            server = WorkflowServer(workflow_store=store)
+            server.add_workflow(
+                "interactive", InteractiveWorkflow(), additional_events=[ExternalEvent]
+            )
+            return server
+
+    elif store_type == "agent_data":
+        backend = FakeAgentDataBackend()
+
+        def make_server() -> WorkflowServer:
+            store = create_agent_data_store(backend, monkeypatch)
+            server = WorkflowServer(workflow_store=store)
+            server.add_workflow(
+                "interactive", InteractiveWorkflow(), additional_events=[ExternalEvent]
+            )
+            return server
+
+    else:
+        postgres_container = request.getfixturevalue("postgres_container")
+        dsn = get_asyncpg_dsn(postgres_container)
+
+        def make_server() -> WorkflowServer:
+            pg_store = PostgresWorkflowStore(dsn=dsn)
+            server = WorkflowServer(workflow_store=pg_store)
+            server.add_workflow(
+                "interactive", InteractiveWorkflow(), additional_events=[ExternalEvent]
+            )
+            return server
+
+    return make_server
 
 
 @pytest.mark.asyncio
 async def test_server_restart_resumes_workflow(
-    tmp_path_factory: pytest.TempPathFactory,
+    durable_server_factory: Callable[[], WorkflowServer],
 ) -> None:
-    db_path = str(tmp_path_factory.mktemp("sqlite_restart") / "test.db")
-
-    def make_server() -> WorkflowServer:
-        store = SqliteWorkflowStore(db_path)
-        server = WorkflowServer(workflow_store=store)
-        server.add_workflow(
-            "interactive", InteractiveWorkflow(), additional_events=[ExternalEvent]
-        )
-        return server
-
     # Start workflow, then stop server
-    async with live_server(make_server) as (base_url, _server):
+    async with live_server(durable_server_factory) as (base_url, _server):
         client = WorkflowClient(base_url=base_url)
         started = await client.run_workflow_nowait("interactive")
         handler_id = started.handler_id
@@ -469,7 +485,7 @@ async def test_server_restart_resumes_workflow(
                 break
 
     # Restart with same store - workflow should resume
-    async with live_server(make_server) as (base_url2, _server2):
+    async with live_server(durable_server_factory) as (base_url2, _server2):
         client2 = WorkflowClient(base_url=base_url2)
 
         # Send the event to complete the workflow
@@ -489,19 +505,9 @@ async def test_server_restart_resumes_workflow(
 
 @pytest.mark.asyncio
 async def test_idle_release_and_reload(
-    tmp_path_factory: pytest.TempPathFactory,
+    durable_server_factory: Callable[[], WorkflowServer],
 ) -> None:
-    db_path = str(tmp_path_factory.mktemp("sqlite_idle") / "test.db")
-
-    def make_server() -> WorkflowServer:
-        store = SqliteWorkflowStore(db_path)
-        server = WorkflowServer(workflow_store=store)
-        server.add_workflow(
-            "interactive", InteractiveWorkflow(), additional_events=[ExternalEvent]
-        )
-        return server
-
-    async with live_server(make_server) as (base_url, _server):
+    async with live_server(durable_server_factory) as (base_url, _server):
         client = WorkflowClient(base_url=base_url)
         started = await client.run_workflow_nowait("interactive")
         handler_id = started.handler_id
