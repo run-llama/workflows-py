@@ -360,19 +360,13 @@ class PostgresWorkflowStore(AbstractWorkflowStore):
 
         while True:
             async with condition:
-                events = await self.query_events(
-                    run_id, after_sequence=max(cursor - 1, -1)
-                )
-                batch = [e for e in events if e.sequence > cursor]
+                batch = await self.query_events(run_id, after_sequence=cursor)
                 if not batch:
                     with contextlib.suppress(TimeoutError):
                         await asyncio.wait_for(
                             condition.wait(), timeout=self.poll_interval
                         )
-                    events = await self.query_events(
-                        run_id, after_sequence=max(cursor - 1, -1)
-                    )
-                    batch = [e for e in events if e.sequence > cursor]
+                    continue
 
             for event in batch:
                 yield event

@@ -217,7 +217,7 @@ class SqliteWorkflowStore(AbstractWorkflowStore):
                         await asyncio.wait_for(
                             condition.wait(), timeout=self.poll_interval
                         )
-                    batch = await self.query_events(run_id, after_sequence=cursor)
+                    continue
 
             for event in batch:
                 yield event

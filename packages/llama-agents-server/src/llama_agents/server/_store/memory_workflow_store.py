@@ -190,8 +190,7 @@ class MemoryWorkflowStore(AbstractWorkflowStore):
                 batch = all_events[cursor:]
                 if not batch:
                     await condition.wait()
-                    all_events = self.events.get(run_id, [])
-                    batch = all_events[cursor:]
+                    continue
 
             for event in batch:
                 yield event
