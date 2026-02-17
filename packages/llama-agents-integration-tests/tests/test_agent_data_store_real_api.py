@@ -5,11 +5,6 @@
 These tests exercise edge cases that the fake backend might not faithfully
 reproduce
 
-Must be run with llama cloud env vars set:
-    LLAMA_CLOUD_API_KEY=...
-    LLAMA_DEPLOY_PROJECT_ID=...
-    LLAMA_CLOUD_BASE_URL=...
-    uv run pytest packages/llama-agents-integration-tests/tests/test_agent_data_store_staging.py -v -m llamacloud
 """
 
 from __future__ import annotations
