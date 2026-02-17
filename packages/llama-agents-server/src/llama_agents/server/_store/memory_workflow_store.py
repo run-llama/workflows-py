@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import weakref
+from collections import deque
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
 from typing import Any, Dict, List
@@ -17,6 +18,7 @@ from .abstract_workflow_store import (
     PersistentHandler,
     StoredEvent,
     StoredTick,
+    is_terminal_status,
 )
 
 logger = logging.getLogger(__name__)
@@ -57,7 +59,10 @@ def _matches_query(handler: PersistentHandler, query: HandlerQuery) -> bool:
 
 
 class MemoryWorkflowStore(AbstractWorkflowStore):
-    def __init__(self) -> None:
+    def __init__(self, max_completed: int | None = 1000) -> None:
+        if max_completed is not None and max_completed < 0:
+            raise ValueError("max_completed must be >= 0 or None")
+
         self.handlers: Dict[str, PersistentHandler] = {}
         self.events: Dict[str, List[StoredEvent]] = {}
         self.ticks: Dict[str, List[StoredTick]] = {}
@@ -65,6 +70,8 @@ class MemoryWorkflowStore(AbstractWorkflowStore):
         self._conditions: weakref.WeakValueDictionary[str, asyncio.Condition] = (
             weakref.WeakValueDictionary()
         )
+        self.max_completed = max_completed
+        self._terminal_queue: deque[str] = deque()
 
     def create_state_store(
         self,
@@ -99,6 +106,9 @@ class MemoryWorkflowStore(AbstractWorkflowStore):
 
     async def update(self, handler: PersistentHandler) -> None:
         self.handlers[handler.handler_id] = handler
+        if is_terminal_status(handler.status):
+            self._terminal_queue.append(handler.handler_id)
+            self._evict_oldest_completed()
 
     async def delete(self, query: HandlerQuery) -> int:
         to_delete = [
@@ -109,6 +119,33 @@ class MemoryWorkflowStore(AbstractWorkflowStore):
         for handler_id in to_delete:
             del self.handlers[handler_id]
         return len(to_delete)
+
+    def _evict_oldest_completed(self) -> None:
+        """Remove the oldest completed handlers when the cap is exceeded.
+
+        Uses _terminal_queue (insertion-ordered deque) for O(1) eviction
+        instead of scanning and sorting all handlers.
+        """
+        if self.max_completed is None:
+            return
+
+        while len(self._terminal_queue) > self.max_completed:
+            handler_id = self._terminal_queue.popleft()
+            handler = self.handlers.get(handler_id)
+            if handler is None:
+                # Already removed (e.g. via delete()), skip.
+                continue
+            if not is_terminal_status(handler.status):
+                # Stale terminal-queue entry for a handler_id that was upserted
+                # into a newer non-terminal row.
+                continue
+
+            self.handlers.pop(handler_id, None)
+            run_id = handler.run_id
+            if run_id is not None:
+                self.events.pop(run_id, None)
+                self.ticks.pop(run_id, None)
+                self.state_stores.pop(run_id, None)
 
     def _get_or_create_condition(self, run_id: str) -> asyncio.Condition:
         """Get or create a condition for a run_id.
