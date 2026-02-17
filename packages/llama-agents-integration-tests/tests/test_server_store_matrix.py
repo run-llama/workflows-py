@@ -215,9 +215,7 @@ async def server_with_store(
 async def test_sync_run(server_with_store: tuple[str, WorkflowServer, str]) -> None:
     base_url, _server, _store_type = server_with_store
     client = WorkflowClient(base_url=base_url)
-    result = await client.run_workflow(
-        "test", start_event={"__is_pydantic_event": True}
-    )
+    result = await client.run_workflow("test", start_event=StartEvent())
     assert result.status == "completed"
     assert result.result is not None
     assert result.result.value.get("result") == "processed: default"
@@ -319,8 +317,8 @@ async def test_list_handlers(
     client = WorkflowClient(base_url=base_url)
 
     # Run two workflows
-    await client.run_workflow("test", start_event={"__is_pydantic_event": True})
-    await client.run_workflow("test", start_event={"__is_pydantic_event": True})
+    await client.run_workflow("test", start_event=StartEvent())
+    await client.run_workflow("test", start_event=StartEvent())
 
     handlers = await client.get_handlers()
     assert len(handlers.handlers) >= 2
@@ -374,9 +372,7 @@ async def test_cursor_resume(
     client = WorkflowClient(base_url=base_url)
 
     # Run a streaming workflow synchronously first so all events are stored
-    result = await client.run_workflow(
-        "streaming", start_event={"__is_pydantic_event": True}
-    )
+    result = await client.run_workflow("streaming", start_event=StartEvent())
     assert result.status == "completed"
     handler_id = result.handler_id
 
