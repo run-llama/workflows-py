@@ -983,7 +983,7 @@ version = "0.1.0"
 source = { virtual = "docs/api_docs" }
 dependencies = [
     { name = "griffe-fieldz" },
-    { name = "llama-index-workflows", extra = ["server"] },
+    { name = "llama-index-workflows", extra = ["client", "server"] },
     { name = "mkdocs" },
     { name = "mkdocs-click" },
     { name = "mkdocs-github-admonitions-plugin" },
@@ -997,7 +997,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "griffe-fieldz", specifier = ">=0.2.0,<1" },
-    { name = "llama-index-workflows", extras = ["server"], editable = "packages/llama-index-workflows" },
+    { name = "llama-index-workflows", extras = ["server", "client"], editable = "packages/llama-index-workflows" },
     { name = "mkdocs", specifier = ">=1.6.1,<2" },
     { name = "mkdocs-click", specifier = ">=0.8.1,<1" },
     { name = "mkdocs-github-admonitions-plugin", specifier = ">=0.0.3,<1" },

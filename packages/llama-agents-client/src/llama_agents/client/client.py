@@ -56,11 +56,17 @@ def _raise_for_status_with_body(response: httpx.Response) -> None:
 class EventStream:
     """Async iterator over workflow events that exposes the current stream position.
 
-    Use ``last_sequence`` to capture the cursor for resuming later::
+    Returned by ``WorkflowClient.get_workflow_events()``. Use
+    ``last_sequence`` to capture the cursor for resuming later::
 
-        stream = client.stream_workflow_events(handler_id)
+        stream = client.get_workflow_events(handler_id)
         async for event in stream:
             print(event.type, stream.last_sequence)
+
+        # Resume from where we left off:
+        stream = client.get_workflow_events(
+            handler_id, after_sequence=stream.last_sequence
+        )
     """
 
     def __init__(
@@ -88,6 +94,37 @@ class EventStream:
 
 
 class WorkflowClient:
+    """Python client for interacting with a ``WorkflowServer``.
+
+    Provides methods for listing workflows, running them synchronously or
+    asynchronously, streaming events, and sending events for
+    human-in-the-loop workflows.
+
+    Example:
+
+        from llama_agents.client import WorkflowClient
+        from workflows.events import StartEvent
+
+        client = WorkflowClient(base_url="http://localhost:8080")
+
+        # Run synchronously
+        result = await client.run_workflow("greet", start_event=StartEvent(name="Ada"))
+        print(result.result)
+
+        # Run async and stream events
+        handler = await client.run_workflow_nowait("greet")
+        stream = client.get_workflow_events(handler.handler_id)
+        async for event in stream:
+            print(event.type, event.value)
+
+    Args:
+        base_url: Base URL of the workflow server (e.g. ``"http://localhost:8080"``).
+        httpx_client: Pre-configured ``httpx.AsyncClient``. Use this for
+            custom auth headers, timeouts, or transport configuration.
+
+    Provide exactly one of ``base_url`` or ``httpx_client``.
+    """
+
     @overload
     def __init__(self, *, httpx_client: httpx.AsyncClient): ...
     @overload
@@ -119,11 +156,10 @@ class WorkflowClient:
                 yield client
 
     async def is_healthy(self) -> HealthResponse:
-        """
-        Check whether the workflow server is helathy or not
+        """Check whether the workflow server is healthy.
 
-        Returns:
-            HealthResponse: health response from the workflow
+        Raises:
+            httpx.HTTPStatusError: If the server returns an error status.
         """
         async with self._get_client() as client:
             response = await client.get("/health")
@@ -131,12 +167,7 @@ class WorkflowClient:
             return HealthResponse.model_validate(response.json())
 
     async def list_workflows(self) -> WorkflowsListResponse:
-        """
-        List workflows
-
-        Returns:
-            WorkflowsListResponse: List of workflow names available through the server.
-        """
+        """List the names of all workflows registered on the server."""
         async with self._get_client() as client:
             response = await client.get("/workflows")
 
@@ -151,16 +182,18 @@ class WorkflowClient:
         start_event: StartEvent | dict[str, Any] | None = None,
         context: Context | dict[str, Any] | None = None,
     ) -> HandlerData:
-        """
-        Run the workflow and wait until completion.
+        """Run the workflow and block until completion.
 
         Args:
-            start_event (Union[StartEvent, dict[str, Any], None]): start event class or dictionary representation (optional, defaults to None and get passed as an empty dictionary if not provided).
-            context: Context or serialized representation of it (optional, defaults to None if not provided)
-            handler_id (Optional[str]): Workflow handler identifier to continue from a previous completed run.
+            workflow_name: Name of the registered workflow to run.
+            start_event: Input event for the workflow. Can be a ``StartEvent``
+                instance or a plain dict.
+            context: Workflow context to restore, for continuing a previous run.
+            handler_id: Handler identifier to continue from a previous
+                completed run.
 
         Returns:
-            HandlerData: Data representing the handler running the workflow (including result and metadata)
+            HandlerData: Handler metadata including the final result.
         """
         if start_event is not None:
             try:
@@ -198,16 +231,21 @@ class WorkflowClient:
         start_event: StartEvent | dict[str, Any] | None = None,
         context: Context | dict[str, Any] | None = None,
     ) -> HandlerData:
-        """
-        Run the workflow in the background.
+        """Start the workflow without waiting for completion.
+
+        Use the returned ``handler_id`` to stream events, poll for results,
+        or send events.
 
         Args:
-            start_event (Union[StartEvent, dict[str, Any], None]): start event class or dictionary representation (optional, defaults to None and get passed as an empty dictionary if not provided).
-            context: Context or serialized representation of it (optional, defaults to None if not provided)
-            handler_id (Optional[str]): Workflow handler identifier to continue from a previous completed run.
+            workflow_name: Name of the registered workflow to run.
+            start_event: Input event for the workflow. Can be a ``StartEvent``
+                instance or a plain dict.
+            context: Workflow context to restore, for continuing a previous run.
+            handler_id: Handler identifier to continue from a previous
+                completed run.
 
         Returns:
-            HandlerData: data representing the handler running the workflow.
+            HandlerData: Handler metadata including the ``handler_id``.
         """
         if start_event is not None:
             try:
@@ -245,28 +283,29 @@ class WorkflowClient:
         after_sequence: int | Literal["now"] = -1,
         max_reconnect_attempts: int = 3,
     ) -> EventStream:
-        """
-        Stream events as they are produced by the workflow.
+        """Stream events as they are produced by the workflow.
 
         Returns an ``EventStream`` whose ``last_sequence`` property tracks
         the sequence number of the most recently yielded event. Uses SSE
-        (Server-Sent Events) mode and automatically reconnects from the last
-        received event on connection drops.
+        and automatically reconnects from the last received event on
+        connection drops.
 
-        Example::
+        Example:
 
             stream = client.get_workflow_events(handler_id)
             async for event in stream:
                 print(event.type, stream.last_sequence)
 
         Args:
-            handler_id (str): ID of the handler running the workflow
-            include_internal_events (bool): Include internal workflow events. Defaults to False.
-            after_sequence (int | str): Sequence number to start streaming after. Defaults to -1 (all events). Use ``"now"`` to only receive new events.
-            max_reconnect_attempts (int): Maximum number of reconnect attempts on connection drop. Defaults to 3.
-
-        Returns:
-            EventStream: An async iterator of ``EventEnvelopeWithMetadata`` with a ``last_sequence`` property.
+            handler_id: ID of the handler running the workflow.
+            include_internal_events: Include internal dispatch events.
+                Defaults to ``False``.
+            after_sequence: Where to start streaming. ``-1`` (default) streams
+                all events from the beginning. ``"now"`` skips existing events
+                and only delivers new ones. An integer ``N`` streams events
+                after sequence ``N``.
+            max_reconnect_attempts: Maximum reconnect attempts on connection
+                drop. Defaults to ``3``.
         """
         event_stream: EventStream = EventStream.__new__(EventStream)
         event_stream._last_sequence = after_sequence
@@ -360,16 +399,15 @@ class WorkflowClient:
         event: Event | dict[str, Any],
         step: str | None = None,
     ) -> SendEventResponse:
-        """
-        Send an event to the workflow.
+        """Send an event to a running workflow.
+
+        Useful for human-in-the-loop workflows that wait for external input.
 
         Args:
-            handler_id (str): ID of the handler of the running workflow to send the event to
-            event (Event | dict[str, Any] | str): Event to send, represented as an Event object, a dictionary or a serialized string.
-            step (Optional[str]): Step to send the event to (optional, defaults to None)
-
-        Returns:
-            SendEventResponse: Confirmation of the send operation
+            handler_id: ID of the handler running the workflow.
+            event: Event to send, as an ``Event`` instance or a dict.
+            step: Target a specific workflow step. When ``None``, the event
+                is broadcast to all waiting steps.
         """
         try:
             serialized_event: dict[str, Any] = _serialize_event(event)
@@ -395,13 +433,12 @@ class WorkflowClient:
         status: list[Status] | None = None,
         workflow_name: list[str] | None = None,
     ) -> HandlersListResponse:
-        """
-        Get all the workflow handlers.
+        """List all workflow handlers.
+
         Args:
-            status (list[Status] | None): List of statuses (e.g. "running", "completed", etc. ) to filter by. Defaults to None.
-            workflow_name (list[str] | None): List of workflow names to filter by. Defaults to None.
-        Returns:
-            HandlersListResponse: List of workflow handlers.
+            status: Filter by handler status (e.g. ``"running"``,
+                ``"completed"``).
+            workflow_name: Filter by workflow name.
         """
         async with self._get_client() as client:
             response = await client.get(
@@ -416,14 +453,13 @@ class WorkflowClient:
             return HandlersListResponse.model_validate(response.json())
 
     async def get_handler(self, handler_id: str) -> HandlerData:
-        """
-        Get a single workflow handler by identifier.
+        """Get a workflow handler by ID.
+
+        Returns handler metadata including status, result (if completed),
+        and timestamps.
 
         Args:
-            handler_id (str): ID of the handler associated with the workflow run
-
-        Returns:
-            HandlerData: Handler metadata persisted by the server.
+            handler_id: ID of the handler.
         """
         async with self._get_client() as client:
             response = await client.get(f"/handlers/{handler_id}")
@@ -434,12 +470,12 @@ class WorkflowClient:
     async def cancel_handler(
         self, handler_id: str, purge: bool = False
     ) -> CancelHandlerResponse:
-        """
-        Stop and cancel a workflow run.
+        """Cancel a running workflow.
 
         Args:
-            handler_id (str): ID of the handler associated with the workflow run
-            purge (bool): Whether or not to delete the run also from the persistent storage. Defaults to false
+            handler_id: ID of the handler to cancel.
+            purge: Also remove the handler from the persistence store.
+                Defaults to ``False``.
         """
         async with self._get_client() as client:
             response = await client.post(
