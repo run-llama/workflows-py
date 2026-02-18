@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import asyncio
 import socket
-import time
 from pathlib import Path
 from typing import Any, AsyncGenerator
 
@@ -17,51 +16,25 @@ from dbos import DBOS, DBOSConfig
 from llama_agents.client.client import WorkflowClient
 from llama_agents.dbos import DBOSRuntime
 from llama_agents.server import MemoryWorkflowStore, SqliteWorkflowStore, WorkflowServer
+from llama_agents_integration_tests.server_test_utils import (
+    ExternalEvent,
+    InteractiveWorkflow,
+    RequestedExternalEvent,
+    SimpleTestWorkflow,
+    StreamingWorkflow,
+    live_server,
+    wait_for_passing,
+)
 from testcontainers.postgres import PostgresContainer
 from workflows import Context, Workflow, step
 from workflows.events import (
     Event,
-    HumanResponseEvent,
-    InputRequiredEvent,
     StartEvent,
     StopEvent,
 )
 
 
-# Workflow definitions
-class StreamEvent(Event):
-    message: str
-    sequence: int
-
-
-class StreamingWorkflow(Workflow):
-    @step
-    async def stream_data(self, ctx: Context, ev: StartEvent) -> StopEvent:
-        count = getattr(ev, "count", 3)
-        for i in range(count):
-            ctx.write_event_to_stream(StreamEvent(message=f"event_{i}", sequence=i))
-            await asyncio.sleep(0.01)
-        return StopEvent(result=f"completed_{count}_events")
-
-
-class RequestedExternalEvent(InputRequiredEvent):
-    message: str
-
-
-class ExternalEvent(HumanResponseEvent):
-    response: str
-
-
-class InteractiveWorkflow(Workflow):
-    @step
-    async def start(self, ctx: Context, ev: StartEvent) -> RequestedExternalEvent:
-        return RequestedExternalEvent(message="ping")
-
-    @step
-    async def end(self, ctx: Context, ev: ExternalEvent) -> StopEvent:
-        return StopEvent(result=f"received: {ev.response}")
-
-
+# Workflow definitions (test-specific)
 class CumulativeWorkflow(Workflow):
     @step
     async def accumulate(self, ctx: Context, ev: StartEvent) -> StopEvent:
@@ -75,15 +48,6 @@ class CumulativeWorkflow(Workflow):
         return StopEvent(result=f"count: {new_count}, runs: {len(run_history)}")
 
 
-class SimpleTestWorkflow(Workflow):
-    @step
-    async def process(self, ctx: Context, ev: StartEvent) -> StopEvent:
-        message = await ctx.store.get("test_param", None)
-        if message is None:
-            message = getattr(ev, "message", "default")
-        return StopEvent(result=f"processed: {message}")
-
-
 class WaitableExternalEvent(Event):
     response: str
 
@@ -93,81 +57,6 @@ class WaitingWorkflow(Workflow):
     async def start_and_wait(self, ctx: Context, ev: StartEvent) -> StopEvent:
         external = await ctx.wait_for_event(WaitableExternalEvent)
         return StopEvent(result=f"received: {external.response}")
-
-
-# Helper functions
-async def wait_for_passing(
-    func: Any, max_duration: float = 5.0, interval: float = 0.05
-) -> Any:
-    start_time = time.monotonic()
-    last_exception = None
-    while time.monotonic() - start_time < max_duration:
-        remaining = max_duration - (time.monotonic() - start_time)
-        try:
-            return await asyncio.wait_for(func(), timeout=remaining)
-        except Exception as e:
-            last_exception = e
-            await asyncio.sleep(interval)
-    raise last_exception or TimeoutError(
-        f"wait_for_passing timed out after {max_duration}s"
-    )
-
-
-class live_server:
-    def __init__(self, server_factory: Any) -> None:
-        self.server_factory = server_factory
-        self.sock: socket.socket | None = None
-        self.task: Any = None
-        self.uv_server: Any = None
-
-    async def __aenter__(self) -> tuple[str, WorkflowServer]:
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.sock.bind(("127.0.0.1", 0))
-        self.sock.listen(128)
-        port = self.sock.getsockname()[1]
-        self.server = self.server_factory()
-        await self.server.start()
-        config = uvicorn.Config(
-            self.server.app,
-            host="127.0.0.1",
-            port=port,
-            log_level="error",
-            loop="asyncio",
-        )
-        self.uv_server = uvicorn.Server(config)
-        self.task = asyncio.create_task(self.uv_server.serve(sockets=[self.sock]))
-        base_url = f"http://127.0.0.1:{port}"
-        async with httpx.AsyncClient(base_url=base_url, timeout=1.0) as client:
-            for _ in range(50):
-                try:
-                    resp = await client.get("/health")
-                    if resp.status_code == 200:
-                        break
-                except Exception:
-                    pass
-                await asyncio.sleep(0.01)
-            else:
-                self.uv_server.should_exit = True
-                await self.task
-                raise RuntimeError("Live server did not start in time")
-        return base_url, self.server
-
-    async def __aexit__(self, *args: Any) -> None:
-        if self.uv_server:
-            self.uv_server.should_exit = True
-        if self.task:
-            try:
-                await self.task
-            except Exception:
-                pass
-        if hasattr(self.server, "stop"):
-            await self.server.stop()
-        if self.sock:
-            try:
-                self.sock.close()
-            except Exception:
-                pass
 
 
 def _get_backend_params() -> list[Any]:

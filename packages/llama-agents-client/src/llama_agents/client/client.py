@@ -139,9 +139,11 @@ class WorkflowClient:
                 context = context.to_dict()
             except Exception as e:
                 raise ValueError(f"Impossible to serialize the context because of: {e}")
-        request_body = {
-            "start_event": start_event or "",
-            "context": context or {},
+        request_body: dict[str, Any] = {
+            "start_event": start_event
+            if start_event is not None
+            else _serialize_event(StartEvent(), bare=True),
+            "context": context if context is not None else {},
         }
         if handler_id:
             request_body["handler_id"] = handler_id
@@ -185,8 +187,10 @@ class WorkflowClient:
             except Exception as e:
                 raise ValueError(f"Impossible to serialize the context because of: {e}")
         request_body: dict[str, Any] = {
-            "start_event": start_event or _serialize_event(StartEvent()),
-            "context": context or {},
+            "start_event": start_event
+            if start_event is not None
+            else _serialize_event(StartEvent()),
+            "context": context if context is not None else {},
         }
         if handler_id:
             request_body["handler_id"] = handler_id

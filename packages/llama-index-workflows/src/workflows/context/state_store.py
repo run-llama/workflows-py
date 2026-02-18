@@ -398,15 +398,6 @@ class StateStore(Protocol[MODEL_T]):
         """Serialize state for persistence."""
         ...
 
-    @classmethod
-    def from_dict(
-        cls,
-        serialized_state: dict[str, Any],
-        serializer: "BaseSerializer",
-    ) -> "StateStore[MODEL_T]":
-        """Restore state from serialized payload."""
-        ...
-
 
 class InMemoryStateStore(Generic[MODEL_T]):
     """
