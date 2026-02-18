@@ -8,6 +8,7 @@ from typing import (
     Any,
     AsyncGenerator,
     AsyncIterator,
+    Callable,
     Literal,
     overload,
 )
@@ -50,6 +51,40 @@ def _raise_for_status_with_body(response: httpx.Response) -> None:
                 response=e.response,
             ) from e
         raise
+
+
+class EventStream:
+    """Async iterator over workflow events that exposes the current stream position.
+
+    Use ``last_sequence`` to capture the cursor for resuming later::
+
+        stream = client.stream_workflow_events(handler_id)
+        async for event in stream:
+            print(event.type, stream.last_sequence)
+    """
+
+    def __init__(
+        self,
+        generator: AsyncGenerator[EventEnvelopeWithMetadata, None],
+        initial_sequence: int | Literal["now"],
+    ) -> None:
+        self._generator = generator
+        self._last_sequence: int | Literal["now"] = initial_sequence
+
+    @property
+    def last_sequence(self) -> int | Literal["now"]:
+        """The sequence number of the most recently yielded event, or the
+        initial ``after_sequence`` value if no events have been yielded yet."""
+        return self._last_sequence
+
+    def _set_sequence(self, seq: int | Literal["now"]) -> None:
+        self._last_sequence = seq
+
+    def __aiter__(self) -> EventStream:
+        return self
+
+    async def __anext__(self) -> EventEnvelopeWithMetadata:
+        return await self._generator.__anext__()
 
 
 class WorkflowClient:
@@ -203,18 +238,26 @@ class WorkflowClient:
 
             return HandlerData.model_validate(response.json())
 
-    async def get_workflow_events(
+    def get_workflow_events(
         self,
         handler_id: str,
         include_internal_events: bool = False,
         after_sequence: int | Literal["now"] = -1,
         max_reconnect_attempts: int = 3,
-    ) -> AsyncGenerator[EventEnvelopeWithMetadata, None]:
+    ) -> EventStream:
         """
         Stream events as they are produced by the workflow.
 
-        Uses SSE (Server-Sent Events) mode and automatically reconnects from
-        the last received event on connection drops.
+        Returns an ``EventStream`` whose ``last_sequence`` property tracks
+        the sequence number of the most recently yielded event. Uses SSE
+        (Server-Sent Events) mode and automatically reconnects from the last
+        received event on connection drops.
+
+        Example::
+
+            stream = client.get_workflow_events(handler_id)
+            async for event in stream:
+                print(event.type, stream.last_sequence)
 
         Args:
             handler_id (str): ID of the handler running the workflow
@@ -223,8 +266,27 @@ class WorkflowClient:
             max_reconnect_attempts (int): Maximum number of reconnect attempts on connection drop. Defaults to 3.
 
         Returns:
-            AsyncGenerator[EventEnvelopeWithMetadata, None]: Generator for the events that are streamed as instances of `EventEnvelopeWithMetadata`.
+            EventStream: An async iterator of ``EventEnvelopeWithMetadata`` with a ``last_sequence`` property.
         """
+        event_stream: EventStream = EventStream.__new__(EventStream)
+        event_stream._last_sequence = after_sequence
+        event_stream._generator = self._iter_events(
+            handler_id=handler_id,
+            include_internal_events=include_internal_events,
+            after_sequence=after_sequence,
+            max_reconnect_attempts=max_reconnect_attempts,
+            on_sequence=event_stream._set_sequence,
+        )
+        return event_stream
+
+    async def _iter_events(
+        self,
+        handler_id: str,
+        include_internal_events: bool,
+        after_sequence: int | Literal["now"],
+        max_reconnect_attempts: int,
+        on_sequence: Callable[[int | Literal["now"]], None],
+    ) -> AsyncGenerator[EventEnvelopeWithMetadata, None]:
         incl_inter = "true" if include_internal_events else "false"
         url = f"/events/{handler_id}"
         last_sequence = after_sequence
@@ -273,6 +335,7 @@ class WorkflowClient:
                                         last_sequence = int(current_id)
                                     except ValueError:
                                         pass
+                                on_sequence(last_sequence)
                                 current_id = None
                                 yield event
 
