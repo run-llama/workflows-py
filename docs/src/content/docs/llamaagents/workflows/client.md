@@ -102,7 +102,7 @@ async for event in stream:
     print(event)
 ```
 
-Both `get_workflow_events` and `get_workflow_events` automatically reconnect from the last received sequence on connection drops (up to `max_reconnect_attempts`, default 3).
+`get_workflow_events` automatically reconnects from the last received sequence on connection drops (up to `max_reconnect_attempts`, default 3).
 
 ## Human-in-the-Loop
 
