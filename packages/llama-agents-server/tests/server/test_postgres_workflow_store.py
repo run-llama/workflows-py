@@ -102,14 +102,15 @@ async def test_build_filters_produces_correct_clauses() -> None:
 
 async def test_on_notify_wakes_condition() -> None:
     store = PostgresWorkflowStore(dsn="postgresql://localhost/test")
-    cond = store._get_or_create_condition("run-1")
+    condition = store._get_or_create_condition("run-1")
 
-    notified = asyncio.Event()
+    woken = False
 
     async def waiter() -> None:
-        async with cond:
-            await cond.wait()
-        notified.set()
+        nonlocal woken
+        async with condition:
+            await condition.wait()
+            woken = True
 
     task = asyncio.create_task(waiter())
     await asyncio.sleep(0.01)
@@ -117,8 +118,8 @@ async def test_on_notify_wakes_condition() -> None:
     # Simulate the NOTIFY callback
     store._on_notify(MagicMock(), 0, "wf_events", "run-1")
 
-    await asyncio.wait_for(notified.wait(), timeout=1.0)
-    await task
+    await asyncio.wait_for(task, timeout=1.0)
+    assert woken
 
 
 async def test_close_without_start_is_safe() -> None:

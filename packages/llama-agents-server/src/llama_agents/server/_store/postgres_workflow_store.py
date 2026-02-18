@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import contextlib
 import json
 import logging
 import weakref
@@ -100,19 +101,16 @@ class PostgresWorkflowStore(AbstractWorkflowStore):
         channel: str,
         payload: str,
     ) -> None:
-        """Handle NOTIFY callback — wake up subscribers for the given run_id."""
+        """Handle NOTIFY callback — schedule condition notification."""
         run_id = payload
-        cond = self._conditions.get(run_id)
-        if cond is not None:
-            # Schedule the notify on the event loop since this callback
-            # may fire from a non-async context
-            loop = asyncio.get_event_loop()
-            loop.create_task(self._notify_condition(cond))
+        condition = self._conditions.get(run_id)
+        if condition is not None:
+            asyncio.ensure_future(self._notify_condition(condition))
 
     @staticmethod
-    async def _notify_condition(cond: asyncio.Condition) -> None:
-        async with cond:
-            cond.notify_all()
+    async def _notify_condition(condition: asyncio.Condition) -> None:
+        async with condition:
+            condition.notify_all()
 
     async def close(self) -> None:
         """Tear down the LISTEN connection and close the pool."""
@@ -359,22 +357,22 @@ class PostgresWorkflowStore(AbstractWorkflowStore):
     ) -> AsyncIterator[StoredEvent]:
         condition = self._get_or_create_condition(run_id)
         cursor = after_sequence
+
         while True:
-            events = await self.query_events(run_id, after_sequence=max(cursor - 1, -1))
-            for event in events:
-                if event.sequence > cursor:
-                    yield event
-                    cursor = event.sequence
-                if self._is_terminal_event(event):
-                    return
-            if not events:
-                async with condition:
-                    try:
+            async with condition:
+                batch = await self.query_events(run_id, after_sequence=cursor)
+                if not batch:
+                    with contextlib.suppress(TimeoutError):
                         await asyncio.wait_for(
                             condition.wait(), timeout=self.poll_interval
                         )
-                    except TimeoutError:
-                        pass
+                    continue
+
+            for event in batch:
+                yield event
+                cursor = event.sequence
+                if self._is_terminal_event(event):
+                    return
 
     # ── Ticks (not supported) ───────────────────────────────────────────
 

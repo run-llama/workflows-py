@@ -1830,7 +1830,9 @@ name = "llama-agents-integration-tests"
 version = "0.1.0"
 source = { editable = "packages/llama-agents-integration-tests" }
 dependencies = [
+    { name = "llama-agents-client" },
     { name = "llama-agents-dbos", marker = "python_full_version > '3.9'" },
+    { name = "llama-agents-server" },
     { name = "llama-index-core" },
     { name = "llama-index-workflows" },
 ]
@@ -1854,7 +1856,9 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "llama-agents-client", editable = "packages/llama-agents-client" },
     { name = "llama-agents-dbos", marker = "python_full_version > '3.9'", editable = "packages/llama-agents-dbos" },
+    { name = "llama-agents-server", editable = "packages/llama-agents-server" },
     { name = "llama-index-core", specifier = ">=0.14.13" },
     { name = "llama-index-workflows", editable = "packages/llama-index-workflows" },
 ]
