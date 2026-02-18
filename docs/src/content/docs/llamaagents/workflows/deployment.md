@@ -281,6 +281,57 @@ curl -X POST http://localhost:80/handlers/someUniqueId123/cancel?purge=true
 }
 ```
 
+## Persistence
+
+By default, `WorkflowServer` uses an in-memory store (`MemoryWorkflowStore`), so all handler state and events are lost when the process restarts. For durable persistence, pass a `workflow_store` backed by a database.
+
+### SQLite
+
+The simplest option for single-process deployments is `SqliteWorkflowStore`, which persists handler state, events, and results to a local file:
+
+```python
+from llama_agents.server import WorkflowServer, SqliteWorkflowStore
+
+store = SqliteWorkflowStore(db_path="workflows.db")
+
+server = WorkflowServer(workflow_store=store)
+server.add_workflow("greet", greet_wf)
+```
+
+### DBOS (Postgres)
+
+For production deployments that need Postgres-backed persistence, durable execution, and the ability to run distributed workers, use the `DBOSRuntime` from the `llama-agents-dbos` package. This replaces the default runtime with one backed by [DBOS](https://docs.dbos.dev/), providing transactional state management and recovery across process restarts:
+
+```python
+from dbos import DBOS
+from llama_agents.dbos import DBOSRuntime
+from llama_agents.server import WorkflowServer
+
+# Configure DBOS — uses SQLite by default, or set system_database_url for Postgres
+DBOS(config={"name": "my-app", "run_admin_server": False})
+
+runtime = DBOSRuntime()
+
+server = WorkflowServer(
+    workflow_store=runtime.create_workflow_store(),
+    runtime=runtime.build_server_runtime(),
+)
+server.add_workflow("greet", GreetingWorkflow())
+```
+
+By default DBOS uses SQLite (zero setup). To use Postgres, pass a `system_database_url` in the DBOS config. For multi-replica setups, each replica must have a unique `executor_id`:
+
+```python
+DBOS(config={
+    "name": "my-app",
+    "system_database_url": "postgresql://user:pass@localhost:5432/mydb",
+    "run_admin_server": False,
+    "executor_id": "replica-1",  # unique per replica
+})
+```
+
+With Postgres, multiple server replicas can share the same database for distributed execution and recovery. See the `examples/dbos/` directory for a full multi-replica demo.
+
 ## Python Client
 
 For programmatic interaction with a `WorkflowServer`, see the [Python Client](/python/llamaagents/workflows/client) documentation.
