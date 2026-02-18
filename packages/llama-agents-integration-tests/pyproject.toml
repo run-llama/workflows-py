@@ -25,7 +25,9 @@ requires-python = ">=3.9"
 dependencies = [
   "llama-index-core>=0.14.13",
   "llama-index-workflows",
-  "llama-agents-dbos; python_full_version > '3.9'"
+  "llama-agents-dbos; python_full_version > '3.9'",
+  "llama-agents-server",
+  "llama-agents-client"
 ]
 
 [tool.basedpyright]
@@ -45,9 +47,10 @@ asyncio_default_fixture_loop_scope = "module"
 asyncio_default_test_loop_scope = "module"
 testpaths = ["tests"]
 # Skip docker tests by default - run with `pytest -m docker` to include them
-addopts = "-nauto --timeout=120 -m 'not docker'"
+addopts = "-nauto --timeout=120 -m 'not docker and not llamacloud'"
 markers = [
-  "docker: marks tests as requiring Docker (testcontainers/PostgreSQL)"
+  "docker: marks tests as requiring Docker (testcontainers/PostgreSQL)",
+  "llamacloud: marks tests as requiring LlamaCloud API credentials"
 ]
 filterwarnings = [
   # Ignore internal testcontainers deprecation warning (fixed in their code, just noisy)
@@ -57,3 +60,5 @@ filterwarnings = [
 [tool.uv.sources]
 llama-index-workflows = {workspace = true}
 llama-agents-dbos = {workspace = true}
+llama-agents-server = {workspace = true}
+llama-agents-client = {workspace = true}
