@@ -92,6 +92,7 @@ jobs:
           COVERALLS_REPO_TOKEN: ${{ secrets.COVERALLS_REPO_TOKEN }}
 
   test-docker:
+    name: "test docker (3.14 - all packages)"
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

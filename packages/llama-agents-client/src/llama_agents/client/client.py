@@ -3,13 +3,15 @@
 
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from typing import (
     Any,
     AsyncGenerator,
     AsyncIterator,
-    Callable,
     Literal,
+    Union,
     overload,
 )
 
@@ -53,6 +55,25 @@ def _raise_for_status_with_body(response: httpx.Response) -> None:
         raise
 
 
+@dataclass(frozen=True)
+class _QueuedEvent:
+    sequence: int | Literal["now"]
+    event: EventEnvelopeWithMetadata
+
+
+@dataclass(frozen=True)
+class _QueuedError:
+    error: BaseException
+
+
+@dataclass(frozen=True)
+class _QueuedDone:
+    pass
+
+
+_QueueItem = Union[_QueuedEvent, _QueuedError, _QueuedDone]
+
+
 class EventStream:
     """Async iterator over workflow events that exposes the current stream position.
 
@@ -71,11 +92,14 @@ class EventStream:
 
     def __init__(
         self,
-        generator: AsyncGenerator[EventEnvelopeWithMetadata, None],
+        queue: asyncio.Queue[_QueueItem],
+        task: asyncio.Task[None] | None,
         initial_sequence: int | Literal["now"],
     ) -> None:
-        self._generator = generator
+        self._queue = queue
+        self._task = task
         self._last_sequence: int | Literal["now"] = initial_sequence
+        self._iter_started = False
 
     @property
     def last_sequence(self) -> int | Literal["now"]:
@@ -83,14 +107,35 @@ class EventStream:
         initial ``after_sequence`` value if no events have been yielded yet."""
         return self._last_sequence
 
-    def _set_sequence(self, seq: int | Literal["now"]) -> None:
-        self._last_sequence = seq
+    def __aiter__(self) -> AsyncIterator[EventEnvelopeWithMetadata]:
+        if self._iter_started:
+            raise RuntimeError("EventStream can only be iterated once")
+        self._iter_started = True
+        return self._iterate()
 
-    def __aiter__(self) -> EventStream:
-        return self
+    async def _iterate(self) -> AsyncGenerator[EventEnvelopeWithMetadata, None]:
+        try:
+            while True:
+                item = await self._queue.get()
+                if isinstance(item, _QueuedDone):
+                    return
+                if isinstance(item, _QueuedError):
+                    raise item.error
+                self._last_sequence = item.sequence
+                yield item.event
+        finally:
+            await self.aclose()
 
-    async def __anext__(self) -> EventEnvelopeWithMetadata:
-        return await self._generator.__anext__()
+    async def aclose(self) -> None:
+        """Cancel the background reader and release resources."""
+        if self._task is None:
+            return
+        task, self._task = self._task, None
+        task.cancel()
+        try:
+            await task
+        except (asyncio.CancelledError, Exception):
+            pass
 
 
 class WorkflowClient:
@@ -307,91 +352,89 @@ class WorkflowClient:
             max_reconnect_attempts: Maximum reconnect attempts on connection
                 drop. Defaults to ``3``.
         """
-        event_stream: EventStream = EventStream.__new__(EventStream)
-        event_stream._last_sequence = after_sequence
-        event_stream._generator = self._iter_events(
-            handler_id=handler_id,
-            include_internal_events=include_internal_events,
-            after_sequence=after_sequence,
-            max_reconnect_attempts=max_reconnect_attempts,
-            on_sequence=event_stream._set_sequence,
-        )
-        return event_stream
+        queue: asyncio.Queue[_QueueItem] = asyncio.Queue()
+        stream = EventStream(queue, None, after_sequence)
 
-    async def _iter_events(
-        self,
-        handler_id: str,
-        include_internal_events: bool,
-        after_sequence: int | Literal["now"],
-        max_reconnect_attempts: int,
-        on_sequence: Callable[[int | Literal["now"]], None],
-    ) -> AsyncGenerator[EventEnvelopeWithMetadata, None]:
-        incl_inter = "true" if include_internal_events else "false"
-        url = f"/events/{handler_id}"
-        last_sequence = after_sequence
-        attempts = 0
+        async def reader() -> None:
+            incl_inter = "true" if include_internal_events else "false"
+            url = f"/events/{handler_id}"
+            last_sequence: int | Literal["now"] = after_sequence
+            attempts = 0
+            try:
+                while True:
+                    async with self._get_client() as client:
+                        try:
+                            async with client.stream(
+                                "GET",
+                                url,
+                                params={
+                                    "sse": "true",
+                                    "include_internal": incl_inter,
+                                    "after_sequence": str(last_sequence),
+                                },
+                                headers={"Connection": "keep-alive"},
+                                timeout=None,
+                            ) as response:
+                                if response.status_code == 404:
+                                    raise ValueError("Handler not found")
+                                elif response.status_code == 204:
+                                    await queue.put(_QueuedDone())
+                                    return
 
-        while True:
-            async with self._get_client() as client:
-                try:
-                    async with client.stream(
-                        "GET",
-                        url,
-                        params={
-                            "sse": "true",
-                            "include_internal": incl_inter,
-                            "after_sequence": str(last_sequence),
-                        },
-                        headers={"Connection": "keep-alive"},
-                        timeout=None,
-                    ) as response:
-                        if response.status_code == 404:
-                            raise ValueError("Handler not found")
-                        elif response.status_code == 204:
+                                _raise_for_status_with_body(response)
+
+                                # Reset attempts on successful connection
+                                attempts = 0
+
+                                # Parse SSE stream: "id: N\ndata: {...}\n\n"
+                                current_id: str | None = None
+                                async for line in response.aiter_lines():
+                                    stripped = line.strip()
+                                    if not stripped:
+                                        # Empty line = end of SSE event
+                                        continue
+                                    if stripped.startswith("id:"):
+                                        current_id = stripped[3:].strip()
+                                    elif stripped.startswith("data:"):
+                                        data = stripped[5:].strip()
+                                        event = EventEnvelopeWithMetadata.model_validate_json(
+                                            data
+                                        )
+                                        if current_id is not None:
+                                            try:
+                                                last_sequence = int(current_id)
+                                            except ValueError:
+                                                pass
+                                        await queue.put(
+                                            _QueuedEvent(
+                                                sequence=last_sequence,
+                                                event=event,
+                                            )
+                                        )
+                                        current_id = None
+
+                            # Stream ended normally (server closed connection)
+                            await queue.put(_QueuedDone())
                             return
 
-                        _raise_for_status_with_body(response)
-
-                        # Reset attempts on successful connection
-                        attempts = 0
-
-                        # Parse SSE stream: "id: N\ndata: {...}\n\n"
-                        current_id: str | None = None
-                        async for line in response.aiter_lines():
-                            stripped = line.strip()
-                            if not stripped:
-                                # Empty line = end of SSE event
-                                continue
-                            if stripped.startswith("id:"):
-                                current_id = stripped[3:].strip()
-                            elif stripped.startswith("data:"):
-                                data = stripped[5:].strip()
-                                event = EventEnvelopeWithMetadata.model_validate_json(
-                                    data
+                        except httpx.TimeoutException:
+                            raise TimeoutError(
+                                f"Timeout waiting for events from handler {handler_id}"
+                            )
+                        except (httpx.RequestError, ConnectionError):
+                            attempts += 1
+                            if attempts > max_reconnect_attempts:
+                                raise ConnectionError(
+                                    f"Failed to connect to event stream after {max_reconnect_attempts} attempts"
                                 )
-                                if current_id is not None:
-                                    try:
-                                        last_sequence = int(current_id)
-                                    except ValueError:
-                                        pass
-                                on_sequence(last_sequence)
-                                current_id = None
-                                yield event
+                            # Retry from last received sequence
+            except asyncio.CancelledError:
+                await queue.put(_QueuedDone())
+            except BaseException as exc:
+                await queue.put(_QueuedError(exc))
 
-                    # Stream ended normally (server closed connection)
-                    return
-
-                except httpx.TimeoutException:
-                    raise TimeoutError(
-                        f"Timeout waiting for events from handler {handler_id}"
-                    )
-                except (httpx.RequestError, ConnectionError):
-                    attempts += 1
-                    if attempts > max_reconnect_attempts:
-                        raise ConnectionError(
-                            f"Failed to connect to event stream after {max_reconnect_attempts} attempts"
-                        )
-                    # Retry from last received sequence
+        stream._task = asyncio.create_task(reader())
+        return stream
 
     async def send_event(
         self,
