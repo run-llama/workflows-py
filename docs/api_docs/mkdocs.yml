@@ -1,0 +1,79 @@
+docs_dir: docs/api_reference
+site_url: https://developers.llamaindex.ai/python/workflows-api-reference/
+extra:
+  homepage: /
+extra_css:
+  - css/style.css
+  - css/algolia.css
+extra_javascript:
+  - javascript/algolia.js
+markdown_extensions:
+  - attr_list
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - md_in_html
+  - mkdocs-click
+  - toc:
+      permalink: "#"
+plugins:
+  - search
+  - include_dir_to_nav
+  - render_swagger
+  - gh-admonitions
+  - mkdocstrings:
+      handlers:
+        python:
+          options:
+            docstring_options:
+              ignore_init_summary: true
+            docstring_style: google
+            filters:
+              - "!^_"
+              - "!^__init__"
+            members_order: source
+            merge_init_into_class: false
+            separate_signature: true
+            show_root_full_path: true
+            show_root_heading: false
+            show_root_toc_entry: false
+            show_signature_annotations: true
+            signature_crossrefs: true
+            extensions:
+              - griffe_fieldz
+          paths:
+            - ../../workflows
+site_name: LlamaIndex Workflows
+theme:
+  custom_dir: overrides
+  favicon: _static/assets/LlamaLogoBrowserTab.png
+  features:
+    - navigation.instant
+    - navigation.indexes
+    - navigation.top
+    - navigation.footer
+    - toc.follow
+    - content.code.copy
+    - search.suggest
+    - search.highlight
+  logo: _static/assets/LlamaSquareBlack.svg
+  name: material
+  palette:
+    - media: (prefers-color-scheme)
+      toggle:
+        icon: material/brightness-auto
+        name: Switch to light mode
+    - accent: purple
+      media: "(prefers-color-scheme: light)"
+      primary: white
+      scheme: default
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - accent: purple
+      media: "(prefers-color-scheme: dark)"
+      primary: black
+      scheme: slate
+      toggle:
+        icon: material/brightness-4
+        name: Switch to system preference

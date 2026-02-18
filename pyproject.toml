@@ -1,0 +1,148 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+  "pre-commit>=4.3.0",
+  "pytest>=8.4.2",
+  "pytest-cov>=7.0.0",
+  "pytest-timeout>=2.4.0",
+  "pytest-xdist>=3.8.0",
+  "ruff>=0.14.5",
+  "ty>=0.0.1,<0.0.9"
+]
+
+[project]
+name = "llama-agents-dev"
+version = "0.1.0"
+description = "Monorepo workspace for the LlamaIndex Workflows packages."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.9"
+dependencies = [
+  "click>=8.1.7",
+  "httpx>=0.28.1",
+  "packaging>=24.1",
+  "pydantic>=2.12.3",
+  "rich>=14.0.0",
+  "tomlkit>=0.13.3",
+  "tomli>=2.3.0"
+]
+
+[project.scripts]
+dev = "dev_cli:main"
+
+[tool.basedpyright]
+typeCheckingMode = "standard"
+
+[[tool.basedpyright.executionEnvironments]]
+root = "packages/llama-index-workflows"
+pythonVersion = "3.9"
+
+[[tool.basedpyright.executionEnvironments]]
+root = "packages/llama-agents-client"
+pythonVersion = "3.9"
+
+[[tool.basedpyright.executionEnvironments]]
+root = "packages/llama-agents-server"
+pythonVersion = "3.9"
+
+[[tool.basedpyright.executionEnvironments]]
+root = "packages/llama-index-utils-workflow"
+pythonVersion = "3.9"
+
+[[tool.basedpyright.executionEnvironments]]
+root = "src/dev_cli"
+pythonVersion = "3.14"
+
+[[tool.basedpyright.executionEnvironments]]
+root = "packages/llama-agents-integration-tests"
+pythonVersion = "3.13"
+
+[[tool.basedpyright.executionEnvironments]]
+root = "packages/llama-index-workflows-dbos"
+pythonVersion = "3.10"
+
+[[tool.basedpyright.executionEnvironments]]
+root = "examples"
+pythonVersion = "3.14"
+reportMissingImports = false
+
+[tool.coverage.run]
+omit = ["**/tests/*"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/dev_cli"]
+
+[tool.mypy]
+explicit_package_bases = true
+exclude = [
+  "packages/llama-agents-server/tests/",
+  "packages/llama-agents-client/tests/",
+  "packages/llama-index-utils-workflow/tests/",
+  "tests/dev_cli/",
+  "packages/llama-index-workflows/src/llama_agents/",
+  "packages/llama-index-workflows/tests/test_llama_agents_alias.py"
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "module"
+asyncio_default_test_loop_scope = "module"
+testpaths = ["tests/dev_cli"]
+addopts = "-nauto --timeout=10"
+
+[tool.ruff.lint]
+select = [
+  # default flake8 rules
+  "E4",
+  "E7",
+  "E9",
+  "F", # Pyflakes rules https://docs.astral.sh/ruff/rules/#pyflakes-f
+  "I", # sort imports https://docs.astral.sh/ruff/rules/#isort-i
+  "UP007", # Use X | Y for type annotations
+  "UP045", # Use X | None for type annotations
+  "ANN001", # Missing type annotation for function argument {name}
+  "ANN002", # Missing type annotation for *{name}
+  "ANN003", # Missing type annotation for **{name}
+  "T201" # no print statements
+]
+
+[tool.ruff.lint.per-file-ignores]
+# "tests/*" = ["D", "D100", "D101"]
+"examples/**/*" = ["T201"]
+"packages/*/tests/**/*" = [
+  "T201",
+  # remove UP007 and UP045 after removing 3.9 support
+  "UP007",
+  "UP045"
+]
+"tests/dev_cli/**/*" = [
+  "T201",
+  "UP007",
+  "UP045"
+]
+"*.ipynb" = ["T201", "ANN001", "ANN002", "ANN003"]
+"__main__.py" = ["T201"]
+
+[tool.ty.src]
+# Exclude llama_agents.workflows alias (dynamic import aliasing not understood by static analyzers)
+exclude = ["**/uv.lock", "**/.gitignore", "**/llama_agents/workflows/**", "**/test_llama_agents_alias.py"]
+
+[tool.uv.sources]
+llama-agents-integration-tests = {workspace = true}
+llama-index-utils-workflow = {workspace = true}
+llama-index-workflows = {workspace = true}
+llama-agents-client = {workspace = true}
+llama-agents-server = {workspace = true}
+
+[tool.uv.workspace]
+members = [
+  "docs/api_docs",
+  "packages/llama-agents-integration-tests",
+  "packages/llama-index-utils-workflow",
+  "packages/llama-index-workflows",
+  "packages/llama-agents-client",
+  "packages/llama-agents-server"
+]

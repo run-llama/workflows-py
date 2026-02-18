@@ -1,0 +1,84 @@
+name: Version Bump and Release
+
+on:
+  push:
+    branches:
+      - main
+      - dev
+
+concurrency: ${{ github.workflow }}-${{ github.ref }}
+
+jobs:
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev'
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@v5
+
+      - uses: pnpm/action-setup@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: "pnpm"
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Generate GitHub App token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.CI_BOT_APP_ID }}
+          private-key: ${{ secrets.CI_BOT_PRIVATE_KEY }}
+
+      - name: Create Release Pull Request or Publish packages
+        id: changesets
+        uses: changesets/action@v1
+        with:
+          commit: "chore: version packages"
+          title: "chore: version packages"
+          # Custom version script
+          version: pnpm -w run version
+          # Custom publish script
+          publish: pnpm -w run publish
+          setupGitUser: false          # don’t override git user to github-actions[bot], instead use the app token user
+          commitMode: github-api       # commits/tags attributed to the GITHUB_TOKEN owner (app token user)
+        env:
+          # Use the created app token, otherwise PRs won't run workflows
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+          UV_PUBLISH_TOKEN: ${{ secrets.PYPI_TOKEN }}
+
+      - name: Extract published llama-agents-server version
+        if: github.ref == 'refs/heads/main' && steps.changesets.outputs.published == 'true'
+        id: server-version
+        run: |
+          PACKAGES='${{ steps.changesets.outputs.publishedPackages }}'
+          VERSION=$(echo "$PACKAGES" | jq -r '.[] | select(.name == "llama-agents-server") | .version')
+
+          if [ -n "$VERSION" ]; then
+            echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+            echo "tag=llama-agents-server@v${VERSION}" >> "$GITHUB_OUTPUT"
+            echo "Found llama-agents-server version: $VERSION"
+          else
+            echo "llama-agents-server was not published in this release"
+          fi
+
+      - name: Trigger OpenAPI publish for llama-agents-server
+        if: github.ref == 'refs/heads/main' && steps.changesets.outputs.published == 'true' && steps.server-version.outputs.version != ''
+        uses: peter-evans/repository-dispatch@v3
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          event-type: publish-openapi
+          client-payload: '{"tag": "${{ steps.server-version.outputs.tag }}"}'

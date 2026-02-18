@@ -1,0 +1,8 @@
+[formatting]
+align_comments = false
+reorder_keys = false
+# Following are to be consistent with toml-sort
+indent_string = "  "
+array_trailing_comma = false
+compact_arrays = true
+compact_inline_tables = true
