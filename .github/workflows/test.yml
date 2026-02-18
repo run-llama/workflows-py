@@ -33,8 +33,6 @@ jobs:
           # Integration tests on 3.14 run in test-docker job with cross-package coverage
           - package: llama-agents-integration-tests
             python-version: "3.9"
-          - package: llama-agents-integration-tests
-            python-version: "3.14"
           # Dev CLI only needs to run on 3.14
           - package: llama-agents-dev
             python-version: "3.9"
