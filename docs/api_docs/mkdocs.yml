@@ -52,6 +52,7 @@ theme:
   features:
     - navigation.instant
     - navigation.indexes
+    - navigation.expand
     - navigation.top
     - navigation.footer
     - toc.follow

@@ -152,8 +152,10 @@ handler = await client.run_workflow_nowait("human")
 handler_id = handler.handler_id
 
 async for event in client.get_workflow_events(handler_id):
-    if event.type == "RequestEvent":
-        print("Workflow is requiring human input:", event.value.get("prompt", ""))
+    # load_event() reconstructs the typed Event class by qualified name
+    loaded = event.load_event()
+    if isinstance(loaded, RequestEvent):
+        print("Workflow is requiring human input:", loaded.prompt)
         name = input("Reply here: ")
         await client.send_event(
             handler_id=handler_id,
@@ -164,3 +166,5 @@ result = await client.get_handler(handler_id)
 res = OutEvent.model_validate(result.result)
 print("Received final message:", res.output)
 ```
+
+`load_event()` works automatically when the event class is importable by its qualified name. You can also pass a `registry` list to resolve against: `event.load_event(registry=[RequestEvent, ResponseEvent])`. If you don't need typed events, the raw `event.type` and `event.value` dict are always available.
