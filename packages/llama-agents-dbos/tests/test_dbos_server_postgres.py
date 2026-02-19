@@ -25,6 +25,9 @@ SERVER_RUNNER_PATH = str(Path(__file__).parent / "fixtures" / "server_runner.py"
 CANCEL_RESUME_RUNNER_PATH = str(
     Path(__file__).parent / "fixtures" / "cancel_resume_runner.py"
 )
+IDLE_RELEASE_RUNNER_PATH = str(
+    Path(__file__).parent / "fixtures" / "idle_release_runner.py"
+)
 
 pytestmark = [pytest.mark.docker]
 
@@ -232,6 +235,61 @@ def test_cancel_resume_round_trip(postgres_dsn: str) -> None:
     )
     assert "RESUMED" in result.stdout, (
         f"Should resume.\nstdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+    assert "EVENT_SENT" in result.stdout, (
+        f"Should send event.\nstdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+    assert "SUCCESS" in result.stdout, (
+        f"Should complete successfully.\nstdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+
+
+def run_idle_release_scenario(
+    workflow: str,
+    db_url: str,
+    run_id: str,
+    event_type: str,
+    event_data: dict[str, object],
+    idle_timeout: float = 0.5,
+    timeout: float = 60.0,
+) -> subprocess.CompletedProcess[str]:
+    """Run an idle release end-to-end scenario."""
+    cmd = [
+        sys.executable,
+        IDLE_RELEASE_RUNNER_PATH,
+        "--workflow",
+        workflow,
+        "--db-url",
+        db_url,
+        "--run-id",
+        run_id,
+        "--event-type",
+        event_type,
+        "--event-data",
+        json.dumps(event_data),
+        "--idle-timeout",
+        str(idle_timeout),
+    ]
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+
+
+def test_idle_release_end_to_end(postgres_dsn: str) -> None:
+    """Idle workflow is auto-released and auto-resumed via DBOSIdleReleaseDecorator."""
+    result = run_idle_release_scenario(
+        workflow="tests.fixtures.sample_workflows.idle_cancel_resume:IdleCancelResumeWorkflow",
+        db_url=postgres_dsn,
+        run_id="test-idle-release-001",
+        event_type="ExternalDataEvent",
+        event_data={"response": "idle-test"},
+        idle_timeout=0.5,
+    )
+    assert_no_errors(result)
+
+    assert "IDLE_DETECTED" in result.stdout, (
+        f"Should detect idle.\nstdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+    assert "TIMEOUT_ELAPSED" in result.stdout, (
+        f"Should wait for timeout.\nstdout: {result.stdout}\nstderr: {result.stderr}"
     )
     assert "EVENT_SENT" in result.stdout, (
         f"Should send event.\nstdout: {result.stdout}\nstderr: {result.stderr}"

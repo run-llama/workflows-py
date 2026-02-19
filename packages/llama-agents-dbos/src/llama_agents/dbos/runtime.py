@@ -555,19 +555,30 @@ class DBOSRuntime(Runtime):
         self._workflow_store = DBOSWorkflowStore(_factory)
         return self._workflow_store
 
-    def build_server_runtime(self) -> Runtime:
+    def build_server_runtime(self, *, idle_timeout: float | None = None) -> Runtime:
         """Build the decorator chain for use with WorkflowServer.
 
         Wraps the DBOS runtime with:
         - EventInterceptorDecorator (blocks events from reaching DBOS streams)
+        - DBOSIdleReleaseDecorator (when ``idle_timeout`` is set)
 
-        DBOS handles persistence and resumption internally, and idle detection
-        is not supported (would require cancelling and resuming a new workflow).
+        Args:
+            idle_timeout: Seconds to wait after a workflow becomes idle before
+                releasing it via ``cancel_workflow_async``. When ``None``
+                (default), idle release is disabled.
 
         The returned runtime should be passed as the ``runtime`` argument
         to ``WorkflowServer``.
         """
-        return EventInterceptorDecorator(self)
+        from .idle_release import DBOSIdleReleaseDecorator
+
+        inner: Runtime = EventInterceptorDecorator(self)
+        if idle_timeout is not None:
+            store = self.create_workflow_store()
+            inner = DBOSIdleReleaseDecorator(
+                inner, store=store, idle_timeout=idle_timeout
+            )
+        return inner
 
     def launch(self) -> None:
         """
