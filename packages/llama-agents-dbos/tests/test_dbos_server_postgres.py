@@ -28,6 +28,9 @@ CANCEL_RESUME_RUNNER_PATH = str(
 IDLE_RELEASE_RUNNER_PATH = str(
     Path(__file__).parent / "fixtures" / "idle_release_runner.py"
 )
+CANCEL_HANGS_RUNNER_PATH = str(
+    Path(__file__).parent / "fixtures" / "cancel_hangs_runner.py"
+)
 
 pytestmark = [pytest.mark.docker]
 
@@ -297,3 +300,104 @@ def test_idle_release_end_to_end(postgres_dsn: str) -> None:
     assert "SUCCESS" in result.stdout, (
         f"Should complete successfully.\nstdout: {result.stdout}\nstderr: {result.stderr}"
     )
+
+
+def test_cancel_unblocks_waiting_control_loop(postgres_dsn: str) -> None:
+    """Experiment: does cancel_workflow_async unblock a control loop blocked in recv_async?
+
+    If DBOS doesn't interrupt recv_async on cancellation, the control loop will
+    hang for up to 24 hours (the unbounded wait timeout). This test checks whether
+    the loop exits within 10 seconds of cancel.
+    """
+    cmd = [
+        sys.executable,
+        CANCEL_HANGS_RUNNER_PATH,
+        "--workflow",
+        "tests.fixtures.sample_workflows.idle_cancel_resume:IdleCancelResumeWorkflow",
+        "--db-url",
+        postgres_dsn,
+        "--run-id",
+        "test-cancel-hangs-001",
+        "--cancel-wait-timeout",
+        "10.0",
+    ]
+    # Use Popen so we can stream stdout and kill on EXPERIMENT_DONE,
+    # since cleanup hangs when the control loop is still blocked in recv_async.
+    import time as _time
+
+    proc = subprocess.Popen(
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+    )
+    stdout_lines: list[str] = []
+    deadline = _time.monotonic() + 60
+    experiment_done = False
+    while _time.monotonic() < deadline:
+        line = proc.stdout.readline()  # type: ignore[union-attr]
+        if not line:
+            if proc.poll() is not None:
+                break
+            _time.sleep(0.1)
+            continue
+        stdout_lines.append(line.rstrip())
+        if "EXPERIMENT_DONE" in line:
+            experiment_done = True
+            break
+
+    proc.kill()
+    proc.wait()
+    remaining_stdout = proc.stdout.read() if proc.stdout else ""  # type: ignore[union-attr]
+    stderr_output = proc.stderr.read() if proc.stderr else ""  # type: ignore[union-attr]
+    stdout_output = "\n".join(stdout_lines) + remaining_stdout
+
+    class _FakeResult:
+        def __init__(self, stdout: str, stderr: str, returncode: int) -> None:
+            self.stdout = stdout
+            self.stderr = stderr
+            self.returncode = returncode
+
+    result = _FakeResult(stdout_output, stderr_output, 0)  # type: ignore[assignment]
+
+    if not experiment_done:
+        pytest.fail(
+            f"Subprocess timed out at 60s before EXPERIMENT_DONE.\n"
+            f"stdout: {result.stdout}\nstderr: {result.stderr}"
+        )
+
+    print(f"stdout:\n{result.stdout}")
+    print(f"stderr:\n{result.stderr}")
+
+    assert "IDLE_DETECTED" in result.stdout, (
+        f"Should detect idle.\nstdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+    assert "CANCEL_CALLED" in result.stdout, (
+        f"Should call cancel.\nstdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+    assert "EXPERIMENT_DONE" in result.stdout, (
+        f"Experiment should complete.\nstdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+
+    # The key assertion: did the control loop exit, or did it hang?
+    if "CONTROL_LOOP_HUNG" in result.stdout:
+        pytest.fail(
+            f"Control loop HUNG after cancel_workflow_async! "
+            f"recv_async was not interrupted by cancellation.\n"
+            f"stdout: {result.stdout}\nstderr: {result.stderr}"
+        )
+
+    # Accept either clean exit or exit-with-error (e.g. DBOSAwaitedWorkflowCancelledError)
+    exited = (
+        "CONTROL_LOOP_EXITED:" in result.stdout
+        or "CONTROL_LOOP_EXITED_WITH_ERROR:" in result.stdout
+    )
+    assert exited, (
+        f"Expected control loop to exit after cancel.\n"
+        f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+
+    # Extract timing for informational purposes
+    elapsed_line = extract_line(result.stdout, "CONTROL_LOOP_EXITED:elapsed=")
+    if elapsed_line is None:
+        elapsed_line = extract_line(
+            result.stdout, "CONTROL_LOOP_EXITED_WITH_ERROR:elapsed="
+        )
+    print(f"Control loop exited in {elapsed_line}")
