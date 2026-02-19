@@ -97,7 +97,7 @@ async def run_cancel_resume(
             await asyncio.sleep(0.2)
 
             # Step 3: Resume the workflow
-            handle = await DBOS.resume_workflow_async(actual_run_id)
+            await DBOS.resume_workflow_async(actual_run_id)
             print("RESUMED", flush=True)
 
             # Step 4: Send the external event
@@ -136,9 +136,7 @@ async def run_cancel_resume(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="Run cancel/resume round-trip test"
-    )
+    parser = argparse.ArgumentParser(description="Run cancel/resume round-trip test")
     parser.add_argument("--workflow", required=True)
     parser.add_argument("--db-url", required=True)
     parser.add_argument("--run-id", required=True)
