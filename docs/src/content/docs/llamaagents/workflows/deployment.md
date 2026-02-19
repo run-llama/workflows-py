@@ -281,104 +281,57 @@ curl -X POST http://localhost:80/handlers/someUniqueId123/cancel?purge=true
 }
 ```
 
-## Using `WorkflowClient` to Interact with Servers
+## Persistence
 
-In order to interact with a deployed `WorkflowServer` programmatically, beyond the raw API calls detailed above, we also provide a `WorkflowClient` class.
+By default, `WorkflowServer` uses an in-memory store (`MemoryWorkflowStore`), so all handler state and events are lost when the process restarts. For durable persistence, pass a `workflow_store` backed by a database.
 
-`WorkflowClient` provides methods for listing available workflows and workflow handlers, verifying the health of the server, running a workflow (both synchronously and asynchronously), streaming events and sending events.
+### SQLite
 
-Assuming you are running the server example from above, we can use `WorkflowClient` in the following way:
+The simplest option for single-process deployments is `SqliteWorkflowStore`, which persists handler state, events, and results to a local file:
 
 ```python
-from llama_agents.client import WorkflowClient
+from llama_agents.server import WorkflowServer, SqliteWorkflowStore
 
-async def main():
-    client = WorkflowClient(base_url="http://0.0.0.0:8080")
-    workflows = await client.list_workflows()
-    print("===== AVAILABLE WORKFLOWS ====")
-    print(workflows)
-    await client.is_healthy()  # will raise an exception if the server is not healthy
-    handler = await client.run_workflow_nowait(
-        "greet",
-        start_event=StartEvent(name="John"),
-        context=None,
-    )
-    handler_id = handler.handler_id
-    print("==== STARTING THE WORKFLOW ===")
-    print(f"Workflow running with handler ID: {handler_id}")
-    print("=== STREAMING EVENTS ===")
+store = SqliteWorkflowStore(db_path="workflows.db")
 
-    async for event in client.get_workflow_events(handler_id=handler_id):
-        print("Received data:", event)
-    result = await client.get_handler(handler_id)
-
-    print(f"Final result: {result.result} (status: {result.status})")
-
-if __name__ == "__main__":
-    import asyncio
-    asyncio.run(main())
+server = WorkflowServer(workflow_store=store)
+server.add_workflow("greet", greet_wf)
 ```
 
-You can use the client also to interactively run human-in-the-loop workflows, like this one:
+### DBOS (Postgres)
+
+For production deployments that need Postgres-backed persistence, durable execution, and the ability to run distributed workers, use the `DBOSRuntime` from the `llama-agents-dbos` package. This replaces the default runtime with one backed by [DBOS](https://docs.dbos.dev/), providing transactional state management and recovery across process restarts:
 
 ```python
-from workflows import Workflow, step
-from workflows.context import Context
-from workflows.events import (
-    StartEvent,
-    StopEvent,
-    InputRequiredEvent,
-    HumanResponseEvent,
-)
+from dbos import DBOS
+from llama_agents.dbos import DBOSRuntime
 from llama_agents.server import WorkflowServer
 
-class RequestEvent(InputRequiredEvent):
-    prompt: str
+# Configure DBOS — uses SQLite by default, or set system_database_url for Postgres
+DBOS(config={"name": "my-app", "run_admin_server": False})
 
-class ResponseEvent(HumanResponseEvent):
-    response: str
+runtime = DBOSRuntime()
 
-class OutEvent(StopEvent):
-    output: str
-
-class HumanInTheLoopWorkflow(Workflow):
-    @step
-    async def prompt_human(self, ev: StartEvent, ctx: Context) -> RequestEvent:
-        return RequestEvent(prompt="What is your name?")
-
-    @step
-    async def greet_human(self, ev: ResponseEvent) -> OutEvent:
-        return OutEvent(output=f"Hello, {ev.response}")
-
-server = WorkflowServer()
-server.add_workflow("human", HumanInTheLoopWorkflow(timeout=1000))
-await server.serve("0.0.0.0", "8080")
+server = WorkflowServer(
+    workflow_store=runtime.create_workflow_store(),
+    runtime=runtime.build_server_runtime(),
+)
+server.add_workflow("greet", GreetingWorkflow())
 ```
 
-You can now run the workflow and, when the human interaction is required, send the human response back:
+By default DBOS uses SQLite (zero setup). To use Postgres, pass a `system_database_url` in the DBOS config. For multi-replica setups, each replica must have a unique `executor_id`:
 
 ```python
-from llama_agents.client import WorkflowClient
-
-client = WorkflowClient(base_url="http://0.0.0.0:8080")
-handler = await client.run_workflow_nowait("human")
-handler_id = handler.handler_id
-print(handler_id)
-async for event in client.get_workflow_events(handler_id=handler_id):
-    if "RequestEvent" == event.type:
-        print(
-            "Workflow is requiring human input:",
-            event.value.get("prompt", ""),
-        )
-        name = input("Reply here: ")
-        sent_event = await client.send_event(
-            handler_id=handler_id,
-            event=ResponseEvent(response=name.capitalize().strip()),
-        )
-        msg = "Event has been sent" if sent_event else "Event failed to send"
-        print(msg)
-result = await client.get_handler(handler_id)
-print(f"Workflow complete with status: {result.status})")
-res = OutEvent.model_validate(result.result)
-print("Received final message:", res.output)
+DBOS(config={
+    "name": "my-app",
+    "system_database_url": "postgresql://user:pass@localhost:5432/mydb",
+    "run_admin_server": False,
+    "executor_id": "replica-1",  # unique per replica
+})
 ```
+
+With Postgres, multiple server replicas can share the same database for distributed execution and recovery. See the `examples/dbos/` directory for a full multi-replica demo.
+
+## Python Client
+
+For programmatic interaction with a `WorkflowServer`, see the [Python Client](/python/llamaagents/workflows/client) documentation.
