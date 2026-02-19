@@ -22,6 +22,9 @@ from pathlib import Path
 import pytest
 
 SERVER_RUNNER_PATH = str(Path(__file__).parent / "fixtures" / "server_runner.py")
+CANCEL_RESUME_RUNNER_PATH = str(
+    Path(__file__).parent / "fixtures" / "cancel_resume_runner.py"
+)
 
 pytestmark = [pytest.mark.docker]
 
@@ -182,3 +185,57 @@ def test_no_duplicate_events_after_replay(postgres_dsn: str) -> None:
         assert int(streams_count) == 0, (
             f"Expected 0 events in dbos.streams after replay, got {streams_count}"
         )
+
+
+def run_cancel_resume_scenario(
+    workflow: str,
+    db_url: str,
+    run_id: str,
+    event_type: str,
+    event_data: dict[str, object],
+    timeout: float = 60.0,
+) -> subprocess.CompletedProcess[str]:
+    """Run a cancel/resume round-trip scenario."""
+    cmd = [
+        sys.executable,
+        CANCEL_RESUME_RUNNER_PATH,
+        "--workflow",
+        workflow,
+        "--db-url",
+        db_url,
+        "--run-id",
+        run_id,
+        "--event-type",
+        event_type,
+        "--event-data",
+        json.dumps(event_data),
+    ]
+    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+
+
+def test_cancel_resume_round_trip(postgres_dsn: str) -> None:
+    """Cancel an idle DBOS workflow and resume it, verifying correct completion."""
+    result = run_cancel_resume_scenario(
+        workflow="tests.fixtures.sample_workflows.idle_cancel_resume:IdleCancelResumeWorkflow",
+        db_url=postgres_dsn,
+        run_id="test-cancel-resume-001",
+        event_type="ExternalDataEvent",
+        event_data={"response": "hello-world"},
+    )
+    assert_no_errors(result)
+
+    assert "IDLE_DETECTED" in result.stdout, (
+        f"Should detect idle.\nstdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+    assert "CANCELLED" in result.stdout, (
+        f"Should cancel.\nstdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+    assert "RESUMED" in result.stdout, (
+        f"Should resume.\nstdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+    assert "EVENT_SENT" in result.stdout, (
+        f"Should send event.\nstdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+    assert "SUCCESS" in result.stdout, (
+        f"Should complete successfully.\nstdout: {result.stdout}\nstderr: {result.stderr}"
+    )
