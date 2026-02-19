@@ -201,6 +201,11 @@ class _DBOSInternalShutdown:
     """Internal signal sent via DBOS.send to wake blocked recv for shutdown."""
 
 
+@dataclass
+class _DBOSInternalWakeUp:
+    """Internal signal sent via DBOS.send to wake blocked recv without shutdown."""
+
+
 @DBOS.step()
 def _durable_time() -> float:
     """
@@ -753,6 +758,8 @@ class InternalDBOSAdapter(InternalRunAdapter):
         if isinstance(result, _DBOSInternalShutdown):
             self._closed = True
             raise asyncio.CancelledError("Adapter closed")
+        if isinstance(result, _DBOSInternalWakeUp):
+            return WaitResultTimeout()
         return WaitResultTick(tick=result)
 
     async def close(self) -> None:

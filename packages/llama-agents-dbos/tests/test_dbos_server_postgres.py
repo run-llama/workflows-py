@@ -303,11 +303,16 @@ def test_idle_release_end_to_end(postgres_dsn: str) -> None:
 
 
 def test_cancel_unblocks_waiting_control_loop(postgres_dsn: str) -> None:
-    """Experiment: does cancel_workflow_async unblock a control loop blocked in recv_async?
+    """Experiment: does cancel_workflow_async actually kill the control loop task?
 
-    If DBOS doesn't interrupt recv_async on cancellation, the control loop will
-    hang for up to 24 hours (the unbounded wait timeout). This test checks whether
-    the loop exits within 10 seconds of cancel.
+    handle.get_result() just polls the DBOS DB — it resolves immediately when
+    cancel marks the workflow status. But the real question is whether the asyncio
+    task running the control loop (blocked in recv_async with a 24-hour timeout)
+    actually exits. We test this by:
+    1. Cancelling the workflow
+    2. Waiting 5 seconds
+    3. Checking if the process can shut down cleanly (server.contextmanager exit +
+       dbos_runtime.destroy) — if the control loop task is still alive, these hang.
     """
     cmd = [
         sys.executable,
@@ -319,18 +324,20 @@ def test_cancel_unblocks_waiting_control_loop(postgres_dsn: str) -> None:
         "--run-id",
         "test-cancel-hangs-001",
         "--cancel-wait-timeout",
-        "10.0",
+        "5.0",
     ]
-    # Use Popen so we can stream stdout and kill on EXPERIMENT_DONE,
-    # since cleanup hangs when the control loop is still blocked in recv_async.
+
+    # Use Popen to stream output line-by-line and detect hangs
     import time as _time
 
     proc = subprocess.Popen(
         cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
     )
     stdout_lines: list[str] = []
-    deadline = _time.monotonic() + 60
-    experiment_done = False
+    # 30s for setup + 5s wait + 15s buffer for shutdown
+    deadline = _time.monotonic() + 50
+    saw_experiment_done = False
+    saw_inner_done = False
     while _time.monotonic() < deadline:
         line = proc.stdout.readline()  # type: ignore[union-attr]
         if not line:
@@ -338,66 +345,63 @@ def test_cancel_unblocks_waiting_control_loop(postgres_dsn: str) -> None:
                 break
             _time.sleep(0.1)
             continue
-        stdout_lines.append(line.rstrip())
+        stripped = line.rstrip()
+        stdout_lines.append(stripped)
+        print(stripped)
+        if "INNER_DONE" in line:
+            saw_inner_done = True
         if "EXPERIMENT_DONE" in line:
-            experiment_done = True
+            saw_experiment_done = True
             break
 
+    # If we got INNER_DONE but not EXPERIMENT_DONE, the process hung during
+    # server shutdown or destroy — meaning the control loop task is still alive
     proc.kill()
     proc.wait()
-    remaining_stdout = proc.stdout.read() if proc.stdout else ""  # type: ignore[union-attr]
     stderr_output = proc.stderr.read() if proc.stderr else ""  # type: ignore[union-attr]
-    stdout_output = "\n".join(stdout_lines) + remaining_stdout
+    stdout_output = "\n".join(stdout_lines)
 
-    class _FakeResult:
-        def __init__(self, stdout: str, stderr: str, returncode: int) -> None:
-            self.stdout = stdout
-            self.stderr = stderr
-            self.returncode = returncode
+    print(f"\nstderr:\n{stderr_output}")
 
-    result = _FakeResult(stdout_output, stderr_output, 0)  # type: ignore[assignment]
+    assert "IDLE_DETECTED" in stdout_output, (
+        f"Should detect idle.\nstdout: {stdout_output}"
+    )
+    assert "CANCEL_CALLED" in stdout_output, (
+        f"Should call cancel.\nstdout: {stdout_output}"
+    )
 
-    if not experiment_done:
+    if saw_inner_done and not saw_experiment_done:
+        # Print the task info for debugging
+        task_lines = extract_all_lines(stdout_output, "TASK:")
         pytest.fail(
-            f"Subprocess timed out at 60s before EXPERIMENT_DONE.\n"
-            f"stdout: {result.stdout}\nstderr: {result.stderr}"
+            f"Control loop HANGS after cancel_workflow_async!\n"
+            f"Server shutdown / destroy hung because the control loop asyncio task "
+            f"is still blocked in recv_async.\n"
+            f"Live tasks at check time: {task_lines}\n"
+            f"stdout: {stdout_output}"
         )
 
-    print(f"stdout:\n{result.stdout}")
-    print(f"stderr:\n{result.stderr}")
-
-    assert "IDLE_DETECTED" in result.stdout, (
-        f"Should detect idle.\nstdout: {result.stdout}\nstderr: {result.stderr}"
-    )
-    assert "CANCEL_CALLED" in result.stdout, (
-        f"Should call cancel.\nstdout: {result.stdout}\nstderr: {result.stderr}"
-    )
-    assert "EXPERIMENT_DONE" in result.stdout, (
-        f"Experiment should complete.\nstdout: {result.stdout}\nstderr: {result.stderr}"
-    )
-
-    # The key assertion: did the control loop exit, or did it hang?
-    if "CONTROL_LOOP_HUNG" in result.stdout:
+    if not saw_inner_done:
         pytest.fail(
-            f"Control loop HUNG after cancel_workflow_async! "
-            f"recv_async was not interrupted by cancellation.\n"
-            f"stdout: {result.stdout}\nstderr: {result.stderr}"
+            f"Process didn't reach INNER_DONE within timeout.\n"
+            f"stdout: {stdout_output}\nstderr: {stderr_output}"
         )
 
-    # Accept either clean exit or exit-with-error (e.g. DBOSAwaitedWorkflowCancelledError)
-    exited = (
-        "CONTROL_LOOP_EXITED:" in result.stdout
-        or "CONTROL_LOOP_EXITED_WITH_ERROR:" in result.stdout
-    )
-    assert exited, (
-        f"Expected control loop to exit after cancel.\n"
-        f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    assert saw_experiment_done, (
+        f"Process should have completed cleanly.\nstdout: {stdout_output}"
     )
 
-    # Extract timing for informational purposes
-    elapsed_line = extract_line(result.stdout, "CONTROL_LOOP_EXITED:elapsed=")
-    if elapsed_line is None:
-        elapsed_line = extract_line(
-            result.stdout, "CONTROL_LOOP_EXITED_WITH_ERROR:elapsed="
-        )
-    print(f"Control loop exited in {elapsed_line}")
+    # Assert the zombie task actually died — task count should drop
+    before = extract_line(stdout_output, "LIVE_TASKS_BEFORE_WAIT:")
+    after = extract_line(stdout_output, "LIVE_TASKS_AFTER_WAIT:")
+    print(f"\nLive tasks before wait: {before}, after wait: {after}")
+    assert before is not None and after is not None, (
+        f"Should have task counts.\nstdout: {stdout_output}"
+    )
+    before_count = int(before.split(":")[-1])
+    after_count = int(after.split(":")[-1])
+    assert after_count < before_count, (
+        f"Control loop task should have exited after cancel. "
+        f"Tasks before: {before_count}, after: {after_count}\n"
+        f"stdout: {stdout_output}"
+    )

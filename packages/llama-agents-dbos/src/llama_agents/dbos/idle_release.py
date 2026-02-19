@@ -14,6 +14,7 @@ from collections.abc import Coroutine
 from datetime import datetime, timezone
 from typing import Any
 
+from llama_agents.dbos.runtime import _IO_STREAM_TICK_TOPIC, _DBOSInternalWakeUp
 from llama_agents.server._keyed_lock import KeyedLock
 from llama_agents.server._runtime.runtime_decorators import (
     BaseExternalRunAdapterDecorator,
@@ -185,6 +186,20 @@ class DBOSIdleReleaseDecorator(BaseRuntimeDecorator):
                     exc_info=True,
                 )
                 return
+
+            # Wake up the control loop so it exits instead of lingering as a
+            # zombie blocked in recv_async for up to 24 hours.
+            try:
+                await DBOS.send_async(
+                    run_id,
+                    _DBOSInternalWakeUp(),
+                    topic=_IO_STREAM_TICK_TOPIC,
+                )
+            except Exception:
+                logger.debug(
+                    f"Failed to send wake-up signal [run_id={run_id}]",
+                    exc_info=True,
+                )
 
             logger.info(f"Released idle DBOS handler [run_id={run_id}]")
 
