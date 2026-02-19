@@ -384,3 +384,36 @@ async def test_reconnect_resets_attempts_on_success() -> None:
 async def test_timeout_exception_not_retried() -> None:
     with pytest.raises(TimeoutError, match="Timeout"):
         await _collect([httpx.ReadTimeout("timed out")])
+
+
+@pytest.mark.asyncio
+async def test_get_workflow_events_tracks_last_sequence() -> None:
+    e1, e2, e3 = _envelope("a"), _envelope("b"), _envelope("c")
+    fake = FakeStreamClient([[(0, e1), (1, e2), (2, e3)]])
+    wf_client = WorkflowClient(httpx_client=fake)  # type: ignore[arg-type]
+
+    stream = wf_client.get_workflow_events(handler_id="h")
+    assert stream.last_sequence == -1
+
+    sequences: list[int | str] = []
+    async for event in stream:
+        sequences.append(stream.last_sequence)
+
+    assert sequences == [0, 1, 2]
+    assert stream.last_sequence == 2
+
+
+@pytest.mark.asyncio
+async def test_get_workflow_events_with_now() -> None:
+    e1 = _envelope("a")
+    fake = FakeStreamClient([[(5, e1)]])
+    wf_client = WorkflowClient(httpx_client=fake)  # type: ignore[arg-type]
+
+    stream = wf_client.get_workflow_events(handler_id="h", after_sequence="now")
+    assert stream.last_sequence == "now"
+
+    async for _ in stream:
+        pass
+
+    assert stream.last_sequence == 5
+    assert fake.captured_params[0]["after_sequence"] == "now"
