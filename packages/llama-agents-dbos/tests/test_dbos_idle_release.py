@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -73,33 +74,15 @@ async def test_idle_event_stamps_idle_since_and_spawns_release(
     # Should have forwarded the event
     inner_adapter.write_to_event_stream.assert_called_once_with(event)
 
-    # Should have spawned a background task
-    assert len(decorator._background_tasks) == 1
+    # Should have a deferred release task tracked by run_id
+    assert "run-1" in decorator._deferred_release_tasks
 
 
 @pytest.mark.asyncio()
-async def test_run_workflow_tracks_active_run_id(
-    decorator: DBOSIdleReleaseDecorator, mock_inner_runtime: MagicMock
-) -> None:
-    """run_workflow should add run_id to _active_run_ids."""
-    mock_inner_runtime.run_workflow.return_value = MagicMock(spec=ExternalRunAdapter)
-
-    decorator.run_workflow("run-1", MagicMock(), MagicMock())
-
-    assert "run-1" in decorator._active_run_ids
-
-
-@pytest.mark.asyncio()
-async def test_release_cancels_and_closes(
+async def test_release_only_cancels_workflow(
     decorator: DBOSIdleReleaseDecorator, mock_store: AsyncMock
 ) -> None:
-    """Release should call cancel_workflow_async and close the internal adapter."""
-    decorator._active_run_ids.add("run-1")
-
-    # Set up a mock internal adapter
-    mock_internal = AsyncMock(spec=InternalRunAdapter)
-    decorator._internal_adapters["run-1"] = mock_internal
-
+    """Release should only call cancel_workflow_async — no close, no shutdown signal."""
     # Set up store to return a handler that's been idle long enough
     idle_since = datetime(2020, 1, 1, tzinfo=timezone.utc)
     handler = MagicMock(spec=PersistentHandler)
@@ -110,9 +93,7 @@ async def test_release_cancels_and_closes(
         mock_dbos.cancel_workflow_async = AsyncMock()
         await decorator._release_idle_handler("run-1")
 
-    assert "run-1" not in decorator._active_run_ids
     mock_dbos.cancel_workflow_async.assert_called_once_with("run-1")
-    mock_internal.close.assert_called_once()
 
 
 @pytest.mark.asyncio()
@@ -120,8 +101,6 @@ async def test_release_skips_if_not_idle(
     decorator: DBOSIdleReleaseDecorator, mock_store: AsyncMock
 ) -> None:
     """Release should skip if handler is no longer idle."""
-    decorator._active_run_ids.add("run-1")
-
     handler = MagicMock(spec=PersistentHandler)
     handler.idle_since = None
     mock_store.query.return_value = [handler]
@@ -130,8 +109,6 @@ async def test_release_skips_if_not_idle(
         mock_dbos.cancel_workflow_async = AsyncMock()
         await decorator._release_idle_handler("run-1")
 
-    # Should not have cancelled — handler wasn't idle
-    assert "run-1" in decorator._active_run_ids
     mock_dbos.cancel_workflow_async.assert_not_called()
 
 
@@ -160,7 +137,6 @@ async def test_send_event_triggers_resume_when_idle(
         await adapter.send_event(MagicMock(spec=WorkflowTick))
 
     mock_dbos.resume_workflow_async.assert_called_once_with("run-1")
-    assert "run-1" in decorator._active_run_ids
     mock_inner_external.send_event.assert_called_once()
 
 
@@ -190,3 +166,46 @@ async def test_send_event_skips_resume_when_not_idle(
 
     mock_dbos.resume_workflow_async.assert_not_called()
     mock_inner_external.send_event.assert_called_once()
+
+
+@pytest.mark.asyncio()
+async def test_send_event_cancels_pending_release_timer(
+    decorator: DBOSIdleReleaseDecorator, mock_store: AsyncMock
+) -> None:
+    """send_event should cancel any pending deferred release timer for the run."""
+    # Schedule a deferred release
+    decorator._schedule_deferred_release("run-1")
+    assert "run-1" in decorator._deferred_release_tasks
+    task = decorator._deferred_release_tasks["run-1"]
+
+    # Set up store to return non-idle handler
+    handler = MagicMock(spec=PersistentHandler)
+    handler.idle_since = None
+    mock_store.query.return_value = [handler]
+
+    mock_inner_external = AsyncMock(spec=ExternalRunAdapter)
+    adapter = DBOSIdleReleaseExternalRunAdapter(decorator, "run-1")
+
+    with patch.object(
+        decorator._decorated,
+        "get_external_adapter",
+        return_value=mock_inner_external,
+    ):
+        await adapter.send_event(MagicMock(spec=WorkflowTick))
+
+    # Timer should have been cancelled (allow event loop to process cancellation)
+    await asyncio.sleep(0)
+    assert task.cancelled()
+    assert "run-1" not in decorator._deferred_release_tasks
+
+
+@pytest.mark.asyncio()
+async def test_no_destroy_or_shutdown_cancellation(
+    decorator: DBOSIdleReleaseDecorator,
+) -> None:
+    """Decorator should not have destroy/shutdown methods that cancel workflows."""
+    assert not hasattr(decorator, "stop_task")
+    assert not hasattr(decorator, "_on_server_stop")
+    assert not hasattr(decorator, "_close_internal_adapter")
+    assert not hasattr(decorator, "_active_run_ids")
+    assert not hasattr(decorator, "_internal_adapters")
