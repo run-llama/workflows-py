@@ -136,12 +136,12 @@ async def test_release_skips_if_not_idle(
 
 
 @pytest.mark.asyncio()
-async def test_send_event_triggers_resume_when_not_active(
+async def test_send_event_triggers_resume_when_idle(
     decorator: DBOSIdleReleaseDecorator, mock_store: AsyncMock
 ) -> None:
-    """send_event on external adapter should resume workflow if not active."""
+    """send_event should resume workflow if store shows handler is idle."""
     handler = MagicMock(spec=PersistentHandler)
-    handler.idle_since = None
+    handler.idle_since = datetime(2020, 1, 1, tzinfo=timezone.utc)
     mock_store.query.return_value = [handler]
 
     mock_inner_external = AsyncMock(spec=ExternalRunAdapter)
@@ -165,22 +165,28 @@ async def test_send_event_triggers_resume_when_not_active(
 
 
 @pytest.mark.asyncio()
-async def test_send_event_clears_idle_when_active(
+async def test_send_event_skips_resume_when_not_idle(
     decorator: DBOSIdleReleaseDecorator, mock_store: AsyncMock
 ) -> None:
-    """send_event should clear idle_since when run is active."""
-    decorator._active_run_ids.add("run-1")
+    """send_event should not resume if store shows handler is not idle."""
+    handler = MagicMock(spec=PersistentHandler)
+    handler.idle_since = None
+    mock_store.query.return_value = [handler]
 
     mock_inner_external = AsyncMock(spec=ExternalRunAdapter)
 
     adapter = DBOSIdleReleaseExternalRunAdapter(decorator, "run-1")
 
-    with patch.object(
-        decorator._decorated,
-        "get_external_adapter",
-        return_value=mock_inner_external,
+    with (
+        patch.object(
+            decorator._decorated,
+            "get_external_adapter",
+            return_value=mock_inner_external,
+        ),
+        patch("llama_agents.dbos.idle_release.DBOS") as mock_dbos,
     ):
+        mock_dbos.resume_workflow_async = AsyncMock()
         await adapter.send_event(MagicMock(spec=WorkflowTick))
 
-    mock_store.update_handler_status.assert_called_once_with("run-1", idle_since=None)
+    mock_dbos.resume_workflow_async.assert_not_called()
     mock_inner_external.send_event.assert_called_once()

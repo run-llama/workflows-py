@@ -93,12 +93,11 @@ class DBOSIdleReleaseExternalRunAdapter(BaseExternalRunAdapterDecorator):
     @override
     async def send_event(self, tick: WorkflowTick) -> None:
         async with self._runtime._reload_lock(self.run_id):
-            if self.run_id not in self._runtime._active_run_ids:
+            handlers = await self._runtime._store.query(
+                HandlerQuery(run_id_in=[self.run_id])
+            )
+            if len(handlers) == 1 and handlers[0].idle_since is not None:
                 await self._runtime._ensure_active_run_locked(self.run_id)
-            else:
-                await self._runtime._store.update_handler_status(
-                    self.run_id, idle_since=None
-                )
             await self._decorated.send_event(tick)
 
 
@@ -234,16 +233,8 @@ class DBOSIdleReleaseDecorator(BaseRuntimeDecorator):
 
         Called under the reload lock. Uses DBOS resume_workflow_async to
         restart the workflow from its last completed step with the same run_id.
+        The caller must have already verified the handler is idle via the store.
         """
-        if run_id in self._active_run_ids:
-            return
-
-        handlers = await self._store.query(HandlerQuery(run_id_in=[run_id]))
-        if len(handlers) != 1:
-            raise ValueError(
-                f"Expected 1 handler for run {run_id}, got {len(handlers)}"
-            )
-
         # Resume the DBOS workflow — restarts from last completed step
         await DBOS.resume_workflow_async(run_id)
 
