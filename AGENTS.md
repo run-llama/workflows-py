@@ -49,6 +49,9 @@ See `architecture-docs/` for high-level architectural overviews:
 - [`control-loop.md`](architecture-docs/control-loop.md) — The reducer-based execution engine
 - [`server-architecture.md`](architecture-docs/server-architecture.md) — HTTP server, persistence, and runtime decorators
 
+The DBOS package has its own architecture doc explaining the distributed model (process boundaries, adapter rules, idle release):
+- [`packages/llama-agents-dbos/ARCHITECTURE.md`](packages/llama-agents-dbos/ARCHITECTURE.md)
+
 ## Key Components
 - **Workflow** - Main orchestration class
 - **Context** - State management across workflow steps

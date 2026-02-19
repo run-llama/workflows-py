@@ -23,6 +23,7 @@ from workflows.runtime.types.plugin import (
     ExternalRunAdapter,
     InternalRunAdapter,
     Runtime,
+    WaitResultTick,
 )
 from workflows.runtime.types.ticks import WorkflowTick
 
@@ -169,30 +170,26 @@ async def test_send_event_skips_resume_when_not_idle(
 
 
 @pytest.mark.asyncio()
-async def test_send_event_cancels_pending_release_timer(
+async def test_wait_receive_cancels_pending_release_timer(
     decorator: DBOSIdleReleaseDecorator, mock_store: AsyncMock
 ) -> None:
-    """send_event should cancel any pending deferred release timer for the run."""
+    """wait_receive returning a tick should cancel the pending release timer."""
     # Schedule a deferred release
     decorator._schedule_deferred_release("run-1")
     assert "run-1" in decorator._deferred_release_tasks
     task = decorator._deferred_release_tasks["run-1"]
 
-    # Set up store to return non-idle handler
-    handler = MagicMock(spec=PersistentHandler)
-    handler.idle_since = None
-    mock_store.query.return_value = [handler]
+    # Create internal adapter with a mock that returns a tick
+    inner_adapter = MagicMock(spec=InternalRunAdapter)
+    inner_adapter.run_id = "run-1"
+    tick_result = WaitResultTick(tick=MagicMock(spec=WorkflowTick))
+    inner_adapter.wait_receive = AsyncMock(return_value=tick_result)
 
-    mock_inner_external = AsyncMock(spec=ExternalRunAdapter)
-    adapter = DBOSIdleReleaseExternalRunAdapter(decorator, "run-1")
+    adapter = _DBOSIdleReleaseInternalRunAdapter(inner_adapter, decorator, mock_store)
 
-    with patch.object(
-        decorator._decorated,
-        "get_external_adapter",
-        return_value=mock_inner_external,
-    ):
-        await adapter.send_event(MagicMock(spec=WorkflowTick))
+    result = await adapter.wait_receive(timeout_seconds=5.0)
 
+    assert result is tick_result
     # Timer should have been cancelled (allow event loop to process cancellation)
     await asyncio.sleep(0)
     assert task.cancelled()

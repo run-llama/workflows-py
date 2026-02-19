@@ -29,6 +29,8 @@ from workflows.events import Event, WorkflowIdleEvent
 from workflows.runtime.types.plugin import (
     ExternalRunAdapter,
     InternalRunAdapter,
+    WaitResult,
+    WaitResultTick,
 )
 from workflows.runtime.types.ticks import WorkflowTick
 from workflows.workflow import Workflow
@@ -50,6 +52,16 @@ class _DBOSIdleReleaseInternalRunAdapter(BaseInternalRunAdapterDecorator):
         super().__init__(decorated)
         self._runtime = runtime
         self._store = store
+
+    @override
+    async def wait_receive(
+        self,
+        timeout_seconds: float | None = None,
+    ) -> WaitResult:
+        result = await super().wait_receive(timeout_seconds)
+        if isinstance(result, WaitResultTick):
+            self._runtime._cancel_deferred_release(self.run_id)
+        return result
 
     @override
     async def write_to_event_stream(self, event: Event) -> None:
@@ -90,8 +102,6 @@ class DBOSIdleReleaseExternalRunAdapter(BaseExternalRunAdapterDecorator):
     @override
     async def send_event(self, tick: WorkflowTick) -> None:
         async with self._runtime._reload_lock(self.run_id):
-            # Cancel any pending release timer — this run is active
-            self._runtime._cancel_deferred_release(self.run_id)
             handlers = await self._runtime._store.query(
                 HandlerQuery(run_id_in=[self.run_id])
             )
