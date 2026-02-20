@@ -18,6 +18,11 @@ Agent Builder transforms your descriptions into working document pipelines:
 
 The agent understands LlamaCloud services and can configure extraction schemas, classification rules, and multi-step pipelines through conversation.
 
+<div style="position: relative; padding-bottom: 56.25%; height: 0; overflow: hidden; max-width: 100%; margin-bottom: 1.5rem;">
+  <iframe
+    style="position: absolute; top: 0; left: 0; width: 100%; height: 100%;" src="https://www.youtube.com/embed/0Zhf5z2Onjs" title="LlamaAgents overview" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen></>
+</div>
+
 ## Building Your First Workflow
 
 ### Start a New Session
