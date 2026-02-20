@@ -303,16 +303,12 @@ def test_idle_release_end_to_end(postgres_dsn: str) -> None:
 
 
 def test_cancel_unblocks_waiting_control_loop(postgres_dsn: str) -> None:
-    """Experiment: does cancel_workflow_async actually kill the control loop task?
+    """Test that idle-release cancel actually kills the control loop task.
 
-    handle.get_result() just polls the DBOS DB — it resolves immediately when
-    cancel marks the workflow status. But the real question is whether the asyncio
-    task running the control loop (blocked in recv_async with a 24-hour timeout)
-    actually exits. We test this by:
-    1. Cancelling the workflow
-    2. Waiting 5 seconds
-    3. Checking if the process can shut down cleanly (server.contextmanager exit +
-       dbos_runtime.destroy) — if the control loop task is still alive, these hang.
+    Exercises the real production path: DBOSIdleReleaseDecorator detects idle,
+    waits for timeout, calls _release_idle_handler which cancels the workflow
+    and sends a wake-up signal. The control loop should exit — not linger as a
+    zombie blocked in recv_async for up to 24 hours.
     """
     cmd = [
         sys.executable,
@@ -323,6 +319,8 @@ def test_cancel_unblocks_waiting_control_loop(postgres_dsn: str) -> None:
         postgres_dsn,
         "--run-id",
         "test-cancel-hangs-001",
+        "--idle-timeout",
+        "0.5",
         "--cancel-wait-timeout",
         "5.0",
     ]
@@ -366,8 +364,8 @@ def test_cancel_unblocks_waiting_control_loop(postgres_dsn: str) -> None:
     assert "IDLE_DETECTED" in stdout_output, (
         f"Should detect idle.\nstdout: {stdout_output}"
     )
-    assert "CANCEL_CALLED" in stdout_output, (
-        f"Should call cancel.\nstdout: {stdout_output}"
+    assert "WAIT_ELAPSED" in stdout_output, (
+        f"Should wait for idle release.\nstdout: {stdout_output}"
     )
 
     if saw_inner_done and not saw_experiment_done:
@@ -391,17 +389,15 @@ def test_cancel_unblocks_waiting_control_loop(postgres_dsn: str) -> None:
         f"Process should have completed cleanly.\nstdout: {stdout_output}"
     )
 
-    # Assert the zombie task actually died — task count should drop
-    before = extract_line(stdout_output, "LIVE_TASKS_BEFORE_WAIT:")
-    after = extract_line(stdout_output, "LIVE_TASKS_AFTER_WAIT:")
-    print(f"\nLive tasks before wait: {before}, after wait: {after}")
-    assert before is not None and after is not None, (
-        f"Should have task counts.\nstdout: {stdout_output}"
+    # Assert no zombie control loop tasks remain after cancel + wake-up
+    zombie_line = extract_line(stdout_output, "ZOMBIE_TASKS:")
+    print(f"\nZombie tasks: {zombie_line}")
+    assert zombie_line is not None, (
+        f"Should have zombie task count.\nstdout: {stdout_output}"
     )
-    before_count = int(before.split(":")[-1])
-    after_count = int(after.split(":")[-1])
-    assert after_count < before_count, (
-        f"Control loop task should have exited after cancel. "
-        f"Tasks before: {before_count}, after: {after_count}\n"
+    zombie_count = int(zombie_line.split(":")[-1])
+    assert zombie_count == 0, (
+        f"Control loop tasks should have exited after cancel, "
+        f"but {zombie_count} zombie task(s) remain.\n"
         f"stdout: {stdout_output}"
     )

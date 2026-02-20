@@ -167,10 +167,18 @@ class InternalRunAdapter(ABC):
 
     async def close(self) -> None:
         """
-        Signal shutdown to wake any blocked wait operations.
+        Release resources for a completed/failed workflow.
 
-        Called during cleanup to allow the adapter to exit gracefully.
-        Default is no-op. Custom adapters may send a shutdown signal to wake blocked recv.
+        Called by the control loop's cleanup_tasks() when the workflow is
+        finishing (completion, failure, halt, or unwind). Implementations
+        should wake any blocked wait_receive() calls so the control loop
+        can exit.
+
+        WARNING: This may be destructive — e.g. sending a durable message
+        that prevents the workflow from resuming later. Only called when
+        the workflow's outcome is already determined.
+
+        Default is no-op.
         """
         pass
 

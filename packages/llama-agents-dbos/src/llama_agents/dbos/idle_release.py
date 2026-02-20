@@ -37,6 +37,7 @@ from workflows.runtime.types.ticks import WorkflowTick
 from workflows.workflow import Workflow
 
 from dbos import DBOS
+from dbos._context import _clear_local_dbos_context
 
 logger = logging.getLogger(__name__)
 
@@ -189,6 +190,11 @@ class DBOSIdleReleaseDecorator(BaseRuntimeDecorator):
 
             # Wake up the control loop so it exits instead of lingering as a
             # zombie blocked in recv_async for up to 24 hours.
+            # Clear the inherited DBOS workflow context — this task inherits
+            # contextvars from the control loop that spawned it, and
+            # DBOS.send_async fails with DBOSWorkflowCancelledError if the
+            # context still references the now-cancelled workflow.
+            _clear_local_dbos_context()
             try:
                 await DBOS.send_async(
                     run_id,
