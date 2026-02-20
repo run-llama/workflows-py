@@ -30,6 +30,12 @@ uv run dev -- -k test_name
 
 For more advanced scenarios, you can always `cd packages/some-package` and use pytest directly. The dev tool just provides additional package level test parallelism, and more curated cross package test output to avoid context bloat.
 
+The `llama-agents-dbos` package has Docker integration tests (requires Docker running) marked with `@pytest.mark.docker`. Run them with:
+
+```bash
+cd packages/llama-agents-dbos && uv run pytest tests/test_dbos_server_postgres.py -m docker -s -n0
+```
+
 
 ### Linting & Formatting
 ```bash

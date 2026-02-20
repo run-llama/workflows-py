@@ -14,7 +14,6 @@ from collections.abc import Coroutine
 from datetime import datetime, timezone
 from typing import Any
 
-from llama_agents.dbos.runtime import _IO_STREAM_TICK_TOPIC, _DBOSInternalWakeUp
 from llama_agents.server._keyed_lock import KeyedLock
 from llama_agents.server._runtime.runtime_decorators import (
     BaseExternalRunAdapterDecorator,
@@ -37,7 +36,6 @@ from workflows.runtime.types.ticks import WorkflowTick
 from workflows.workflow import Workflow
 
 from dbos import DBOS
-from dbos._context import _clear_local_dbos_context
 
 logger = logging.getLogger(__name__)
 
@@ -60,7 +58,26 @@ class _DBOSIdleReleaseInternalRunAdapter(BaseInternalRunAdapterDecorator):
         self,
         timeout_seconds: float | None = None,
     ) -> WaitResult:
-        result = await super().wait_receive(timeout_seconds)
+        cancel_event = self._runtime._get_cancel_event(self.run_id)
+
+        recv_task = asyncio.create_task(super().wait_receive(timeout_seconds))
+        event_task = asyncio.create_task(cancel_event.wait())
+
+        done, pending = await asyncio.wait(
+            {recv_task, event_task}, return_when=asyncio.FIRST_COMPLETED
+        )
+        for t in pending:
+            t.cancel()
+            try:
+                await t
+            except (asyncio.CancelledError, Exception):
+                pass
+
+        if event_task in done:
+            # Cancel event fired — abort before anything is journaled
+            raise asyncio.CancelledError("Idle release cancelled workflow")
+
+        result = recv_task.result()
         if isinstance(result, WaitResultTick):
             self._runtime._cancel_deferred_release(self.run_id)
         return result
@@ -130,6 +147,7 @@ class DBOSIdleReleaseDecorator(BaseRuntimeDecorator):
         self._store = store
         self._reload_lock = KeyedLock()
         self._deferred_release_tasks: dict[str, asyncio.Task[None]] = {}
+        self._cancel_events: dict[str, asyncio.Event] = {}
         self._background_tasks: set[asyncio.Task[None]] = set()
         self._idle_timeout = idle_timeout
 
@@ -144,6 +162,22 @@ class DBOSIdleReleaseDecorator(BaseRuntimeDecorator):
         self._cancel_deferred_release(run_id)
         task = self._spawn_task(self._deferred_release(run_id))
         self._deferred_release_tasks[run_id] = task
+
+    def _get_cancel_event(self, run_id: str) -> asyncio.Event:
+        """Get or create a cancel event for a run_id."""
+        event = self._cancel_events.get(run_id)
+        if event is None:
+            event = asyncio.Event()
+            self._cancel_events[run_id] = event
+        return event
+
+    def _signal_cancel(self, run_id: str) -> None:
+        """Signal the cancel event for a run_id, waking wait_receive."""
+        self._get_cancel_event(run_id).set()
+
+    def _cleanup_cancel_event(self, run_id: str) -> None:
+        """Remove the cancel event for a run_id."""
+        self._cancel_events.pop(run_id, None)
 
     def _cancel_deferred_release(self, run_id: str) -> None:
         """Cancel a pending deferred release timer for run_id, if any."""
@@ -188,24 +222,11 @@ class DBOSIdleReleaseDecorator(BaseRuntimeDecorator):
                 )
                 return
 
-            # Wake up the control loop so it exits instead of lingering as a
-            # zombie blocked in recv_async for up to 24 hours.
-            # Clear the inherited DBOS workflow context — this task inherits
-            # contextvars from the control loop that spawned it, and
-            # DBOS.send_async fails with DBOSWorkflowCancelledError if the
-            # context still references the now-cancelled workflow.
-            _clear_local_dbos_context()
-            try:
-                await DBOS.send_async(
-                    run_id,
-                    _DBOSInternalWakeUp(),
-                    topic=_IO_STREAM_TICK_TOPIC,
-                )
-            except Exception:
-                logger.debug(
-                    f"Failed to send wake-up signal [run_id={run_id}]",
-                    exc_info=True,
-                )
+            # Wake up the control loop via process-local asyncio.Event so it
+            # exits instead of lingering as a zombie blocked in recv_async.
+            # This avoids DBOS.send_async which would journal the wake-up and
+            # poison resume.
+            self._signal_cancel(run_id)
 
             logger.info(f"Released idle DBOS handler [run_id={run_id}]")
 
@@ -216,6 +237,7 @@ class DBOSIdleReleaseDecorator(BaseRuntimeDecorator):
         restart the workflow from its last completed step with the same run_id.
         The caller must have already verified the handler is idle via the store.
         """
+        self._cleanup_cancel_event(run_id)
         await DBOS.resume_workflow_async(run_id)
         await self._store.update_handler_status(run_id, idle_since=None)
         logger.info(f"Resumed DBOS workflow [run_id={run_id}]")
