@@ -112,12 +112,18 @@ async def run_idle_release(
             print("EVENT_SENT", flush=True)
 
             # Step 4: Wait for completion
+            idle_count = 0
             async for stored_event in store.subscribe_events(actual_run_id):
                 event_type = stored_event.event.type
                 print(f"EVENT:{event_type}", flush=True)
 
                 if event_type == "StopEvent":
                     break
+                if event_type == "WorkflowIdleEvent":
+                    idle_count += 1
+                    if idle_count >= 3:
+                        print("ERROR:Too many idle events", flush=True)
+                        break
 
             print("SUCCESS", flush=True)
 

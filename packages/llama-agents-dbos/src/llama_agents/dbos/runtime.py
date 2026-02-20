@@ -743,7 +743,6 @@ class InternalDBOSAdapter(InternalRunAdapter):
         if self._closed:
             raise asyncio.CancelledError("Adapter closed")
 
-        # Timeout 1x per day at least. This will just cause a wakeup loop of the control loop.
         result = await DBOS.recv_async(
             _IO_STREAM_TICK_TOPIC,
             timeout_seconds=timeout_seconds or _UNBOUNDED_WAIT_TIMEOUT_SECONDS,

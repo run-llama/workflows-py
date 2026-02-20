@@ -92,9 +92,12 @@ async def test_release_only_cancels_workflow(
 
     with patch("llama_agents.dbos.idle_release.DBOS") as mock_dbos:
         mock_dbos.cancel_workflow_async = AsyncMock()
+        mock_dbos.send_async = AsyncMock()
         await decorator._release_idle_handler("run-1")
 
     mock_dbos.cancel_workflow_async.assert_called_once_with("run-1")
+    # Should also send a None notification to wake the recv thread
+    mock_dbos.send_async.assert_called_once()
 
 
 @pytest.mark.asyncio()
@@ -126,6 +129,13 @@ async def test_send_event_triggers_resume_when_idle(
 
     adapter = DBOSIdleReleaseExternalRunAdapter(decorator, "run-1")
 
+    mock_dbos_inst = MagicMock()
+    mock_engine = MagicMock()
+    mock_conn = MagicMock()
+    mock_engine.begin.return_value.__enter__ = MagicMock(return_value=mock_conn)
+    mock_engine.begin.return_value.__exit__ = MagicMock(return_value=False)
+    mock_dbos_inst._sys_db.engine = mock_engine
+
     with (
         patch.object(
             decorator._decorated,
@@ -133,6 +143,10 @@ async def test_send_event_triggers_resume_when_idle(
             return_value=mock_inner_external,
         ),
         patch("llama_agents.dbos.idle_release.DBOS") as mock_dbos,
+        patch(
+            "llama_agents.dbos.idle_release._get_dbos_instance",
+            return_value=mock_dbos_inst,
+        ),
     ):
         mock_dbos.resume_workflow_async = AsyncMock()
         await adapter.send_event(MagicMock(spec=WorkflowTick))

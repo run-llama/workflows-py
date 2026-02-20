@@ -278,27 +278,57 @@ def run_idle_release_scenario(
 
 def test_idle_release_end_to_end(postgres_dsn: str) -> None:
     """Idle workflow is auto-released and auto-resumed via DBOSIdleReleaseDecorator."""
-    result = run_idle_release_scenario(
-        workflow="tests.fixtures.sample_workflows.idle_cancel_resume:IdleCancelResumeWorkflow",
-        db_url=postgres_dsn,
-        run_id="test-idle-release-001",
-        event_type="ExternalDataEvent",
-        event_data={"response": "idle-test"},
-        idle_timeout=0.5,
-    )
-    assert_no_errors(result)
+    import time as _time
 
-    assert "IDLE_DETECTED" in result.stdout, (
-        f"Should detect idle.\nstdout: {result.stdout}\nstderr: {result.stderr}"
+    cmd = [
+        sys.executable,
+        IDLE_RELEASE_RUNNER_PATH,
+        "--workflow",
+        "tests.fixtures.sample_workflows.idle_cancel_resume:IdleCancelResumeWorkflow",
+        "--db-url",
+        postgres_dsn,
+        "--run-id",
+        "test-idle-release-001",
+        "--event-type",
+        "ExternalDataEvent",
+        "--event-data",
+        json.dumps({"response": "idle-test"}),
+        "--idle-timeout",
+        "0.5",
+    ]
+    proc = subprocess.Popen(
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
     )
-    assert "TIMEOUT_ELAPSED" in result.stdout, (
-        f"Should wait for timeout.\nstdout: {result.stdout}\nstderr: {result.stderr}"
-    )
-    assert "EVENT_SENT" in result.stdout, (
-        f"Should send event.\nstdout: {result.stdout}\nstderr: {result.stderr}"
-    )
-    assert "SUCCESS" in result.stdout, (
-        f"Should complete successfully.\nstdout: {result.stdout}\nstderr: {result.stderr}"
+    stdout_lines: list[str] = []
+    deadline = _time.monotonic() + 30
+    saw_success = False
+    while _time.monotonic() < deadline:
+        line = proc.stdout.readline()  # type: ignore[union-attr]
+        if not line:
+            if proc.poll() is not None:
+                break
+            _time.sleep(0.1)
+            continue
+        stripped = line.rstrip()
+        stdout_lines.append(stripped)
+        print(stripped)
+        if "SUCCESS" in stripped:
+            saw_success = True
+            break
+        if "ERROR:" in stripped:
+            break
+
+    proc.kill()
+    proc.wait()
+    stderr_output = proc.stderr.read() if proc.stderr else ""  # type: ignore[union-attr]
+    stdout_output = "\n".join(stdout_lines)
+    print(f"\nstderr:\n{stderr_output}")
+
+    assert "IDLE_DETECTED" in stdout_output, f"stdout: {stdout_output}"
+    assert "TIMEOUT_ELAPSED" in stdout_output, f"stdout: {stdout_output}"
+    assert "EVENT_SENT" in stdout_output, f"stdout: {stdout_output}"
+    assert saw_success, (
+        f"Should complete successfully.\nstdout: {stdout_output}\nstderr: {stderr_output}"
     )
 
 
