@@ -73,6 +73,12 @@ class PostgresWorkflowStore(AbstractWorkflowStore):
         return self._events_table_name
 
     @property
+    def _ticks_ref(self) -> str:
+        if self._schema:
+            return f"{self._schema}.wf_ticks"
+        return "wf_ticks"
+
+    @property
     def _notify_channel(self) -> str:
         return self._events_table_name
 
@@ -374,13 +380,62 @@ class PostgresWorkflowStore(AbstractWorkflowStore):
                 if self._is_terminal_event(event):
                     return
 
-    # ── Ticks (not supported) ───────────────────────────────────────────
+    # ── Ticks ──────────────────────────────────────────────────────────
+
+    _MAX_TICK_SEQUENCE_RETRIES = 5
 
     async def append_tick(self, run_id: str, tick_data: dict[str, Any]) -> None:
-        raise NotImplementedError("PostgresWorkflowStore does not support ticks")
+        now = _utc_now()
+        tick_json = json.dumps(tick_data)
+
+        pool = await self._ensure_pool()
+        insert_sql = f"""
+            INSERT INTO {self._ticks_ref} (run_id, sequence, timestamp, tick_data)
+            VALUES (
+                $1,
+                COALESCE((SELECT MAX(sequence) FROM {self._ticks_ref} WHERE run_id = $1::varchar), -1) + 1,
+                $2,
+                $3::jsonb
+            )
+        """
+        for attempt in range(self._MAX_TICK_SEQUENCE_RETRIES):
+            try:
+                async with pool.acquire() as conn:
+                    await conn.execute(insert_sql, run_id, now, tick_json)
+                    return
+            except asyncpg.UniqueViolationError:
+                if attempt == self._MAX_TICK_SEQUENCE_RETRIES - 1:
+                    raise
+                logger.debug(
+                    "Tick sequence conflict for run_id=%s, retrying (attempt %d)",
+                    run_id,
+                    attempt + 1,
+                )
 
     async def get_ticks(self, run_id: str) -> list[StoredTick]:
-        raise NotImplementedError("PostgresWorkflowStore does not support ticks")
+        pool = await self._ensure_pool()
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(
+                f"""
+                SELECT run_id, sequence, timestamp, tick_data
+                FROM {self._ticks_ref}
+                WHERE run_id = $1
+                ORDER BY sequence
+                """,
+                run_id,
+            )
+
+        return [
+            StoredTick(
+                run_id=row["run_id"],
+                sequence=row["sequence"],
+                timestamp=row["timestamp"],
+                tick_data=json.loads(row["tick_data"])
+                if isinstance(row["tick_data"], str)
+                else row["tick_data"],
+            )
+            for row in rows
+        ]
 
     # ── Helpers ─────────────────────────────────────────────────────────
 
