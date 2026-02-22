@@ -87,12 +87,47 @@ from llama_agents.server._store.sqlite.sqlite_workflow_store import SqliteWorkfl
 from sqlalchemy.engine import URL as SaURL
 from sqlalchemy.engine import Engine
 
-from .journal.crud import JOURNAL_TABLE_NAME, PostgresJournalCrud, SqliteJournalCrud
+from .journal.crud import (
+    JOURNAL_TABLE_NAME,
+    JournalCrud,
+    PostgresJournalCrud,
+    SqliteJournalCrud,
+)
 from .journal.task_journal import TaskJournal
 
 STATE_TABLE_NAME = "workflow_state"
 
 logger = logging.getLogger(__name__)
+
+
+class _LazyJournalCrud(JournalCrud):
+    """Journal CRUD that lazily resolves the underlying implementation.
+
+    Needed because DB config (db_path, dsn, pool) isn't available until
+    after ``DBOSRuntime.launch()`` is called, but the decorator chain is
+    built before launch via ``build_server_runtime()``.
+    """
+
+    def __init__(self, factory: Callable[[], JournalCrud]) -> None:
+        self._factory = factory
+        self._inner: JournalCrud | None = None
+
+    def _resolve(self) -> JournalCrud:
+        if self._inner is None:
+            self._inner = self._factory()
+        return self._inner
+
+    async def insert(self, run_id: str, seq_num: int, task_key: str) -> None:
+        await self._resolve().insert(run_id, seq_num, task_key)
+
+    async def load(self, run_id: str) -> list[str]:
+        return await self._resolve().load(run_id)
+
+    async def delete(self, run_id: str) -> None:
+        await self._resolve().delete(run_id)
+
+    async def purge_dbos_operation_outputs(self, run_id: str) -> None:
+        await self._resolve().purge_dbos_operation_outputs(run_id)
 
 
 class DBOSWorkflowStore(AbstractWorkflowStore):
@@ -556,6 +591,33 @@ class DBOSRuntime(Runtime):
         self._workflow_store = DBOSWorkflowStore(_factory)
         return self._workflow_store
 
+    def _create_journal_crud(self) -> JournalCrud:
+        """Create a lazily-resolved JournalCrud for the configured database backend.
+
+        Must be lazy because DB config isn't available until ``launch()`` runs.
+        """
+
+        def _factory() -> JournalCrud:
+            journal_table_name = self.config.get(
+                "journal_table_name", DEFAULT_JOURNAL_TABLE_NAME
+            )
+            if self._db_path is not None:
+                return SqliteJournalCrud(
+                    db_path=self._db_path,
+                    table_name=journal_table_name,
+                )
+            if self._pool is not None:
+                return PostgresJournalCrud(
+                    self._pool,
+                    table_name=journal_table_name,
+                    schema=self._schema,
+                )
+            raise RuntimeError(
+                "No database configured for journal. Was launch() called?"
+            )
+
+        return _LazyJournalCrud(_factory)
+
     def build_server_runtime(self, *, idle_timeout: float | None = None) -> Runtime:
         """Build the decorator chain for use with WorkflowServer.
 
@@ -581,11 +643,13 @@ class DBOSRuntime(Runtime):
         inner: Runtime = tick_persistence
         inner = EventInterceptorDecorator(inner)
         if idle_timeout is not None:
+            journal_crud = self._create_journal_crud()
             inner = DBOSIdleReleaseDecorator(
                 inner,
                 store=store,
                 idle_timeout=idle_timeout,
                 tick_persistence=tick_persistence,
+                journal_crud=journal_crud,
             )
         return inner
 

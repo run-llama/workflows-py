@@ -111,7 +111,7 @@ async def run_idle_release(
             )
             print("EVENT_SENT", flush=True)
 
-            # Step 4: Wait for completion
+            # Step 4: Wait for completion via event stream
             idle_count = 0
             async for stored_event in store.subscribe_events(actual_run_id):
                 event_type = stored_event.event.type
@@ -124,6 +124,20 @@ async def run_idle_release(
                     if idle_count >= 3:
                         print("ERROR:Too many idle events", flush=True)
                         break
+
+            # Step 5: Verify handler status is "completed"
+            from llama_agents.server._store.abstract_workflow_store import (  # noqa: E402
+                HandlerQuery,
+            )
+
+            handlers = await store.query(
+                HandlerQuery(handler_id_in=[handler_data.handler_id])
+            )
+            if handlers and handlers[0].status == "completed":
+                print("HANDLER_COMPLETED", flush=True)
+            else:
+                status = handlers[0].status if handlers else "not_found"
+                print(f"HANDLER_STATUS:{status}", flush=True)
 
             print("SUCCESS", flush=True)
 

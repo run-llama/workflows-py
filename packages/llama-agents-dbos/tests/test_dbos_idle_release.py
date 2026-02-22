@@ -14,19 +14,20 @@ from llama_agents.dbos.idle_release import (
     DBOSIdleReleaseExternalRunAdapter,
     _DBOSIdleReleaseInternalRunAdapter,
 )
+from llama_agents.dbos.journal.crud import JournalCrud
 from llama_agents.server._runtime.persistence_runtime import TickPersistenceDecorator
 from llama_agents.server._store.abstract_workflow_store import (
     AbstractWorkflowStore,
     PersistentHandler,
 )
-from workflows.events import WorkflowCancelledEvent, WorkflowIdleEvent
+from workflows.events import WorkflowIdleEvent
 from workflows.runtime.types.plugin import (
     ExternalRunAdapter,
     InternalRunAdapter,
     Runtime,
     WaitResultTick,
 )
-from workflows.runtime.types.ticks import TickCancelRun, WorkflowTick
+from workflows.runtime.types.ticks import TickIdleRelease, WorkflowTick
 
 
 # Helper to access mock methods on decorator._decorated (typed as Runtime but actually MagicMock)
@@ -59,16 +60,23 @@ def mock_tick_persistence() -> MagicMock:
 
 
 @pytest.fixture()
+def mock_journal_crud() -> AsyncMock:
+    return AsyncMock(spec=JournalCrud)
+
+
+@pytest.fixture()
 def decorator(
     mock_inner_runtime: MagicMock,
     mock_store: AsyncMock,
     mock_tick_persistence: MagicMock,
+    mock_journal_crud: AsyncMock,
 ) -> DBOSIdleReleaseDecorator:
     return DBOSIdleReleaseDecorator(
         mock_inner_runtime,
         mock_store,
         idle_timeout=0.1,
         tick_persistence=mock_tick_persistence,
+        journal_crud=mock_journal_crud,
     )
 
 
@@ -100,10 +108,10 @@ async def test_idle_event_stamps_idle_since_and_spawns_release(
 
 
 @pytest.mark.asyncio()
-async def test_release_sends_tick_cancel_run(
+async def test_release_sends_tick_idle_release(
     decorator: DBOSIdleReleaseDecorator, mock_store: AsyncMock
 ) -> None:
-    """Release should send TickCancelRun via the inner external adapter."""
+    """Release should send TickIdleRelease via the inner external adapter."""
     idle_since = datetime(2020, 1, 1, tzinfo=timezone.utc)
     handler = MagicMock(spec=PersistentHandler)
     handler.idle_since = idle_since
@@ -114,10 +122,10 @@ async def test_release_sends_tick_cancel_run(
 
     await decorator._release_idle_handler("run-1")
 
-    # Should have sent TickCancelRun via inner external adapter
+    # Should have sent TickIdleRelease via inner external adapter
     mock_inner_external.send_event.assert_called_once()
     tick_arg = mock_inner_external.send_event.call_args[0][0]
-    assert isinstance(tick_arg, TickCancelRun)
+    assert isinstance(tick_arg, TickIdleRelease)
 
     # run_id should be tracked as releasing
     assert "run-1" in decorator._idle_releasing
@@ -145,6 +153,7 @@ async def test_send_event_triggers_resume_when_idle(
     decorator: DBOSIdleReleaseDecorator,
     mock_store: AsyncMock,
     mock_tick_persistence: MagicMock,
+    mock_journal_crud: AsyncMock,
 ) -> None:
     """send_event should resume workflow if store shows handler is idle."""
     handler = MagicMock(spec=PersistentHandler)
@@ -169,23 +178,28 @@ async def test_send_event_triggers_resume_when_idle(
         decorator, "_broker_state_from_ticks", new_callable=AsyncMock
     ) as mock_broker:
         mock_broker.return_value = MagicMock()
-        # Mock state carry-over: no state type
-        with patch(
-            "llama_agents.dbos.idle_release.infer_state_type", return_value=None
+        with (
+            patch("llama_agents.dbos.idle_release.infer_state_type", return_value=None),
+            patch("llama_agents.dbos.idle_release.DBOS") as mock_dbos,
         ):
+            mock_dbos.delete_workflow_async = AsyncMock()
             await adapter.send_event(MagicMock(spec=WorkflowTick))
 
-    # Should have started a new workflow run
+    # Should have started a new workflow run with the same run_id
     _inner(decorator).run_workflow.assert_called_once()
+    call_args = _inner(decorator).run_workflow.call_args
+    assert call_args[0][0] == "run-1"  # same run_id reused
     # Handler should have been updated in store
     mock_store.update.assert_called_once()
     updated = mock_store.update.call_args[0][0]
     assert updated.idle_since is None
     assert updated.status == "running"
-    # run_id should have changed
-    assert updated.run_id != "run-1"
+    assert updated.run_id == "run-1"  # run_id stays the same
     # The new adapter (from run_workflow) should have received the tick
     mock_new_adapter.send_event.assert_called_once()
+    # Journal and DBOS operation outputs should have been purged for the run_id
+    mock_journal_crud.purge_dbos_operation_outputs.assert_called_once_with("run-1")
+    mock_journal_crud.delete.assert_called_once_with("run-1")
 
 
 @pytest.mark.asyncio()
@@ -238,50 +252,6 @@ async def test_wait_receive_cancels_pending_release_timer(
 
 
 @pytest.mark.asyncio()
-async def test_cancelled_event_during_idle_release_overwrites_status_back_to_running(
-    decorator: DBOSIdleReleaseDecorator, mock_store: AsyncMock
-) -> None:
-    """When ServerRuntimeDecorator sets status='cancelled' during idle release,
-    the idle release adapter should overwrite it back to 'running' so the
-    handler remains resumable (not treated as terminal)."""
-    inner_adapter = MagicMock(spec=InternalRunAdapter)
-    inner_adapter.run_id = "run-1"
-    inner_adapter.write_to_event_stream = AsyncMock()
-
-    adapter = _DBOSIdleReleaseInternalRunAdapter(inner_adapter, decorator, mock_store)
-
-    # Simulate that this run_id is being idle-released
-    decorator._idle_releasing.add("run-1")
-
-    await adapter.write_to_event_stream(WorkflowCancelledEvent())
-
-    # Should have forwarded the event
-    inner_adapter.write_to_event_stream.assert_called_once()
-
-    # Should have overwritten status back to "running"
-    mock_store.update_handler_status.assert_called_once_with("run-1", status="running")
-
-
-@pytest.mark.asyncio()
-async def test_cancelled_event_without_idle_release_does_not_overwrite(
-    decorator: DBOSIdleReleaseDecorator, mock_store: AsyncMock
-) -> None:
-    """A WorkflowCancelledEvent from a user cancel (not idle release) should
-    NOT overwrite the status."""
-    inner_adapter = MagicMock(spec=InternalRunAdapter)
-    inner_adapter.run_id = "run-1"
-    inner_adapter.write_to_event_stream = AsyncMock()
-
-    adapter = _DBOSIdleReleaseInternalRunAdapter(inner_adapter, decorator, mock_store)
-
-    # run-1 is NOT in _idle_releasing
-    await adapter.write_to_event_stream(WorkflowCancelledEvent())
-
-    inner_adapter.write_to_event_stream.assert_called_once()
-    mock_store.update_handler_status.assert_not_called()
-
-
-@pytest.mark.asyncio()
 async def test_no_destroy_or_shutdown_cancellation(
     decorator: DBOSIdleReleaseDecorator,
 ) -> None:
@@ -291,3 +261,23 @@ async def test_no_destroy_or_shutdown_cancellation(
     assert not hasattr(decorator, "_close_internal_adapter")
     assert not hasattr(decorator, "_active_run_ids")
     assert not hasattr(decorator, "_internal_adapters")
+
+
+@pytest.mark.asyncio()
+async def test_await_and_purge_deletes_journal_and_operation_outputs(
+    decorator: DBOSIdleReleaseDecorator,
+    mock_journal_crud: AsyncMock,
+) -> None:
+    """_await_and_purge should delete journal entries and DBOS operation outputs."""
+    external = AsyncMock(spec=ExternalRunAdapter)
+    external.get_result = AsyncMock(return_value=None)
+    decorator._idle_releasing.add("run-1")
+
+    with patch("llama_agents.dbos.idle_release.DBOS") as mock_dbos:
+        mock_dbos.delete_workflow_async = AsyncMock()
+        await decorator._await_and_purge("run-1", external)
+
+    mock_dbos.delete_workflow_async.assert_called_once_with("run-1")
+    mock_journal_crud.purge_dbos_operation_outputs.assert_called_once_with("run-1")
+    mock_journal_crud.delete.assert_called_once_with("run-1")
+    assert "run-1" not in decorator._idle_releasing

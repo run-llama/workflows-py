@@ -3,7 +3,7 @@
 """DBOSIdleReleaseDecorator and supporting adapters.
 
 Wraps an EventInterceptorDecorator to add idle detection, memory release via
-TickCancelRun, and reload-on-demand via continue-as-new (new run_id).
+TickIdleRelease, and reload-on-demand via reusing the same run_id.
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ from collections.abc import Coroutine
 from datetime import datetime, timezone
 from typing import Any
 
+from llama_agents.dbos.journal.crud import JournalCrud
 from llama_agents.server._keyed_lock import KeyedLock
 from llama_agents.server._runtime.persistence_runtime import TickPersistenceDecorator
 from llama_agents.server._runtime.runtime_decorators import (
@@ -30,22 +31,24 @@ from typing_extensions import override
 from workflows.context.context_types import SerializedContext
 from workflows.context.serializers import JsonSerializer
 from workflows.context.state_store import create_in_memory_payload, infer_state_type
-from workflows.events import Event, WorkflowCancelledEvent, WorkflowIdleEvent
+from workflows.events import Event, WorkflowIdleEvent
 from workflows.runtime.control_loop import rebuild_state_from_ticks
 from workflows.runtime.types.internal_state import BrokerState
 from workflows.runtime.types.plugin import (
     ExternalRunAdapter,
     InternalRunAdapter,
+    Runtime,
     WaitResult,
     WaitResultTick,
 )
 from workflows.runtime.types.ticks import (
-    TickCancelRun,
+    TickIdleRelease,
     WorkflowTick,
     WorkflowTickAdapter,
 )
-from workflows.utils import _nanoid as nanoid
 from workflows.workflow import Workflow
+
+from dbos import DBOS
 
 logger = logging.getLogger(__name__)
 
@@ -83,13 +86,6 @@ class _DBOSIdleReleaseInternalRunAdapter(BaseInternalRunAdapterDecorator):
         await super().write_to_event_stream(event)
         if isinstance(event, WorkflowIdleEvent):
             self._runtime._schedule_deferred_release(self.run_id)
-        elif (
-            isinstance(event, WorkflowCancelledEvent)
-            and self.run_id in self._runtime._idle_releasing
-        ):
-            # ServerRuntimeDecorator (outer) already set status="cancelled".
-            # Overwrite back to "running" so the handler remains resumable.
-            await self._store.update_handler_status(self.run_id, status="running")
 
 
 class DBOSIdleReleaseExternalRunAdapter(BaseExternalRunAdapterDecorator):
@@ -123,10 +119,9 @@ class DBOSIdleReleaseExternalRunAdapter(BaseExternalRunAdapterDecorator):
                 HandlerQuery(run_id_in=[self.run_id])
             )
             if len(handlers) == 1 and handlers[0].idle_since is not None:
-                new_run_id, new_adapter = await self._runtime._ensure_active_run_locked(
+                _run_id, new_adapter = await self._runtime._ensure_active_run_locked(
                     self.run_id
                 )
-                self._run_id = new_run_id
                 # Use the adapter returned by run_workflow which has the
                 # startup_task — this ensures we wait for the DBOS workflow
                 # to exist before sending.
@@ -136,8 +131,8 @@ class DBOSIdleReleaseExternalRunAdapter(BaseExternalRunAdapterDecorator):
 
 
 class DBOSIdleReleaseDecorator(BaseRuntimeDecorator):
-    """Runtime decorator for idle detection, release via TickCancelRun,
-    and reload via continue-as-new for DBOS-backed workflows.
+    """Runtime decorator for idle detection, release via TickIdleRelease,
+    and reload via reusing the same run_id for DBOS-backed workflows.
 
     Must wrap an EventInterceptorDecorator (or compatible runtime) that
     wraps a DBOSRuntime.
@@ -149,6 +144,7 @@ class DBOSIdleReleaseDecorator(BaseRuntimeDecorator):
         store: AbstractWorkflowStore,
         idle_timeout: float = 60.0,
         tick_persistence: TickPersistenceDecorator | None = None,
+        journal_crud: JournalCrud | None = None,
     ) -> None:
         super().__init__(decorated)
         self._store = store
@@ -160,6 +156,10 @@ class DBOSIdleReleaseDecorator(BaseRuntimeDecorator):
         if tick_persistence is None:
             raise ValueError("tick_persistence is required")
         self._tick_persistence: TickPersistenceDecorator = tick_persistence
+        self._journal_crud = journal_crud
+        # Set by the outermost decorator (e.g. ServerRuntimeDecorator) after
+        # construction so that resumed workflows go through the full chain.
+        self._root_runtime: Runtime | None = None
 
     def _spawn_task(self, coro: Coroutine[Any, Any, None]) -> asyncio.Task[None]:
         task = asyncio.create_task(coro)
@@ -197,7 +197,7 @@ class DBOSIdleReleaseDecorator(BaseRuntimeDecorator):
         await self._release_idle_handler(run_id)
 
     async def _release_idle_handler(self, run_id: str) -> None:
-        """Release an idle handler by sending TickCancelRun."""
+        """Release an idle handler by sending TickIdleRelease."""
         async with self._reload_lock(run_id):
             handlers = await self._store.query(HandlerQuery(run_id_in=[run_id]))
             if len(handlers) != 1 or handlers[0].idle_since is None:
@@ -209,10 +209,31 @@ class DBOSIdleReleaseDecorator(BaseRuntimeDecorator):
                 return
 
             self._idle_releasing.add(run_id)
-            await self._decorated.get_external_adapter(run_id).send_event(
-                TickCancelRun()
-            )
+            external = self._decorated.get_external_adapter(run_id)
+            await external.send_event(TickIdleRelease())
             logger.info(f"Released idle DBOS handler [run_id={run_id}]")
+
+            # Await workflow completion then purge DBOS state so run_id can be reused
+            self._spawn_task(self._await_and_purge(run_id, external))
+
+    async def _await_and_purge(self, run_id: str, external: ExternalRunAdapter) -> None:
+        """Await workflow completion and purge DBOS state so run_id can be reused."""
+        try:
+            await external.get_result()
+            if self._journal_crud is not None:
+                await self._journal_crud.purge_dbos_operation_outputs(run_id)
+                await self._journal_crud.delete(run_id)
+            await DBOS.delete_workflow_async(run_id)
+            logger.info(
+                f"Purged DBOS state for idle-released handler [run_id={run_id}]"
+            )
+        except Exception:
+            logger.warning(
+                f"Failed to purge DBOS state for run_id={run_id}", exc_info=True
+            )
+        finally:
+            self._idle_releasing.discard(run_id)
+            self._deferred_release_tasks.pop(run_id, None)
 
     async def _broker_state_from_ticks(
         self, workflow: Workflow, run_id: str
@@ -241,12 +262,13 @@ class DBOSIdleReleaseDecorator(BaseRuntimeDecorator):
     async def _ensure_active_run_locked(
         self, run_id: str
     ) -> tuple[str, ExternalRunAdapter]:
-        """Resume a workflow that was previously idle-released using continue-as-new.
+        """Resume a workflow that was previously idle-released.
 
-        Called under the reload lock. Rebuilds state from ticks, creates a new
-        run_id, and starts a fresh workflow run.
+        Called under the reload lock. Rebuilds state from ticks and starts a
+        fresh DBOS workflow with the same run_id (DBOS state was purged after
+        idle release, so SetWorkflowID will insert a fresh row).
 
-        Returns (new_run_id, external_adapter) — the adapter has the startup
+        Returns (run_id, external_adapter) — the adapter has the startup
         task so callers can wait for the DBOS workflow to exist before sending.
         """
         self._cancel_deferred_release(run_id)
@@ -284,24 +306,41 @@ class DBOSIdleReleaseDecorator(BaseRuntimeDecorator):
                     f"Failed to carry over state from run {run_id}", exc_info=True
                 )
 
-        # Generate new run_id
-        new_run_id = nanoid()
+        # Purge DBOS state and journal (if not already purged) so the same run_id can be reused
+        if self._journal_crud is not None:
+            try:
+                await self._journal_crud.purge_dbos_operation_outputs(run_id)
+                await self._journal_crud.delete(run_id)
+            except Exception:
+                logger.debug(
+                    f"Journal already purged for run_id={run_id}", exc_info=True
+                )
+        try:
+            await DBOS.delete_workflow_async(run_id)
+        except Exception:
+            logger.debug(
+                f"DBOS state already purged for run_id={run_id}", exc_info=True
+            )
 
-        # Start new workflow run
-        new_adapter = self._decorated.run_workflow(
-            new_run_id,
+        # Start new workflow run with the same run_id.
+        # Use _root_runtime (the outermost decorator, e.g. ServerRuntimeDecorator)
+        # so the resumed workflow gets the full adapter chain — including the
+        # adapter that marks handlers as "completed" on StopEvent.
+        target_runtime = self._root_runtime or self._decorated
+        new_adapter = target_runtime.run_workflow(
+            run_id,
             workflow,
             init_state,
             serialized_state=serialized_state,
             serializer=serializer,
         )
 
-        # Update handler in store: new run_id, clear idle, set running
+        # Update handler in store: clear idle, set running (run_id stays the same)
         updated_handler = PersistentHandler(
             handler_id=handler.handler_id,
             workflow_name=handler.workflow_name,
             status="running",
-            run_id=new_run_id,
+            run_id=run_id,
             error=handler.error,
             result=handler.result,
             started_at=handler.started_at,
@@ -313,8 +352,5 @@ class DBOSIdleReleaseDecorator(BaseRuntimeDecorator):
 
         self._idle_releasing.discard(run_id)
 
-        logger.info(
-            f"Resumed DBOS workflow via continue-as-new "
-            f"[old_run_id={run_id}, new_run_id={new_run_id}]"
-        )
-        return new_run_id, new_adapter
+        logger.info(f"Resumed DBOS workflow [run_id={run_id}]")
+        return run_id, new_adapter

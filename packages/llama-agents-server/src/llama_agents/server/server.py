@@ -25,6 +25,19 @@ from ._store.memory_workflow_store import MemoryWorkflowStore
 logger = logging.getLogger()
 
 
+def _set_root_runtime_on_idle_release(inner: Runtime, root: Runtime) -> None:
+    """Walk the decorator chain and set _root_runtime on any decorator that has it.
+
+    This allows inner decorators (like DBOSIdleReleaseDecorator) to call
+    run_workflow through the full chain when resuming workflows.
+    """
+    current = inner
+    while hasattr(current, "_decorated"):
+        if hasattr(current, "_root_runtime"):
+            current._root_runtime = root  # type: ignore[attr-defined]
+        current = current._decorated  # type: ignore[attr-defined]
+
+
 class WorkflowServer:
     """HTTP server that exposes workflows as REST APIs.
 
@@ -102,6 +115,10 @@ class WorkflowServer:
             store=self._workflow_store,
             persistence_backoff=list(persistence_backoff),
         )
+        # Let the idle release decorator call run_workflow through the full
+        # chain (including ServerRuntimeDecorator) so resumed workflows get
+        # the adapter that marks handlers "completed" on StopEvent.
+        _set_root_runtime_on_idle_release(inner, self._runtime)
         self._service = _WorkflowService(
             runtime=self._runtime, store=self._workflow_store
         )
