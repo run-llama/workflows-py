@@ -5,7 +5,7 @@ Starts a server with a short idle_timeout (5s). A background task starts
 a workflow, waits for idle release, then sends an event to trigger resume.
 Watch the server logs for:
   - INFO ... Released idle DBOS handler [run_id=...]
-  - INFO ... Resumed DBOS workflow [run_id=...]
+  - INFO ... Resumed DBOS workflow via continue-as-new [old_run_id=..., new_run_id=...]
 
 Run:
     uv run examples/dbos/idle_release_demo.py
@@ -69,12 +69,18 @@ async def drive_workflow(port: int) -> None:
     print("--- Sending UserInput to trigger resume ---")
     await client.send_event(
         handler.handler_id,
-        event_type="UserInput",
-        event={"response": "world"},
+        UserInput(response="world"),
     )
 
     print("--- Waiting for result ---")
-    result = await client.get_result(handler.handler_id, timeout=30)
+    # Poll until the handler completes
+    data = await client.get_result(handler.handler_id)
+    for _ in range(60):
+        if data.status in ("completed", "failed"):
+            break
+        await asyncio.sleep(0.5)
+        data = await client.get_result(handler.handler_id)
+    result = data.result
     print(f"--- Result: {result} ---")
 
 

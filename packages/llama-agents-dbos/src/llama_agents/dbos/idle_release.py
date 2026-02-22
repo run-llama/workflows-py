@@ -30,7 +30,7 @@ from typing_extensions import override
 from workflows.context.context_types import SerializedContext
 from workflows.context.serializers import JsonSerializer
 from workflows.context.state_store import create_in_memory_payload, infer_state_type
-from workflows.events import Event, WorkflowIdleEvent
+from workflows.events import Event, WorkflowCancelledEvent, WorkflowIdleEvent
 from workflows.runtime.control_loop import rebuild_state_from_ticks
 from workflows.runtime.types.internal_state import BrokerState
 from workflows.runtime.types.plugin import (
@@ -83,6 +83,13 @@ class _DBOSIdleReleaseInternalRunAdapter(BaseInternalRunAdapterDecorator):
         await super().write_to_event_stream(event)
         if isinstance(event, WorkflowIdleEvent):
             self._runtime._schedule_deferred_release(self.run_id)
+        elif (
+            isinstance(event, WorkflowCancelledEvent)
+            and self.run_id in self._runtime._idle_releasing
+        ):
+            # ServerRuntimeDecorator (outer) already set status="cancelled".
+            # Overwrite back to "running" so the handler remains resumable.
+            await self._store.update_handler_status(self.run_id, status="running")
 
 
 class DBOSIdleReleaseExternalRunAdapter(BaseExternalRunAdapterDecorator):
