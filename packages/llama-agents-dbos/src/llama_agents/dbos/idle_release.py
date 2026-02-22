@@ -37,7 +37,6 @@ from workflows.runtime.types.internal_state import BrokerState
 from workflows.runtime.types.plugin import (
     ExternalRunAdapter,
     InternalRunAdapter,
-    Runtime,
     WaitResult,
     WaitResultTick,
 )
@@ -157,9 +156,6 @@ class DBOSIdleReleaseDecorator(BaseRuntimeDecorator):
             raise ValueError("tick_persistence is required")
         self._tick_persistence: TickPersistenceDecorator = tick_persistence
         self._journal_crud = journal_crud
-        # Set by the outermost decorator (e.g. ServerRuntimeDecorator) after
-        # construction so that resumed workflows go through the full chain.
-        self._root_runtime: Runtime | None = None
 
     def _spawn_task(self, coro: Coroutine[Any, Any, None]) -> asyncio.Task[None]:
         task = asyncio.create_task(coro)
@@ -336,11 +332,7 @@ class DBOSIdleReleaseDecorator(BaseRuntimeDecorator):
             )
 
         # Start new workflow run with the same run_id.
-        # Use _root_runtime (the outermost decorator, e.g. ServerRuntimeDecorator)
-        # so the resumed workflow gets the full adapter chain — including the
-        # adapter that marks handlers as "completed" on StopEvent.
-        target_runtime = self._root_runtime or self._decorated
-        new_adapter = target_runtime.run_workflow(
+        new_adapter = self._decorated.run_workflow(
             run_id,
             workflow,
             init_state,
