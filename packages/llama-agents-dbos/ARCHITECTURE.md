@@ -64,14 +64,16 @@ Workflow output events flow through `WorkflowStore` backed by Postgres:
 2. The store writes to Postgres and sends `pg_notify`
 3. Any replica calling `subscribe_events(run_id)` receives the event
 
-## Idle Release
+## Idle Release (Continue-as-New)
 
-`DBOSIdleReleaseDecorator` wraps the runtime to release idle workflows from memory:
+`DBOSIdleReleaseDecorator` wraps the runtime to release idle workflows from memory using a "continue-as-new" approach:
 
-- **Release**: When a workflow goes idle, a timer starts. After `idle_timeout` seconds, `DBOS.cancel_workflow_async(run_id)` marks the workflow as cancelled in the DB. The control loop's asyncio tasks wind down and the process reclaims memory.
-- **Resume**: When an event arrives for an idle-released workflow, `DBOS.resume_workflow_async(run_id)` restarts it from its last completed step. DBOS replays completed steps from the database.
+- **Release**: When a workflow goes idle, a timer starts. After `idle_timeout` seconds, the decorator sends `TickCancelRun` through the external adapter. The control loop processes it, publishes `WorkflowCancelledEvent`, and raises `WorkflowCancelledByUser`. DBOS sees the exception and marks the workflow as ERROR (preventing auto-recovery on restart). The handler in the store is marked `status="cancelled"` with `idle_since` set.
+- **Resume**: When an event arrives for an idle-released handler (`idle_since` is set), the decorator rebuilds `BrokerState` from the tick log via `context_from_ticks()`, generates a new `run_id`, and starts a fresh DBOS workflow with the rebuilt state. The handler in the store is updated with the new `run_id` and `idle_since=None`.
 
-Both operations go through the database, so they work regardless of which replica triggers them.
+Tick persistence is provided by `TickPersistenceDecorator` in the decorator chain, which stores ticks to the workflow store so they can be replayed on resume.
+
+Both operations go through the database, so any replica can resume an idle-released workflow — the new DBOS workflow starts on whichever replica handles the incoming event.
 
 ## Guidelines for DBOS Code
 
