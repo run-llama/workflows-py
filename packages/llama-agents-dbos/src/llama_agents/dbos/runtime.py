@@ -577,11 +577,15 @@ class DBOSRuntime(Runtime):
         from .idle_release import DBOSIdleReleaseDecorator
 
         store = self.create_workflow_store()
-        inner: Runtime = TickPersistenceDecorator(self, store)
+        tick_persistence = TickPersistenceDecorator(self, store)
+        inner: Runtime = tick_persistence
         inner = EventInterceptorDecorator(inner)
         if idle_timeout is not None:
             inner = DBOSIdleReleaseDecorator(
-                inner, store=store, idle_timeout=idle_timeout
+                inner,
+                store=store,
+                idle_timeout=idle_timeout,
+                tick_persistence=tick_persistence,
             )
         return inner
 

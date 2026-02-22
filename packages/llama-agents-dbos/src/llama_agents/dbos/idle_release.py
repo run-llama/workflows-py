@@ -3,7 +3,7 @@
 """DBOSIdleReleaseDecorator and supporting adapters.
 
 Wraps an EventInterceptorDecorator to add idle detection, memory release via
-DBOS cancel_workflow, and reload-on-demand via DBOS resume_workflow.
+TickCancelRun, and reload-on-demand via continue-as-new (new run_id).
 """
 
 from __future__ import annotations
@@ -14,8 +14,8 @@ from collections.abc import Coroutine
 from datetime import datetime, timezone
 from typing import Any
 
-import sqlalchemy as sa
 from llama_agents.server._keyed_lock import KeyedLock
+from llama_agents.server._runtime.persistence_runtime import TickPersistenceDecorator
 from llama_agents.server._runtime.runtime_decorators import (
     BaseExternalRunAdapterDecorator,
     BaseInternalRunAdapterDecorator,
@@ -24,24 +24,28 @@ from llama_agents.server._runtime.runtime_decorators import (
 from llama_agents.server._store.abstract_workflow_store import (
     AbstractWorkflowStore,
     HandlerQuery,
+    PersistentHandler,
 )
 from typing_extensions import override
+from workflows.context.context_types import SerializedContext
+from workflows.context.serializers import JsonSerializer
+from workflows.context.state_store import create_in_memory_payload, infer_state_type
 from workflows.events import Event, WorkflowIdleEvent
+from workflows.runtime.control_loop import rebuild_state_from_ticks
+from workflows.runtime.types.internal_state import BrokerState
 from workflows.runtime.types.plugin import (
     ExternalRunAdapter,
     InternalRunAdapter,
     WaitResult,
     WaitResultTick,
 )
-from workflows.runtime.types.ticks import WorkflowTick
+from workflows.runtime.types.ticks import (
+    TickCancelRun,
+    WorkflowTick,
+    WorkflowTickAdapter,
+)
+from workflows.utils import _nanoid as nanoid
 from workflows.workflow import Workflow
-
-from dbos import DBOS
-from dbos._context import _dbos_context_var
-from dbos._dbos import _get_dbos_instance
-from dbos._sys_db import SystemSchema
-
-from .runtime import _IO_STREAM_TICK_TOPIC
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +62,6 @@ class _DBOSIdleReleaseInternalRunAdapter(BaseInternalRunAdapterDecorator):
         super().__init__(decorated)
         self._runtime = runtime
         self._store = store
-        self._was_cancelled = False
 
     @override
     async def wait_receive(
@@ -68,17 +71,7 @@ class _DBOSIdleReleaseInternalRunAdapter(BaseInternalRunAdapterDecorator):
         result = await super().wait_receive(timeout_seconds)
         if isinstance(result, WaitResultTick):
             self._runtime._cancel_deferred_release(self.run_id)
-            self._runtime._suppress_idle_release.discard(self.run_id)
         return result
-
-    @override
-    async def close(self) -> None:
-        if self._was_cancelled:
-            # Skip sending _DBOSInternalShutdown — the workflow was cancelled
-            # by idle release. Sending shutdown would create a stale
-            # notification that the resumed workflow would consume.
-            return
-        await super().close()
 
     @override
     async def write_to_event_stream(self, event: Event) -> None:
@@ -96,11 +89,11 @@ class DBOSIdleReleaseExternalRunAdapter(BaseExternalRunAdapterDecorator):
     """Proxy adapter that adds reload-on-demand for idle-released DBOS handlers.
 
     The inner adapter is resolved lazily because ``get_external_adapter`` is
-    sync but reload (resume_workflow) is async.
+    sync but reload (continue-as-new) is async.
     """
 
     def __init__(self, runtime: DBOSIdleReleaseDecorator, run_id: str) -> None:
-        # Intentionally skip super().__init__ — _decorated is a lazy property.
+        # Intentionally skip super().__init__ -- _decorated is a lazy property.
         self._runtime = runtime
         self._run_id = run_id
 
@@ -123,13 +116,14 @@ class DBOSIdleReleaseExternalRunAdapter(BaseExternalRunAdapterDecorator):
                 HandlerQuery(run_id_in=[self.run_id])
             )
             if len(handlers) == 1 and handlers[0].idle_since is not None:
-                await self._runtime._ensure_active_run_locked(self.run_id)
+                new_run_id = await self._runtime._ensure_active_run_locked(self.run_id)
+                self._run_id = new_run_id
             await self._decorated.send_event(tick)
 
 
 class DBOSIdleReleaseDecorator(BaseRuntimeDecorator):
-    """Runtime decorator for idle detection, release via cancel_workflow,
-    and reload via resume_workflow for DBOS-backed workflows.
+    """Runtime decorator for idle detection, release via TickCancelRun,
+    and reload via continue-as-new for DBOS-backed workflows.
 
     Must wrap an EventInterceptorDecorator (or compatible runtime) that
     wraps a DBOSRuntime.
@@ -140,6 +134,7 @@ class DBOSIdleReleaseDecorator(BaseRuntimeDecorator):
         decorated: BaseRuntimeDecorator,
         store: AbstractWorkflowStore,
         idle_timeout: float = 60.0,
+        tick_persistence: TickPersistenceDecorator | None = None,
     ) -> None:
         super().__init__(decorated)
         self._store = store
@@ -147,13 +142,10 @@ class DBOSIdleReleaseDecorator(BaseRuntimeDecorator):
         self._deferred_release_tasks: dict[str, asyncio.Task[None]] = {}
         self._background_tasks: set[asyncio.Task[None]] = set()
         self._idle_timeout = idle_timeout
-        # Track active internal adapters by run_id so we can mark them
-        # as cancelled during idle release (prevents stale shutdown notifications).
-        self._active_adapters: dict[str, _DBOSIdleReleaseInternalRunAdapter] = {}
-        # Run IDs where idle release is suppressed because a resume is in
-        # progress and a tick is pending delivery. Cleared when the tick is
-        # consumed by wait_receive.
-        self._suppress_idle_release: set[str] = set()
+        self._idle_releasing: set[str] = set()
+        if tick_persistence is None:
+            raise ValueError("tick_persistence is required")
+        self._tick_persistence: TickPersistenceDecorator = tick_persistence
 
     def _spawn_task(self, coro: Coroutine[Any, Any, None]) -> asyncio.Task[None]:
         task = asyncio.create_task(coro)
@@ -163,7 +155,7 @@ class DBOSIdleReleaseDecorator(BaseRuntimeDecorator):
 
     def _schedule_deferred_release(self, run_id: str) -> None:
         """Cancel any existing timer for run_id and schedule a new one."""
-        if run_id in self._suppress_idle_release:
+        if run_id in self._idle_releasing:
             return
         self._cancel_deferred_release(run_id)
         task = self._spawn_task(self._deferred_release(run_id))
@@ -178,9 +170,7 @@ class DBOSIdleReleaseDecorator(BaseRuntimeDecorator):
     @override
     def get_internal_adapter(self, workflow: Workflow) -> InternalRunAdapter:
         inner_adapter = self._decorated.get_internal_adapter(workflow)
-        adapter = _DBOSIdleReleaseInternalRunAdapter(inner_adapter, self, self._store)
-        self._active_adapters[adapter.run_id] = adapter
-        return adapter
+        return _DBOSIdleReleaseInternalRunAdapter(inner_adapter, self, self._store)
 
     @override
     def get_external_adapter(self, run_id: str) -> ExternalRunAdapter:
@@ -193,7 +183,7 @@ class DBOSIdleReleaseDecorator(BaseRuntimeDecorator):
         await self._release_idle_handler(run_id)
 
     async def _release_idle_handler(self, run_id: str) -> None:
-        """Release an idle handler: cancel in DBOS and let control loop die naturally."""
+        """Release an idle handler by sending TickCancelRun."""
         async with self._reload_lock(run_id):
             handlers = await self._store.query(HandlerQuery(run_id_in=[run_id]))
             if len(handlers) != 1 or handlers[0].idle_since is None:
@@ -204,70 +194,110 @@ class DBOSIdleReleaseDecorator(BaseRuntimeDecorator):
             if elapsed < self._idle_timeout:
                 return
 
-            # Mark the adapter as cancelled so close() skips sending
-            # _DBOSInternalShutdown (which would create a stale notification).
-            adapter = self._active_adapters.pop(run_id, None)
-            if adapter is not None:
-                adapter._was_cancelled = True
-
-            # Clear the DBOS workflow context so these operations don't get
-            # journaled as steps of the (about-to-be-cancelled) workflow.
-            # Without this, cancel_workflow would be replayed on resume and
-            # send_async would see the cancelled context and raise.
-            token = _dbos_context_var.set(None)
-            try:
-                # Cancel in DBOS DB — marks the workflow as cancelled
-                try:
-                    await DBOS.cancel_workflow_async(run_id)
-                except Exception:
-                    logger.warning(
-                        f"Failed to cancel DBOS workflow [run_id={run_id}]",
-                        exc_info=True,
-                    )
-                    return
-
-                # Wake the recv thread by sending a None notification.
-                # recv returns None → WaitResultTimeout, the loop continues,
-                # and the next recv detects CANCELLED status and exits cleanly.
-                await DBOS.send_async(run_id, None, topic=_IO_STREAM_TICK_TOPIC)
-            finally:
-                _dbos_context_var.reset(token)
-
+            self._idle_releasing.add(run_id)
+            await self._decorated.get_external_adapter(run_id).send_event(
+                TickCancelRun()
+            )
             logger.info(f"Released idle DBOS handler [run_id={run_id}]")
 
-    async def _ensure_active_run_locked(self, run_id: str) -> None:
-        """Resume a DBOS workflow that was previously idle-released.
+    async def _broker_state_from_ticks(
+        self, workflow: Workflow, run_id: str
+    ) -> BrokerState:
+        """Rebuild BrokerState from persisted ticks without converting to Context."""
+        stored_ticks = await self._store.get_ticks(run_id)
+        serializer = JsonSerializer()
 
-        Called under the reload lock. Uses DBOS resume_workflow_async to
-        restart the workflow from its last completed step with the same run_id.
-        The caller must have already verified the handler is idle via the store.
+        legacy_ctx = self._tick_persistence._get_legacy_ctx(run_id)
+
+        if legacy_ctx:
+            self._tick_persistence._seed_legacy_state(run_id, legacy_ctx)
+            parsed = SerializedContext.from_dict_auto(legacy_ctx)
+            init_state = BrokerState.from_serialized(parsed, workflow, serializer)
+        else:
+            init_state = BrokerState.from_workflow(workflow)
+
+        if stored_ticks:
+            ticks = [
+                WorkflowTickAdapter.validate_python(st.tick_data) for st in stored_ticks
+            ]
+            init_state = rebuild_state_from_ticks(init_state, ticks)
+
+        return init_state
+
+    async def _ensure_active_run_locked(self, run_id: str) -> str:
+        """Resume a workflow that was previously idle-released using continue-as-new.
+
+        Called under the reload lock. Rebuilds state from ticks, creates a new
+        run_id, and starts a fresh workflow run.
+
+        Returns the new run_id.
         """
         self._cancel_deferred_release(run_id)
-        # Suppress idle release scheduling during replay — the resumed workflow
-        # will re-emit WorkflowIdleEvent while rebuilding state, which would
-        # schedule a new timer that fires before the tick is consumed.
-        # Cleared when wait_receive sees the tick.
-        self._suppress_idle_release.add(run_id)
 
-        # Delete stale notifications left over from the cancel cycle.
-        # The original workflow's recv consumed its notification live (DELETE),
-        # but DBOS recv replay returns cached results WITHOUT deleting from DB.
-        # Any notifications inserted after the original recv (e.g. the wake-up
-        # None from _release_idle_handler) persist and would be consumed by the
-        # resumed workflow's fresh recv instead of the real tick.
-        dbos_inst = _get_dbos_instance()
-        with dbos_inst._sys_db.engine.begin() as conn:
-            conn.execute(
-                sa.delete(SystemSchema.notifications).where(
-                    SystemSchema.notifications.c.destination_uuid == run_id,
-                    SystemSchema.notifications.c.topic == _IO_STREAM_TICK_TOPIC,
-                )
+        # Look up handler to get workflow_name
+        handlers = await self._store.query(HandlerQuery(run_id_in=[run_id]))
+        if len(handlers) != 1:
+            raise ValueError(
+                f"Expected 1 handler for run {run_id}, got {len(handlers)}"
             )
+        handler = handlers[0]
 
-        token = _dbos_context_var.set(None)
-        try:
-            await DBOS.resume_workflow_async(run_id)
-        finally:
-            _dbos_context_var.reset(token)
-        logger.info(f"Resumed DBOS workflow [run_id={run_id}]")
-        await self._store.update_handler_status(run_id, idle_since=None)
+        workflow = self._tick_persistence.get_tracked_workflow(handler.workflow_name)
+        if workflow is None:
+            raise ValueError(f"Workflow {handler.workflow_name} not found")
+
+        # Rebuild BrokerState from persisted ticks
+        init_state = await self._broker_state_from_ticks(workflow, run_id)
+
+        # Carry over state from old run's state store
+        serializer = JsonSerializer()
+        serialized_state: dict[str, Any] | None = None
+        state_type = infer_state_type(workflow)
+        if state_type is not None:
+            try:
+                old_state_store = self._store.create_state_store(
+                    run_id, state_type=state_type
+                )
+                state = await old_state_store.get_state()
+                if state is not None:
+                    payload = create_in_memory_payload(state, serializer)
+                    serialized_state = payload.model_dump()
+            except Exception:
+                logger.warning(
+                    f"Failed to carry over state from run {run_id}", exc_info=True
+                )
+
+        # Generate new run_id
+        new_run_id = nanoid()
+
+        # Start new workflow run
+        self._decorated.run_workflow(
+            new_run_id,
+            workflow,
+            init_state,
+            serialized_state=serialized_state,
+            serializer=serializer,
+        )
+
+        # Update handler in store: new run_id, clear idle, set running
+        updated_handler = PersistentHandler(
+            handler_id=handler.handler_id,
+            workflow_name=handler.workflow_name,
+            status="running",
+            run_id=new_run_id,
+            error=handler.error,
+            result=handler.result,
+            started_at=handler.started_at,
+            updated_at=datetime.now(timezone.utc),
+            completed_at=handler.completed_at,
+            idle_since=None,
+        )
+        await self._store.update(updated_handler)
+
+        self._idle_releasing.discard(run_id)
+
+        logger.info(
+            f"Resumed DBOS workflow via continue-as-new "
+            f"[old_run_id={run_id}, new_run_id={new_run_id}]"
+        )
+        return new_run_id
