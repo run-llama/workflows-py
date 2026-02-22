@@ -174,6 +174,7 @@ async def test_send_event_triggers_resume_when_idle(
 
     adapter = DBOSIdleReleaseExternalRunAdapter(decorator, "run-1")
 
+    mock_rebuilt_state = MagicMock()
     with patch.object(
         decorator, "_broker_state_from_ticks", new_callable=AsyncMock
     ) as mock_broker:
@@ -181,22 +182,33 @@ async def test_send_event_triggers_resume_when_idle(
         with (
             patch("llama_agents.dbos.idle_release.infer_state_type", return_value=None),
             patch("llama_agents.dbos.idle_release.DBOS") as mock_dbos,
+            patch(
+                "llama_agents.dbos.idle_release.rebuild_state_from_ticks",
+                return_value=mock_rebuilt_state,
+            ) as mock_rebuild,
         ):
             mock_dbos.delete_workflow_async = AsyncMock()
-            await adapter.send_event(MagicMock(spec=WorkflowTick))
+            tick = MagicMock(spec=WorkflowTick)
+            await adapter.send_event(tick)
+
+    # Pending tick should have been included in the rebuilt state
+    mock_rebuild.assert_called_once()
+    assert mock_rebuild.call_args[0][1] == [tick]
 
     # Should have started a new workflow run with the same run_id
     _inner(decorator).run_workflow.assert_called_once()
     call_args = _inner(decorator).run_workflow.call_args
     assert call_args[0][0] == "run-1"  # same run_id reused
+    # The init_state should be the one with the pending tick applied
+    assert call_args[0][2] is mock_rebuilt_state
     # Handler should have been updated in store
     mock_store.update.assert_called_once()
     updated = mock_store.update.call_args[0][0]
     assert updated.idle_since is None
     assert updated.status == "running"
     assert updated.run_id == "run-1"  # run_id stays the same
-    # The new adapter (from run_workflow) should have received the tick
-    mock_new_adapter.send_event.assert_called_once()
+    # The tick is baked into init_state, so send_event is NOT called on the adapter
+    mock_new_adapter.send_event.assert_not_called()
     # Journal and DBOS operation outputs should have been purged for the run_id
     mock_journal_crud.purge_dbos_operation_outputs.assert_called_once_with("run-1")
     mock_journal_crud.delete.assert_called_once_with("run-1")

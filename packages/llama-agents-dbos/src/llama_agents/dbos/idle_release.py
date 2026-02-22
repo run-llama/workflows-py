@@ -119,13 +119,13 @@ class DBOSIdleReleaseExternalRunAdapter(BaseExternalRunAdapterDecorator):
                 HandlerQuery(run_id_in=[self.run_id])
             )
             if len(handlers) == 1 and handlers[0].idle_since is not None:
-                _run_id, new_adapter = await self._runtime._ensure_active_run_locked(
-                    self.run_id
+                # Include the pending tick in the rebuilt state so the
+                # control loop processes it immediately — avoids a race
+                # where the resumed workflow goes idle again before the
+                # tick is delivered.
+                await self._runtime._ensure_active_run_locked(
+                    self.run_id, pending_tick=tick
                 )
-                # Use the adapter returned by run_workflow which has the
-                # startup_task — this ensures we wait for the DBOS workflow
-                # to exist before sending.
-                await new_adapter.send_event(tick)
                 return
             await self._decorated.send_event(tick)
 
@@ -260,13 +260,21 @@ class DBOSIdleReleaseDecorator(BaseRuntimeDecorator):
         return init_state
 
     async def _ensure_active_run_locked(
-        self, run_id: str
+        self,
+        run_id: str,
+        pending_tick: WorkflowTick | None = None,
     ) -> tuple[str, ExternalRunAdapter]:
         """Resume a workflow that was previously idle-released.
 
         Called under the reload lock. Rebuilds state from ticks and starts a
         fresh DBOS workflow with the same run_id (DBOS state was purged after
         idle release, so SetWorkflowID will insert a fresh row).
+
+        Args:
+            run_id: The workflow run ID to resume.
+            pending_tick: An optional tick to include in the rebuilt state
+                before starting the workflow. This avoids a race where the
+                resumed workflow goes idle again before the tick is delivered.
 
         Returns (run_id, external_adapter) — the adapter has the startup
         task so callers can wait for the DBOS workflow to exist before sending.
@@ -287,6 +295,11 @@ class DBOSIdleReleaseDecorator(BaseRuntimeDecorator):
 
         # Rebuild BrokerState from persisted ticks
         init_state = await self._broker_state_from_ticks(workflow, run_id)
+
+        # Include the pending tick in the rebuilt state so the control loop
+        # has it queued before it starts processing.
+        if pending_tick is not None:
+            init_state = rebuild_state_from_ticks(init_state, [pending_tick])
 
         # Carry over state from old run's state store
         serializer = JsonSerializer()
