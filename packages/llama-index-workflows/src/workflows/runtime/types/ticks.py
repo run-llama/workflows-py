@@ -51,6 +51,13 @@ class TickCancelRun(BaseModel):
     type: Literal["cancel_run"] = "cancel_run"
 
 
+class TickIdleRelease(BaseModel):
+    """When processed, cleanly releases the workflow due to idleness"""
+
+    model_config = ConfigDict(frozen=True)
+    type: Literal["idle_release"] = "idle_release"
+
+
 class TickPublishEvent(BaseModel):
     """When sent, publishes an event to workflow consumers, e.g. a UI or a callback"""
 
@@ -87,6 +94,7 @@ WorkflowTick = Annotated[
         TickPublishEvent,
         TickTimeout,
         TickIdleCheck,
+        TickIdleRelease,
     ],
     Discriminator("type"),
 ]
