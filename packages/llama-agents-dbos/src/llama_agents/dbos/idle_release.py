@@ -123,8 +123,15 @@ class DBOSIdleReleaseExternalRunAdapter(BaseExternalRunAdapterDecorator):
                 HandlerQuery(run_id_in=[self.run_id])
             )
             if len(handlers) == 1 and handlers[0].idle_since is not None:
-                new_run_id = await self._runtime._ensure_active_run_locked(self.run_id)
+                new_run_id, new_adapter = await self._runtime._ensure_active_run_locked(
+                    self.run_id
+                )
                 self._run_id = new_run_id
+                # Use the adapter returned by run_workflow which has the
+                # startup_task — this ensures we wait for the DBOS workflow
+                # to exist before sending.
+                await new_adapter.send_event(tick)
+                return
             await self._decorated.send_event(tick)
 
 
@@ -231,13 +238,16 @@ class DBOSIdleReleaseDecorator(BaseRuntimeDecorator):
 
         return init_state
 
-    async def _ensure_active_run_locked(self, run_id: str) -> str:
+    async def _ensure_active_run_locked(
+        self, run_id: str
+    ) -> tuple[str, ExternalRunAdapter]:
         """Resume a workflow that was previously idle-released using continue-as-new.
 
         Called under the reload lock. Rebuilds state from ticks, creates a new
         run_id, and starts a fresh workflow run.
 
-        Returns the new run_id.
+        Returns (new_run_id, external_adapter) — the adapter has the startup
+        task so callers can wait for the DBOS workflow to exist before sending.
         """
         self._cancel_deferred_release(run_id)
 
@@ -278,7 +288,7 @@ class DBOSIdleReleaseDecorator(BaseRuntimeDecorator):
         new_run_id = nanoid()
 
         # Start new workflow run
-        self._decorated.run_workflow(
+        new_adapter = self._decorated.run_workflow(
             new_run_id,
             workflow,
             init_state,
@@ -307,4 +317,4 @@ class DBOSIdleReleaseDecorator(BaseRuntimeDecorator):
             f"Resumed DBOS workflow via continue-as-new "
             f"[old_run_id={run_id}, new_run_id={new_run_id}]"
         )
-        return new_run_id
+        return new_run_id, new_adapter

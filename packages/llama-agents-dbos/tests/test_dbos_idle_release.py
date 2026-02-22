@@ -160,8 +160,8 @@ async def test_send_event_triggers_resume_when_idle(
     mock_workflow = MagicMock()
     mock_tick_persistence.get_tracked_workflow.return_value = mock_workflow
 
-    mock_inner_external = AsyncMock(spec=ExternalRunAdapter)
-    _inner(decorator).get_external_adapter.return_value = mock_inner_external
+    mock_new_adapter = AsyncMock(spec=ExternalRunAdapter)
+    _inner(decorator).run_workflow.return_value = mock_new_adapter
 
     adapter = DBOSIdleReleaseExternalRunAdapter(decorator, "run-1")
 
@@ -184,8 +184,8 @@ async def test_send_event_triggers_resume_when_idle(
     assert updated.status == "running"
     # run_id should have changed
     assert updated.run_id != "run-1"
-    # The inner external adapter should have received the tick
-    mock_inner_external.send_event.assert_called_once()
+    # The new adapter (from run_workflow) should have received the tick
+    mock_new_adapter.send_event.assert_called_once()
 
 
 @pytest.mark.asyncio()
