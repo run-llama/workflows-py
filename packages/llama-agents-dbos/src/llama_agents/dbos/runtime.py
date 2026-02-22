@@ -27,7 +27,6 @@ from workflows.context.state_store import (
     deserialize_state_from_dict,
     infer_state_type,
 )
-from workflows.errors import WorkflowCancelledByUser
 from workflows.events import Event, StartEvent, StopEvent
 from workflows.runtime.types.internal_state import BrokerState
 from workflows.runtime.types.named_task import (
@@ -309,14 +308,7 @@ class DBOSRuntime(Runtime):
             if self._dsn is not None:
                 await self._ensure_pool()
             workflow_run_fn = create_workflow_run_function(workflow)
-            try:
-                return await workflow_run_fn(init_state, start_event, tags)
-            except WorkflowCancelledByUser:
-                # Idle release cancels the workflow gracefully. Return a
-                # sentinel StopEvent so DBOS records a successful completion
-                # instead of logging a noisy ERROR stack trace.
-                logger.debug("Workflow cancelled (idle release)")
-                return StopEvent(result=None)
+            return await workflow_run_fn(init_state, start_event, tags)
 
         # Wrap steps with stable names
         wrapped_steps: dict[str, StepWorkerFunction] = {
@@ -956,6 +948,7 @@ class ExternalDBOSAdapter(ExternalRunAdapter):
         return self._run_id
 
     async def send_event(self, tick: WorkflowTick) -> None:
+        await self._ensure_workflow_started()
         await DBOS.send_async(self._run_id, tick, topic=_IO_STREAM_TICK_TOPIC)
 
     async def stream_published_events(self) -> AsyncGenerator[Event, None]:
