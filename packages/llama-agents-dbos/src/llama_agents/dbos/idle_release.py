@@ -39,6 +39,7 @@ from workflows.workflow import Workflow
 from dbos import DBOS
 from dbos._context import _dbos_context_var
 from dbos._dbos import _get_dbos_instance
+from dbos._sys_db import SystemSchema
 
 from .runtime import _IO_STREAM_TICK_TOPIC
 
@@ -257,11 +258,10 @@ class DBOSIdleReleaseDecorator(BaseRuntimeDecorator):
         dbos_inst = _get_dbos_instance()
         with dbos_inst._sys_db.engine.begin() as conn:
             conn.execute(
-                sa.text(
-                    "DELETE FROM dbos.notifications"
-                    " WHERE destination_uuid = :run_id AND topic = :topic"
-                ),
-                {"run_id": run_id, "topic": _IO_STREAM_TICK_TOPIC},
+                sa.delete(SystemSchema.notifications).where(
+                    SystemSchema.notifications.c.destination_uuid == run_id,
+                    SystemSchema.notifications.c.topic == _IO_STREAM_TICK_TOPIC,
+                )
             )
 
         token = _dbos_context_var.set(None)

@@ -70,6 +70,7 @@ from llama_agents.client.protocol.serializable_events import (
     EventEnvelopeWithMetadata,
 )
 from llama_agents.server._runtime.event_interceptor import EventInterceptorDecorator
+from llama_agents.server._runtime.persistence_runtime import TickPersistenceDecorator
 from llama_agents.server._store.abstract_workflow_store import (
     AbstractWorkflowStore,
     HandlerQuery,
@@ -559,22 +560,26 @@ class DBOSRuntime(Runtime):
         """Build the decorator chain for use with WorkflowServer.
 
         Wraps the DBOS runtime with:
+        - TickPersistenceDecorator (persists ticks to workflow store)
         - EventInterceptorDecorator (blocks events from reaching DBOS streams)
         - DBOSIdleReleaseDecorator (when ``idle_timeout`` is set)
 
+        Chain order (outermost first):
+        DBOSIdleReleaseDecorator → EventInterceptorDecorator → TickPersistenceDecorator → DBOSRuntime
+
         Args:
             idle_timeout: Seconds to wait after a workflow becomes idle before
-                releasing it via ``cancel_workflow_async``. When ``None``
-                (default), idle release is disabled.
+                releasing it. When ``None`` (default), idle release is disabled.
 
         The returned runtime should be passed as the ``runtime`` argument
         to ``WorkflowServer``.
         """
         from .idle_release import DBOSIdleReleaseDecorator
 
-        inner: Runtime = EventInterceptorDecorator(self)
+        store = self.create_workflow_store()
+        inner: Runtime = TickPersistenceDecorator(self, store)
+        inner = EventInterceptorDecorator(inner)
         if idle_timeout is not None:
-            store = self.create_workflow_store()
             inner = DBOSIdleReleaseDecorator(
                 inner, store=store, idle_timeout=idle_timeout
             )
