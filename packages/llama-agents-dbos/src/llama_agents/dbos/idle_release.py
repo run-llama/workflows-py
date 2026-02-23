@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Coroutine
+from collections.abc import Callable, Coroutine
 from datetime import datetime, timezone
 from typing import Any
 
@@ -142,7 +142,7 @@ class DBOSIdleReleaseDecorator(BaseRuntimeDecorator):
         store: AbstractWorkflowStore,
         idle_timeout: float = 60.0,
         tick_persistence: TickPersistenceDecorator | None = None,
-        journal_crud: JournalCrud | None = None,
+        journal_crud: Callable[[], JournalCrud] | None = None,
     ) -> None:
         super().__init__(decorated)
         self._store = store
@@ -153,7 +153,16 @@ class DBOSIdleReleaseDecorator(BaseRuntimeDecorator):
         if tick_persistence is None:
             raise ValueError("tick_persistence is required")
         self._tick_persistence: TickPersistenceDecorator = tick_persistence
-        self._journal_crud = journal_crud
+        self._journal_crud_factory = journal_crud
+        self._journal_crud_instance: JournalCrud | None = None
+
+    @property
+    def _journal_crud(self) -> JournalCrud | None:
+        if self._journal_crud_factory is None:
+            return None
+        if self._journal_crud_instance is None:
+            self._journal_crud_instance = self._journal_crud_factory()
+        return self._journal_crud_instance
 
     def _spawn_task(self, coro: Coroutine[Any, Any, None]) -> asyncio.Task[None]:
         task = asyncio.create_task(coro)

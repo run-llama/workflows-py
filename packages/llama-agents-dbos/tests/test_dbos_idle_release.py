@@ -77,7 +77,7 @@ def decorator(
         mock_store,
         idle_timeout=0.1,
         tick_persistence=mock_tick_persistence,
-        journal_crud=mock_journal_crud,
+        journal_crud=lambda: mock_journal_crud,
     )
 
 
