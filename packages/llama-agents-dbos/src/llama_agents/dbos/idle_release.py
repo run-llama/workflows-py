@@ -16,7 +16,6 @@ from typing import Any
 
 from llama_agents.dbos.journal.crud import JournalCrud
 from llama_agents.server._keyed_lock import KeyedLock
-from llama_agents.server._runtime.persistence_runtime import TickPersistenceDecorator
 from llama_agents.server._runtime.runtime_decorators import (
     BaseExternalRunAdapterDecorator,
     BaseInternalRunAdapterDecorator,
@@ -141,7 +140,6 @@ class DBOSIdleReleaseDecorator(BaseRuntimeDecorator):
         decorated: BaseRuntimeDecorator,
         store: AbstractWorkflowStore,
         idle_timeout: float = 60.0,
-        tick_persistence: TickPersistenceDecorator | None = None,
         journal_crud: Callable[[], JournalCrud] | None = None,
     ) -> None:
         super().__init__(decorated)
@@ -150,9 +148,7 @@ class DBOSIdleReleaseDecorator(BaseRuntimeDecorator):
         self._deferred_release_tasks: dict[str, asyncio.Task[None]] = {}
         self._background_tasks: set[asyncio.Task[None]] = set()
         self._idle_timeout = idle_timeout
-        if tick_persistence is None:
-            raise ValueError("tick_persistence is required")
-        self._tick_persistence: TickPersistenceDecorator = tick_persistence
+        self._workflows: dict[str, Workflow] = {}
         self._journal_crud_factory = journal_crud
         self._journal_crud_instance: JournalCrud | None = None
 
@@ -163,6 +159,16 @@ class DBOSIdleReleaseDecorator(BaseRuntimeDecorator):
         if self._journal_crud_instance is None:
             self._journal_crud_instance = self._journal_crud_factory()
         return self._journal_crud_instance
+
+    @override
+    def track_workflow(self, workflow: Workflow) -> None:
+        self._workflows[workflow.workflow_name] = workflow
+        super().track_workflow(workflow)
+
+    @override
+    def untrack_workflow(self, workflow: Workflow) -> None:
+        self._workflows.pop(workflow.workflow_name, None)
+        super().untrack_workflow(workflow)
 
     def _spawn_task(self, coro: Coroutine[Any, Any, None]) -> asyncio.Task[None]:
         task = asyncio.create_task(coro)
@@ -279,7 +285,7 @@ class DBOSIdleReleaseDecorator(BaseRuntimeDecorator):
             )
         handler = handlers[0]
 
-        workflow = self._tick_persistence.get_tracked_workflow(handler.workflow_name)
+        workflow = self._workflows.get(handler.workflow_name)
         if workflow is None:
             raise ValueError(f"Workflow {handler.workflow_name} not found")
 

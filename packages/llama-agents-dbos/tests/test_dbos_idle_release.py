@@ -15,7 +15,6 @@ from llama_agents.dbos.idle_release import (
     _DBOSIdleReleaseInternalRunAdapter,
 )
 from llama_agents.dbos.journal.crud import JournalCrud
-from llama_agents.server._runtime.persistence_runtime import TickPersistenceDecorator
 from llama_agents.server._store.abstract_workflow_store import (
     AbstractWorkflowStore,
     PersistentHandler,
@@ -56,11 +55,6 @@ def mock_inner_runtime() -> MagicMock:
 
 
 @pytest.fixture()
-def mock_tick_persistence() -> MagicMock:
-    return MagicMock(spec=TickPersistenceDecorator)
-
-
-@pytest.fixture()
 def mock_journal_crud() -> AsyncMock:
     return AsyncMock(spec=JournalCrud)
 
@@ -69,14 +63,12 @@ def mock_journal_crud() -> AsyncMock:
 def decorator(
     mock_inner_runtime: MagicMock,
     mock_store: AsyncMock,
-    mock_tick_persistence: MagicMock,
     mock_journal_crud: AsyncMock,
 ) -> DBOSIdleReleaseDecorator:
     return DBOSIdleReleaseDecorator(
         mock_inner_runtime,
         mock_store,
         idle_timeout=0.1,
-        tick_persistence=mock_tick_persistence,
         journal_crud=lambda: mock_journal_crud,
     )
 
@@ -157,7 +149,6 @@ async def test_release_skips_if_not_idle(
 async def test_send_event_triggers_resume_when_idle(
     decorator: DBOSIdleReleaseDecorator,
     mock_store: AsyncMock,
-    mock_tick_persistence: MagicMock,
     mock_journal_crud: AsyncMock,
 ) -> None:
     """send_event should resume workflow if store shows handler is idle."""
@@ -171,7 +162,8 @@ async def test_send_event_triggers_resume_when_idle(
     mock_store.query.return_value = [handler]
 
     mock_workflow = MagicMock()
-    mock_tick_persistence.get_tracked_workflow.return_value = mock_workflow
+    mock_workflow.workflow_name = "test_wf"
+    decorator.track_workflow(mock_workflow)
 
     mock_new_adapter = AsyncMock(spec=ExternalRunAdapter)
     _inner(decorator).run_workflow.return_value = mock_new_adapter
@@ -304,7 +296,6 @@ async def test_await_and_purge_deletes_journal_and_operation_outputs(
 async def test_ensure_active_run_carries_over_serialized_state(
     decorator: DBOSIdleReleaseDecorator,
     mock_store: AsyncMock,
-    mock_tick_persistence: MagicMock,
     mock_journal_crud: AsyncMock,
 ) -> None:
     """_ensure_active_run_locked should pass serialized_state from the old state store."""
@@ -322,7 +313,8 @@ async def test_ensure_active_run_carries_over_serialized_state(
     mock_store.query.return_value = [handler]
 
     mock_workflow = MagicMock()
-    mock_tick_persistence.get_tracked_workflow.return_value = mock_workflow
+    mock_workflow.workflow_name = "stateful_wf"
+    decorator.track_workflow(mock_workflow)
 
     # Set up state store to return a state object
     mock_state_store = AsyncMock()

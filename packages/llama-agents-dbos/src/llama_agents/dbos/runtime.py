@@ -592,39 +592,32 @@ class DBOSRuntime(Runtime):
 
         return _factory
 
-    def build_server_runtime(self, *, idle_timeout: float | None = None) -> Runtime:
+    def build_server_runtime(self, *, idle_timeout: float = 600.0) -> Runtime:
         """Build the decorator chain for use with WorkflowServer.
 
         Wraps the DBOS runtime with:
         - TickPersistenceDecorator (persists ticks to workflow store)
         - EventInterceptorDecorator (blocks events from reaching DBOS streams)
-        - DBOSIdleReleaseDecorator (when ``idle_timeout`` is set)
+        - DBOSIdleReleaseDecorator (releases idle workflows after timeout)
 
         Chain order (outermost first):
         DBOSIdleReleaseDecorator → EventInterceptorDecorator → TickPersistenceDecorator → DBOSRuntime
 
         Args:
             idle_timeout: Seconds to wait after a workflow becomes idle before
-                releasing it. When ``None`` (default), idle release is disabled.
+                releasing it. Defaults to 10 minutes.
 
         The returned runtime should be passed as the ``runtime`` argument
         to ``WorkflowServer``.
         """
-
         store = self.create_workflow_store()
         tick_persistence = TickPersistenceDecorator(self, store)
-        inner: Runtime = tick_persistence
-        inner = EventInterceptorDecorator(inner)
-        if idle_timeout is not None:
-            journal_crud = self._create_journal_crud_factory()
-            inner = DBOSIdleReleaseDecorator(
-                inner,
-                store=store,
-                idle_timeout=idle_timeout,
-                tick_persistence=tick_persistence,
-                journal_crud=journal_crud,
-            )
-        return inner
+        return DBOSIdleReleaseDecorator(
+            EventInterceptorDecorator(tick_persistence),
+            store=store,
+            idle_timeout=idle_timeout,
+            journal_crud=self._create_journal_crud_factory(),
+        )
 
     def launch(self) -> None:
         """
