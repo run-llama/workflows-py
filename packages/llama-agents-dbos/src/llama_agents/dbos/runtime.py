@@ -57,6 +57,7 @@ from workflows.workflow import Workflow
 try:
     from dbos import DBOS, SetWorkflowID, WorkflowHandleAsync
     from dbos._dbos import _get_dbos_instance
+    from dbos._error import DBOSNonExistentWorkflowError
 except ImportError as e:
     # if 3.9, give a detailed error that dbos is not supported on this version of python
     if sys.version_info.major == 3 and sys.version_info.minor <= 9:
@@ -87,6 +88,7 @@ from llama_agents.server._store.sqlite.sqlite_workflow_store import SqliteWorkfl
 from sqlalchemy.engine import URL as SaURL
 from sqlalchemy.engine import Engine
 
+from .idle_release import DBOSIdleReleaseDecorator
 from .journal.crud import (
     JOURNAL_TABLE_NAME,
     JournalCrud,
@@ -608,7 +610,6 @@ class DBOSRuntime(Runtime):
         The returned runtime should be passed as the ``runtime`` argument
         to ``WorkflowServer``.
         """
-        from .idle_release import DBOSIdleReleaseDecorator
 
         store = self.create_workflow_store()
         tick_persistence = TickPersistenceDecorator(self, store)
@@ -1006,7 +1007,6 @@ class ExternalDBOSAdapter(ExternalRunAdapter):
             # Fallback: workflow was started elsewhere, retrieve with retry since
             # there can be a race between start_workflow_async completing and the
             # workflow becoming retrievable in DBOS.
-            from dbos._error import DBOSNonExistentWorkflowError
 
             for attempt in range(20):
                 try:
