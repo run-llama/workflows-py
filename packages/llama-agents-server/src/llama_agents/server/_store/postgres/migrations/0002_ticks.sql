@@ -20,3 +20,9 @@ BEGIN
     END IF;
 END
 $$;
+
+CREATE TABLE IF NOT EXISTS run_lifecycle (
+    run_id VARCHAR(255) PRIMARY KEY,
+    state VARCHAR(20) NOT NULL DEFAULT 'active',
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
