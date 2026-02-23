@@ -5,6 +5,31 @@
 Wraps an EventInterceptorDecorator to add idle detection, memory release via
 TickIdleRelease, and reload-on-demand via reusing the same run_id.
 
+## Lifecycle lock coordination
+
+A distributed lifecycle lock (``RunLifecycleLock``) coordinates release and
+resume across replicas. The state machine is::
+
+    active → releasing → released → active
+
+- **Release**: When the deferred release timer fires, the decorator calls
+  ``begin_release(run_id)`` to CAS ``active → releasing``. If successful,
+  it sends ``TickIdleRelease`` via ``DBOS.send_async()``. A background task
+  awaits the workflow completion and then calls ``complete_release`` to
+  transition ``releasing → released``. The handler's ``idle_since`` is set
+  only after the workflow is fully released.
+
+- **Resume**: When ``send_event`` is called, it consults the lifecycle lock
+  via ``try_begin_resume``. If the state is ``released``, the caller owns
+  the resume: it waits for the old DBOS workflow to finish (cross-replica
+  via ``DBOS.retrieve_workflow_async``), purges DBOS/journal state, rebuilds
+  from ticks, and starts a fresh workflow. If the state is ``releasing``,
+  the caller polls with a crash timeout.
+
+- **Crash recovery**: If a releaser crashes mid-release (state stuck at
+  ``releasing``), ``send_event`` detects the stale ``updated_at`` timestamp
+  and calls ``force_resume`` to take over.
+
 ## Tick delivery via DBOS notifications
 
 To release an idle workflow, we deliver a ``TickIdleRelease`` tick into
@@ -13,24 +38,10 @@ the running control loop. The control loop receives ticks through
 ``DBOS.recv_async()`` — DBOS's durable notification channel backed by
 Postgres.
 
-We send the tick via ``DBOS.send_async()`` on the external adapter side.
-The internal adapter's ``recv_async`` picks it up and the control loop
-processes the ``TickIdleRelease``, which cleanly completes the workflow
-with an ``IdleReleasedEvent`` (a ``StopEvent`` subclass). DBOS sees a
-normal return and marks the workflow as SUCCESS.
-
-After the workflow completes, ``_await_and_purge`` deletes the DBOS
-workflow state and journal entries so the run_id can be reused on resume.
-
 **Why purge is needed**: DBOS uses ``SetWorkflowID`` to pin a workflow
 to a specific run_id. If we don't delete the old DBOS row, starting a
 new workflow with the same run_id would be treated as a recovery replay
-instead of a fresh start.
-
-**Forward compatibility**: If DBOS changes notification semantics (e.g.
-``recv_async`` no longer delivers to running workflows, or ``send_async``
-requires the workflow to be in a specific state), the tick delivery path
-would break. The symptom would be idle workflows that never release.
+instead of a fresh start. Purge now happens only in the resume path.
 """
 
 from __future__ import annotations
@@ -42,7 +53,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from llama_agents.dbos.journal.crud import JournalCrud
-from llama_agents.server._keyed_lock import KeyedLock
+from llama_agents.dbos.journal.lifecycle import RunLifecycleLock, RunLifecycleState
 from llama_agents.server._runtime.runtime_decorators import (
     BaseExternalRunAdapterDecorator,
     BaseInternalRunAdapterDecorator,
@@ -76,6 +87,9 @@ from dbos import DBOS
 
 logger = logging.getLogger(__name__)
 
+# How long to wait before declaring a "releasing" state as crashed
+CRASH_TIMEOUT_SECONDS = 120.0
+
 
 class _DBOSIdleReleaseInternalRunAdapter(BaseInternalRunAdapterDecorator):
     """Internal adapter that detects idle events and schedules release."""
@@ -102,11 +116,6 @@ class _DBOSIdleReleaseInternalRunAdapter(BaseInternalRunAdapterDecorator):
 
     @override
     async def write_to_event_stream(self, event: Event) -> None:
-        if isinstance(event, WorkflowIdleEvent):
-            idle_since = datetime.now(timezone.utc)
-            await self._store.update_handler_status(
-                self.run_id, status="running", idle_since=idle_since
-            )
         await super().write_to_event_stream(event)
         if isinstance(event, WorkflowIdleEvent):
             self._runtime._schedule_deferred_release(self.run_id)
@@ -138,25 +147,46 @@ class DBOSIdleReleaseExternalRunAdapter(BaseExternalRunAdapterDecorator):
 
     @override
     async def send_event(self, tick: WorkflowTick) -> None:
-        async with self._runtime._reload_lock(self.run_id):
-            handlers = await self._runtime._store.query(
-                HandlerQuery(run_id_in=[self.run_id])
-            )
-            if len(handlers) == 1 and handlers[0].idle_since is not None:
-                # Include the pending tick in the rebuilt state so the
-                # control loop processes it immediately — avoids a race
-                # where the resumed workflow goes idle again before the
-                # tick is delivered.
-                await self._runtime._ensure_active_run_locked(
-                    self.run_id, pending_tick=tick
-                )
-                return
+        lifecycle = self._runtime._lifecycle
+        if lifecycle is None:
+            # No lifecycle lock configured — send directly
             await self._decorated.send_event(tick)
+            return
+
+        while True:
+            result = await lifecycle.try_begin_resume(self.run_id)
+            if result is None:
+                # active or no row — send normally
+                await self._decorated.send_event(tick)
+                return
+            if result == RunLifecycleState.released:
+                # We own the resume
+                await self._runtime._do_resume(self.run_id, pending_tick=tick)
+                return
+            if result == RunLifecycleState.releasing:
+                # Check for crash timeout
+                state_info = await lifecycle.get_state(self.run_id)
+                if state_info is not None:
+                    elapsed = (
+                        datetime.now(timezone.utc) - state_info[1]
+                    ).total_seconds()
+                    if elapsed > CRASH_TIMEOUT_SECONDS:
+                        logger.warning(
+                            f"Releasing state timed out for run_id={self.run_id}, "
+                            f"forcing resume"
+                        )
+                        await lifecycle.force_resume(self.run_id)
+                        await self._runtime._do_resume(self.run_id, pending_tick=tick)
+                        return
+                await asyncio.sleep(0.5)
 
 
 class DBOSIdleReleaseDecorator(BaseRuntimeDecorator):
     """Runtime decorator for idle detection, release via TickIdleRelease,
     and reload via reusing the same run_id for DBOS-backed workflows.
+
+    Uses a distributed lifecycle lock to coordinate release/resume across
+    replicas. The state machine is: active → releasing → released → active.
 
     Must wrap an EventInterceptorDecorator (or compatible runtime) that
     wraps a DBOSRuntime.
@@ -168,16 +198,18 @@ class DBOSIdleReleaseDecorator(BaseRuntimeDecorator):
         store: AbstractWorkflowStore,
         idle_timeout: float = 60.0,
         journal_crud: Callable[[], JournalCrud] | None = None,
+        lifecycle_lock: Callable[[], RunLifecycleLock] | None = None,
     ) -> None:
         super().__init__(decorated)
         self._store = store
-        self._reload_lock = KeyedLock()
         self._deferred_release_tasks: dict[str, asyncio.Task[None]] = {}
         self._background_tasks: set[asyncio.Task[None]] = set()
         self._idle_timeout = idle_timeout
         self._workflows: dict[str, Workflow] = {}
         self._journal_crud_factory = journal_crud
         self._journal_crud_instance: JournalCrud | None = None
+        self._lifecycle_lock_factory = lifecycle_lock
+        self._lifecycle_lock_instance: RunLifecycleLock | None = None
 
     @property
     def _journal_crud(self) -> JournalCrud | None:
@@ -186,6 +218,14 @@ class DBOSIdleReleaseDecorator(BaseRuntimeDecorator):
         if self._journal_crud_instance is None:
             self._journal_crud_instance = self._journal_crud_factory()
         return self._journal_crud_instance
+
+    @property
+    def _lifecycle(self) -> RunLifecycleLock | None:
+        if self._lifecycle_lock_factory is None:
+            return None
+        if self._lifecycle_lock_instance is None:
+            self._lifecycle_lock_instance = self._lifecycle_lock_factory()
+        return self._lifecycle_lock_instance
 
     @override
     def track_workflow(self, workflow: Workflow) -> None:
@@ -232,7 +272,12 @@ class DBOSIdleReleaseDecorator(BaseRuntimeDecorator):
 
     async def _release_idle_handler(self, run_id: str) -> None:
         """Release an idle handler by sending TickIdleRelease."""
-        async with self._reload_lock(run_id):
+        lifecycle = self._lifecycle
+        if lifecycle is not None:
+            if not await lifecycle.begin_release(run_id):
+                return
+        else:
+            # No lifecycle lock — fall back to checking idle_since
             handlers = await self._store.query(HandlerQuery(run_id_in=[run_id]))
             if len(handlers) != 1 or handlers[0].idle_since is None:
                 return
@@ -242,27 +287,32 @@ class DBOSIdleReleaseDecorator(BaseRuntimeDecorator):
             if elapsed < self._idle_timeout:
                 return
 
-            external = self._decorated.get_external_adapter(run_id)
-            await external.send_event(TickIdleRelease())
-            logger.info(f"Released idle DBOS handler [run_id={run_id}]")
+        external = self._decorated.get_external_adapter(run_id)
+        await external.send_event(TickIdleRelease())
+        logger.info(f"Released idle DBOS handler [run_id={run_id}]")
 
-            # Await workflow completion then purge DBOS state so run_id can be reused
-            self._spawn_task(self._await_and_purge(run_id, external))
+        self._spawn_task(self._await_and_mark_released(run_id, external))
 
-    async def _await_and_purge(self, run_id: str, external: ExternalRunAdapter) -> None:
-        """Await workflow completion and purge DBOS state so run_id can be reused."""
+    async def _await_and_mark_released(
+        self, run_id: str, external: ExternalRunAdapter
+    ) -> None:
+        """Await workflow completion, then mark as released and set idle_since."""
         try:
             await external.get_result()
-            if self._journal_crud is not None:
-                await self._journal_crud.purge_dbos_operation_outputs(run_id)
-                await self._journal_crud.delete(run_id)
-            await DBOS.delete_workflow_async(run_id)
-            logger.info(
-                f"Purged DBOS state for idle-released handler [run_id={run_id}]"
+
+            lifecycle = self._lifecycle
+            if lifecycle is not None:
+                await lifecycle.complete_release(run_id)
+
+            # Set idle_since NOW — after the workflow is fully released
+            await self._store.update_handler_status(
+                run_id, status="running", idle_since=datetime.now(timezone.utc)
             )
+
+            logger.info(f"Marked handler as released [run_id={run_id}]")
         except Exception:
             logger.warning(
-                f"Failed to purge DBOS state for run_id={run_id}", exc_info=True
+                f"Failed to mark released for run_id={run_id}", exc_info=True
             )
         finally:
             self._deferred_release_tasks.pop(run_id, None)
@@ -282,16 +332,16 @@ class DBOSIdleReleaseDecorator(BaseRuntimeDecorator):
 
         return init_state
 
-    async def _ensure_active_run_locked(
+    async def _do_resume(
         self,
         run_id: str,
         pending_tick: WorkflowTick | None = None,
     ) -> tuple[str, ExternalRunAdapter]:
         """Resume a workflow that was previously idle-released.
 
-        Called under the reload lock. Rebuilds state from ticks and starts a
-        fresh DBOS workflow with the same run_id (DBOS state was purged after
-        idle release, so SetWorkflowID will insert a fresh row).
+        Waits for the old DBOS workflow to finish (works cross-replica),
+        purges DBOS/journal state, rebuilds from ticks, and starts a fresh
+        DBOS workflow with the same run_id.
 
         Args:
             run_id: The workflow run ID to resume.
@@ -299,10 +349,18 @@ class DBOSIdleReleaseDecorator(BaseRuntimeDecorator):
                 before starting the workflow. This avoids a race where the
                 resumed workflow goes idle again before the tick is delivered.
 
-        Returns (run_id, external_adapter) — the adapter has the startup
-        task so callers can wait for the DBOS workflow to exist before sending.
+        Returns (run_id, external_adapter).
         """
         self._cancel_deferred_release(run_id)
+
+        # Wait for old DBOS workflow to finish (cross-replica safe)
+        try:
+            handle = await DBOS.retrieve_workflow_async(run_id)
+            await handle.get_result()
+        except Exception:
+            logger.debug(
+                f"Old DBOS workflow already gone for run_id={run_id}", exc_info=True
+            )
 
         # Look up handler to get workflow_name
         handlers = await self._store.query(HandlerQuery(run_id_in=[run_id]))
@@ -339,7 +397,7 @@ class DBOSIdleReleaseDecorator(BaseRuntimeDecorator):
                     f"Failed to carry over state from run {run_id}", exc_info=True
                 )
 
-        # Purge DBOS state and journal (if not already purged) so the same run_id can be reused
+        # Purge DBOS state and journal so the same run_id can be reused
         if self._journal_crud is not None:
             try:
                 await self._journal_crud.purge_dbos_operation_outputs(run_id)

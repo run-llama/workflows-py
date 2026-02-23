@@ -95,6 +95,11 @@ from .journal.crud import (
     PostgresJournalCrud,
     SqliteJournalCrud,
 )
+from .journal.lifecycle import (
+    PostgresRunLifecycleLock,
+    RunLifecycleLock,
+    SqliteRunLifecycleLock,
+)
 from .journal.task_journal import TaskJournal
 
 STATE_TABLE_NAME = "workflow_state"
@@ -592,6 +597,20 @@ class DBOSRuntime(Runtime):
 
         return _factory
 
+    def _create_lifecycle_lock_factory(self) -> Callable[[], RunLifecycleLock]:
+        """Create a factory for RunLifecycleLock that resolves the database backend."""
+
+        def _factory() -> RunLifecycleLock:
+            if self._db_path is not None:
+                return SqliteRunLifecycleLock(db_path=self._db_path)
+            if self._pool is not None:
+                return PostgresRunLifecycleLock(self._pool, schema=self._schema)
+            raise RuntimeError(
+                "No database configured for lifecycle lock. Was launch() called?"
+            )
+
+        return _factory
+
     def build_server_runtime(self, *, idle_timeout: float = 600.0) -> Runtime:
         """Build the decorator chain for use with WorkflowServer.
 
@@ -617,6 +636,7 @@ class DBOSRuntime(Runtime):
             store=store,
             idle_timeout=idle_timeout,
             journal_crud=self._create_journal_crud_factory(),
+            lifecycle_lock=self._create_lifecycle_lock_factory(),
         )
 
     def launch(self) -> None:
