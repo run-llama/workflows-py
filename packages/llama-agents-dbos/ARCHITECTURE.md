@@ -68,8 +68,8 @@ Workflow output events flow through `WorkflowStore` backed by Postgres:
 
 `DBOSIdleReleaseDecorator` wraps the runtime to release idle workflows from memory using a "continue-as-new" approach:
 
-- **Release**: When a workflow goes idle, a timer starts. After `idle_timeout` seconds, the decorator sends `TickCancelRun` through the external adapter. The control loop processes it, publishes `WorkflowCancelledEvent`, and raises `WorkflowCancelledByUser`. DBOS sees the exception and marks the workflow as ERROR (preventing auto-recovery on restart). The handler in the store is marked `status="cancelled"` with `idle_since` set.
-- **Resume**: When an event arrives for an idle-released handler (`idle_since` is set), the decorator rebuilds `BrokerState` from the tick log via `context_from_ticks()`, generates a new `run_id`, and starts a fresh DBOS workflow with the rebuilt state. The handler in the store is updated with the new `run_id` and `idle_since=None`.
+- **Release**: When a workflow goes idle, a timer starts. After `idle_timeout` seconds, the decorator sends `TickIdleRelease` through the external adapter via `DBOS.send_async()`. The internal adapter picks it up via `DBOS.recv_async()`, and the control loop processes it, cleanly completing the workflow with an `IdleReleasedEvent`. DBOS marks the workflow as SUCCESS. We then purge the DBOS state and journal entries so the run_id can be reused on resume (see the docstring in `idle_release.py` for details).
+- **Resume**: When an event arrives for an idle-released handler (`idle_since` is set), the decorator rebuilds `BrokerState` from the tick log, purges stale DBOS/journal state, and starts a fresh DBOS workflow reusing the same `run_id` with the rebuilt state. The handler in the store keeps the same `run_id` with `idle_since=None`.
 
 Tick persistence is provided by `TickPersistenceDecorator` in the decorator chain, which stores ticks to the workflow store so they can be replayed on resume.
 

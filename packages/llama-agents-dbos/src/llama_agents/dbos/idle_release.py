@@ -4,6 +4,33 @@
 
 Wraps an EventInterceptorDecorator to add idle detection, memory release via
 TickIdleRelease, and reload-on-demand via reusing the same run_id.
+
+## Tick delivery via DBOS notifications
+
+To release an idle workflow, we deliver a ``TickIdleRelease`` tick into
+the running control loop. The control loop receives ticks through
+``InternalRunAdapter.wait_receive()``, which for DBOS-backed runs uses
+``DBOS.recv_async()`` — DBOS's durable notification channel backed by
+Postgres.
+
+We send the tick via ``DBOS.send_async()`` on the external adapter side.
+The internal adapter's ``recv_async`` picks it up and the control loop
+processes the ``TickIdleRelease``, which cleanly completes the workflow
+with an ``IdleReleasedEvent`` (a ``StopEvent`` subclass). DBOS sees a
+normal return and marks the workflow as SUCCESS.
+
+After the workflow completes, ``_await_and_purge`` deletes the DBOS
+workflow state and journal entries so the run_id can be reused on resume.
+
+**Why purge is needed**: DBOS uses ``SetWorkflowID`` to pin a workflow
+to a specific run_id. If we don't delete the old DBOS row, starting a
+new workflow with the same run_id would be treated as a recovery replay
+instead of a fresh start.
+
+**Forward compatibility**: If DBOS changes notification semantics (e.g.
+``recv_async`` no longer delivers to running workflows, or ``send_async``
+requires the workflow to be in a specific state), the tick delivery path
+would break. The symptom would be idle workflows that never release.
 """
 
 from __future__ import annotations
