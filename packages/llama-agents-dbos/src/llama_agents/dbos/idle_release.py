@@ -48,7 +48,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Callable, Coroutine
+from collections.abc import Awaitable, Callable, Coroutine
 from datetime import datetime, timezone
 from typing import Any
 
@@ -147,7 +147,7 @@ class DBOSIdleReleaseExternalRunAdapter(BaseExternalRunAdapterDecorator):
 
     @override
     async def send_event(self, tick: WorkflowTick) -> None:
-        lifecycle = self._runtime._lifecycle
+        lifecycle = await self._runtime._get_lifecycle()
         if lifecycle is None:
             # No lifecycle lock configured — send directly
             await self._decorated.send_event(tick)
@@ -198,7 +198,9 @@ class DBOSIdleReleaseDecorator(BaseRuntimeDecorator):
         store: AbstractWorkflowStore,
         idle_timeout: float = 60.0,
         journal_crud: Callable[[], JournalCrud] | None = None,
-        lifecycle_lock: Callable[[], RunLifecycleLock] | None = None,
+        lifecycle_lock: Callable[[], Awaitable[RunLifecycleLock]]
+        | Callable[[], RunLifecycleLock]
+        | None = None,
     ) -> None:
         super().__init__(decorated)
         self._store = store
@@ -219,12 +221,15 @@ class DBOSIdleReleaseDecorator(BaseRuntimeDecorator):
             self._journal_crud_instance = self._journal_crud_factory()
         return self._journal_crud_instance
 
-    @property
-    def _lifecycle(self) -> RunLifecycleLock | None:
+    async def _get_lifecycle(self) -> RunLifecycleLock | None:
         if self._lifecycle_lock_factory is None:
             return None
         if self._lifecycle_lock_instance is None:
-            self._lifecycle_lock_instance = self._lifecycle_lock_factory()
+            result = self._lifecycle_lock_factory()
+            if isinstance(result, Awaitable):
+                self._lifecycle_lock_instance = await result
+            else:
+                self._lifecycle_lock_instance = result
         return self._lifecycle_lock_instance
 
     @override
@@ -272,7 +277,7 @@ class DBOSIdleReleaseDecorator(BaseRuntimeDecorator):
 
     async def _release_idle_handler(self, run_id: str) -> None:
         """Release an idle handler by sending TickIdleRelease."""
-        lifecycle = self._lifecycle
+        lifecycle = await self._get_lifecycle()
         if lifecycle is not None:
             if not await lifecycle.begin_release(run_id):
                 return
@@ -300,7 +305,7 @@ class DBOSIdleReleaseDecorator(BaseRuntimeDecorator):
         try:
             await external.get_result()
 
-            lifecycle = self._lifecycle
+            lifecycle = await self._get_lifecycle()
             if lifecycle is not None:
                 await lifecycle.complete_release(run_id)
 

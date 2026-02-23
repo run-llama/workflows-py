@@ -80,7 +80,7 @@ async def test_cross_process_event_delivery(postgres_dsn: str) -> None:
 
     replicas: list[subprocess.Popen[str]] = []
     try:
-        # Start replicas sequentially to avoid DBOS CREATE SCHEMA race (upstream bug)
+        # Start replicas sequentially to avoid DBOS CREATE SCHEMA race
         replicas.append(start_replica(PORT_A, postgres_dsn))
         wait_for_server(replicas[0], PORT_A)
         replicas.append(start_replica(PORT_B, postgres_dsn))
@@ -89,7 +89,7 @@ async def test_cross_process_event_delivery(postgres_dsn: str) -> None:
         client_a = WorkflowClient(base_url=f"http://localhost:{PORT_A}")
         client_b = WorkflowClient(base_url=f"http://localhost:{PORT_B}")
 
-        # Start workflow on Replica A — step "ask" returns AskInputEvent
+        # Start workflow on Replica A — step "ask" emits AskInputEvent
         handler = await client_a.run_workflow_nowait("test")
         handler_id = handler.handler_id
 
@@ -116,5 +116,4 @@ async def test_cross_process_event_delivery(postgres_dsn: str) -> None:
     finally:
         for proc in replicas:
             proc.kill()
-        for proc in replicas:
             proc.wait()

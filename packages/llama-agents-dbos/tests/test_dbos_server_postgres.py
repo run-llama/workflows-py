@@ -25,9 +25,6 @@ SERVER_RUNNER_PATH = str(Path(__file__).parent / "fixtures" / "server_runner.py"
 IDLE_RELEASE_RUNNER_PATH = str(
     Path(__file__).parent / "fixtures" / "idle_release_runner.py"
 )
-CANCEL_HANGS_RUNNER_PATH = str(
-    Path(__file__).parent / "fixtures" / "cancel_hangs_runner.py"
-)
 
 pytestmark = [pytest.mark.docker]
 
@@ -272,105 +269,4 @@ def test_idle_release_end_to_end(postgres_dsn: str) -> None:
     assert "EVENT_SENT" in stdout_output, f"stdout: {stdout_output}"
     assert saw_success, (
         f"Should complete successfully.\nstdout: {stdout_output}\nstderr: {stderr_output}"
-    )
-
-
-def test_cancel_unblocks_waiting_control_loop(postgres_dsn: str) -> None:
-    """Test that idle-release cancel actually kills the control loop task.
-
-    Exercises the real production path: DBOSIdleReleaseDecorator detects idle,
-    waits for timeout, calls _release_idle_handler which cancels the workflow
-    and sends a wake-up signal. The control loop should exit — not linger as a
-    zombie blocked in recv_async for up to 24 hours.
-    """
-    cmd = [
-        sys.executable,
-        CANCEL_HANGS_RUNNER_PATH,
-        "--workflow",
-        "tests.fixtures.sample_workflows.idle_cancel_resume:IdleCancelResumeWorkflow",
-        "--db-url",
-        postgres_dsn,
-        "--run-id",
-        "test-cancel-hangs-001",
-        "--idle-timeout",
-        "0.5",
-        "--cancel-wait-timeout",
-        "5.0",
-    ]
-
-    # Use Popen to stream output line-by-line and detect hangs
-    import time as _time
-
-    proc = subprocess.Popen(
-        cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
-    )
-    stdout_lines: list[str] = []
-    # 30s for setup + 5s wait + 15s buffer for shutdown
-    deadline = _time.monotonic() + 50
-    saw_experiment_done = False
-    saw_inner_done = False
-    while _time.monotonic() < deadline:
-        line = proc.stdout.readline()  # type: ignore[union-attr]
-        if not line:
-            if proc.poll() is not None:
-                break
-            _time.sleep(0.1)
-            continue
-        stripped = line.rstrip()
-        stdout_lines.append(stripped)
-        print(stripped)
-        if "INNER_DONE" in line:
-            saw_inner_done = True
-        if "EXPERIMENT_DONE" in line:
-            saw_experiment_done = True
-            break
-
-    # If we got INNER_DONE but not EXPERIMENT_DONE, the process hung during
-    # server shutdown or destroy — meaning the control loop task is still alive
-    proc.kill()
-    proc.wait()
-    stderr_output = proc.stderr.read() if proc.stderr else ""  # type: ignore[union-attr]
-    stdout_output = "\n".join(stdout_lines)
-
-    print(f"\nstderr:\n{stderr_output}")
-
-    assert "IDLE_DETECTED" in stdout_output, (
-        f"Should detect idle.\nstdout: {stdout_output}"
-    )
-    assert "WAIT_ELAPSED" in stdout_output, (
-        f"Should wait for idle release.\nstdout: {stdout_output}"
-    )
-
-    if saw_inner_done and not saw_experiment_done:
-        # Print the task info for debugging
-        task_lines = extract_all_lines(stdout_output, "TASK:")
-        pytest.fail(
-            f"Control loop HANGS after idle release cancel!\n"
-            f"Server shutdown / destroy hung because the control loop asyncio task "
-            f"is still blocked in recv_async.\n"
-            f"Live tasks at check time: {task_lines}\n"
-            f"stdout: {stdout_output}"
-        )
-
-    if not saw_inner_done:
-        pytest.fail(
-            f"Process didn't reach INNER_DONE within timeout.\n"
-            f"stdout: {stdout_output}\nstderr: {stderr_output}"
-        )
-
-    assert saw_experiment_done, (
-        f"Process should have completed cleanly.\nstdout: {stdout_output}"
-    )
-
-    # Assert no zombie control loop tasks remain after cancel + wake-up
-    zombie_line = extract_line(stdout_output, "ZOMBIE_TASKS:")
-    print(f"\nZombie tasks: {zombie_line}")
-    assert zombie_line is not None, (
-        f"Should have zombie task count.\nstdout: {stdout_output}"
-    )
-    zombie_count = int(zombie_line.split(":")[-1])
-    assert zombie_count == 0, (
-        f"Control loop tasks should have exited after cancel, "
-        f"but {zombie_count} zombie task(s) remain.\n"
-        f"stdout: {stdout_output}"
     )

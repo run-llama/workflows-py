@@ -597,14 +597,17 @@ class DBOSRuntime(Runtime):
 
         return _factory
 
-    def _create_lifecycle_lock_factory(self) -> Callable[[], RunLifecycleLock]:
-        """Create a factory for RunLifecycleLock that resolves the database backend."""
+    def _create_lifecycle_lock_factory(
+        self,
+    ) -> Callable[[], Awaitable[RunLifecycleLock]]:
+        """Create an async factory for RunLifecycleLock that resolves the database backend."""
 
-        def _factory() -> RunLifecycleLock:
+        async def _factory() -> RunLifecycleLock:
             if self._db_path is not None:
                 return SqliteRunLifecycleLock(db_path=self._db_path)
-            if self._pool is not None:
-                return PostgresRunLifecycleLock(self._pool, schema=self._schema)
+            if self._dsn is not None:
+                pool = await self._ensure_pool()
+                return PostgresRunLifecycleLock(pool, schema=self._schema)
             raise RuntimeError(
                 "No database configured for lifecycle lock. Was launch() called?"
             )
