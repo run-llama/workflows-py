@@ -28,7 +28,6 @@ from llama_agents.server._store.abstract_workflow_store import (
     PersistentHandler,
 )
 from typing_extensions import override
-from workflows.context.context_types import SerializedContext
 from workflows.context.serializers import JsonSerializer
 from workflows.context.state_store import create_in_memory_payload, infer_state_type
 from workflows.events import Event, WorkflowIdleEvent
@@ -229,18 +228,9 @@ class DBOSIdleReleaseDecorator(BaseRuntimeDecorator):
     async def _broker_state_from_ticks(
         self, workflow: Workflow, run_id: str
     ) -> BrokerState:
-        """Rebuild BrokerState from persisted ticks without converting to Context."""
+        """Rebuild BrokerState from persisted ticks."""
         stored_ticks = await self._store.get_ticks(run_id)
-        serializer = JsonSerializer()
-
-        legacy_ctx = self._tick_persistence._get_legacy_ctx(run_id)
-
-        if legacy_ctx:
-            self._tick_persistence._seed_legacy_state(run_id, legacy_ctx)
-            parsed = SerializedContext.from_dict_auto(legacy_ctx)
-            init_state = BrokerState.from_serialized(parsed, workflow, serializer)
-        else:
-            init_state = BrokerState.from_workflow(workflow)
+        init_state = BrokerState.from_workflow(workflow)
 
         if stored_ticks:
             ticks = [

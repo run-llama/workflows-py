@@ -79,7 +79,6 @@ async def server_with_store(
         dsn = get_asyncpg_dsn(postgres_container)
         pg_store = PostgresWorkflowStore(dsn=dsn)
         await pg_store.start()
-        await pg_store.run_migrations()
 
     def make_server() -> WorkflowServer:
         if store_type == "memory":

@@ -20,6 +20,7 @@ from llama_agents.server._store.abstract_workflow_store import (
     AbstractWorkflowStore,
     PersistentHandler,
 )
+from pydantic import BaseModel
 from workflows.events import WorkflowIdleEvent
 from workflows.runtime.types.plugin import (
     ExternalRunAdapter,
@@ -113,8 +114,12 @@ async def test_release_sends_tick_idle_release(
 ) -> None:
     """Release should send TickIdleRelease via the inner external adapter."""
     idle_since = datetime(2020, 1, 1, tzinfo=timezone.utc)
-    handler = MagicMock(spec=PersistentHandler)
-    handler.idle_since = idle_since
+    handler = PersistentHandler(
+        handler_id="handler-1",
+        workflow_name="test_wf",
+        status="running",
+        idle_since=idle_since,
+    )
     mock_store.query.return_value = [handler]
 
     mock_inner_external = AsyncMock(spec=ExternalRunAdapter)
@@ -133,8 +138,11 @@ async def test_release_skips_if_not_idle(
     decorator: DBOSIdleReleaseDecorator, mock_store: AsyncMock
 ) -> None:
     """Release should skip if handler is no longer idle."""
-    handler = MagicMock(spec=PersistentHandler)
-    handler.idle_since = None
+    handler = PersistentHandler(
+        handler_id="handler-1",
+        workflow_name="test_wf",
+        status="running",
+    )
     mock_store.query.return_value = [handler]
 
     mock_inner_external = AsyncMock(spec=ExternalRunAdapter)
@@ -153,14 +161,13 @@ async def test_send_event_triggers_resume_when_idle(
     mock_journal_crud: AsyncMock,
 ) -> None:
     """send_event should resume workflow if store shows handler is idle."""
-    handler = MagicMock(spec=PersistentHandler)
-    handler.idle_since = datetime(2020, 1, 1, tzinfo=timezone.utc)
-    handler.handler_id = "handler-1"
-    handler.workflow_name = "test_wf"
-    handler.error = None
-    handler.result = None
-    handler.started_at = datetime(2020, 1, 1, tzinfo=timezone.utc)
-    handler.completed_at = None
+    handler = PersistentHandler(
+        handler_id="handler-1",
+        workflow_name="test_wf",
+        status="running",
+        idle_since=datetime(2020, 1, 1, tzinfo=timezone.utc),
+        started_at=datetime(2020, 1, 1, tzinfo=timezone.utc),
+    )
     mock_store.query.return_value = [handler]
 
     mock_workflow = MagicMock()
@@ -216,8 +223,11 @@ async def test_send_event_skips_resume_when_not_idle(
     decorator: DBOSIdleReleaseDecorator, mock_store: AsyncMock
 ) -> None:
     """send_event should not resume if store shows handler is not idle."""
-    handler = MagicMock(spec=PersistentHandler)
-    handler.idle_since = None
+    handler = PersistentHandler(
+        handler_id="handler-1",
+        workflow_name="test_wf",
+        status="running",
+    )
     mock_store.query.return_value = [handler]
 
     mock_inner_external = AsyncMock(spec=ExternalRunAdapter)
@@ -288,3 +298,59 @@ async def test_await_and_purge_deletes_journal_and_operation_outputs(
     mock_dbos.delete_workflow_async.assert_called_once_with("run-1")
     mock_journal_crud.purge_dbos_operation_outputs.assert_called_once_with("run-1")
     mock_journal_crud.delete.assert_called_once_with("run-1")
+
+
+@pytest.mark.asyncio()
+async def test_ensure_active_run_carries_over_serialized_state(
+    decorator: DBOSIdleReleaseDecorator,
+    mock_store: AsyncMock,
+    mock_tick_persistence: MagicMock,
+    mock_journal_crud: AsyncMock,
+) -> None:
+    """_ensure_active_run_locked should pass serialized_state from the old state store."""
+
+    class MyState(BaseModel):
+        counter: int = 0
+
+    handler = PersistentHandler(
+        handler_id="handler-1",
+        workflow_name="stateful_wf",
+        status="running",
+        idle_since=datetime(2020, 1, 1, tzinfo=timezone.utc),
+        started_at=datetime(2020, 1, 1, tzinfo=timezone.utc),
+    )
+    mock_store.query.return_value = [handler]
+
+    mock_workflow = MagicMock()
+    mock_tick_persistence.get_tracked_workflow.return_value = mock_workflow
+
+    # Set up state store to return a state object
+    mock_state_store = AsyncMock()
+    mock_state_store.get_state = AsyncMock(return_value=MyState(counter=42))
+    mock_store.create_state_store = MagicMock(return_value=mock_state_store)
+
+    mock_new_adapter = AsyncMock(spec=ExternalRunAdapter)
+    _inner(decorator).run_workflow.return_value = mock_new_adapter
+
+    with (
+        patch.object(
+            decorator, "_broker_state_from_ticks", new_callable=AsyncMock
+        ) as mock_broker,
+        patch(
+            "llama_agents.dbos.idle_release.infer_state_type",
+            return_value=MyState,
+        ),
+        patch("llama_agents.dbos.idle_release.DBOS") as mock_dbos,
+    ):
+        mock_broker.return_value = MagicMock()
+        mock_dbos.delete_workflow_async = AsyncMock()
+        await decorator._ensure_active_run_locked("run-1")
+
+    # Should have created state store with the right type
+    mock_store.create_state_store.assert_called_once_with("run-1", state_type=MyState)
+
+    # serialized_state kwarg should be passed through to run_workflow
+    call_kwargs = _inner(decorator).run_workflow.call_args
+    serialized_state = call_kwargs.kwargs.get("serialized_state")
+    assert serialized_state is not None
+    assert "counter" in serialized_state["state_data"]

@@ -46,6 +46,7 @@ class PostgresWorkflowStore(AbstractWorkflowStore):
         events_table_name: str = "wf_events",
         pool_min_size: int = 2,
         pool_max_size: int = 10,
+        auto_migrate: bool = True,
     ) -> None:
         self._dsn = dsn
         self._schema = schema
@@ -54,6 +55,7 @@ class PostgresWorkflowStore(AbstractWorkflowStore):
         self._events_table_name = events_table_name
         self._pool_min_size = pool_min_size
         self._pool_max_size = pool_max_size
+        self._auto_migrate = auto_migrate
         self._pool: asyncpg.Pool | None = None
         self._listen_conn: asyncpg.Connection | None = None
         self._conditions: weakref.WeakValueDictionary[str, asyncio.Condition] = (
@@ -83,7 +85,7 @@ class PostgresWorkflowStore(AbstractWorkflowStore):
         return self._events_table_name
 
     async def start(self) -> None:
-        """Create the connection pool and set up the LISTEN connection."""
+        """Create the connection pool, run migrations if enabled, and set up LISTEN."""
         if self._pool is not None:
             return
         self._pool = await asyncpg.create_pool(
@@ -91,6 +93,8 @@ class PostgresWorkflowStore(AbstractWorkflowStore):
             min_size=self._pool_min_size,
             max_size=self._pool_max_size,
         )
+        if self._auto_migrate:
+            await self.run_migrations()
         await self._setup_listener()
 
     async def _setup_listener(self) -> None:
