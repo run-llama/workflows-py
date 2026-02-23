@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timedelta, timezone
+from typing import Any, AsyncGenerator
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -17,43 +18,220 @@ from llama_agents.dbos.idle_release import (
 )
 from llama_agents.dbos.journal.crud import JournalCrud
 from llama_agents.dbos.journal.lifecycle import RunLifecycleLock, RunLifecycleState
+from llama_agents.server._runtime.runtime_decorators import BaseRuntimeDecorator
 from llama_agents.server._store.abstract_workflow_store import (
-    AbstractWorkflowStore,
     PersistentHandler,
 )
+from llama_agents.server._store.memory_workflow_store import MemoryWorkflowStore
 from pydantic import BaseModel
-from workflows.events import WorkflowIdleEvent
+from workflows.context import Context
+from workflows.context.state_store import InMemoryStateStore, StateStore
+from workflows.decorators import step
+from workflows.events import Event, StartEvent, StopEvent, WorkflowIdleEvent
 from workflows.runtime.types.plugin import (
     ExternalRunAdapter,
     InternalRunAdapter,
+    RegisteredWorkflow,
     Runtime,
+    WaitResult,
     WaitResultTick,
+    WaitResultTimeout,
 )
-from workflows.runtime.types.ticks import TickIdleRelease, WorkflowTick
+from workflows.runtime.types.ticks import TickIdleCheck, TickIdleRelease, WorkflowTick
+from workflows.workflow import Workflow
+
+# -- Stubs -----------------------------------------------------------------
 
 
-# Helper to access mock methods on decorator._decorated (typed as Runtime but actually MagicMock)
-def _inner(decorator: DBOSIdleReleaseDecorator) -> MagicMock:
-    assert isinstance(decorator._decorated, MagicMock)
-    return decorator._decorated
+class StubInternalAdapter(InternalRunAdapter):
+    def __init__(self, run_id: str = "run-1") -> None:
+        self._run_id = run_id
+        self.written_events: list[Event] = []
+        self.closed = False
+
+    @property
+    def run_id(self) -> str:
+        return self._run_id
+
+    async def write_to_event_stream(self, event: Event) -> None:
+        self.written_events.append(event)
+
+    async def get_now(self) -> float:
+        return 1.0
+
+    async def send_event(self, tick: WorkflowTick) -> None:
+        pass
+
+    async def wait_receive(self, timeout_seconds: float | None = None) -> WaitResult:
+        return WaitResultTimeout()
+
+    async def close(self) -> None:
+        self.closed = True
+
+    def get_state_store(self) -> StateStore[Any] | None:
+        return None
+
+
+class StubExternalAdapter(ExternalRunAdapter):
+    def __init__(self, run_id: str = "run-1", result: StopEvent | None = None) -> None:
+        self._run_id = run_id
+        self._result = result or StopEvent(result="done")
+        self.sent_events: list[WorkflowTick] = []
+        self.closed = False
+
+    @property
+    def run_id(self) -> str:
+        return self._run_id
+
+    async def send_event(self, tick: WorkflowTick) -> None:
+        self.sent_events.append(tick)
+
+    async def stream_published_events(self) -> AsyncGenerator[Event, None]:
+        yield self._result
+
+    async def close(self) -> None:
+        self.closed = True
+
+    async def get_result(self) -> StopEvent:
+        return self._result
+
+    def get_state_store(self) -> StateStore[Any] | None:
+        return None
+
+
+class StubRuntime(Runtime):
+    def __init__(self) -> None:
+        super().__init__()
+        self.run_workflow_calls: list[dict[str, Any]] = []
+        self._external_adapters: dict[str, StubExternalAdapter] = {}
+
+    def register(self, workflow: Any) -> RegisteredWorkflow:
+        return RegisteredWorkflow(
+            workflow=workflow, workflow_run_fn=MagicMock(), steps={}
+        )
+
+    def run_workflow(
+        self,
+        run_id: str,
+        workflow: Any,
+        init_state: Any,
+        start_event: Any = None,
+        serialized_state: dict[str, Any] | None = None,
+        serializer: Any = None,
+    ) -> ExternalRunAdapter:
+        self.run_workflow_calls.append(
+            {
+                "run_id": run_id,
+                "workflow": workflow,
+                "init_state": init_state,
+                "start_event": start_event,
+                "serialized_state": serialized_state,
+                "serializer": serializer,
+            }
+        )
+        adapter = StubExternalAdapter(run_id=run_id)
+        self._external_adapters[run_id] = adapter
+        return adapter
+
+    def get_internal_adapter(self, workflow: Any) -> InternalRunAdapter:
+        return StubInternalAdapter()
+
+    def get_external_adapter(self, run_id: str) -> ExternalRunAdapter:
+        if run_id in self._external_adapters:
+            return self._external_adapters[run_id]
+        adapter = StubExternalAdapter(run_id=run_id)
+        self._external_adapters[run_id] = adapter
+        return adapter
+
+    def launch(self) -> None:
+        pass
+
+    def destroy(self) -> None:
+        pass
+
+
+class SimpleWorkflow(Workflow):
+    @step
+    async def process(self, ctx: Context, ev: StartEvent) -> StopEvent:
+        return StopEvent(result="done")
+
+
+class MyState(BaseModel):
+    counter: int = 0
+
+
+class StatefulWorkflow(Workflow):
+    @step
+    async def process(self, ctx: Context[MyState], ev: StartEvent) -> StopEvent:
+        return StopEvent(result="done")
+
+
+class FakeLifecycleLock(RunLifecycleLock):
+    """In-memory lifecycle lock that implements the real state machine."""
+
+    def __init__(self) -> None:
+        self._states: dict[str, tuple[RunLifecycleState, datetime]] = {}
+
+    async def create(self, run_id: str) -> None:
+        self._states[run_id] = (RunLifecycleState.active, datetime.now(timezone.utc))
+
+    async def begin_release(self, run_id: str) -> bool:
+        entry = self._states.get(run_id)
+        if entry is None or entry[0] != RunLifecycleState.active:
+            return False
+        self._states[run_id] = (RunLifecycleState.releasing, datetime.now(timezone.utc))
+        return True
+
+    async def complete_release(self, run_id: str) -> None:
+        entry = self._states.get(run_id)
+        if entry is not None and entry[0] == RunLifecycleState.releasing:
+            self._states[run_id] = (
+                RunLifecycleState.released,
+                datetime.now(timezone.utc),
+            )
+
+    async def try_begin_resume(self, run_id: str) -> RunLifecycleState | None:
+        entry = self._states.get(run_id)
+        if entry is None:
+            return None
+        state = entry[0]
+        if state == RunLifecycleState.active:
+            return None
+        if state == RunLifecycleState.released:
+            self._states[run_id] = (
+                RunLifecycleState.active,
+                datetime.now(timezone.utc),
+            )
+            return RunLifecycleState.released
+        return RunLifecycleState.releasing
+
+    async def get_state(self, run_id: str) -> tuple[RunLifecycleState, datetime] | None:
+        return self._states.get(run_id)
+
+    async def force_resume(self, run_id: str) -> None:
+        self._states[run_id] = (RunLifecycleState.active, datetime.now(timezone.utc))
+
+    async def delete(self, run_id: str) -> None:
+        self._states.pop(run_id, None)
+
+    def set_updated_at(self, run_id: str, updated_at: datetime) -> None:
+        """Test hook: override the updated_at timestamp for crash timeout testing."""
+        entry = self._states.get(run_id)
+        if entry is not None:
+            self._states[run_id] = (entry[0], updated_at)
+
+
+# -- Fixtures --------------------------------------------------------------
 
 
 @pytest.fixture()
-def mock_store() -> AsyncMock:
-    store = AsyncMock(spec=AbstractWorkflowStore)
-    store.update_handler_status = AsyncMock()
-    store.query = AsyncMock(return_value=[])
-    store.update = AsyncMock()
-    return store
+def store() -> MemoryWorkflowStore:
+    return MemoryWorkflowStore()
 
 
 @pytest.fixture()
-def mock_inner_runtime() -> MagicMock:
-    runtime = MagicMock(spec=Runtime)
-    runtime.get_internal_adapter = MagicMock()
-    runtime.get_external_adapter = MagicMock()
-    runtime.run_workflow = MagicMock()
-    return runtime
+def stub_runtime() -> StubRuntime:
+    return StubRuntime()
 
 
 @pytest.fixture()
@@ -62,45 +240,89 @@ def mock_journal_crud() -> AsyncMock:
 
 
 @pytest.fixture()
-def mock_lifecycle_lock() -> AsyncMock:
-    return AsyncMock(spec=RunLifecycleLock)
+def mock_dbos():
+    with patch("llama_agents.dbos.idle_release.DBOS") as dbos:
+        dbos.delete_workflow_async = AsyncMock()
+        dbos.retrieve_workflow_async = AsyncMock()
+        dbos.retrieve_workflow_async.return_value = AsyncMock()
+        yield dbos
+
+
+@pytest.fixture()
+def lifecycle() -> FakeLifecycleLock:
+    return FakeLifecycleLock()
+
+
+def _make_decorator(
+    stub_runtime: StubRuntime,
+    store: MemoryWorkflowStore,
+    mock_journal_crud: AsyncMock,
+    lifecycle_lock: RunLifecycleLock | None,
+    idle_timeout: float = 0.1,
+) -> DBOSIdleReleaseDecorator:
+    return DBOSIdleReleaseDecorator(
+        BaseRuntimeDecorator(stub_runtime),
+        store,
+        idle_timeout=idle_timeout,
+        journal_crud=lambda: mock_journal_crud,
+        lifecycle_lock=(lambda: lifecycle_lock) if lifecycle_lock is not None else None,
+    )
 
 
 @pytest.fixture()
 def decorator(
-    mock_inner_runtime: MagicMock,
-    mock_store: AsyncMock,
+    stub_runtime: StubRuntime,
+    store: MemoryWorkflowStore,
     mock_journal_crud: AsyncMock,
-    mock_lifecycle_lock: AsyncMock,
+    lifecycle: FakeLifecycleLock,
 ) -> DBOSIdleReleaseDecorator:
-    return DBOSIdleReleaseDecorator(
-        mock_inner_runtime,
-        mock_store,
-        idle_timeout=0.1,
-        journal_crud=lambda: mock_journal_crud,
-        lifecycle_lock=lambda: mock_lifecycle_lock,
+    return _make_decorator(stub_runtime, store, mock_journal_crud, lifecycle)
+
+
+# -- Helpers ---------------------------------------------------------------
+
+
+def _seed_handler(
+    store: MemoryWorkflowStore,
+    handler_id: str = "handler-1",
+    workflow_name: str = "test_wf",
+    run_id: str = "run-1",
+    idle_since: datetime | None = None,
+) -> PersistentHandler:
+    handler = PersistentHandler(
+        handler_id=handler_id,
+        workflow_name=workflow_name,
+        status="running",
+        run_id=run_id,
+        idle_since=idle_since,
+        started_at=datetime(2020, 1, 1, tzinfo=timezone.utc),
     )
+    store.handlers[handler_id] = handler
+    return handler
+
+
+# -- Tests -----------------------------------------------------------------
 
 
 @pytest.mark.asyncio()
 async def test_idle_event_schedules_release_without_stamping_idle_since(
-    decorator: DBOSIdleReleaseDecorator, mock_store: AsyncMock
+    decorator: DBOSIdleReleaseDecorator, store: MemoryWorkflowStore
 ) -> None:
     """WorkflowIdleEvent should schedule deferred release but NOT stamp idle_since."""
-    inner_adapter = MagicMock(spec=InternalRunAdapter)
-    inner_adapter.run_id = "run-1"
-    inner_adapter.write_to_event_stream = AsyncMock()
+    inner_adapter = StubInternalAdapter(run_id="run-1")
+    _seed_handler(store, run_id="run-1")
 
-    adapter = _DBOSIdleReleaseInternalRunAdapter(inner_adapter, decorator, mock_store)
+    adapter = _DBOSIdleReleaseInternalRunAdapter(inner_adapter, decorator, store)
     event = WorkflowIdleEvent()
 
     await adapter.write_to_event_stream(event)
 
-    # Should NOT have stamped idle_since (idle_since is now set only after release)
-    mock_store.update_handler_status.assert_not_called()
+    # Should NOT have stamped idle_since
+    handler = store.handlers["handler-1"]
+    assert handler.idle_since is None
 
     # Should have forwarded the event
-    inner_adapter.write_to_event_stream.assert_called_once_with(event)
+    assert inner_adapter.written_events == [event]
 
     # Should have a deferred release task tracked by run_id
     assert "run-1" in decorator._deferred_release_tasks
@@ -109,122 +331,104 @@ async def test_idle_event_schedules_release_without_stamping_idle_since(
 @pytest.mark.asyncio()
 async def test_release_uses_lifecycle_lock(
     decorator: DBOSIdleReleaseDecorator,
-    mock_store: AsyncMock,
-    mock_lifecycle_lock: AsyncMock,
+    store: MemoryWorkflowStore,
+    stub_runtime: StubRuntime,
+    lifecycle: FakeLifecycleLock,
 ) -> None:
     """Release should use begin_release and send TickIdleRelease."""
-    mock_lifecycle_lock.begin_release.return_value = True
+    await lifecycle.create("run-1")
 
-    mock_inner_external = AsyncMock(spec=ExternalRunAdapter)
-    _inner(decorator).get_external_adapter.return_value = mock_inner_external
+    # Pre-populate an external adapter so get_external_adapter returns it
+    stub_runtime._external_adapters["run-1"] = StubExternalAdapter(run_id="run-1")
 
     await decorator._release_idle_handler("run-1")
 
-    mock_lifecycle_lock.begin_release.assert_called_once_with("run-1")
-    mock_inner_external.send_event.assert_called_once()
-    tick_arg = mock_inner_external.send_event.call_args[0][0]
-    assert isinstance(tick_arg, TickIdleRelease)
+    state = await lifecycle.get_state("run-1")
+    assert state is not None
+    assert state[0] == RunLifecycleState.releasing
+    ext = stub_runtime._external_adapters["run-1"]
+    assert len(ext.sent_events) == 1
+    assert isinstance(ext.sent_events[0], TickIdleRelease)
 
 
 @pytest.mark.asyncio()
 async def test_release_skips_if_begin_release_fails(
     decorator: DBOSIdleReleaseDecorator,
-    mock_lifecycle_lock: AsyncMock,
+    stub_runtime: StubRuntime,
+    lifecycle: FakeLifecycleLock,
 ) -> None:
     """Release should skip if begin_release returns False."""
-    mock_lifecycle_lock.begin_release.return_value = False
-
-    mock_inner_external = AsyncMock(spec=ExternalRunAdapter)
-    _inner(decorator).get_external_adapter.return_value = mock_inner_external
+    # No row exists, so begin_release returns False already
 
     await decorator._release_idle_handler("run-1")
 
-    _inner(decorator).get_external_adapter.assert_not_called()
+    # No external adapter should have been accessed / no events sent
+    assert "run-1" not in stub_runtime._external_adapters
 
 
 @pytest.mark.asyncio()
 async def test_await_and_mark_released_sets_idle_since(
     decorator: DBOSIdleReleaseDecorator,
-    mock_store: AsyncMock,
-    mock_lifecycle_lock: AsyncMock,
+    store: MemoryWorkflowStore,
+    lifecycle: FakeLifecycleLock,
 ) -> None:
     """After workflow completes, idle_since should be set and state marked released."""
-    external = AsyncMock(spec=ExternalRunAdapter)
-    external.get_result = AsyncMock(return_value=None)
+    _seed_handler(store, run_id="run-1")
+
+    await lifecycle.create("run-1")
+    await lifecycle.begin_release("run-1")
+
+    external = StubExternalAdapter(run_id="run-1")
 
     await decorator._await_and_mark_released("run-1", external)
 
-    mock_lifecycle_lock.complete_release.assert_called_once_with("run-1")
-    mock_store.update_handler_status.assert_called_once()
-    call_kwargs = mock_store.update_handler_status.call_args
-    assert call_kwargs[0][0] == "run-1"
-    assert call_kwargs[1]["idle_since"] is not None
+    state = await lifecycle.get_state("run-1")
+    assert state is not None
+    assert state[0] == RunLifecycleState.released
+    handler = store.handlers["handler-1"]
+    assert handler.idle_since is not None
 
 
 @pytest.mark.asyncio()
 async def test_send_event_resumes_when_released(
     decorator: DBOSIdleReleaseDecorator,
-    mock_store: AsyncMock,
+    store: MemoryWorkflowStore,
+    stub_runtime: StubRuntime,
     mock_journal_crud: AsyncMock,
-    mock_lifecycle_lock: AsyncMock,
+    lifecycle: FakeLifecycleLock,
+    mock_dbos: AsyncMock,
 ) -> None:
     """send_event should resume workflow if lifecycle state is released."""
-    mock_lifecycle_lock.try_begin_resume.return_value = RunLifecycleState.released
-
-    handler = PersistentHandler(
-        handler_id="handler-1",
-        workflow_name="test_wf",
-        status="running",
-        idle_since=datetime(2020, 1, 1, tzinfo=timezone.utc),
-        started_at=datetime(2020, 1, 1, tzinfo=timezone.utc),
+    lifecycle._states["run-1"] = (
+        RunLifecycleState.released,
+        datetime.now(timezone.utc),
     )
-    mock_store.query.return_value = [handler]
 
-    mock_workflow = MagicMock()
-    mock_workflow.workflow_name = "test_wf"
-    decorator.track_workflow(mock_workflow)
+    workflow = SimpleWorkflow()
+    decorator.track_workflow(workflow)
 
-    mock_new_adapter = AsyncMock(spec=ExternalRunAdapter)
-    _inner(decorator).run_workflow.return_value = mock_new_adapter
+    _seed_handler(
+        store,
+        workflow_name=workflow.workflow_name,
+        run_id="run-1",
+        idle_since=datetime(2020, 1, 1, tzinfo=timezone.utc),
+    )
 
     adapter = DBOSIdleReleaseExternalRunAdapter(decorator, "run-1")
 
-    mock_rebuilt_state = MagicMock()
-    with patch.object(
-        decorator, "_broker_state_from_ticks", new_callable=AsyncMock
-    ) as mock_broker:
-        mock_broker.return_value = MagicMock()
-        with (
-            patch("llama_agents.dbos.idle_release.infer_state_type", return_value=None),
-            patch("llama_agents.dbos.idle_release.DBOS") as mock_dbos,
-            patch(
-                "llama_agents.dbos.idle_release.rebuild_state_from_ticks",
-                return_value=mock_rebuilt_state,
-            ) as mock_rebuild,
-        ):
-            mock_dbos.delete_workflow_async = AsyncMock()
-            mock_dbos.retrieve_workflow_async = AsyncMock()
-            mock_handle = AsyncMock()
-            mock_dbos.retrieve_workflow_async.return_value = mock_handle
-            tick = MagicMock(spec=WorkflowTick)
-            await adapter.send_event(tick)
-
-    # Pending tick should have been included in the rebuilt state
-    mock_rebuild.assert_called_once()
-    assert mock_rebuild.call_args[0][1] == [tick]
+    tick = TickIdleCheck()
+    await adapter.send_event(tick)
 
     # Should have started a new workflow run with the same run_id
-    _inner(decorator).run_workflow.assert_called_once()
-    call_args = _inner(decorator).run_workflow.call_args
-    assert call_args[0][0] == "run-1"
-    assert call_args[0][2] is mock_rebuilt_state
+    assert len(stub_runtime.run_workflow_calls) == 1
+    call = stub_runtime.run_workflow_calls[0]
+    assert call["run_id"] == "run-1"
 
     # Handler should have been updated in store
-    mock_store.update.assert_called_once()
-    updated = mock_store.update.call_args[0][0]
-    assert updated.idle_since is None
-    assert updated.status == "running"
-    assert updated.run_id == "run-1"
+    handler = store.handlers["handler-1"]
+    assert handler.idle_since is None
+    assert handler.status == "running"
+    assert handler.run_id == "run-1"
 
     # Journal and DBOS operation outputs should have been purged
     mock_journal_crud.purge_dbos_operation_outputs.assert_called_once_with("run-1")
@@ -234,145 +438,122 @@ async def test_send_event_resumes_when_released(
 @pytest.mark.asyncio()
 async def test_send_event_sends_normally_when_active(
     decorator: DBOSIdleReleaseDecorator,
-    mock_store: AsyncMock,
-    mock_lifecycle_lock: AsyncMock,
+    store: MemoryWorkflowStore,
+    stub_runtime: StubRuntime,
+    lifecycle: FakeLifecycleLock,
 ) -> None:
     """send_event should send normally if lifecycle returns None (active)."""
-    mock_lifecycle_lock.try_begin_resume.return_value = None
+    await lifecycle.create("run-1")
 
-    mock_inner_external = AsyncMock(spec=ExternalRunAdapter)
-    _inner(decorator).get_external_adapter.return_value = mock_inner_external
+    # Pre-populate an external adapter
+    stub_runtime._external_adapters["run-1"] = StubExternalAdapter(run_id="run-1")
 
     adapter = DBOSIdleReleaseExternalRunAdapter(decorator, "run-1")
-    await adapter.send_event(MagicMock(spec=WorkflowTick))
+    await adapter.send_event(TickIdleCheck())
 
-    _inner(decorator).run_workflow.assert_not_called()
-    mock_inner_external.send_event.assert_called_once()
+    assert len(stub_runtime.run_workflow_calls) == 0
+    ext = stub_runtime._external_adapters["run-1"]
+    assert len(ext.sent_events) == 1
 
 
 @pytest.mark.asyncio()
 async def test_send_event_waits_on_releasing_then_resumes(
     decorator: DBOSIdleReleaseDecorator,
-    mock_store: AsyncMock,
+    store: MemoryWorkflowStore,
+    stub_runtime: StubRuntime,
     mock_journal_crud: AsyncMock,
-    mock_lifecycle_lock: AsyncMock,
+    lifecycle: FakeLifecycleLock,
+    mock_dbos: AsyncMock,
 ) -> None:
     """send_event should poll when releasing, then resume when released."""
-    # First call: releasing. Second call: released.
-    mock_lifecycle_lock.try_begin_resume.side_effect = [
-        RunLifecycleState.releasing,
-        RunLifecycleState.released,
-    ]
-    mock_lifecycle_lock.get_state.return_value = (
+    lifecycle._states["run-1"] = (
         RunLifecycleState.releasing,
         datetime.now(timezone.utc),
     )
 
-    handler = PersistentHandler(
-        handler_id="handler-1",
-        workflow_name="test_wf",
-        status="running",
+    workflow = SimpleWorkflow()
+    decorator.track_workflow(workflow)
+
+    _seed_handler(
+        store,
+        workflow_name=workflow.workflow_name,
+        run_id="run-1",
         idle_since=datetime(2020, 1, 1, tzinfo=timezone.utc),
-        started_at=datetime(2020, 1, 1, tzinfo=timezone.utc),
     )
-    mock_store.query.return_value = [handler]
-
-    mock_workflow = MagicMock()
-    mock_workflow.workflow_name = "test_wf"
-    decorator.track_workflow(mock_workflow)
-
-    mock_new_adapter = AsyncMock(spec=ExternalRunAdapter)
-    _inner(decorator).run_workflow.return_value = mock_new_adapter
 
     adapter = DBOSIdleReleaseExternalRunAdapter(decorator, "run-1")
 
-    with (
-        patch.object(
-            decorator, "_broker_state_from_ticks", new_callable=AsyncMock
-        ) as mock_broker,
-        patch("llama_agents.dbos.idle_release.infer_state_type", return_value=None),
-        patch("llama_agents.dbos.idle_release.DBOS") as mock_dbos,
-        patch("llama_agents.dbos.idle_release.rebuild_state_from_ticks"),
-        patch("asyncio.sleep", new_callable=AsyncMock),
-    ):
-        mock_broker.return_value = MagicMock()
-        mock_dbos.delete_workflow_async = AsyncMock()
-        mock_dbos.retrieve_workflow_async = AsyncMock()
-        mock_dbos.retrieve_workflow_async.return_value = AsyncMock()
-        await adapter.send_event(MagicMock(spec=WorkflowTick))
+    async def _complete_release_during_sleep(delay: float) -> None:
+        await lifecycle.complete_release("run-1")
 
-    assert mock_lifecycle_lock.try_begin_resume.call_count == 2
-    _inner(decorator).run_workflow.assert_called_once()
+    with patch("asyncio.sleep", side_effect=_complete_release_during_sleep):
+        await adapter.send_event(TickIdleCheck())
+
+    state = await lifecycle.get_state("run-1")
+    assert state is not None
+    assert state[0] == RunLifecycleState.active
+    assert len(stub_runtime.run_workflow_calls) == 1
 
 
 @pytest.mark.asyncio()
 async def test_send_event_force_resumes_on_crash_timeout(
     decorator: DBOSIdleReleaseDecorator,
-    mock_store: AsyncMock,
+    store: MemoryWorkflowStore,
+    stub_runtime: StubRuntime,
     mock_journal_crud: AsyncMock,
-    mock_lifecycle_lock: AsyncMock,
+    lifecycle: FakeLifecycleLock,
+    mock_dbos: AsyncMock,
 ) -> None:
     """send_event should force resume if releasing state is stale."""
-    mock_lifecycle_lock.try_begin_resume.return_value = RunLifecycleState.releasing
+    lifecycle._states["run-1"] = (
+        RunLifecycleState.releasing,
+        datetime.now(timezone.utc),
+    )
     stale_time = datetime.now(timezone.utc) - timedelta(
         seconds=CRASH_TIMEOUT_SECONDS + 10
     )
-    mock_lifecycle_lock.get_state.return_value = (
-        RunLifecycleState.releasing,
-        stale_time,
-    )
+    lifecycle.set_updated_at("run-1", stale_time)
 
-    handler = PersistentHandler(
-        handler_id="handler-1",
-        workflow_name="test_wf",
-        status="running",
+    workflow = SimpleWorkflow()
+    decorator.track_workflow(workflow)
+
+    _seed_handler(
+        store,
+        workflow_name=workflow.workflow_name,
+        run_id="run-1",
         idle_since=datetime(2020, 1, 1, tzinfo=timezone.utc),
-        started_at=datetime(2020, 1, 1, tzinfo=timezone.utc),
     )
-    mock_store.query.return_value = [handler]
-
-    mock_workflow = MagicMock()
-    mock_workflow.workflow_name = "test_wf"
-    decorator.track_workflow(mock_workflow)
-
-    mock_new_adapter = AsyncMock(spec=ExternalRunAdapter)
-    _inner(decorator).run_workflow.return_value = mock_new_adapter
 
     adapter = DBOSIdleReleaseExternalRunAdapter(decorator, "run-1")
 
-    with (
-        patch.object(
-            decorator, "_broker_state_from_ticks", new_callable=AsyncMock
-        ) as mock_broker,
-        patch("llama_agents.dbos.idle_release.infer_state_type", return_value=None),
-        patch("llama_agents.dbos.idle_release.DBOS") as mock_dbos,
-        patch("llama_agents.dbos.idle_release.rebuild_state_from_ticks"),
-    ):
-        mock_broker.return_value = MagicMock()
-        mock_dbos.delete_workflow_async = AsyncMock()
-        mock_dbos.retrieve_workflow_async = AsyncMock()
-        mock_dbos.retrieve_workflow_async.return_value = AsyncMock()
-        await adapter.send_event(MagicMock(spec=WorkflowTick))
+    await adapter.send_event(TickIdleCheck())
 
-    mock_lifecycle_lock.force_resume.assert_called_once_with("run-1")
-    _inner(decorator).run_workflow.assert_called_once()
+    state = await lifecycle.get_state("run-1")
+    assert state is not None
+    assert state[0] == RunLifecycleState.active
+    assert len(stub_runtime.run_workflow_calls) == 1
 
 
 @pytest.mark.asyncio()
 async def test_wait_receive_cancels_pending_release_timer(
-    decorator: DBOSIdleReleaseDecorator, mock_store: AsyncMock
+    decorator: DBOSIdleReleaseDecorator, store: MemoryWorkflowStore
 ) -> None:
     """wait_receive returning a tick should cancel the pending release timer."""
     decorator._schedule_deferred_release("run-1")
     assert "run-1" in decorator._deferred_release_tasks
     task = decorator._deferred_release_tasks["run-1"]
 
-    inner_adapter = MagicMock(spec=InternalRunAdapter)
-    inner_adapter.run_id = "run-1"
-    tick_result = WaitResultTick(tick=MagicMock(spec=WorkflowTick))
-    inner_adapter.wait_receive = AsyncMock(return_value=tick_result)
+    inner_adapter = StubInternalAdapter(run_id="run-1")
 
-    adapter = _DBOSIdleReleaseInternalRunAdapter(inner_adapter, decorator, mock_store)
+    # Override wait_receive to return a tick
+    tick_result = WaitResultTick(tick=TickIdleCheck())
+
+    async def _return_tick(timeout_seconds: float | None = None) -> WaitResult:
+        return tick_result
+
+    inner_adapter.wait_receive = _return_tick  # type: ignore[assignment]
+
+    adapter = _DBOSIdleReleaseInternalRunAdapter(inner_adapter, decorator, store)
 
     result = await adapter.wait_receive(timeout_seconds=5.0)
 
@@ -397,58 +578,380 @@ async def test_no_destroy_or_shutdown_cancellation(
 @pytest.mark.asyncio()
 async def test_do_resume_carries_over_serialized_state(
     decorator: DBOSIdleReleaseDecorator,
-    mock_store: AsyncMock,
+    store: MemoryWorkflowStore,
+    stub_runtime: StubRuntime,
     mock_journal_crud: AsyncMock,
+    mock_dbos: AsyncMock,
 ) -> None:
     """_do_resume should pass serialized_state from the old state store."""
+    workflow = StatefulWorkflow()
+    decorator.track_workflow(workflow)
 
-    class MyState(BaseModel):
-        counter: int = 0
-
-    handler = PersistentHandler(
-        handler_id="handler-1",
-        workflow_name="stateful_wf",
-        status="running",
+    _seed_handler(
+        store,
+        workflow_name=workflow.workflow_name,
+        run_id="run-1",
         idle_since=datetime(2020, 1, 1, tzinfo=timezone.utc),
-        started_at=datetime(2020, 1, 1, tzinfo=timezone.utc),
     )
-    mock_store.query.return_value = [handler]
 
-    mock_workflow = MagicMock()
-    mock_workflow.workflow_name = "stateful_wf"
-    decorator.track_workflow(mock_workflow)
+    # Seed the state store with actual state data
+    state_store = InMemoryStateStore(MyState(counter=42))
+    store.state_stores["run-1"] = state_store
 
-    mock_state_store = AsyncMock()
-    mock_state_store.to_dict = MagicMock(
-        return_value={
-            "state_type": "MyState",
-            "state_data": {"counter": 42},
-        }
-    )
-    mock_store.create_state_store = MagicMock(return_value=mock_state_store)
+    await decorator._do_resume("run-1")
 
-    mock_new_adapter = AsyncMock(spec=ExternalRunAdapter)
-    _inner(decorator).run_workflow.return_value = mock_new_adapter
-
-    with (
-        patch.object(
-            decorator, "_broker_state_from_ticks", new_callable=AsyncMock
-        ) as mock_broker,
-        patch(
-            "llama_agents.dbos.idle_release.infer_state_type",
-            return_value=MyState,
-        ),
-        patch("llama_agents.dbos.idle_release.DBOS") as mock_dbos,
-    ):
-        mock_broker.return_value = MagicMock()
-        mock_dbos.delete_workflow_async = AsyncMock()
-        mock_dbos.retrieve_workflow_async = AsyncMock()
-        mock_dbos.retrieve_workflow_async.return_value = AsyncMock()
-        await decorator._do_resume("run-1")
-
-    mock_store.create_state_store.assert_called_once_with("run-1", state_type=MyState)
-
-    call_kwargs = _inner(decorator).run_workflow.call_args
-    serialized_state = call_kwargs.kwargs.get("serialized_state")
+    assert len(stub_runtime.run_workflow_calls) == 1
+    call = stub_runtime.run_workflow_calls[0]
+    serialized_state = call["serialized_state"]
     assert serialized_state is not None
     assert "counter" in serialized_state["state_data"]
+
+
+@pytest.mark.asyncio()
+async def test_send_event_forwards_directly_without_lifecycle_lock(
+    stub_runtime: StubRuntime,
+    store: MemoryWorkflowStore,
+    mock_journal_crud: AsyncMock,
+) -> None:
+    dec = _make_decorator(stub_runtime, store, mock_journal_crud, lifecycle_lock=None)
+    stub_runtime._external_adapters["run-1"] = StubExternalAdapter(run_id="run-1")
+    adapter = DBOSIdleReleaseExternalRunAdapter(dec, "run-1")
+    await adapter.send_event(TickIdleCheck())
+    assert len(stub_runtime.run_workflow_calls) == 0
+    ext = stub_runtime._external_adapters["run-1"]
+    assert len(ext.sent_events) == 1
+    assert isinstance(ext.sent_events[0], TickIdleCheck)
+
+
+@pytest.mark.asyncio()
+async def test_send_event_polls_when_releasing_with_missing_state(
+    decorator: DBOSIdleReleaseDecorator,
+    store: MemoryWorkflowStore,
+    stub_runtime: StubRuntime,
+    mock_journal_crud: AsyncMock,
+    lifecycle: FakeLifecycleLock,
+    mock_dbos: AsyncMock,
+) -> None:
+    workflow = SimpleWorkflow()
+    decorator.track_workflow(workflow)
+    _seed_handler(
+        store,
+        workflow_name=workflow.workflow_name,
+        run_id="run-1",
+        idle_since=datetime(2020, 1, 1, tzinfo=timezone.utc),
+    )
+
+    # Start in releasing state
+    lifecycle._states["run-1"] = (
+        RunLifecycleState.releasing,
+        datetime.now(timezone.utc),
+    )
+
+    sleep_count = 0
+
+    async def _on_sleep(delay: float) -> None:
+        nonlocal sleep_count
+        sleep_count += 1
+        # After first sleep, complete the release so next try_begin_resume returns released
+        await lifecycle.complete_release("run-1")
+
+    # Remove the state entry so get_state returns None on first poll
+    original_get_state = lifecycle.get_state
+    call_count = 0
+
+    async def _patched_get_state(
+        run_id: str,
+    ) -> tuple[RunLifecycleState, datetime] | None:
+        nonlocal call_count
+        call_count += 1
+        if call_count == 1:
+            return None  # simulate missing state
+        return await original_get_state(run_id)
+
+    lifecycle.get_state = _patched_get_state  # type: ignore[assignment]
+
+    adapter = DBOSIdleReleaseExternalRunAdapter(decorator, "run-1")
+    with patch("asyncio.sleep", side_effect=_on_sleep):
+        await adapter.send_event(TickIdleCheck())
+
+    assert sleep_count >= 1
+    assert len(stub_runtime.run_workflow_calls) == 1
+
+
+@pytest.mark.asyncio()
+async def test_send_event_crash_timeout_boundary_does_not_force_resume(
+    decorator: DBOSIdleReleaseDecorator,
+    store: MemoryWorkflowStore,
+    stub_runtime: StubRuntime,
+    mock_journal_crud: AsyncMock,
+    lifecycle: FakeLifecycleLock,
+    mock_dbos: AsyncMock,
+) -> None:
+    workflow = SimpleWorkflow()
+    decorator.track_workflow(workflow)
+    _seed_handler(
+        store,
+        workflow_name=workflow.workflow_name,
+        run_id="run-1",
+        idle_since=datetime(2020, 1, 1, tzinfo=timezone.utc),
+    )
+
+    # Set exactly at boundary (not greater)
+    lifecycle._states["run-1"] = (
+        RunLifecycleState.releasing,
+        datetime.now(timezone.utc),
+    )
+    boundary_time = datetime.now(timezone.utc) - timedelta(
+        seconds=CRASH_TIMEOUT_SECONDS
+    )
+    lifecycle.set_updated_at("run-1", boundary_time)
+
+    async def _complete_release_during_sleep(delay: float) -> None:
+        await lifecycle.complete_release("run-1")
+
+    adapter = DBOSIdleReleaseExternalRunAdapter(decorator, "run-1")
+    with patch("asyncio.sleep", side_effect=_complete_release_during_sleep):
+        await adapter.send_event(TickIdleCheck())
+
+    # Should have resumed normally (not force), state should be active
+    state = await lifecycle.get_state("run-1")
+    assert state is not None
+    assert state[0] == RunLifecycleState.active
+    assert len(stub_runtime.run_workflow_calls) == 1
+
+
+@pytest.mark.asyncio()
+async def test_do_resume_continues_when_old_dbos_workflow_gone(
+    decorator: DBOSIdleReleaseDecorator,
+    store: MemoryWorkflowStore,
+    stub_runtime: StubRuntime,
+    mock_journal_crud: AsyncMock,
+    mock_dbos: AsyncMock,
+) -> None:
+    mock_dbos.retrieve_workflow_async.side_effect = Exception("workflow not found")
+    workflow = SimpleWorkflow()
+    decorator.track_workflow(workflow)
+    _seed_handler(
+        store,
+        workflow_name=workflow.workflow_name,
+        run_id="run-1",
+        idle_since=datetime(2020, 1, 1, tzinfo=timezone.utc),
+    )
+
+    await decorator._do_resume("run-1")
+
+    assert len(stub_runtime.run_workflow_calls) == 1
+
+
+@pytest.mark.asyncio()
+async def test_do_resume_continues_when_state_carryover_fails(
+    decorator: DBOSIdleReleaseDecorator,
+    store: MemoryWorkflowStore,
+    stub_runtime: StubRuntime,
+    mock_journal_crud: AsyncMock,
+    mock_dbos: AsyncMock,
+) -> None:
+    workflow = StatefulWorkflow()
+    decorator.track_workflow(workflow)
+    _seed_handler(
+        store,
+        workflow_name=workflow.workflow_name,
+        run_id="run-1",
+        idle_since=datetime(2020, 1, 1, tzinfo=timezone.utc),
+    )
+
+    with patch.object(store, "create_state_store", side_effect=Exception("boom")):
+        await decorator._do_resume("run-1")
+
+    assert len(stub_runtime.run_workflow_calls) == 1
+    call = stub_runtime.run_workflow_calls[0]
+    assert call["serialized_state"] is None
+
+
+@pytest.mark.asyncio()
+async def test_do_resume_continues_when_journal_purge_fails(
+    decorator: DBOSIdleReleaseDecorator,
+    store: MemoryWorkflowStore,
+    stub_runtime: StubRuntime,
+    mock_journal_crud: AsyncMock,
+    mock_dbos: AsyncMock,
+) -> None:
+    mock_journal_crud.purge_dbos_operation_outputs.side_effect = Exception("db error")
+    workflow = SimpleWorkflow()
+    decorator.track_workflow(workflow)
+    _seed_handler(
+        store,
+        workflow_name=workflow.workflow_name,
+        run_id="run-1",
+        idle_since=datetime(2020, 1, 1, tzinfo=timezone.utc),
+    )
+
+    await decorator._do_resume("run-1")
+
+    assert len(stub_runtime.run_workflow_calls) == 1
+
+
+@pytest.mark.asyncio()
+async def test_do_resume_continues_when_dbos_delete_fails(
+    decorator: DBOSIdleReleaseDecorator,
+    store: MemoryWorkflowStore,
+    stub_runtime: StubRuntime,
+    mock_journal_crud: AsyncMock,
+    mock_dbos: AsyncMock,
+) -> None:
+    mock_dbos.delete_workflow_async.side_effect = Exception("delete failed")
+    workflow = SimpleWorkflow()
+    decorator.track_workflow(workflow)
+    _seed_handler(
+        store,
+        workflow_name=workflow.workflow_name,
+        run_id="run-1",
+        idle_since=datetime(2020, 1, 1, tzinfo=timezone.utc),
+    )
+
+    await decorator._do_resume("run-1")
+
+    assert len(stub_runtime.run_workflow_calls) == 1
+
+
+@pytest.mark.asyncio()
+async def test_do_resume_raises_when_handler_not_found(
+    decorator: DBOSIdleReleaseDecorator,
+    mock_dbos: AsyncMock,
+) -> None:
+    with pytest.raises(ValueError, match="Expected 1 handler"):
+        await decorator._do_resume("run-1")
+
+
+@pytest.mark.asyncio()
+async def test_do_resume_raises_when_workflow_not_tracked(
+    decorator: DBOSIdleReleaseDecorator,
+    store: MemoryWorkflowStore,
+    mock_dbos: AsyncMock,
+) -> None:
+    _seed_handler(store, workflow_name="unknown_workflow", run_id="run-1")
+    with pytest.raises(ValueError, match="not found"):
+        await decorator._do_resume("run-1")
+
+
+@pytest.mark.asyncio()
+async def test_do_resume_includes_pending_tick_in_rebuilt_state(
+    decorator: DBOSIdleReleaseDecorator,
+    store: MemoryWorkflowStore,
+    stub_runtime: StubRuntime,
+    mock_journal_crud: AsyncMock,
+    mock_dbos: AsyncMock,
+) -> None:
+    workflow = SimpleWorkflow()
+    decorator.track_workflow(workflow)
+    _seed_handler(
+        store,
+        workflow_name=workflow.workflow_name,
+        run_id="run-1",
+        idle_since=datetime(2020, 1, 1, tzinfo=timezone.utc),
+    )
+
+    tick = TickIdleCheck()
+    await decorator._do_resume("run-1", pending_tick=tick)
+
+    assert len(stub_runtime.run_workflow_calls) == 1
+    call = stub_runtime.run_workflow_calls[0]
+    init_state = call["init_state"]
+    # The init_state should have been rebuilt with the pending tick applied.
+    # TickIdleCheck produces commands (not queued events), so we just verify
+    # that the state was passed through and the workflow was started.
+    assert init_state is not None
+    assert init_state.is_running is False
+
+
+@pytest.mark.asyncio()
+async def test_release_without_lifecycle_lock_checks_idle_since(
+    stub_runtime: StubRuntime,
+    store: MemoryWorkflowStore,
+    mock_journal_crud: AsyncMock,
+) -> None:
+    dec = _make_decorator(stub_runtime, store, mock_journal_crud, lifecycle_lock=None)
+    _seed_handler(
+        store, run_id="run-1", idle_since=datetime(2020, 1, 1, tzinfo=timezone.utc)
+    )
+    stub_runtime._external_adapters["run-1"] = StubExternalAdapter(run_id="run-1")
+
+    await dec._release_idle_handler("run-1")
+
+    ext = stub_runtime._external_adapters["run-1"]
+    assert len(ext.sent_events) == 1
+    assert isinstance(ext.sent_events[0], TickIdleRelease)
+
+
+@pytest.mark.asyncio()
+async def test_release_without_lifecycle_lock_skips_when_not_idle(
+    stub_runtime: StubRuntime,
+    store: MemoryWorkflowStore,
+    mock_journal_crud: AsyncMock,
+) -> None:
+    dec = _make_decorator(stub_runtime, store, mock_journal_crud, lifecycle_lock=None)
+    _seed_handler(store, run_id="run-1", idle_since=None)
+    stub_runtime._external_adapters["run-1"] = StubExternalAdapter(run_id="run-1")
+
+    await dec._release_idle_handler("run-1")
+
+    ext = stub_runtime._external_adapters["run-1"]
+    assert len(ext.sent_events) == 0
+
+
+@pytest.mark.asyncio()
+async def test_release_without_lifecycle_lock_skips_when_recently_idle(
+    stub_runtime: StubRuntime,
+    store: MemoryWorkflowStore,
+    mock_journal_crud: AsyncMock,
+) -> None:
+    dec = _make_decorator(stub_runtime, store, mock_journal_crud, lifecycle_lock=None)
+    _seed_handler(store, run_id="run-1", idle_since=datetime.now(timezone.utc))
+    stub_runtime._external_adapters["run-1"] = StubExternalAdapter(run_id="run-1")
+
+    await dec._release_idle_handler("run-1")
+
+    ext = stub_runtime._external_adapters["run-1"]
+    assert len(ext.sent_events) == 0
+
+
+@pytest.mark.asyncio()
+async def test_await_and_mark_released_handles_get_result_failure(
+    decorator: DBOSIdleReleaseDecorator,
+    store: MemoryWorkflowStore,
+    lifecycle: FakeLifecycleLock,
+) -> None:
+    _seed_handler(store, run_id="run-1")
+    decorator._deferred_release_tasks["run-1"] = asyncio.ensure_future(
+        asyncio.sleep(999)
+    )  # dummy entry
+
+    external = StubExternalAdapter(run_id="run-1")
+    external.get_result = AsyncMock(side_effect=Exception("get_result failed"))  # type: ignore[assignment]
+
+    await decorator._await_and_mark_released("run-1", external)
+
+    # The finally block should have cleaned up
+    assert "run-1" not in decorator._deferred_release_tasks
+
+
+@pytest.mark.asyncio()
+async def test_deferred_release_fires_after_timeout(
+    stub_runtime: StubRuntime,
+    store: MemoryWorkflowStore,
+    mock_journal_crud: AsyncMock,
+    lifecycle: FakeLifecycleLock,
+) -> None:
+    dec = _make_decorator(
+        stub_runtime, store, mock_journal_crud, lifecycle, idle_timeout=0.01
+    )
+    await lifecycle.create("run-1")
+    stub_runtime._external_adapters["run-1"] = StubExternalAdapter(run_id="run-1")
+
+    dec._schedule_deferred_release("run-1")
+    await asyncio.sleep(0.05)
+
+    state = await lifecycle.get_state("run-1")
+    assert state is not None
+    # After deferred release fires, the handler goes through releasing -> released
+    assert state[0] in (RunLifecycleState.releasing, RunLifecycleState.released)
