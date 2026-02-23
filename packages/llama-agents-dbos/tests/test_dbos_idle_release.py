@@ -318,7 +318,12 @@ async def test_ensure_active_run_carries_over_serialized_state(
 
     # Set up state store to return a state object
     mock_state_store = AsyncMock()
-    mock_state_store.get_state = AsyncMock(return_value=MyState(counter=42))
+    mock_state_store.to_dict = MagicMock(
+        return_value={
+            "state_type": "MyState",
+            "state_data": {"counter": 42},
+        }
+    )
     mock_store.create_state_store = MagicMock(return_value=mock_state_store)
 
     mock_new_adapter = AsyncMock(spec=ExternalRunAdapter)
