@@ -127,9 +127,6 @@ async def test_release_sends_tick_idle_release(
     tick_arg = mock_inner_external.send_event.call_args[0][0]
     assert isinstance(tick_arg, TickIdleRelease)
 
-    # run_id should be tracked as releasing
-    assert "run-1" in decorator._idle_releasing
-
 
 @pytest.mark.asyncio()
 async def test_release_skips_if_not_idle(
@@ -283,7 +280,6 @@ async def test_await_and_purge_deletes_journal_and_operation_outputs(
     """_await_and_purge should delete journal entries and DBOS operation outputs."""
     external = AsyncMock(spec=ExternalRunAdapter)
     external.get_result = AsyncMock(return_value=None)
-    decorator._idle_releasing.add("run-1")
 
     with patch("llama_agents.dbos.idle_release.DBOS") as mock_dbos:
         mock_dbos.delete_workflow_async = AsyncMock()
@@ -292,4 +288,3 @@ async def test_await_and_purge_deletes_journal_and_operation_outputs(
     mock_dbos.delete_workflow_async.assert_called_once_with("run-1")
     mock_journal_crud.purge_dbos_operation_outputs.assert_called_once_with("run-1")
     mock_journal_crud.delete.assert_called_once_with("run-1")
-    assert "run-1" not in decorator._idle_releasing

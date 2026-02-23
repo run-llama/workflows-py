@@ -151,7 +151,6 @@ class DBOSIdleReleaseDecorator(BaseRuntimeDecorator):
         self._deferred_release_tasks: dict[str, asyncio.Task[None]] = {}
         self._background_tasks: set[asyncio.Task[None]] = set()
         self._idle_timeout = idle_timeout
-        self._idle_releasing: set[str] = set()
         if tick_persistence is None:
             raise ValueError("tick_persistence is required")
         self._tick_persistence: TickPersistenceDecorator = tick_persistence
@@ -165,8 +164,6 @@ class DBOSIdleReleaseDecorator(BaseRuntimeDecorator):
 
     def _schedule_deferred_release(self, run_id: str) -> None:
         """Cancel any existing timer for run_id and schedule a new one."""
-        if run_id in self._idle_releasing:
-            return
         self._cancel_deferred_release(run_id)
         task = self._spawn_task(self._deferred_release(run_id))
         self._deferred_release_tasks[run_id] = task
@@ -204,7 +201,6 @@ class DBOSIdleReleaseDecorator(BaseRuntimeDecorator):
             if elapsed < self._idle_timeout:
                 return
 
-            self._idle_releasing.add(run_id)
             external = self._decorated.get_external_adapter(run_id)
             await external.send_event(TickIdleRelease())
             logger.info(f"Released idle DBOS handler [run_id={run_id}]")
@@ -228,7 +224,6 @@ class DBOSIdleReleaseDecorator(BaseRuntimeDecorator):
                 f"Failed to purge DBOS state for run_id={run_id}", exc_info=True
             )
         finally:
-            self._idle_releasing.discard(run_id)
             self._deferred_release_tasks.pop(run_id, None)
 
     async def _broker_state_from_ticks(
@@ -354,8 +349,6 @@ class DBOSIdleReleaseDecorator(BaseRuntimeDecorator):
             idle_since=None,
         )
         await self._store.update(updated_handler)
-
-        self._idle_releasing.discard(run_id)
 
         logger.info(f"Resumed DBOS workflow [run_id={run_id}]")
         return run_id, new_adapter
