@@ -22,9 +22,6 @@ from pathlib import Path
 import pytest
 
 SERVER_RUNNER_PATH = str(Path(__file__).parent / "fixtures" / "server_runner.py")
-IDLE_RELEASE_RUNNER_PATH = str(
-    Path(__file__).parent / "fixtures" / "idle_release_runner.py"
-)
 
 pytestmark = [pytest.mark.docker]
 
@@ -185,88 +182,3 @@ def test_no_duplicate_events_after_replay(postgres_dsn: str) -> None:
         assert int(streams_count) == 0, (
             f"Expected 0 events in dbos.streams after replay, got {streams_count}"
         )
-
-
-def run_idle_release_scenario(
-    workflow: str,
-    db_url: str,
-    run_id: str,
-    event_type: str,
-    event_data: dict[str, object],
-    idle_timeout: float = 0.5,
-    timeout: float = 60.0,
-) -> subprocess.CompletedProcess[str]:
-    """Run an idle release end-to-end scenario."""
-    cmd = [
-        sys.executable,
-        IDLE_RELEASE_RUNNER_PATH,
-        "--workflow",
-        workflow,
-        "--db-url",
-        db_url,
-        "--run-id",
-        run_id,
-        "--event-type",
-        event_type,
-        "--event-data",
-        json.dumps(event_data),
-        "--idle-timeout",
-        str(idle_timeout),
-    ]
-    return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-
-
-def test_idle_release_end_to_end(postgres_dsn: str) -> None:
-    """Idle workflow is auto-released and auto-resumed via DBOSIdleReleaseDecorator."""
-    import time as _time
-
-    cmd = [
-        sys.executable,
-        IDLE_RELEASE_RUNNER_PATH,
-        "--workflow",
-        "tests.fixtures.sample_workflows.idle_cancel_resume:IdleCancelResumeWorkflow",
-        "--db-url",
-        postgres_dsn,
-        "--run-id",
-        "test-idle-release-001",
-        "--event-type",
-        "ExternalDataEvent",
-        "--event-data",
-        json.dumps({"response": "idle-test"}),
-        "--idle-timeout",
-        "0.5",
-    ]
-    proc = subprocess.Popen(
-        cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
-    )
-    stdout_lines: list[str] = []
-    deadline = _time.monotonic() + 30
-    saw_success = False
-    while _time.monotonic() < deadline:
-        line = proc.stdout.readline()  # type: ignore[union-attr]
-        if not line:
-            if proc.poll() is not None:
-                break
-            _time.sleep(0.1)
-            continue
-        stripped = line.rstrip()
-        stdout_lines.append(stripped)
-        print(stripped)
-        if "SUCCESS" in stripped:
-            saw_success = True
-            break
-        if "ERROR:" in stripped:
-            break
-
-    proc.kill()
-    proc.wait()
-    stderr_output = proc.stderr.read() if proc.stderr else ""  # type: ignore[union-attr]
-    stdout_output = "\n".join(stdout_lines)
-    print(f"\nstderr:\n{stderr_output}")
-
-    assert "IDLE_DETECTED" in stdout_output, f"stdout: {stdout_output}"
-    assert "TIMEOUT_ELAPSED" in stdout_output, f"stdout: {stdout_output}"
-    assert "EVENT_SENT" in stdout_output, f"stdout: {stdout_output}"
-    assert saw_success, (
-        f"Should complete successfully.\nstdout: {stdout_output}\nstderr: {stderr_output}"
-    )

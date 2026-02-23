@@ -37,7 +37,13 @@ from workflows.runtime.types.plugin import (
     WaitResultTick,
     WaitResultTimeout,
 )
-from workflows.runtime.types.ticks import TickIdleCheck, TickIdleRelease, WorkflowTick
+from workflows.runtime.types.ticks import (
+    TickAddEvent,
+    TickIdleCheck,
+    TickIdleRelease,
+    WorkflowTick,
+    WorkflowTickAdapter,
+)
 from workflows.workflow import Workflow
 
 # -- Stubs -----------------------------------------------------------------
@@ -433,6 +439,9 @@ async def test_send_event_resumes_when_released(
     # Journal and DBOS operation outputs should have been purged
     mock_journal_crud.purge_dbos_operation_outputs.assert_called_once_with("run-1")
     mock_journal_crud.delete.assert_called_once_with("run-1")
+
+    # DBOS workflow record must be deleted before re-creating with same run_id
+    mock_dbos.delete_workflow_async.assert_called_once_with("run-1")
 
 
 @pytest.mark.asyncio()
@@ -851,17 +860,53 @@ async def test_do_resume_includes_pending_tick_in_rebuilt_state(
         idle_since=datetime(2020, 1, 1, tzinfo=timezone.utc),
     )
 
-    tick = TickIdleCheck()
+    # Use TickAddEvent with StartEvent — this sets is_running=True in BrokerState,
+    # giving us a concrete observable difference vs. no pending tick.
+    tick = TickAddEvent(event=StartEvent())
     await decorator._do_resume("run-1", pending_tick=tick)
 
     assert len(stub_runtime.run_workflow_calls) == 1
     call = stub_runtime.run_workflow_calls[0]
     init_state = call["init_state"]
-    # The init_state should have been rebuilt with the pending tick applied.
-    # TickIdleCheck produces commands (not queued events), so we just verify
-    # that the state was passed through and the workflow was started.
     assert init_state is not None
-    assert init_state.is_running is False
+    # Without the pending tick injection, is_running would remain False.
+    # StartEvent via TickAddEvent sets is_running=True in the rebuilt state.
+    assert init_state.is_running is True
+
+
+@pytest.mark.asyncio()
+async def test_do_resume_replays_persisted_ticks(
+    decorator: DBOSIdleReleaseDecorator,
+    store: MemoryWorkflowStore,
+    stub_runtime: StubRuntime,
+    mock_journal_crud: AsyncMock,
+    mock_dbos: AsyncMock,
+) -> None:
+    """Persisted ticks must be replayed to rebuild BrokerState on resume (Fault 8)."""
+    workflow = SimpleWorkflow()
+    decorator.track_workflow(workflow)
+    _seed_handler(
+        store,
+        workflow_name=workflow.workflow_name,
+        run_id="run-1",
+        idle_since=datetime(2020, 1, 1, tzinfo=timezone.utc),
+    )
+
+    # Seed a persisted TickAddEvent(StartEvent) — simulates a tick recorded
+    # before the workflow was released.
+    tick = TickAddEvent(event=StartEvent())
+    tick_data = WorkflowTickAdapter.dump_python(tick)
+    await store.append_tick("run-1", tick_data)
+
+    await decorator._do_resume("run-1")
+
+    assert len(stub_runtime.run_workflow_calls) == 1
+    call = stub_runtime.run_workflow_calls[0]
+    init_state = call["init_state"]
+    assert init_state is not None
+    # Without tick replay, is_running would remain False (bare BrokerState).
+    # The persisted TickAddEvent(StartEvent) sets is_running=True.
+    assert init_state.is_running is True
 
 
 @pytest.mark.asyncio()

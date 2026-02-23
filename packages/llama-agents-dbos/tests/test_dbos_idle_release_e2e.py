@@ -3,109 +3,144 @@
 """End-to-end idle release tests over live HTTP with subprocess isolation.
 
 Tests the full idle release → purge → resume cycle by starting a real HTTP
-server inside a subprocess and exercising it via WorkflowClient. Validates
-both event stream continuity (events flow across idle/resume boundary) and
-handler completion status (the GET /handlers/{id} API returns "completed").
-
-Parameterized for SQLite and PostgreSQL (Docker).
+server (replica_server.py with --idle-timeout) and exercising it via
+WorkflowClient. Validates event stream continuity across the idle/resume
+boundary and handler completion.
 """
 
 from __future__ import annotations
 
+import asyncio
 import subprocess
 import sys
+import time
 from pathlib import Path
 
+import httpx
 import pytest
+from llama_agents.client import WorkflowClient
+from tests.fixtures.sample_workflows.hitl import UserInput
+from workflows.events import WorkflowIdleEvent
 
-HTTP_RUNNER_PATH = str(
-    Path(__file__).parent / "fixtures" / "idle_release_http_runner.py"
-)
+REPLICA_SERVER_PATH = str(Path(__file__).parent / "fixtures" / "replica_server.py")
+WORKFLOW_PATH = "tests.fixtures.sample_workflows.hitl:TestWorkflow"
+IDLE_TIMEOUT = 0.5
 
 
-def _run_http_idle_release(
-    db_url: str, idle_timeout: float = 0.5
-) -> tuple[str, str, str]:
-    """Run the HTTP idle release runner and return stdout."""
-    result = subprocess.run(
+def _start_idle_server(
+    port: int, db_url: str, idle_timeout: float
+) -> subprocess.Popen[str]:
+    return subprocess.Popen(
         [
             sys.executable,
-            HTTP_RUNNER_PATH,
+            REPLICA_SERVER_PATH,
+            "--workflow",
+            WORKFLOW_PATH,
             "--db-url",
             db_url,
+            "--port",
+            str(port),
             "--idle-timeout",
             str(idle_timeout),
         ],
-        capture_output=True,
         text=True,
-        timeout=30,
-    )
-    stdout = result.stdout
-    stderr = result.stderr
-    combined = stdout + stderr
-    return stdout, stderr, combined
-
-
-def _assert_idle_release_http(stdout: str, stderr: str, combined: str) -> None:
-    """Assert the full idle release HTTP cycle completed correctly."""
-    # Stream phase: saw idle event
-    assert "IDLE_DETECTED" in stdout, (
-        f"Should detect idle via event stream.\nstdout: {stdout}\nstderr: {stderr}"
-    )
-
-    # Timeout elapsed and handler still running before resume
-    assert "TIMEOUT_ELAPSED" in stdout, (
-        f"Should wait for timeout.\nstdout: {stdout}\nstderr: {stderr}"
-    )
-    assert "PRE_RESUME_STATUS:running" in stdout, (
-        f"Handler should still be 'running' before resume.\nstdout: {stdout}\nstderr: {stderr}"
-    )
-
-    # Event was sent successfully
-    assert "SEND_STATUS:sent" in stdout, (
-        f"Event send should succeed.\nstdout: {stdout}\nstderr: {stderr}"
-    )
-
-    # Resumed stream includes StopEvent (stream continuity across idle/resume)
-    assert "RESUMED_STREAM:StopEvent" in stdout, (
-        f"Resumed stream should include StopEvent.\nstdout: {stdout}\nstderr: {stderr}"
-    )
-
-    # Handler status API returns "completed"
-    assert "FINAL_STATUS:completed" in stdout, (
-        f"Handler should be marked completed.\nstdout: {stdout}\nstderr: {stderr}"
-    )
-
-    # Result is correct
-    assert "RESULT:got:world" in stdout, (
-        f"Result should be 'got:world'.\nstdout: {stdout}\nstderr: {stderr}"
-    )
-
-    # No DBOS determinism errors
-    assert "DBOSUnexpectedStepError" not in combined, (
-        f"DBOS determinism error!\nstdout: {stdout}\nstderr: {stderr}"
-    )
-    assert "Non-deterministic execution" not in combined, (
-        f"Journal non-determinism!\nstdout: {stdout}\nstderr: {stderr}"
-    )
-
-    assert "SUCCESS" in stdout, (
-        f"Should complete successfully.\nstdout: {stdout}\nstderr: {stderr}"
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
     )
 
 
-def test_idle_release_http_sqlite(tmp_path: Path) -> None:
+def _wait_for_server(
+    proc: subprocess.Popen[str], port: int, timeout: float = 30.0
+) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if proc.poll() is not None:
+            stdout = proc.stdout.read() if proc.stdout else ""
+            raise RuntimeError(
+                f"Server on port {port} exited with code {proc.returncode}\n"
+                f"output: {stdout}"
+            )
+        try:
+            resp = httpx.get(f"http://localhost:{port}/workflows", timeout=2.0)
+            if resp.status_code == 200:
+                return
+        except httpx.ConnectError:
+            pass
+        time.sleep(0.5)
+    proc.kill()
+    stdout = proc.stdout.read() if proc.stdout else ""
+    raise RuntimeError(
+        f"Server on port {port} did not start in {timeout}s\noutput: {stdout}"
+    )
+
+
+async def _run_idle_release_test(port: int, db_url: str) -> None:
+    """Core test logic shared between SQLite and Postgres variants."""
+    proc = _start_idle_server(port, db_url, IDLE_TIMEOUT)
+    try:
+        _wait_for_server(proc, port)
+        client = WorkflowClient(base_url=f"http://localhost:{port}")
+
+        # 1. Start workflow
+        handler = await client.run_workflow_nowait("test")
+        handler_id = handler.handler_id
+
+        # 2. Stream events until WorkflowIdleEvent
+        stream = client.get_workflow_events(handler_id, include_internal_events=True)
+        async for env in stream:
+            event = env.load_event([WorkflowIdleEvent])
+            if isinstance(event, WorkflowIdleEvent):
+                break
+
+        last_seq = stream.last_sequence
+
+        # 3. Wait for idle timeout to elapse (release happens in background)
+        await asyncio.sleep(IDLE_TIMEOUT + 1.5)
+
+        # 4. Handler should still be "running" (released but not completed)
+        h = await client.get_handler(handler_id)
+        assert h.status == "running", f"Expected 'running', got '{h.status}'"
+
+        # 5. Send event to trigger resume
+        send_resp = await client.send_event(handler_id, UserInput(response="world"))
+        assert send_resp.status == "sent"
+
+        # 6. Stream events after resume, expect StopEvent
+        got_stop = False
+        async for env in client.get_workflow_events(
+            handler_id, after_sequence=last_seq
+        ):
+            if env.type == "StopEvent":
+                got_stop = True
+                break
+        assert got_stop, "Should see StopEvent after resume"
+
+        # 7. Poll for handler completion
+        for _ in range(40):
+            h = await client.get_handler(handler_id)
+            if h.status == "completed":
+                break
+            await asyncio.sleep(0.25)
+        assert h.status == "completed", f"Expected 'completed', got '{h.status}'"
+        assert h.result is not None
+        assert h.result.value.get("result", {}).get("response") == "world"
+    finally:
+        proc.kill()
+        proc.wait()
+
+
+@pytest.mark.timeout(45)
+async def test_idle_release_e2e_sqlite(tmp_path: Path) -> None:
     """Full idle release cycle over HTTP with SQLite backend."""
-    db_path = tmp_path / "idle_http_test.sqlite3"
+    db_path = tmp_path / "idle_e2e.sqlite3"
     db_url = f"sqlite+pysqlite:///{db_path}?check_same_thread=false"
-    stdout, stderr, combined = _run_http_idle_release(db_url)
-    _assert_idle_release_http(stdout, stderr, combined)
+    await _run_idle_release_test(18010, db_url)
 
 
 @pytest.mark.docker
-def test_idle_release_http_postgres(postgres_dsn: str) -> None:
+@pytest.mark.timeout(45)
+async def test_idle_release_e2e_postgres(postgres_dsn: str) -> None:
     """Full idle release cycle over HTTP with PostgreSQL backend."""
-    # Convert asyncpg DSN to SQLAlchemy format for DBOS
     db_url = postgres_dsn.replace("postgresql://", "postgresql+psycopg://", 1)
-    stdout, stderr, combined = _run_http_idle_release(db_url)
-    _assert_idle_release_http(stdout, stderr, combined)
+    await _run_idle_release_test(18011, db_url)

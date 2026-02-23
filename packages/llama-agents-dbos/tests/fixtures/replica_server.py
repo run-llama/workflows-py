@@ -30,6 +30,7 @@ async def main() -> None:
     parser.add_argument("--workflow", required=True)
     parser.add_argument("--db-url", required=True)
     parser.add_argument("--port", type=int, required=True)
+    parser.add_argument("--idle-timeout", type=float, default=None)
     args = parser.parse_args()
 
     workflow_class, _module = import_workflow(args.workflow)
@@ -47,7 +48,10 @@ async def main() -> None:
     dbos_runtime.launch()
 
     store = dbos_runtime.create_workflow_store()
-    server_runtime = dbos_runtime.build_server_runtime()
+    idle_kwargs = (
+        {"idle_timeout": args.idle_timeout} if args.idle_timeout is not None else {}
+    )
+    server_runtime = dbos_runtime.build_server_runtime(**idle_kwargs)
     server = WorkflowServer(runtime=server_runtime, workflow_store=store)
     # Discover all Event subclasses in the workflow's module so that
     # wait_for_event types (not in step signatures) are in the registry.
