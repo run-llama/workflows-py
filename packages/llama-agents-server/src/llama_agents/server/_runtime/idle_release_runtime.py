@@ -35,7 +35,7 @@ from .._store.abstract_workflow_store import (
     AbstractWorkflowStore,
     HandlerQuery,
 )
-from .persistence_runtime import PersistenceDecorator
+from .persistence_runtime import TickPersistenceDecorator
 from .runtime_decorators import (
     BaseExternalRunAdapterDecorator,
     BaseInternalRunAdapterDecorator,
@@ -110,19 +110,19 @@ class IdleReleaseExternalRunAdapter(BaseExternalRunAdapterDecorator):
 class IdleReleaseDecorator(BaseRuntimeDecorator):
     """Runtime decorator for idle detection, memory release, and reload-on-demand.
 
-    Must wrap a PersistenceDecorator (or compatible runtime) to access
+    Must wrap a TickPersistenceDecorator (or compatible runtime) to access
     context_from_ticks for reloading released handlers.
     """
 
     def __init__(
         self,
-        decorated: PersistenceDecorator,
+        decorated: TickPersistenceDecorator,
         store: AbstractWorkflowStore,
         idle_timeout: float = 60.0,
     ) -> None:
         super().__init__(decorated)
         self._store = store
-        self._persistence: PersistenceDecorator = decorated
+        self._persistence: TickPersistenceDecorator = decorated
         self._reload_lock = KeyedLock()
         self._active_run_ids: set[str] = set()
         self._background_tasks: set[asyncio.Task[None]] = set()

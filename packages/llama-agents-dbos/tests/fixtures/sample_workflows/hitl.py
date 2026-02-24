@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from pydantic import Field
 from workflows.context import Context
 from workflows.decorators import step
@@ -25,6 +27,9 @@ class UserInput(HumanResponseEvent):
 
 
 class TestWorkflow(Workflow):
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(timeout=None, **kwargs)
+
     @step
     async def ask(self, ctx: Context, ev: StartEvent) -> AskInputEvent:
         await ctx.store.set("asked", True)

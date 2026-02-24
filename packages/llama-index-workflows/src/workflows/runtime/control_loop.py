@@ -18,6 +18,7 @@ from workflows.errors import (
 )
 from workflows.events import (
     Event,
+    IdleReleasedEvent,
     InputRequiredEvent,
     StartEvent,
     StepState,
@@ -72,6 +73,7 @@ from workflows.runtime.types.ticks import (
     TickAddEvent,
     TickCancelRun,
     TickIdleCheck,
+    TickIdleRelease,
     TickPublishEvent,
     TickStepResult,
     TickTimeout,
@@ -542,6 +544,9 @@ def _reduce_tick(
         state, commands = _process_add_event_tick(tick, init, now_seconds)
     elif isinstance(tick, TickCancelRun):
         state, commands = _process_cancel_run_tick(tick, init)
+    elif isinstance(tick, TickIdleRelease):
+        # Return early — idle release does not schedule idle checks
+        return init, [CommandCompleteRun(result=IdleReleasedEvent())]
     elif isinstance(tick, TickPublishEvent):
         state, commands = _process_publish_event_tick(tick, init)
     elif isinstance(tick, TickTimeout):

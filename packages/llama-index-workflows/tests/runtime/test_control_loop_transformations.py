@@ -16,6 +16,7 @@ from workflows.decorators import StepConfig
 from workflows.errors import WorkflowTimeoutError
 from workflows.events import (
     Event,
+    IdleReleasedEvent,
     InputRequiredEvent,
     StartEvent,
     StepState,
@@ -33,6 +34,7 @@ from workflows.runtime.control_loop import (
     _process_publish_event_tick,
     _process_step_result_tick,
     _process_timeout_tick,
+    _reduce_tick,
     rebuild_state_from_ticks,
     rewind_in_progress,
 )
@@ -66,6 +68,7 @@ from workflows.runtime.types.results import (
 from workflows.runtime.types.ticks import (
     TickAddEvent,
     TickCancelRun,
+    TickIdleRelease,
     TickPublishEvent,
     TickStepResult,
     TickTimeout,
@@ -503,6 +506,21 @@ def test_cancel_run(base_state: BrokerState) -> None:
     assert len(commands) == 2
     assert isinstance(commands[0], CommandPublishEvent)
     assert isinstance(commands[1], CommandHalt)
+
+
+def test_idle_release(base_state: BrokerState) -> None:
+    """Test that idle release returns CommandCompleteRun with IdleReleasedEvent and no published events."""
+    tick = TickIdleRelease()
+    new_state, commands = _reduce_tick(tick, base_state, 0.0)
+
+    # State is unchanged (returned early without deepcopy)
+    assert new_state is base_state
+    # Single command: complete run with IdleReleasedEvent
+    assert len(commands) == 1
+    assert isinstance(commands[0], CommandCompleteRun)
+    assert isinstance(commands[0].result, IdleReleasedEvent)
+    # No CommandPublishEvent — nothing written to event stream
+    assert not any(isinstance(c, CommandPublishEvent) for c in commands)
 
 
 def test_publish_event(base_state: BrokerState) -> None:
