@@ -1,5 +1,12 @@
 # llama-index-workflows
 
+## 2.15.0-rc.1
+
+### Patch Changes
+
+- 3720c61: Add workflow release for idle DBOS workflows (with replica support)
+- a2aad32: Move task execution into the runtime, for maximal control of specific runtime semantics around determinism
+
 ## 2.15.0-rc.0
 
 ### Minor Changes
