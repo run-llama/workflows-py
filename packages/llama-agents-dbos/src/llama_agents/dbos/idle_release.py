@@ -1,47 +1,10 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 LlamaIndex Inc.
-"""DBOSIdleReleaseDecorator and supporting adapters.
+"""Idle detection and release for DBOS-backed workflows.
 
-Wraps an EventInterceptorDecorator to add idle detection, memory release via
-TickIdleRelease, and reload-on-demand via reusing the same run_id.
-
-## Lifecycle lock coordination
-
-A distributed lifecycle lock (``RunLifecycleLock``) coordinates release and
-resume across replicas. The state machine is::
-
-    active → releasing → released → active
-
-- **Release**: When the deferred release timer fires, the decorator calls
-  ``begin_release(run_id)`` to CAS ``active → releasing``. If successful,
-  it sends ``TickIdleRelease`` via ``DBOS.send_async()``. A background task
-  awaits the workflow completion and then calls ``complete_release`` to
-  transition ``releasing → released``. The handler's ``idle_since`` is set
-  only after the workflow is fully released.
-
-- **Resume**: When ``send_event`` is called, it consults the lifecycle lock
-  via ``try_begin_resume``. If the state is ``released``, the caller owns
-  the resume: it waits for the old DBOS workflow to finish (cross-replica
-  via ``DBOS.retrieve_workflow_async``), purges DBOS/journal state, rebuilds
-  from ticks, and starts a fresh workflow. If the state is ``releasing``,
-  the caller polls with a crash timeout.
-
-- **Crash recovery**: If a releaser crashes mid-release (state stuck at
-  ``releasing``), ``try_begin_resume`` detects the stale ``updated_at``
-  timestamp via ``crash_timeout_seconds`` and force-transitions to active.
-
-## Tick delivery via DBOS notifications
-
-To release an idle workflow, we deliver a ``TickIdleRelease`` tick into
-the running control loop. The control loop receives ticks through
-``InternalRunAdapter.wait_receive()``, which for DBOS-backed runs uses
-``DBOS.recv_async()`` — DBOS's durable notification channel backed by
-Postgres.
-
-**Why purge is needed**: DBOS uses ``SetWorkflowID`` to pin a workflow
-to a specific run_id. If we don't delete the old DBOS row, starting a
-new workflow with the same run_id would be treated as a recovery replay
-instead of a fresh start. Purge now happens only in the resume path.
+Uses a ``RunLifecycleLock`` to coordinate the release/resume state machine
+(active → releasing → released → active) across replicas. See
+``packages/llama-agents-dbos/ARCHITECTURE.md`` for details.
 """
 
 from __future__ import annotations
@@ -62,7 +25,6 @@ from llama_agents.server._runtime.runtime_decorators import (
 from llama_agents.server._store.abstract_workflow_store import (
     AbstractWorkflowStore,
     HandlerQuery,
-    PersistentHandler,
 )
 from typing_extensions import override
 from workflows.context.serializers import JsonSerializer
@@ -330,8 +292,9 @@ class DBOSIdleReleaseDecorator(BaseRuntimeDecorator):
             handle = await DBOS.retrieve_workflow_async(run_id)
             await handle.get_result()
         except Exception:
-            logger.debug(
-                f"Old DBOS workflow already gone for run_id={run_id}", exc_info=True
+            logger.warning(
+                f"Failed to await old DBOS workflow for run_id={run_id}",
+                exc_info=True,
             )
 
         # Look up handler to get workflow_name
@@ -394,20 +357,10 @@ class DBOSIdleReleaseDecorator(BaseRuntimeDecorator):
             serializer=serializer,
         )
 
-        # Update handler in store: clear idle, set running (run_id stays the same)
-        updated_handler = PersistentHandler(
-            handler_id=handler.handler_id,
-            workflow_name=handler.workflow_name,
-            status="running",
-            run_id=run_id,
-            error=handler.error,
-            result=handler.result,
-            started_at=handler.started_at,
-            updated_at=datetime.now(timezone.utc),
-            completed_at=handler.completed_at,
-            idle_since=None,
-        )
-        await self._store.update(updated_handler)
+        handler.status = "running"
+        handler.updated_at = datetime.now(timezone.utc)
+        handler.idle_since = None
+        await self._store.update(handler)
 
         logger.info(f"Resumed DBOS workflow [run_id={run_id}]")
         return run_id, new_adapter

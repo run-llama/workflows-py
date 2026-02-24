@@ -1,185 +1,226 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 LlamaIndex Inc.
-"""Unit tests for RunLifecycleLock implementations."""
+"""Unit tests for RunLifecycleLock implementations (SQLite + PostgreSQL)."""
 
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import AsyncGenerator
 from datetime import datetime, timedelta, timezone
+from typing import Protocol
 
+import asyncpg
 import pytest
 from llama_agents.dbos.journal.lifecycle import (
     LIFECYCLE_TABLE_NAME,
+    PostgresRunLifecycleLock,
+    RunLifecycleLock,
     RunLifecycleState,
     SqliteRunLifecycleLock,
 )
+from llama_agents.server._store.postgres.migrate import run_migrations as pg_migrations
 
 
-def _make_lock(db_path: str) -> SqliteRunLifecycleLock:
-    return SqliteRunLifecycleLock(db_path=db_path)
+class UpdatedAtSetter(Protocol):
+    async def set_updated_at(self, run_id: str, updated_at: datetime) -> None: ...
 
 
-def _read_state(db_path: str, run_id: str) -> tuple[str, str] | None:
-    """Test helper: read raw (state, updated_at) from sqlite."""
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    row = conn.execute(
-        f"SELECT state, updated_at FROM {LIFECYCLE_TABLE_NAME} WHERE run_id = ?",
-        (run_id,),
-    ).fetchone()
-    conn.close()
-    if row is None:
-        return None
-    return row["state"], row["updated_at"]
+class SqliteUpdatedAtSetter:
+    def __init__(self, db_path: str) -> None:
+        self._db_path = db_path
+
+    async def set_updated_at(self, run_id: str, updated_at: datetime) -> None:
+        conn = sqlite3.connect(self._db_path)
+        conn.execute(
+            f"UPDATE {LIFECYCLE_TABLE_NAME} SET updated_at = ? WHERE run_id = ?",
+            (updated_at.isoformat(), run_id),
+        )
+        conn.commit()
+        conn.close()
 
 
-def _set_updated_at(db_path: str, run_id: str, updated_at: datetime) -> None:
-    """Test helper: override updated_at for crash timeout testing."""
-    conn = sqlite3.connect(db_path)
-    conn.execute(
-        f"UPDATE {LIFECYCLE_TABLE_NAME} SET updated_at = ? WHERE run_id = ?",
-        (updated_at.isoformat(), run_id),
-    )
-    conn.commit()
-    conn.close()
+class PostgresUpdatedAtSetter:
+    def __init__(self, pool: asyncpg.Pool) -> None:
+        self._pool = pool
+
+    async def set_updated_at(self, run_id: str, updated_at: datetime) -> None:
+        await self._pool.execute(
+            f"UPDATE {LIFECYCLE_TABLE_NAME} SET updated_at = $1 WHERE run_id = $2",
+            updated_at,
+            run_id,
+        )
 
 
+LockFixture = tuple[RunLifecycleLock, UpdatedAtSetter]
+
+sqlite_param = pytest.param("sqlite", id="sqlite")
+postgres_param = pytest.param("postgres", marks=pytest.mark.docker, id="postgres")
+
+
+@pytest.fixture
+async def lock_fixture(
+    request: pytest.FixtureRequest,
+    journal_db_path: str,
+) -> AsyncGenerator[LockFixture]:
+    backend = request.param
+    if backend == "sqlite":
+        yield (
+            SqliteRunLifecycleLock(db_path=journal_db_path),
+            SqliteUpdatedAtSetter(journal_db_path),
+        )
+    else:
+        dsn = request.getfixturevalue("postgres_dsn")
+        conn = await asyncpg.connect(dsn)
+        schema = "test_lifecycle_lock"
+        try:
+            await conn.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
+            await pg_migrations(conn, schema=schema)
+        finally:
+            await conn.close()
+        pool = await asyncpg.create_pool(dsn, server_settings={"search_path": schema})
+        assert pool is not None
+        try:
+            yield (
+                PostgresRunLifecycleLock(pool, schema=schema),
+                PostgresUpdatedAtSetter(pool),
+            )
+        finally:
+            await pool.close()
+
+
+both = pytest.mark.parametrize(
+    "lock_fixture", [sqlite_param, postgres_param], indirect=True
+)
+sqlite_only = pytest.mark.parametrize("lock_fixture", [sqlite_param], indirect=True)
+
+
+@both
 @pytest.mark.asyncio
-async def test_create_sets_active(journal_db_path: str) -> None:
-    lock = _make_lock(journal_db_path)
+async def test_create_sets_active(lock_fixture: LockFixture) -> None:
+    lock, _ = lock_fixture
     await lock.create("run-1")
-    result = _read_state(journal_db_path, "run-1")
-    assert result is not None
-    assert result[0] == "active"
+    assert await lock.try_begin_resume("run-1") is None
 
 
+@both
 @pytest.mark.asyncio
-async def test_begin_release_active_to_releasing(journal_db_path: str) -> None:
-    lock = _make_lock(journal_db_path)
+async def test_begin_release_active_to_releasing(lock_fixture: LockFixture) -> None:
+    lock, _ = lock_fixture
     await lock.create("run-1")
     assert await lock.begin_release("run-1") is True
-    result = _read_state(journal_db_path, "run-1")
-    assert result is not None
-    assert result[0] == "releasing"
+    assert await lock.try_begin_resume("run-1") == RunLifecycleState.releasing
 
 
+@both
 @pytest.mark.asyncio
-async def test_begin_release_not_active_returns_false(journal_db_path: str) -> None:
-    lock = _make_lock(journal_db_path)
+async def test_begin_release_not_active_returns_false(
+    lock_fixture: LockFixture,
+) -> None:
+    lock, _ = lock_fixture
     await lock.create("run-1")
     await lock.begin_release("run-1")
     assert await lock.begin_release("run-1") is False
 
 
+@both
 @pytest.mark.asyncio
-async def test_complete_release(journal_db_path: str) -> None:
-    lock = _make_lock(journal_db_path)
+async def test_complete_release(lock_fixture: LockFixture) -> None:
+    lock, _ = lock_fixture
     await lock.create("run-1")
     await lock.begin_release("run-1")
     await lock.complete_release("run-1")
-    result = _read_state(journal_db_path, "run-1")
-    assert result is not None
-    assert result[0] == "released"
+    assert await lock.try_begin_resume("run-1") == RunLifecycleState.released
 
 
+@both
 @pytest.mark.asyncio
-async def test_try_begin_resume_no_row(journal_db_path: str) -> None:
-    lock = _make_lock(journal_db_path)
+async def test_try_begin_resume_no_row(lock_fixture: LockFixture) -> None:
+    lock, _ = lock_fixture
     assert await lock.try_begin_resume("nonexistent") is None
 
 
+@both
 @pytest.mark.asyncio
-async def test_try_begin_resume_active_returns_none(journal_db_path: str) -> None:
-    lock = _make_lock(journal_db_path)
+async def test_try_begin_resume_active_returns_none(lock_fixture: LockFixture) -> None:
+    lock, _ = lock_fixture
     await lock.create("run-1")
     assert await lock.try_begin_resume("run-1") is None
 
 
+@both
 @pytest.mark.asyncio
 async def test_try_begin_resume_released_transitions_to_active(
-    journal_db_path: str,
+    lock_fixture: LockFixture,
 ) -> None:
-    lock = _make_lock(journal_db_path)
+    lock, _ = lock_fixture
     await lock.create("run-1")
     await lock.begin_release("run-1")
     await lock.complete_release("run-1")
 
     result = await lock.try_begin_resume("run-1")
     assert result == RunLifecycleState.released
-
-    state = _read_state(journal_db_path, "run-1")
-    assert state is not None
-    assert state[0] == "active"
+    assert await lock.try_begin_resume("run-1") is None
 
 
+@both
 @pytest.mark.asyncio
 async def test_try_begin_resume_releasing_returns_releasing(
-    journal_db_path: str,
+    lock_fixture: LockFixture,
 ) -> None:
-    lock = _make_lock(journal_db_path)
+    lock, _ = lock_fixture
     await lock.create("run-1")
     await lock.begin_release("run-1")
-
-    result = await lock.try_begin_resume("run-1")
-    assert result == RunLifecycleState.releasing
-
-    state = _read_state(journal_db_path, "run-1")
-    assert state is not None
-    assert state[0] == "releasing"
+    assert await lock.try_begin_resume("run-1") == RunLifecycleState.releasing
 
 
+@both
 @pytest.mark.asyncio
 async def test_try_begin_resume_force_resumes_on_crash_timeout(
-    journal_db_path: str,
+    lock_fixture: LockFixture,
 ) -> None:
-    lock = _make_lock(journal_db_path)
+    lock, setter = lock_fixture
     await lock.create("run-1")
     await lock.begin_release("run-1")
 
-    # Set updated_at to well past the timeout
     stale_time = datetime.now(timezone.utc) - timedelta(seconds=200)
-    _set_updated_at(journal_db_path, "run-1", stale_time)
+    await setter.set_updated_at("run-1", stale_time)
 
     result = await lock.try_begin_resume("run-1", crash_timeout_seconds=120.0)
     assert result == RunLifecycleState.released
-
-    state = _read_state(journal_db_path, "run-1")
-    assert state is not None
-    assert state[0] == "active"
+    assert await lock.try_begin_resume("run-1") is None
 
 
+@both
 @pytest.mark.asyncio
 async def test_try_begin_resume_releasing_no_force_without_timeout(
-    journal_db_path: str,
+    lock_fixture: LockFixture,
 ) -> None:
-    lock = _make_lock(journal_db_path)
+    lock, setter = lock_fixture
     await lock.create("run-1")
     await lock.begin_release("run-1")
 
-    # Set stale timestamp but don't pass crash_timeout_seconds
     stale_time = datetime.now(timezone.utc) - timedelta(seconds=200)
-    _set_updated_at(journal_db_path, "run-1", stale_time)
+    await setter.set_updated_at("run-1", stale_time)
 
-    result = await lock.try_begin_resume("run-1")
-    assert result == RunLifecycleState.releasing
+    assert await lock.try_begin_resume("run-1") == RunLifecycleState.releasing
 
 
+@both
 @pytest.mark.asyncio
-async def test_create_is_idempotent(journal_db_path: str) -> None:
-    lock = _make_lock(journal_db_path)
+async def test_create_is_idempotent(lock_fixture: LockFixture) -> None:
+    lock, _ = lock_fixture
     await lock.create("run-1")
     await lock.begin_release("run-1")
     await lock.complete_release("run-1")
     await lock.create("run-1")
-    state = _read_state(journal_db_path, "run-1")
-    assert state is not None
-    assert state[0] == "active"
+    assert await lock.try_begin_resume("run-1") is None
 
 
+@both
 @pytest.mark.asyncio
-async def test_full_lifecycle(journal_db_path: str) -> None:
+async def test_full_lifecycle(lock_fixture: LockFixture) -> None:
     """Test the full active -> releasing -> released -> active cycle."""
-    lock = _make_lock(journal_db_path)
+    lock, _ = lock_fixture
     await lock.create("run-1")
 
     assert await lock.begin_release("run-1") is True
@@ -187,20 +228,16 @@ async def test_full_lifecycle(journal_db_path: str) -> None:
 
     await lock.complete_release("run-1")
     assert await lock.try_begin_resume("run-1") == RunLifecycleState.released
-
-    state = _read_state(journal_db_path, "run-1")
-    assert state is not None
-    assert state[0] == "active"
+    assert await lock.try_begin_resume("run-1") is None
 
 
+@both
 @pytest.mark.asyncio
-async def test_run_id_isolation(journal_db_path: str) -> None:
-    lock = _make_lock(journal_db_path)
+async def test_run_id_isolation(lock_fixture: LockFixture) -> None:
+    lock, _ = lock_fixture
     await lock.create("run-1")
     await lock.create("run-2")
     await lock.begin_release("run-1")
 
-    state1 = _read_state(journal_db_path, "run-1")
-    state2 = _read_state(journal_db_path, "run-2")
-    assert state1 is not None and state1[0] == "releasing"
-    assert state2 is not None and state2[0] == "active"
+    assert await lock.try_begin_resume("run-1") == RunLifecycleState.releasing
+    assert await lock.try_begin_resume("run-2") is None

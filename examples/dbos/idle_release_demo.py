@@ -72,16 +72,14 @@ async def drive_workflow(port: int) -> None:
         UserInput(response="world"),
     )
 
-    print("--- Waiting for result ---")
-    # Poll until the handler completes
-    data = await client.get_result(handler.handler_id)
-    for _ in range(60):
-        if data.status in ("completed", "failed"):
+    print("--- Streaming result ---")
+    stream = client.get_workflow_events(handler.handler_id)
+    async for event in stream:
+        print(f"--- Received event: {event.type} ---")
+        if event.type == "StopEvent":
+            result = event.value.get("result")
+            print(f"--- Result: {result} ---")
             break
-        await asyncio.sleep(0.5)
-        data = await client.get_result(handler.handler_id)
-    result = data.result
-    print(f"--- Result: {result} ---")
 
 
 async def main() -> None:
