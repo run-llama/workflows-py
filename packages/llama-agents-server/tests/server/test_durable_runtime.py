@@ -21,7 +21,9 @@ from llama_agents.server import (
     WorkflowServer,
 )
 from llama_agents.server._runtime.idle_release_runtime import IdleReleaseDecorator
-from llama_agents.server._runtime.persistence_runtime import PersistenceDecorator
+from llama_agents.server._runtime.persistence_runtime import (
+    PersistenceDecorator,
+)
 from server_test_fixtures import wait_for_passing  # type: ignore[import]
 from workflows import Context, Workflow, step
 from workflows.context.serializers import JsonSerializer
@@ -56,6 +58,7 @@ def _get_idle_release(server: WorkflowServer) -> IdleReleaseDecorator:
 def _get_persistence(server: WorkflowServer) -> PersistenceDecorator:
     """Extract the PersistenceDecorator from the server's runtime stack."""
     idle_release = _get_idle_release(server)
+    assert isinstance(idle_release._persistence, PersistenceDecorator)
     return idle_release._persistence
 
 

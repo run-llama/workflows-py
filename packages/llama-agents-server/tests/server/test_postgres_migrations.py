@@ -41,6 +41,8 @@ def test_first_migration_has_version_1() -> None:
 
 # ── Integration tests (require Docker) ──────────────────────────────
 
+EXPECTED_VERSION = len(_iter_migration_files())
+
 
 @pytest.mark.docker
 async def test_run_migrations_fresh_db(postgres_dsn: str) -> None:
@@ -53,7 +55,7 @@ async def test_run_migrations_fresh_db(postgres_dsn: str) -> None:
         version = await conn.fetchval(
             f"SELECT MAX(version) FROM {schema}.schema_migrations"
         )
-        assert version == 1
+        assert version == EXPECTED_VERSION
 
         tables = await conn.fetch(
             "SELECT table_name FROM information_schema.tables WHERE table_schema = $1",
@@ -81,10 +83,10 @@ async def test_run_migrations_idempotent(postgres_dsn: str) -> None:
         version = await conn.fetchval(
             f"SELECT MAX(version) FROM {schema}.schema_migrations"
         )
-        assert version == 1
+        assert version == EXPECTED_VERSION
 
         count = await conn.fetchval(f"SELECT COUNT(*) FROM {schema}.schema_migrations")
-        assert count == 1
+        assert count == EXPECTED_VERSION
     finally:
         await conn.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
         await conn.close()
@@ -97,17 +99,19 @@ async def test_run_migrations_no_schema(postgres_dsn: str) -> None:
         await conn.execute("DROP TABLE IF EXISTS schema_migrations CASCADE")
         await conn.execute("DROP TABLE IF EXISTS wf_handlers CASCADE")
         await conn.execute("DROP TABLE IF EXISTS wf_events CASCADE")
+        await conn.execute("DROP TABLE IF EXISTS wf_ticks CASCADE")
         await conn.execute("DROP TABLE IF EXISTS workflow_state CASCADE")
         await conn.execute("DROP TABLE IF EXISTS workflow_journal CASCADE")
 
         await run_migrations(conn, schema=None)
 
         version = await conn.fetchval("SELECT MAX(version) FROM schema_migrations")
-        assert version == 1
+        assert version == EXPECTED_VERSION
     finally:
         await conn.execute("DROP TABLE IF EXISTS schema_migrations CASCADE")
         await conn.execute("DROP TABLE IF EXISTS wf_handlers CASCADE")
         await conn.execute("DROP TABLE IF EXISTS wf_events CASCADE")
+        await conn.execute("DROP TABLE IF EXISTS wf_ticks CASCADE")
         await conn.execute("DROP TABLE IF EXISTS workflow_state CASCADE")
         await conn.execute("DROP TABLE IF EXISTS workflow_journal CASCADE")
         await conn.close()
@@ -146,10 +150,10 @@ async def test_concurrent_migrations_with_advisory_lock(
 
     conn = await asyncpg.connect(postgres_dsn)
     try:
-        count = await conn.fetchval(
-            f"SELECT COUNT(*) FROM {schema}.schema_migrations WHERE version = 1"
+        count = await conn.fetchval(f"SELECT COUNT(*) FROM {schema}.schema_migrations")
+        assert count == EXPECTED_VERSION, (
+            f"Expected {EXPECTED_VERSION} migration rows, got {count}"
         )
-        assert count == 1, f"Expected 1 migration row, got {count}"
 
         tables = await conn.fetch(
             "SELECT table_name FROM information_schema.tables WHERE table_schema = $1",

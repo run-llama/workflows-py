@@ -42,6 +42,20 @@ class JournalCrud(ABC):
     @abstractmethod
     async def load(self, run_id: str) -> list[str]: ...
 
+    @abstractmethod
+    async def delete(self, run_id: str) -> None: ...
+
+    @abstractmethod
+    async def purge_dbos_operation_outputs(self, run_id: str) -> None:
+        """Delete DBOS operation_outputs for a workflow ID.
+
+        SQLite doesn't enforce ON DELETE CASCADE by default, so deleting
+        from workflow_status alone leaves stale operation_outputs behind.
+        This causes DBOSUnexpectedStepError when the same workflow ID is
+        reused.
+        """
+        ...
+
 
 class PostgresJournalCrud(JournalCrud):
     """Journal CRUD using asyncpg."""
@@ -69,6 +83,16 @@ class PostgresJournalCrud(JournalCrud):
             run_id,
         )
         return [row["task_key"] for row in rows]
+
+    async def delete(self, run_id: str) -> None:
+        await self._pool.execute(
+            f"DELETE FROM {self._table_ref} WHERE run_id = $1",
+            run_id,
+        )
+
+    async def purge_dbos_operation_outputs(self, run_id: str) -> None:
+        # Postgres enforces ON DELETE CASCADE, so this is a no-op.
+        pass
 
 
 class SqliteJournalCrud(JournalCrud):
@@ -105,3 +129,19 @@ class SqliteJournalCrud(JournalCrud):
                 (run_id,),
             )
             return [row[0] for row in cursor.fetchall()]
+
+    async def delete(self, run_id: str) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                f"DELETE FROM {self._table_ref} WHERE run_id = ?",
+                (run_id,),
+            )
+            conn.commit()
+
+    async def purge_dbos_operation_outputs(self, run_id: str) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                "DELETE FROM operation_outputs WHERE workflow_uuid = ?",
+                (run_id,),
+            )
+            conn.commit()

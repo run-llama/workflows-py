@@ -249,6 +249,15 @@ class WorkflowCancelledEvent(StopEvent):
     """
 
 
+class IdleReleasedEvent(StopEvent):
+    """Sentinel returned when a workflow is cleanly released due to idleness.
+
+    Unlike WorkflowCancelledEvent, this does not publish to the event stream
+    and does not raise an exception — the control loop simply returns this
+    event as the workflow result.
+    """
+
+
 class WorkflowFailedEvent(StopEvent):
     """Published when a workflow step fails permanently.
 

@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 LlamaIndex Inc.
-"""PersistenceDecorator and _PersistenceInternalRunAdapter.
+"""TickPersistenceDecorator, PersistenceDecorator, and _PersistenceInternalRunAdapter.
 
-Wraps a basic runtime to add tick persistence and auto-restart on server
-start.  Does NOT handle idle detection or reload-on-demand — those live in
+TickPersistenceDecorator provides tick persistence, workflow tracking, and
+context_from_ticks.  PersistenceDecorator extends it with auto-restart on
+server start.  Neither handles idle detection — that lives in
 IdleReleaseDecorator.
 """
 
@@ -70,11 +71,11 @@ class _PersistenceInternalRunAdapter(BaseInternalRunAdapterDecorator):
             )
 
 
-class PersistenceDecorator(BaseRuntimeDecorator):
-    """Runtime decorator for tick persistence and auto-restart.
+class TickPersistenceDecorator(BaseRuntimeDecorator):
+    """Runtime decorator for tick persistence and workflow tracking.
 
-    Manages workflow tracking, tick persistence via internal adapter,
-    and resuming previously running workflows on server start.
+    Provides tick storage via internal adapter, workflow tracking by name,
+    and context_from_ticks for rebuilding state from persisted ticks.
     """
 
     def __init__(
@@ -86,14 +87,6 @@ class PersistenceDecorator(BaseRuntimeDecorator):
         self._store = store
         self._workflows_by_name: dict[str, Workflow] = {}
         self._active_run_ids: set[str] = set()
-        self._background_tasks: set[asyncio.Task[None]] = set()
-        self.resume_task: asyncio.Task[None] | None = None
-
-    def _spawn_task(self, coro: Coroutine[Any, Any, None]) -> asyncio.Task[None]:
-        task = asyncio.create_task(coro)
-        self._background_tasks.add(task)
-        task.add_done_callback(self._background_tasks.discard)
-        return task
 
     @override
     def run_workflow(
@@ -133,67 +126,6 @@ class PersistenceDecorator(BaseRuntimeDecorator):
     def get_tracked_workflow(self, name: str) -> Workflow | None:
         """Look up a tracked workflow by name (used by IdleReleaseDecorator)."""
         return self._workflows_by_name.get(name)
-
-    @override
-    def launch(self) -> None:
-        super().launch()
-        self.resume_task = self._spawn_task(
-            self._on_server_start(self._workflows_by_name)
-        )
-
-    async def _on_server_start(self, registered_workflows: dict[str, Workflow]) -> None:
-        """Resume previously running (non-idle) workflows from persistence."""
-        handlers = await self._store.query(
-            HandlerQuery(
-                status_in=["running"],
-                workflow_name_in=list(registered_workflows.keys()),
-                is_idle=False,
-            )
-        )
-        for persistent in handlers:
-            workflow = registered_workflows.get(persistent.workflow_name)
-            if workflow is None:
-                continue
-            if persistent.run_id is None:
-                logger.error(f"Run ID is required for handler {persistent.handler_id}")
-                continue
-            run_id = persistent.run_id
-            if run_id in self._active_run_ids:
-                continue
-            try:
-                context = await self.context_from_ticks(workflow, run_id)
-                workflow.run(ctx=context, run_id=run_id)
-            except Exception as e:
-                logger.error(
-                    f"Failed to resume handler {persistent.handler_id} for workflow {persistent.workflow_name}: {e}"
-                )
-                try:
-                    now = datetime.now(timezone.utc)
-                    await self._store.update(
-                        PersistentHandler(
-                            handler_id=persistent.handler_id,
-                            workflow_name=persistent.workflow_name,
-                            status="failed",
-                            run_id=persistent.run_id,
-                            error=str(e),
-                            result=None,
-                            started_at=persistent.started_at,
-                            updated_at=now,
-                            completed_at=now,
-                        )
-                    )
-                except Exception:
-                    pass
-                continue
-
-    @override
-    def destroy(self) -> None:
-        super().destroy()
-        if self.resume_task is not None:
-            try:
-                self.resume_task.cancel()
-            except Exception:
-                pass
 
     async def context_from_ticks(
         self, workflow: Workflow, run_id: str
@@ -265,3 +197,86 @@ class PersistenceDecorator(BaseRuntimeDecorator):
             conn.close()
 
         state_store._write_in_memory_state(state_data)
+
+
+class PersistenceDecorator(TickPersistenceDecorator):
+    """Runtime decorator that extends TickPersistenceDecorator with auto-restart.
+
+    Resumes previously running workflows on server start.
+    """
+
+    def __init__(
+        self,
+        decorated: Runtime,
+        store: AbstractWorkflowStore,
+    ) -> None:
+        super().__init__(decorated, store)
+        self._background_tasks: set[asyncio.Task[None]] = set()
+        self.resume_task: asyncio.Task[None] | None = None
+
+    def _spawn_task(self, coro: Coroutine[Any, Any, None]) -> asyncio.Task[None]:
+        task = asyncio.create_task(coro)
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+        return task
+
+    @override
+    def launch(self) -> None:
+        super().launch()
+        self.resume_task = self._spawn_task(
+            self._on_server_start(self._workflows_by_name)
+        )
+
+    async def _on_server_start(self, registered_workflows: dict[str, Workflow]) -> None:
+        """Resume previously running (non-idle) workflows from persistence."""
+        handlers = await self._store.query(
+            HandlerQuery(
+                status_in=["running"],
+                workflow_name_in=list(registered_workflows.keys()),
+                is_idle=False,
+            )
+        )
+        for persistent in handlers:
+            workflow = registered_workflows.get(persistent.workflow_name)
+            if workflow is None:
+                continue
+            if persistent.run_id is None:
+                logger.error(f"Run ID is required for handler {persistent.handler_id}")
+                continue
+            run_id = persistent.run_id
+            if run_id in self._active_run_ids:
+                continue
+            try:
+                context = await self.context_from_ticks(workflow, run_id)
+                workflow.run(ctx=context, run_id=run_id)
+            except Exception as e:
+                logger.error(
+                    f"Failed to resume handler {persistent.handler_id} for workflow {persistent.workflow_name}: {e}"
+                )
+                try:
+                    now = datetime.now(timezone.utc)
+                    await self._store.update(
+                        PersistentHandler(
+                            handler_id=persistent.handler_id,
+                            workflow_name=persistent.workflow_name,
+                            status="failed",
+                            run_id=persistent.run_id,
+                            error=str(e),
+                            result=None,
+                            started_at=persistent.started_at,
+                            updated_at=now,
+                            completed_at=now,
+                        )
+                    )
+                except Exception:
+                    pass
+                continue
+
+    @override
+    def destroy(self) -> None:
+        super().destroy()
+        if self.resume_task is not None:
+            try:
+                self.resume_task.cancel()
+            except Exception:
+                pass

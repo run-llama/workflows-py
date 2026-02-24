@@ -57,6 +57,7 @@ from workflows.workflow import Workflow
 try:
     from dbos import DBOS, SetWorkflowID, WorkflowHandleAsync
     from dbos._dbos import _get_dbos_instance
+    from dbos._error import DBOSNonExistentWorkflowError
 except ImportError as e:
     # if 3.9, give a detailed error that dbos is not supported on this version of python
     if sys.version_info.major == 3 and sys.version_info.minor <= 9:
@@ -70,6 +71,7 @@ from llama_agents.client.protocol.serializable_events import (
     EventEnvelopeWithMetadata,
 )
 from llama_agents.server._runtime.event_interceptor import EventInterceptorDecorator
+from llama_agents.server._runtime.persistence_runtime import TickPersistenceDecorator
 from llama_agents.server._store.abstract_workflow_store import (
     AbstractWorkflowStore,
     HandlerQuery,
@@ -86,7 +88,18 @@ from llama_agents.server._store.sqlite.sqlite_workflow_store import SqliteWorkfl
 from sqlalchemy.engine import URL as SaURL
 from sqlalchemy.engine import Engine
 
-from .journal.crud import JOURNAL_TABLE_NAME, PostgresJournalCrud, SqliteJournalCrud
+from .idle_release import DBOSIdleReleaseDecorator
+from .journal.crud import (
+    JOURNAL_TABLE_NAME,
+    JournalCrud,
+    PostgresJournalCrud,
+    SqliteJournalCrud,
+)
+from .journal.lifecycle import (
+    PostgresRunLifecycleLock,
+    RunLifecycleLock,
+    SqliteRunLifecycleLock,
+)
 from .journal.task_journal import TaskJournal
 
 STATE_TABLE_NAME = "workflow_state"
@@ -557,19 +570,79 @@ class DBOSRuntime(Runtime):
         self._workflow_store = DBOSWorkflowStore(_factory)
         return self._workflow_store
 
-    def build_server_runtime(self) -> Runtime:
+    def _create_journal_crud_factory(self) -> Callable[[], JournalCrud]:
+        """Create a factory for JournalCrud that resolves the database backend.
+
+        Returns a factory rather than an instance because DB config (db_path,
+        dsn, pool) isn't available until ``launch()`` runs, but the decorator
+        chain is built before launch via ``build_server_runtime()``.
+        """
+
+        def _factory() -> JournalCrud:
+            journal_table_name = self.config.get(
+                "journal_table_name", DEFAULT_JOURNAL_TABLE_NAME
+            )
+            if self._db_path is not None:
+                return SqliteJournalCrud(
+                    db_path=self._db_path,
+                    table_name=journal_table_name,
+                )
+            if self._pool is not None:
+                return PostgresJournalCrud(
+                    self._pool,
+                    table_name=journal_table_name,
+                    schema=self._schema,
+                )
+            raise RuntimeError(
+                "No database configured for journal. Was launch() called?"
+            )
+
+        return _factory
+
+    def _create_lifecycle_lock_factory(
+        self,
+    ) -> Callable[[], Awaitable[RunLifecycleLock]]:
+        """Create an async factory for RunLifecycleLock that resolves the database backend."""
+
+        async def _factory() -> RunLifecycleLock:
+            if self._db_path is not None:
+                return SqliteRunLifecycleLock(db_path=self._db_path)
+            if self._dsn is not None:
+                pool = await self._ensure_pool()
+                return PostgresRunLifecycleLock(pool, schema=self._schema)
+            raise RuntimeError(
+                "No database configured for lifecycle lock. Was launch() called?"
+            )
+
+        return _factory
+
+    def build_server_runtime(self, *, idle_timeout: float = 600.0) -> Runtime:
         """Build the decorator chain for use with WorkflowServer.
 
         Wraps the DBOS runtime with:
+        - TickPersistenceDecorator (persists ticks to workflow store)
         - EventInterceptorDecorator (blocks events from reaching DBOS streams)
+        - DBOSIdleReleaseDecorator (releases idle workflows after timeout)
 
-        DBOS handles persistence and resumption internally, and idle detection
-        is not supported (would require cancelling and resuming a new workflow).
+        Chain order (outermost first):
+        DBOSIdleReleaseDecorator → EventInterceptorDecorator → TickPersistenceDecorator → DBOSRuntime
+
+        Args:
+            idle_timeout: Seconds to wait after a workflow becomes idle before
+                releasing it. Defaults to 10 minutes.
 
         The returned runtime should be passed as the ``runtime`` argument
         to ``WorkflowServer``.
         """
-        return EventInterceptorDecorator(self)
+        store = self.create_workflow_store()
+        tick_persistence = TickPersistenceDecorator(self, store)
+        return DBOSIdleReleaseDecorator(
+            EventInterceptorDecorator(tick_persistence),
+            store=store,
+            idle_timeout=idle_timeout,
+            journal_crud=self._create_journal_crud_factory(),
+            lifecycle_lock=self._create_lifecycle_lock_factory(),
+        )
 
     def launch(self) -> None:
         """
@@ -734,7 +807,6 @@ class InternalDBOSAdapter(InternalRunAdapter):
         if self._closed:
             raise asyncio.CancelledError("Adapter closed")
 
-        # Timeout 1x per day at least. This will just cause a wakeup loop of the control loop.
         result = await DBOS.recv_async(
             _IO_STREAM_TICK_TOPIC,
             timeout_seconds=timeout_seconds or _UNBOUNDED_WAIT_TIMEOUT_SECONDS,
@@ -931,6 +1003,7 @@ class ExternalDBOSAdapter(ExternalRunAdapter):
         return self._run_id
 
     async def send_event(self, tick: WorkflowTick) -> None:
+        await self._ensure_workflow_started()
         await DBOS.send_async(self._run_id, tick, topic=_IO_STREAM_TICK_TOPIC)
 
     async def stream_published_events(self) -> AsyncGenerator[Event, None]:
@@ -952,7 +1025,6 @@ class ExternalDBOSAdapter(ExternalRunAdapter):
             # Fallback: workflow was started elsewhere, retrieve with retry since
             # there can be a race between start_workflow_async completing and the
             # workflow becoming retrievable in DBOS.
-            from dbos._error import DBOSNonExistentWorkflowError
 
             for attempt in range(20):
                 try:

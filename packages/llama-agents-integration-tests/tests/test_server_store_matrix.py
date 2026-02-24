@@ -79,7 +79,6 @@ async def server_with_store(
         dsn = get_asyncpg_dsn(postgres_container)
         pg_store = PostgresWorkflowStore(dsn=dsn)
         await pg_store.start()
-        await pg_store.run_migrations()
 
     def make_server() -> WorkflowServer:
         if store_type == "memory":
@@ -367,11 +366,8 @@ def durable_server_factory(
 
 @pytest.mark.asyncio
 async def test_server_restart_resumes_workflow(
-    request: pytest.FixtureRequest,
     durable_server_factory: Callable[[], WorkflowServer],
 ) -> None:
-    if "postgres" in request.node.callspec.id:
-        pytest.xfail("PostgresWorkflowStore does not support ticks yet")
     # Start workflow, then stop server
     async with live_server(durable_server_factory) as (base_url, _server):
         client = WorkflowClient(base_url=base_url)

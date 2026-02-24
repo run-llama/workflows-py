@@ -56,14 +56,6 @@ def _make_handler(
 # ── Unit tests (no Postgres needed, test logic with mocks) ──────────
 
 
-async def test_ticks_raise_not_implemented() -> None:
-    store = PostgresWorkflowStore(dsn="postgresql://localhost/test")
-    with pytest.raises(NotImplementedError):
-        await store.append_tick("run-1", {"step": "init"})
-    with pytest.raises(NotImplementedError):
-        await store.get_ticks("run-1")
-
-
 async def test_create_state_store_without_pool_raises() -> None:
     store = PostgresWorkflowStore(dsn="postgresql://localhost/test")
     with pytest.raises(RuntimeError, match="pool not initialized"):
@@ -220,5 +212,31 @@ async def test_integration_subscribe_events(postgres_dsn: str) -> None:
         await append_task
 
         assert len(collected) == 3
+    finally:
+        await store.close()
+
+
+@pytest.mark.docker
+async def test_integration_tick_append_and_get(postgres_dsn: str) -> None:
+    store = PostgresWorkflowStore(dsn=postgres_dsn, schema="test_pg_store")
+    try:
+        await store.start()
+        await store.run_migrations()
+
+        run_id = "pg-run-ticks"
+        await store.append_tick(run_id, {"type": "TickSendEvent", "event": "a"})
+        await store.append_tick(run_id, {"type": "TickSendEvent", "event": "b"})
+        await store.append_tick(run_id, {"type": "TickSendEvent", "event": "c"})
+
+        ticks = await store.get_ticks(run_id)
+        assert len(ticks) == 3
+        assert ticks[0].sequence == 0
+        assert ticks[1].sequence == 1
+        assert ticks[2].sequence == 2
+        assert ticks[0].tick_data["event"] == "a"
+        assert ticks[2].tick_data["event"] == "c"
+
+        # Different run_id should be empty
+        assert await store.get_ticks("other-run") == []
     finally:
         await store.close()

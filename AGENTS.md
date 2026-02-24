@@ -30,6 +30,12 @@ uv run dev -- -k test_name
 
 For more advanced scenarios, you can always `cd packages/some-package` and use pytest directly. The dev tool just provides additional package level test parallelism, and more curated cross package test output to avoid context bloat.
 
+Several packages have Docker integration tests (requires Docker running) marked with `@pytest.mark.docker`. Run them with:
+
+```bash
+cd packages/<package> && uv run pytest -m docker -s -n0
+```
+
 
 ### Linting & Formatting
 ```bash
@@ -48,6 +54,9 @@ See `architecture-docs/` for high-level architectural overviews:
 - [`core-overview.md`](architecture-docs/core-overview.md) — Workflow, Context, Runtime, and event flow
 - [`control-loop.md`](architecture-docs/control-loop.md) — The reducer-based execution engine
 - [`server-architecture.md`](architecture-docs/server-architecture.md) — HTTP server, persistence, and runtime decorators
+
+The DBOS package has its own architecture doc explaining the distributed model (process boundaries, adapter rules, idle release):
+- [`packages/llama-agents-dbos/ARCHITECTURE.md`](packages/llama-agents-dbos/ARCHITECTURE.md)
 
 ## Key Components
 - **Workflow** - Main orchestration class
