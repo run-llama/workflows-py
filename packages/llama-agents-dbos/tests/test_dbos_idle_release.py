@@ -265,7 +265,7 @@ def _make_decorator(
     stub_runtime: StubRuntime,
     store: MemoryWorkflowStore,
     mock_journal_crud: AsyncMock,
-    lifecycle_lock: RunLifecycleLock | None,
+    lifecycle_lock: RunLifecycleLock,
     idle_timeout: float = 0.1,
 ) -> DBOSIdleReleaseDecorator:
     return DBOSIdleReleaseDecorator(
@@ -273,7 +273,7 @@ def _make_decorator(
         store,
         idle_timeout=idle_timeout,
         journal_crud=lambda: mock_journal_crud,
-        lifecycle_lock=(lambda: lifecycle_lock) if lifecycle_lock is not None else None,
+        lifecycle_lock=lambda: lifecycle_lock,
     )
 
 
@@ -619,22 +619,6 @@ async def test_do_resume_carries_over_serialized_state(
 
 
 @pytest.mark.asyncio()
-async def test_send_event_forwards_directly_without_lifecycle_lock(
-    stub_runtime: StubRuntime,
-    store: MemoryWorkflowStore,
-    mock_journal_crud: AsyncMock,
-) -> None:
-    dec = _make_decorator(stub_runtime, store, mock_journal_crud, lifecycle_lock=None)
-    stub_runtime._external_adapters["run-1"] = StubExternalAdapter(run_id="run-1")
-    adapter = DBOSIdleReleaseExternalRunAdapter(dec, "run-1")
-    await adapter.send_event(TickIdleCheck())
-    assert len(stub_runtime.run_workflow_calls) == 0
-    ext = stub_runtime._external_adapters["run-1"]
-    assert len(ext.sent_events) == 1
-    assert isinstance(ext.sent_events[0], TickIdleCheck)
-
-
-@pytest.mark.asyncio()
 async def test_send_event_polls_when_releasing_then_completes(
     decorator: DBOSIdleReleaseDecorator,
     store: MemoryWorkflowStore,
@@ -897,74 +881,20 @@ async def test_do_resume_replays_persisted_ticks(
 
 
 @pytest.mark.asyncio()
-async def test_release_without_lifecycle_lock_checks_idle_since(
-    stub_runtime: StubRuntime,
-    store: MemoryWorkflowStore,
-    mock_journal_crud: AsyncMock,
-) -> None:
-    dec = _make_decorator(stub_runtime, store, mock_journal_crud, lifecycle_lock=None)
-    _seed_handler(
-        store, run_id="run-1", idle_since=datetime(2020, 1, 1, tzinfo=timezone.utc)
-    )
-    stub_runtime._external_adapters["run-1"] = StubExternalAdapter(run_id="run-1")
-
-    await dec._release_idle_handler("run-1")
-
-    ext = stub_runtime._external_adapters["run-1"]
-    assert len(ext.sent_events) == 1
-    assert isinstance(ext.sent_events[0], TickIdleRelease)
-
-
-@pytest.mark.asyncio()
-async def test_release_without_lifecycle_lock_skips_when_not_idle(
-    stub_runtime: StubRuntime,
-    store: MemoryWorkflowStore,
-    mock_journal_crud: AsyncMock,
-) -> None:
-    dec = _make_decorator(stub_runtime, store, mock_journal_crud, lifecycle_lock=None)
-    _seed_handler(store, run_id="run-1", idle_since=None)
-    stub_runtime._external_adapters["run-1"] = StubExternalAdapter(run_id="run-1")
-
-    await dec._release_idle_handler("run-1")
-
-    ext = stub_runtime._external_adapters["run-1"]
-    assert len(ext.sent_events) == 0
-
-
-@pytest.mark.asyncio()
-async def test_release_without_lifecycle_lock_skips_when_recently_idle(
-    stub_runtime: StubRuntime,
-    store: MemoryWorkflowStore,
-    mock_journal_crud: AsyncMock,
-) -> None:
-    dec = _make_decorator(stub_runtime, store, mock_journal_crud, lifecycle_lock=None)
-    _seed_handler(store, run_id="run-1", idle_since=datetime.now(timezone.utc))
-    stub_runtime._external_adapters["run-1"] = StubExternalAdapter(run_id="run-1")
-
-    await dec._release_idle_handler("run-1")
-
-    ext = stub_runtime._external_adapters["run-1"]
-    assert len(ext.sent_events) == 0
-
-
-@pytest.mark.asyncio()
 async def test_await_and_mark_released_handles_get_result_failure(
     decorator: DBOSIdleReleaseDecorator,
     store: MemoryWorkflowStore,
     lifecycle: FakeLifecycleLock,
 ) -> None:
     _seed_handler(store, run_id="run-1")
-    decorator._deferred_release_tasks["run-1"] = asyncio.ensure_future(
-        asyncio.sleep(999)
-    )  # dummy entry
 
     external = StubExternalAdapter(run_id="run-1")
     external.get_result = AsyncMock(side_effect=Exception("get_result failed"))  # type: ignore[assignment]
 
     await decorator._await_and_mark_released("run-1", external)
 
-    # The finally block should have cleaned up
-    assert "run-1" not in decorator._deferred_release_tasks
+    # complete_release should not have been called since get_result failed
+    assert "run-1" not in lifecycle._states
 
 
 @pytest.mark.asyncio()

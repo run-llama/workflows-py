@@ -148,11 +148,6 @@ class DBOSIdleReleaseExternalRunAdapter(BaseExternalRunAdapterDecorator):
     @override
     async def send_event(self, tick: WorkflowTick) -> None:
         lifecycle = await self._runtime._get_lifecycle()
-        if lifecycle is None:
-            # No lifecycle lock configured — send directly
-            await self._decorated.send_event(tick)
-            return
-
         while True:
             result = await lifecycle.try_begin_resume(
                 self.run_id, crash_timeout_seconds=CRASH_TIMEOUT_SECONDS
@@ -196,6 +191,8 @@ class DBOSIdleReleaseDecorator(BaseRuntimeDecorator):
         self._workflows: dict[str, Workflow] = {}
         self._journal_crud_factory = journal_crud
         self._journal_crud_instance: JournalCrud | None = None
+        if lifecycle_lock is None:
+            raise ValueError("lifecycle_lock is required")
         self._lifecycle_lock_factory = lifecycle_lock
         self._lifecycle_lock_instance: RunLifecycleLock | None = None
 
@@ -207,9 +204,7 @@ class DBOSIdleReleaseDecorator(BaseRuntimeDecorator):
             self._journal_crud_instance = self._journal_crud_factory()
         return self._journal_crud_instance
 
-    async def _get_lifecycle(self) -> RunLifecycleLock | None:
-        if self._lifecycle_lock_factory is None:
-            return None
+    async def _get_lifecycle(self) -> RunLifecycleLock:
         if self._lifecycle_lock_instance is None:
             result = self._lifecycle_lock_factory()
             if isinstance(result, Awaitable):
@@ -264,19 +259,8 @@ class DBOSIdleReleaseDecorator(BaseRuntimeDecorator):
     async def _release_idle_handler(self, run_id: str) -> None:
         """Release an idle handler by sending TickIdleRelease."""
         lifecycle = await self._get_lifecycle()
-        if lifecycle is not None:
-            if not await lifecycle.begin_release(run_id):
-                return
-        else:
-            # No lifecycle lock — fall back to checking idle_since
-            handlers = await self._store.query(HandlerQuery(run_id_in=[run_id]))
-            if len(handlers) != 1 or handlers[0].idle_since is None:
-                return
-            elapsed = (
-                datetime.now(timezone.utc) - handlers[0].idle_since
-            ).total_seconds()
-            if elapsed < self._idle_timeout:
-                return
+        if not await lifecycle.begin_release(run_id):
+            return
 
         external = self._decorated.get_external_adapter(run_id)
         await external.send_event(TickIdleRelease())
@@ -292,8 +276,7 @@ class DBOSIdleReleaseDecorator(BaseRuntimeDecorator):
             await external.get_result()
 
             lifecycle = await self._get_lifecycle()
-            if lifecycle is not None:
-                await lifecycle.complete_release(run_id)
+            await lifecycle.complete_release(run_id)
 
             # Set idle_since NOW — after the workflow is fully released
             await self._store.update_handler_status(
@@ -305,8 +288,6 @@ class DBOSIdleReleaseDecorator(BaseRuntimeDecorator):
             logger.warning(
                 f"Failed to mark released for run_id={run_id}", exc_info=True
             )
-        finally:
-            self._deferred_release_tasks.pop(run_id, None)
 
     async def _broker_state_from_ticks(
         self, workflow: Workflow, run_id: str
