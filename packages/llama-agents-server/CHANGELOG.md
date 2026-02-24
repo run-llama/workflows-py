@@ -1,5 +1,22 @@
 # llama-agents-server
 
+## 0.2.0-rc.3
+
+### Minor Changes
+
+- c1fbb8f: Add max_completed history cap to MemoryWorkflowStore in order to control memory consumption
+- 281d441: Add AgentDataStore backed by LlamaCloud Agent Data API
+
+### Patch Changes
+
+- 3720c61: Add workflow release for idle DBOS workflows (with replica support)
+- a2aad32: Move task execution into the runtime, for maximal control of specific runtime semantics around determinism
+- Updated dependencies [3720c61]
+- Updated dependencies [8762129]
+- Updated dependencies [a2aad32]
+  - llama-index-workflows@2.15.0-rc.1
+  - llama-agents-client@0.2.0-rc.1
+
 ## 0.2.0-rc.2
 
 ### Minor Changes

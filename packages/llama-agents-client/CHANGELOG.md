@@ -1,5 +1,14 @@
 # llama-agents-client
 
+## 0.2.0-rc.1
+
+### Patch Changes
+
+- 8762129: Add last sequence id accessor to workflow client event stream
+- Updated dependencies [3720c61]
+- Updated dependencies [a2aad32]
+  - llama-index-workflows@2.15.0-rc.1
+
 ## 0.2.0-rc.0
 
 ### Minor Changes

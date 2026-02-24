@@ -1699,7 +1699,7 @@ wheels = [
 
 [[package]]
 name = "llama-agents-client"
-version = "0.2.0rc0"
+version = "0.2.0rc1"
 source = { editable = "packages/llama-agents-client" }
 dependencies = [
     { name = "httpx" },
@@ -1734,7 +1734,7 @@ dev = [
 
 [[package]]
 name = "llama-agents-dbos"
-version = "0.1.0rc0"
+version = "0.1.0rc1"
 source = { editable = "packages/llama-agents-dbos" }
 dependencies = [
     { name = "dbos", marker = "python_full_version >= '3.10'" },
@@ -1879,7 +1879,7 @@ dev = [
 
 [[package]]
 name = "llama-agents-server"
-version = "0.2.0rc2"
+version = "0.2.0rc3"
 source = { editable = "packages/llama-agents-server" }
 dependencies = [
     { name = "httpx" },
@@ -1997,7 +1997,7 @@ wheels = [
 
 [[package]]
 name = "llama-index-utils-workflow"
-version = "0.9.3rc0"
+version = "0.9.3rc1"
 source = { editable = "packages/llama-index-utils-workflow" }
 dependencies = [
     { name = "llama-index-core" },
@@ -2034,7 +2034,7 @@ dev = [
 
 [[package]]
 name = "llama-index-workflows"
-version = "2.15.0rc0"
+version = "2.15.0rc1"
 source = { editable = "packages/llama-index-workflows" }
 dependencies = [
     { name = "eval-type-backport", marker = "python_full_version < '3.10'" },
