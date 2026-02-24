@@ -27,8 +27,8 @@ resume across replicas. The state machine is::
   the caller polls with a crash timeout.
 
 - **Crash recovery**: If a releaser crashes mid-release (state stuck at
-  ``releasing``), ``send_event`` detects the stale ``updated_at`` timestamp
-  and calls ``force_resume`` to take over.
+  ``releasing``), ``try_begin_resume`` detects the stale ``updated_at``
+  timestamp via ``crash_timeout_seconds`` and force-transitions to active.
 
 ## Tick delivery via DBOS notifications
 
@@ -154,31 +154,17 @@ class DBOSIdleReleaseExternalRunAdapter(BaseExternalRunAdapterDecorator):
             return
 
         while True:
-            result = await lifecycle.try_begin_resume(self.run_id)
+            result = await lifecycle.try_begin_resume(
+                self.run_id, crash_timeout_seconds=CRASH_TIMEOUT_SECONDS
+            )
             if result is None:
-                # active or no row — send normally
                 await self._decorated.send_event(tick)
                 return
             if result == RunLifecycleState.released:
-                # We own the resume
                 await self._runtime._do_resume(self.run_id, pending_tick=tick)
                 return
-            if result == RunLifecycleState.releasing:
-                # Check for crash timeout
-                state_info = await lifecycle.get_state(self.run_id)
-                if state_info is not None:
-                    elapsed = (
-                        datetime.now(timezone.utc) - state_info[1]
-                    ).total_seconds()
-                    if elapsed > CRASH_TIMEOUT_SECONDS:
-                        logger.warning(
-                            f"Releasing state timed out for run_id={self.run_id}, "
-                            f"forcing resume"
-                        )
-                        await lifecycle.force_resume(self.run_id)
-                        await self._runtime._do_resume(self.run_id, pending_tick=tick)
-                        return
-                await asyncio.sleep(0.5)
+            # releasing — poll until it completes or times out
+            await asyncio.sleep(0.5)
 
 
 class DBOSIdleReleaseDecorator(BaseRuntimeDecorator):

@@ -196,14 +196,21 @@ class FakeLifecycleLock(RunLifecycleLock):
                 datetime.now(timezone.utc),
             )
 
-    async def try_begin_resume(self, run_id: str) -> RunLifecycleState | None:
+    async def try_begin_resume(
+        self, run_id: str, crash_timeout_seconds: float | None = None
+    ) -> RunLifecycleState | None:
         entry = self._states.get(run_id)
         if entry is None:
             return None
-        state = entry[0]
+        state, updated_at = entry
         if state == RunLifecycleState.active:
             return None
-        if state == RunLifecycleState.released:
+        if state == RunLifecycleState.released or (
+            state == RunLifecycleState.releasing
+            and crash_timeout_seconds is not None
+            and (datetime.now(timezone.utc) - updated_at).total_seconds()
+            > crash_timeout_seconds
+        ):
             self._states[run_id] = (
                 RunLifecycleState.active,
                 datetime.now(timezone.utc),
@@ -211,14 +218,9 @@ class FakeLifecycleLock(RunLifecycleLock):
             return RunLifecycleState.released
         return RunLifecycleState.releasing
 
-    async def get_state(self, run_id: str) -> tuple[RunLifecycleState, datetime] | None:
+    def get_state(self, run_id: str) -> tuple[RunLifecycleState, datetime] | None:
+        """Test-only helper for assertions."""
         return self._states.get(run_id)
-
-    async def force_resume(self, run_id: str) -> None:
-        self._states[run_id] = (RunLifecycleState.active, datetime.now(timezone.utc))
-
-    async def delete(self, run_id: str) -> None:
-        self._states.pop(run_id, None)
 
     def set_updated_at(self, run_id: str, updated_at: datetime) -> None:
         """Test hook: override the updated_at timestamp for crash timeout testing."""
@@ -349,7 +351,7 @@ async def test_release_uses_lifecycle_lock(
 
     await decorator._release_idle_handler("run-1")
 
-    state = await lifecycle.get_state("run-1")
+    state = lifecycle.get_state("run-1")
     assert state is not None
     assert state[0] == RunLifecycleState.releasing
     ext = stub_runtime._external_adapters["run-1"]
@@ -388,7 +390,7 @@ async def test_await_and_mark_released_sets_idle_since(
 
     await decorator._await_and_mark_released("run-1", external)
 
-    state = await lifecycle.get_state("run-1")
+    state = lifecycle.get_state("run-1")
     assert state is not None
     assert state[0] == RunLifecycleState.released
     handler = store.handlers["handler-1"]
@@ -498,7 +500,7 @@ async def test_send_event_waits_on_releasing_then_resumes(
     with patch("asyncio.sleep", side_effect=_complete_release_during_sleep):
         await adapter.send_event(TickIdleCheck())
 
-    state = await lifecycle.get_state("run-1")
+    state = lifecycle.get_state("run-1")
     assert state is not None
     assert state[0] == RunLifecycleState.active
     assert len(stub_runtime.run_workflow_calls) == 1
@@ -537,7 +539,7 @@ async def test_send_event_force_resumes_on_crash_timeout(
 
     await adapter.send_event(TickIdleCheck())
 
-    state = await lifecycle.get_state("run-1")
+    state = lifecycle.get_state("run-1")
     assert state is not None
     assert state[0] == RunLifecycleState.active
     assert len(stub_runtime.run_workflow_calls) == 1
@@ -633,7 +635,7 @@ async def test_send_event_forwards_directly_without_lifecycle_lock(
 
 
 @pytest.mark.asyncio()
-async def test_send_event_polls_when_releasing_with_missing_state(
+async def test_send_event_polls_when_releasing_then_completes(
     decorator: DBOSIdleReleaseDecorator,
     store: MemoryWorkflowStore,
     stub_runtime: StubRuntime,
@@ -663,21 +665,6 @@ async def test_send_event_polls_when_releasing_with_missing_state(
         sleep_count += 1
         # After first sleep, complete the release so next try_begin_resume returns released
         await lifecycle.complete_release("run-1")
-
-    # Remove the state entry so get_state returns None on first poll
-    original_get_state = lifecycle.get_state
-    call_count = 0
-
-    async def _patched_get_state(
-        run_id: str,
-    ) -> tuple[RunLifecycleState, datetime] | None:
-        nonlocal call_count
-        call_count += 1
-        if call_count == 1:
-            return None  # simulate missing state
-        return await original_get_state(run_id)
-
-    lifecycle.get_state = _patched_get_state  # type: ignore[assignment]
 
     adapter = DBOSIdleReleaseExternalRunAdapter(decorator, "run-1")
     with patch("asyncio.sleep", side_effect=_on_sleep):
@@ -723,7 +710,7 @@ async def test_send_event_crash_timeout_boundary_does_not_force_resume(
         await adapter.send_event(TickIdleCheck())
 
     # Should have resumed normally (not force), state should be active
-    state = await lifecycle.get_state("run-1")
+    state = lifecycle.get_state("run-1")
     assert state is not None
     assert state[0] == RunLifecycleState.active
     assert len(stub_runtime.run_workflow_calls) == 1
@@ -996,7 +983,7 @@ async def test_deferred_release_fires_after_timeout(
     dec._schedule_deferred_release("run-1")
     await asyncio.sleep(0.05)
 
-    state = await lifecycle.get_state("run-1")
+    state = lifecycle.get_state("run-1")
     assert state is not None
     # After deferred release fires, the handler goes through releasing -> released
     assert state[0] in (RunLifecycleState.releasing, RunLifecycleState.released)

@@ -25,7 +25,10 @@ class RunLifecycleState(str, Enum):
 
 
 class RunLifecycleLock(ABC):
-    """Abstract base for the run lifecycle lock."""
+    """Abstract base for the run lifecycle lock.
+
+    State machine: active -> releasing -> released -> active
+    """
 
     @abstractmethod
     async def create(self, run_id: str) -> None:
@@ -43,29 +46,20 @@ class RunLifecycleLock(ABC):
         ...
 
     @abstractmethod
-    async def try_begin_resume(self, run_id: str) -> RunLifecycleState | None:
+    async def try_begin_resume(
+        self, run_id: str, crash_timeout_seconds: float | None = None
+    ) -> RunLifecycleState | None:
         """Attempt to claim resume.
 
         Returns:
             None: no row or 'active' - send normally
             released: transitioned to 'active', caller owns resume
             releasing: in progress, caller should wait and retry
+
+        If crash_timeout_seconds is set and the current state is 'releasing'
+        with an updated_at older than the timeout, force-transitions to
+        'active' and returns 'released' (caller owns resume).
         """
-        ...
-
-    @abstractmethod
-    async def get_state(self, run_id: str) -> tuple[RunLifecycleState, datetime] | None:
-        """Read current state + updated_at."""
-        ...
-
-    @abstractmethod
-    async def force_resume(self, run_id: str) -> None:
-        """Force transition to 'active' (crash recovery)."""
-        ...
-
-    @abstractmethod
-    async def delete(self, run_id: str) -> None:
-        """Remove the lifecycle row."""
         ...
 
 
@@ -112,7 +106,9 @@ class PostgresRunLifecycleLock(RunLifecycleLock):
             RunLifecycleState.releasing.value,
         )
 
-    async def try_begin_resume(self, run_id: str) -> RunLifecycleState | None:
+    async def try_begin_resume(
+        self, run_id: str, crash_timeout_seconds: float | None = None
+    ) -> RunLifecycleState | None:
         async with self._pool.acquire() as conn:
             async with conn.transaction():
                 row = await conn.fetchrow(
@@ -125,7 +121,12 @@ class PostgresRunLifecycleLock(RunLifecycleLock):
                 state = RunLifecycleState(row["state"])
                 if state == RunLifecycleState.active:
                     return None
-                if state == RunLifecycleState.released:
+                if state == RunLifecycleState.released or (
+                    state == RunLifecycleState.releasing
+                    and crash_timeout_seconds is not None
+                    and (datetime.now(timezone.utc) - row["updated_at"]).total_seconds()
+                    > crash_timeout_seconds
+                ):
                     await conn.execute(
                         f"UPDATE {self._table_ref} SET state = $1, updated_at = $2 "
                         f"WHERE run_id = $3",
@@ -136,29 +137,6 @@ class PostgresRunLifecycleLock(RunLifecycleLock):
                     return RunLifecycleState.released
                 # releasing
                 return RunLifecycleState.releasing
-
-    async def get_state(self, run_id: str) -> tuple[RunLifecycleState, datetime] | None:
-        row = await self._pool.fetchrow(
-            f"SELECT state, updated_at FROM {self._table_ref} WHERE run_id = $1",
-            run_id,
-        )
-        if row is None:
-            return None
-        return RunLifecycleState(row["state"]), row["updated_at"]
-
-    async def force_resume(self, run_id: str) -> None:
-        await self._pool.execute(
-            f"UPDATE {self._table_ref} SET state = $1, updated_at = $2 WHERE run_id = $3",
-            RunLifecycleState.active.value,
-            datetime.now(timezone.utc),
-            run_id,
-        )
-
-    async def delete(self, run_id: str) -> None:
-        await self._pool.execute(
-            f"DELETE FROM {self._table_ref} WHERE run_id = $1",
-            run_id,
-        )
 
 
 class SqliteRunLifecycleLock(RunLifecycleLock):
@@ -227,7 +205,9 @@ class SqliteRunLifecycleLock(RunLifecycleLock):
                 )
                 conn.commit()
 
-    async def try_begin_resume(self, run_id: str) -> RunLifecycleState | None:
+    async def try_begin_resume(
+        self, run_id: str, crash_timeout_seconds: float | None = None
+    ) -> RunLifecycleState | None:
         async with self._lock(run_id):
             with self._connect() as conn:
                 row = conn.execute(
@@ -239,7 +219,15 @@ class SqliteRunLifecycleLock(RunLifecycleLock):
                 state = RunLifecycleState(row["state"])
                 if state == RunLifecycleState.active:
                     return None
-                if state == RunLifecycleState.released:
+                if state == RunLifecycleState.released or (
+                    state == RunLifecycleState.releasing
+                    and crash_timeout_seconds is not None
+                    and (
+                        datetime.now(timezone.utc)
+                        - datetime.fromisoformat(row["updated_at"])
+                    ).total_seconds()
+                    > crash_timeout_seconds
+                ):
                     conn.execute(
                         f"UPDATE {self._table_ref} SET state = ?, updated_at = ? WHERE run_id = ?",
                         (
@@ -252,37 +240,3 @@ class SqliteRunLifecycleLock(RunLifecycleLock):
                     return RunLifecycleState.released
                 # releasing
                 return RunLifecycleState.releasing
-
-    async def get_state(self, run_id: str) -> tuple[RunLifecycleState, datetime] | None:
-        with self._connect() as conn:
-            row = conn.execute(
-                f"SELECT state, updated_at FROM {self._table_ref} WHERE run_id = ?",
-                (run_id,),
-            ).fetchone()
-            if row is None:
-                return None
-            return RunLifecycleState(row["state"]), datetime.fromisoformat(
-                row["updated_at"]
-            )
-
-    async def force_resume(self, run_id: str) -> None:
-        async with self._lock(run_id):
-            with self._connect() as conn:
-                conn.execute(
-                    f"UPDATE {self._table_ref} SET state = ?, updated_at = ? WHERE run_id = ?",
-                    (
-                        RunLifecycleState.active.value,
-                        datetime.now(timezone.utc).isoformat(),
-                        run_id,
-                    ),
-                )
-                conn.commit()
-
-    async def delete(self, run_id: str) -> None:
-        async with self._lock(run_id):
-            with self._connect() as conn:
-                conn.execute(
-                    f"DELETE FROM {self._table_ref} WHERE run_id = ?",
-                    (run_id,),
-                )
-                conn.commit()

@@ -70,7 +70,7 @@ Workflow output events flow through `WorkflowStore` backed by Postgres:
 
 - **Release**: When a workflow goes idle, a process-local timer starts. After `idle_timeout` seconds, the decorator calls `begin_release(run_id)` to CAS `active → releasing`. If successful, it sends `TickIdleRelease` through the external adapter via `DBOS.send_async()`. The control loop processes it, completing the workflow with `IdleReleasedEvent`. A background task awaits workflow completion and then calls `complete_release` to transition to `released`, setting `idle_since` only at this point.
 - **Resume**: When `send_event` is called, it consults the lifecycle lock via `try_begin_resume`. If the state is `released`, the caller waits for the old DBOS workflow to finish (cross-replica via `DBOS.retrieve_workflow_async`), purges DBOS/journal state, rebuilds `BrokerState` from the tick log, and starts a fresh DBOS workflow with the same `run_id`. If the state is `releasing`, the caller polls with a crash timeout.
-- **Crash recovery**: If a releaser crashes mid-release (state stuck at `releasing` past a timeout), `send_event` calls `force_resume` to take over.
+- **Crash recovery**: If a releaser crashes mid-release (state stuck at `releasing` past a timeout), `try_begin_resume` detects the stale timestamp via `crash_timeout_seconds` and force-transitions to active.
 
 Tick persistence is provided by `TickPersistenceDecorator` in the decorator chain, which stores ticks to the workflow store so they can be replayed on resume.
 
