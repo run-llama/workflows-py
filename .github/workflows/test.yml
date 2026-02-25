@@ -83,6 +83,7 @@ jobs:
 
       - name: Report Coveralls
         if: matrix.python-version == env.COV_PYTHON_VERSION
+        continue-on-error: true
         uses: coverallsapp/github-action@v2
         with:
           file: ${{ matrix.package_dir }}/coverage.xml
@@ -110,6 +111,7 @@ jobs:
         run: uv run --all-extras --all-packages dev --timeout=120 -m docker --cov --cov-append --cov-report=xml
 
       - name: Report Coveralls
+        continue-on-error: true
         uses: coverallsapp/github-action@v2
         with:
           file: packages/llama-agents-integration-tests/coverage.xml
@@ -124,6 +126,7 @@ jobs:
     if: github.repository == 'run-llama/workflows-py'
     steps:
       - name: Finalize Coveralls parallel jobs
+        continue-on-error: true
         uses: coverallsapp/github-action@v2
         with:
           parallel-finished: true
