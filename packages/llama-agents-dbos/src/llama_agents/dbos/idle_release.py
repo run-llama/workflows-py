@@ -333,8 +333,6 @@ class DBOSIdleReleaseDecorator(BaseRuntimeDecorator):
                 )
 
         # Purge DBOS state and journal so the same run_id can be reused.
-        # DBOS >= 2.13 cascades operation_outputs on delete, so we only
-        # need to delete the workflow record and our journal rows.
         try:
             await DBOS.delete_workflow_async(run_id)
         except Exception:
