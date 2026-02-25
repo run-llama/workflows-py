@@ -332,21 +332,22 @@ class DBOSIdleReleaseDecorator(BaseRuntimeDecorator):
                     f"Failed to carry over state from run {run_id}", exc_info=True
                 )
 
-        # Purge DBOS state and journal so the same run_id can be reused
-        if self._journal_crud is not None:
-            try:
-                await self._journal_crud.purge_dbos_operation_outputs(run_id)
-                await self._journal_crud.delete(run_id)
-            except Exception:
-                logger.debug(
-                    f"Journal already purged for run_id={run_id}", exc_info=True
-                )
+        # Purge DBOS state and journal so the same run_id can be reused.
+        # DBOS >= 2.13 cascades operation_outputs on delete, so we only
+        # need to delete the workflow record and our journal rows.
         try:
             await DBOS.delete_workflow_async(run_id)
         except Exception:
             logger.debug(
                 f"DBOS state already purged for run_id={run_id}", exc_info=True
             )
+        if self._journal_crud is not None:
+            try:
+                await self._journal_crud.delete(run_id)
+            except Exception:
+                logger.debug(
+                    f"Journal already purged for run_id={run_id}", exc_info=True
+                )
 
         # Start new workflow run with the same run_id.
         new_adapter = self._decorated.run_workflow(
