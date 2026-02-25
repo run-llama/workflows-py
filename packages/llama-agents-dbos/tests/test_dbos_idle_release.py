@@ -438,12 +438,11 @@ async def test_send_event_resumes_when_released(
     assert handler.status == "running"
     assert handler.run_id == "run-1"
 
-    # Journal and DBOS operation outputs should have been purged
-    mock_journal_crud.purge_dbos_operation_outputs.assert_called_once_with("run-1")
-    mock_journal_crud.delete.assert_called_once_with("run-1")
-
     # DBOS workflow record must be deleted before re-creating with same run_id
     mock_dbos.delete_workflow_async.assert_called_once_with("run-1")
+
+    # Journal should have been purged
+    mock_journal_crud.delete.assert_called_once_with("run-1")
 
 
 @pytest.mark.asyncio()
@@ -749,14 +748,14 @@ async def test_do_resume_continues_when_state_carryover_fails(
 
 
 @pytest.mark.asyncio()
-async def test_do_resume_continues_when_journal_purge_fails(
+async def test_do_resume_continues_when_journal_delete_fails(
     decorator: DBOSIdleReleaseDecorator,
     store: MemoryWorkflowStore,
     stub_runtime: StubRuntime,
     mock_journal_crud: AsyncMock,
     mock_dbos: AsyncMock,
 ) -> None:
-    mock_journal_crud.purge_dbos_operation_outputs.side_effect = Exception("db error")
+    mock_journal_crud.delete.side_effect = Exception("db error")
     workflow = SimpleWorkflow()
     decorator.track_workflow(workflow)
     _seed_handler(
