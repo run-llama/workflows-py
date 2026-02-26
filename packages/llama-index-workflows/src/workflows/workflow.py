@@ -164,6 +164,12 @@ class Workflow(metaclass=WorkflowMeta):
             # get_current_runtime() falls back to basic_runtime
             self._runtime = get_current_runtime()
 
+        # Wrap with verbose decorator if requested
+        if self._verbose:
+            from workflows.runtime.verbose import VerboseDecorator
+
+            self._runtime = VerboseDecorator(self._runtime)
+
         # Register with runtime for tracking (no-op for BasicRuntime)
         self._runtime.track_workflow(self)
 

@@ -16,9 +16,6 @@ from typing import Any, Awaitable, Callable
 from llama_agents.client.protocol.serializable_events import (
     EventEnvelopeWithMetadata,
 )
-from llama_agents.server._runtime.runtime_decorators import (
-    BaseInternalRunAdapterDecorator,
-)
 from typing_extensions import override
 from workflows.context.serializers import BaseSerializer
 from workflows.context.state_store import (
@@ -33,6 +30,10 @@ from workflows.events import (
     WorkflowFailedEvent,
     WorkflowTimedOutEvent,
 )
+from workflows.runtime.runtime_decorators import (
+    BaseInternalRunAdapterDecorator,
+    BaseRuntimeDecorator,
+)
 from workflows.runtime.types.internal_state import BrokerState
 from workflows.runtime.types.plugin import (
     ExternalRunAdapter,
@@ -46,7 +47,6 @@ from .._store.abstract_workflow_store import (
     PersistentHandler,
     Status,
 )
-from .runtime_decorators import BaseRuntimeDecorator
 
 logger = logging.getLogger(__name__)
 
