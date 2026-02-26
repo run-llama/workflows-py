@@ -7,7 +7,7 @@ import logging
 from contextlib import asynccontextmanager
 from importlib.metadata import version
 from pathlib import Path
-from typing import AsyncGenerator, cast
+from typing import Any, AsyncGenerator, cast
 
 from llama_agents.client.protocol import (
     CancelHandlerResponse,
@@ -51,7 +51,20 @@ from ._store.abstract_workflow_store import (
     is_terminal_status,
 )
 
-logger = logging.getLogger()
+logger = logging.getLogger(__name__)
+
+
+async def _http_exception_handler(request: Request, exc: HTTPException) -> JSONResponse:
+    return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
+
+
+async def _unhandled_exception_handler(
+    request: Request, exc: Exception
+) -> JSONResponse:
+    logger.error(
+        "Unhandled exception on %s %s", request.method, request.url.path, exc_info=exc
+    )
+    return JSONResponse({"detail": f"Internal server error: {exc}"}, status_code=500)
 
 
 _DEFAULT_ASSETS_PATH = Path(__file__).parent / "static"
@@ -63,10 +76,16 @@ class _WorkflowAPI:
         service: _WorkflowService,
         *,
         middleware: list[Middleware] | None = None,
+        exception_handlers: dict[Any, Any] | None = None,
         assets_path: Path = _DEFAULT_ASSETS_PATH,
     ) -> None:
         self._service = service
         self._additional_events: dict[str, list[type[Event]]] = {}
+
+        exception_handlers = exception_handlers or {
+            HTTPException: _http_exception_handler,
+            Exception: _unhandled_exception_handler,
+        }
 
         middleware = middleware or [
             Middleware(
@@ -91,6 +110,7 @@ class _WorkflowAPI:
             routes=self._routes(),
             middleware=middleware,
             lifespan=lifespan,
+            exception_handlers=exception_handlers,  # type: ignore[arg-type]
         )
         self.app.mount(
             "/", app=StaticFiles(directory=assets_path, html=True), name="ui"
@@ -1069,7 +1089,7 @@ class _WorkflowAPI:
             body = await request.json()
         except Exception as e:
             raise HTTPException(
-                detail=f"Error processing request: {e}", status_code=500
+                detail=f"Error processing request: {e}", status_code=400
             )
 
         event_data = body.get("event")
@@ -1216,5 +1236,5 @@ class _WorkflowAPI:
             raise
         except Exception as e:
             raise HTTPException(
-                detail=f"Error processing request body: {e}", status_code=500
+                detail=f"Error processing request body: {e}", status_code=400
             )

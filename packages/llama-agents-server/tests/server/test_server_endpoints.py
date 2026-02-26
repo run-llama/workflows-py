@@ -985,14 +985,14 @@ async def test_post_event_body_parsing_error(client: AsyncClient) -> None:
     assert response.status_code == 200
     handler_id = response.json()["handler_id"]
 
-    # Send invalid JSON body (not JSON), triggers 500 from body parsing
+    # Send invalid JSON body (not JSON), triggers 400 from body parsing
     response = await client.post(
         f"/events/{handler_id}",
         content="not json",
         headers={"Content-Type": "application/json"},
     )
-    assert response.status_code == 500
-    assert "Error processing request" in response.text
+    assert response.status_code == 400
+    assert "Error processing request" in response.json()["detail"]
 
 
 @pytest.mark.asyncio

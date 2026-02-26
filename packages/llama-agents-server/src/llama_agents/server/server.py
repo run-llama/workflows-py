@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections.abc import Mapping
 from contextlib import asynccontextmanager
 from typing import Any, AsyncGenerator
 
@@ -22,7 +23,7 @@ from ._service import _WorkflowService
 from ._store.abstract_workflow_store import AbstractWorkflowStore
 from ._store.memory_workflow_store import MemoryWorkflowStore
 
-logger = logging.getLogger()
+logger = logging.getLogger(__name__)
 
 
 class WorkflowServer:
@@ -59,6 +60,7 @@ class WorkflowServer:
         self,
         *,
         middleware: list[Middleware] | None = None,
+        exception_handlers: Mapping[Any, Any] | None = None,
         workflow_store: AbstractWorkflowStore | None = None,
         persistence_backoff: list[float] = [0.5, 3],
         runtime: Runtime | None = None,
@@ -70,6 +72,10 @@ class WorkflowServer:
             middleware: Starlette middleware to apply to the ASGI app. Defaults
                 to a permissive CORS configuration. Passing a custom list
                 replaces the default entirely.
+            exception_handlers: Starlette exception handlers mapping exception
+                types to handler callables. Defaults to JSON error responses
+                with logging. Passing a custom mapping replaces the default
+                entirely.
             workflow_store: Persistence backend for handler state, events, and
                 ticks. Defaults to ``MemoryWorkflowStore``. Use
                 ``SqliteWorkflowStore`` or ``PostgresWorkflowStore`` for
@@ -106,7 +112,11 @@ class WorkflowServer:
             runtime=self._runtime, store=self._workflow_store
         )
 
-        self._api = _WorkflowAPI(self._service, middleware=middleware)
+        self._api = _WorkflowAPI(
+            self._service,
+            middleware=middleware,
+            exception_handlers=dict(exception_handlers) if exception_handlers else None,
+        )
         self.app = self._api.app
 
     # ------------------------------------------------------------------
