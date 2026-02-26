@@ -12,10 +12,6 @@ The [durable workflows](/python/llamaagents/workflows/durable_workflows) page sh
 pip install llama-agents-dbos
 ```
 
-:::note
-`llama-agents-dbos` requires Python 3.10 or later.
-:::
-
 ## Quick Start — Standalone Durable Workflow
 
 The simplest way to use DBOS is with SQLite (zero external dependencies). Define a workflow as usual, pass a `DBOSRuntime`, and your state is persisted automatically.
