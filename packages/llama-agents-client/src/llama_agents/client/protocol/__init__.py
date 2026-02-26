@@ -34,7 +34,7 @@ class HandlersListResponse(BaseModel):
 
 
 class HealthResponse(BaseModel):
-    status: Literal["healthy"]
+    status: Literal["healthy", "unhealthy"]
 
 
 class WorkflowsListResponse(BaseModel):

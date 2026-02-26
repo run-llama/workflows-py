@@ -61,20 +61,20 @@ async def test_basic_runtime_no_explicit_launch() -> None:
 async def test_basic_runtime_with_explicit_launch() -> None:
     """launch()/destroy() are no-ops but don't error for BasicRuntime."""
     runtime = BasicRuntime()
-    runtime.launch()
+    await runtime.launch()
 
     wf = SimpleWorkflow(runtime=runtime)
     result = await WorkflowTestRunner(wf).run()
     assert result.result == "done"
 
-    runtime.destroy()
+    await runtime.destroy()
 
 
 async def test_basic_runtime_launch_idempotent() -> None:
     """Multiple launch() calls are allowed."""
     runtime = BasicRuntime()
-    runtime.launch()
-    runtime.launch()
+    await runtime.launch()
+    await runtime.launch()
 
     wf = SimpleWorkflow(runtime=runtime)
     result = await WorkflowTestRunner(wf).run()
@@ -95,7 +95,7 @@ async def test_registering_multiple_workflows() -> None:
     assert wf1.runtime is runtime
     assert wf2.runtime is runtime
 
-    runtime.launch()
+    await runtime.launch()
 
     result1 = await WorkflowTestRunner(wf1).run()
     result2 = await WorkflowTestRunner(wf2).run()
@@ -111,7 +111,7 @@ async def test_registering_preserves_workflow_state() -> None:
     with runtime.registering():
         wf = CountingWorkflow()
 
-    runtime.launch()
+    await runtime.launch()
 
     # Run multiple times, state should persist
     result1 = await WorkflowTestRunner(wf).run()
@@ -145,8 +145,8 @@ async def test_mixed_explicit_and_implicit_registration() -> None:
     assert wf_implicit.runtime is context_runtime
     assert wf_explicit.runtime is explicit_runtime
 
-    context_runtime.launch()
-    explicit_runtime.launch()
+    await context_runtime.launch()
+    await explicit_runtime.launch()
 
     result1 = await WorkflowTestRunner(wf_implicit).run()
     result2 = await WorkflowTestRunner(wf_explicit).run()
@@ -165,7 +165,7 @@ async def test_workflow_can_run_multiple_times() -> None:
     with runtime.registering():
         wf = CountingWorkflow()
 
-    runtime.launch()
+    await runtime.launch()
 
     result1 = await WorkflowTestRunner(wf).run()
     result2 = await WorkflowTestRunner(wf).run()
@@ -183,16 +183,16 @@ async def test_destroy_allows_reuse() -> None:
     with runtime.registering():
         wf1 = SimpleWorkflow()
 
-    runtime.launch()
+    await runtime.launch()
     result1 = await WorkflowTestRunner(wf1).run()
 
-    runtime.destroy()
+    await runtime.destroy()
 
     # Can register new workflows after destroy
     with runtime.registering():
         wf2 = SimpleWorkflow()
 
-    runtime.launch()
+    await runtime.launch()
     result2 = await WorkflowTestRunner(wf2).run()
 
     assert result1.result == "done"
@@ -250,8 +250,8 @@ async def test_nested_registering_preserves_workflows() -> None:
     assert wf_inner.runtime is inner_runtime
     assert wf_outer_again.runtime is outer_runtime
 
-    outer_runtime.launch()
-    inner_runtime.launch()
+    await outer_runtime.launch()
+    await inner_runtime.launch()
 
     r1 = await WorkflowTestRunner(wf_outer).run()
     r2 = await WorkflowTestRunner(wf_inner).run()
@@ -282,7 +282,7 @@ async def test_multiple_concurrent_workflows() -> None:
         wf2 = SimpleWorkflow()
         wf3 = SimpleWorkflow()
 
-    runtime.launch()
+    await runtime.launch()
 
     # Run all concurrently
     results = await asyncio.gather(

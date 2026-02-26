@@ -1,4 +1,4 @@
-PRAGMA user_version=1;
+-- migration: 1
 
 -- Initial table creation matching the original minimal schema
 CREATE TABLE IF NOT EXISTS handlers (

@@ -82,10 +82,10 @@ class _StubRuntime(Runtime):
     def get_external_adapter(self, run_id: str) -> ExternalRunAdapter:
         raise NotImplementedError
 
-    def launch(self) -> None:
+    async def launch(self) -> None:
         pass
 
-    def destroy(self) -> None:
+    async def destroy(self) -> None:
         pass
 
 

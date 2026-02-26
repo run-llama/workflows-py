@@ -430,6 +430,10 @@ class Runtime(ABC):
         self._pending: WorkflowSet = WorkflowSet()
         self._launched: bool = False
 
+    @property
+    def is_launched(self) -> bool:
+        return self._launched
+
     _token: Token[Runtime | None]
 
     def get_or_register(self, workflow: Workflow) -> RegisteredWorkflow:
@@ -502,7 +506,7 @@ class Runtime(ABC):
         """
         ...
 
-    def launch(self) -> None:
+    async def launch(self) -> None:
         """
         Launch the runtime and register all tracked workflows.
 
@@ -514,13 +518,21 @@ class Runtime(ABC):
             wf._runtime_locked = True
         self._pending = WorkflowSet()
 
-    def destroy(self) -> None:
+    async def destroy(self) -> None:
         """
         Clean up runtime resources.
 
         Called when done with the runtime. Stops workers, closes connections.
         """
-        pass
+        self._launched = False
+
+    def launch_sync(self) -> None:
+        """Synchronous convenience wrapper for :meth:`launch`."""
+        asyncio.run(self.launch())
+
+    def destroy_sync(self) -> None:
+        """Synchronous convenience wrapper for :meth:`destroy`."""
+        asyncio.run(self.destroy())
 
     def track_workflow(self, workflow: Workflow) -> None:
         """

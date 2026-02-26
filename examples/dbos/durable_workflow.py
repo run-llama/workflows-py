@@ -76,7 +76,7 @@ def run(run_id: str) -> None:
 
     runtime = DBOSRuntime()
     workflow = CounterWorkflow(runtime=runtime)
-    runtime.launch()
+    runtime.launch_sync()
 
     interrupted = False
 
@@ -108,7 +108,7 @@ def run(run_id: str) -> None:
     finally:
         if not interrupted:
             try:
-                runtime.destroy()
+                runtime.destroy_sync()
             except Exception:
                 pass
 

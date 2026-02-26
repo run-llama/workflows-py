@@ -110,7 +110,7 @@ async def run_workflow_with_server(
     dbos_runtime = setup_dbos(db_url, app_name="test-server-workflow")
 
     wf = workflow_class(runtime=dbos_runtime)
-    dbos_runtime.launch()
+    await dbos_runtime.launch()
 
     store = dbos_runtime.create_workflow_store()
 
@@ -159,7 +159,7 @@ async def run_workflow_with_server(
         print(f"ERROR:{type(e).__name__}:{e}", flush=True)
         raise
     finally:
-        dbos_runtime.destroy()
+        await dbos_runtime.destroy()
 
 
 def main() -> None:

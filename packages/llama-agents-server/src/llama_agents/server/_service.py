@@ -247,11 +247,11 @@ class _WorkflowService:
 
     async def start(self) -> None:
         """Launch runtimes and register tracked workflows."""
-        self._runtime.launch()
+        await self._runtime.launch()
 
     async def stop(self) -> None:
         """Stop active runs and destroy the runtime."""
-        self._runtime.destroy()
+        await self._runtime.destroy()
 
     # ------------------------------------------------------------------
     # Private helpers

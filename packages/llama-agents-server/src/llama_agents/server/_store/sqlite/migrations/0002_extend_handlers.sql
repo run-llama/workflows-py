@@ -1,4 +1,4 @@
-PRAGMA user_version=2;
+-- migration: 2
 
 -- Add new columns for extended handler persistence
 ALTER TABLE handlers ADD COLUMN run_id TEXT;

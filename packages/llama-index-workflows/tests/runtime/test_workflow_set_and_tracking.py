@@ -138,19 +138,19 @@ def test_untrack_workflow_removes_from_set(basic_runtime: BasicRuntime) -> None:
 def test_launch_locks_tracked_workflows(basic_runtime: BasicRuntime) -> None:
     wf1 = SimpleWorkflow(runtime=basic_runtime)
     wf2 = SimpleWorkflow(runtime=basic_runtime)
-    basic_runtime.launch()
+    basic_runtime.launch_sync()
     assert wf1._runtime_locked is True
     assert wf2._runtime_locked is True
 
 
 def test_relaunch_locks_new_workflows(basic_runtime: BasicRuntime) -> None:
     wf1 = SimpleWorkflow(runtime=basic_runtime)
-    basic_runtime.launch()
+    basic_runtime.launch_sync()
     assert wf1._runtime_locked is True
 
     wf2 = SimpleWorkflow(runtime=basic_runtime)
     assert wf2._runtime_locked is False
-    basic_runtime.launch()
+    basic_runtime.launch_sync()
     assert wf1._runtime_locked is True
     assert wf2._runtime_locked is True
 
@@ -165,7 +165,7 @@ def test_weak_reference_cleanup(basic_runtime: BasicRuntime) -> None:
 
 def test_basic_runtime_launch_sets_launched_flag(basic_runtime: BasicRuntime) -> None:
     assert basic_runtime._launched is False
-    basic_runtime.launch()
+    basic_runtime.launch_sync()
     assert basic_runtime._launched is True
 
 
@@ -186,7 +186,7 @@ def test_workflow_name_setter_raises_after_launch() -> None:
     wf._switch_workflow_name("before-launch")
     assert wf.workflow_name == "before-launch"
 
-    rt.launch()
+    rt.launch_sync()
     with pytest.raises(RuntimeError, match="Cannot change workflow_name"):
         wf._switch_workflow_name("after-launch")
 
@@ -207,7 +207,7 @@ def test_runtime_setter_post_launch_raises() -> None:
     rt1 = BasicRuntime()
     rt2 = BasicRuntime()
     wf = SimpleWorkflow(runtime=rt1)
-    rt1.launch()
+    rt1.launch_sync()
 
     with pytest.raises(RuntimeError, match="Cannot reassign runtime"):
         wf._switch_runtime(rt2)
@@ -216,7 +216,7 @@ def test_runtime_setter_post_launch_raises() -> None:
 def test_runtime_setter_same_runtime_after_launch_is_noop() -> None:
     rt = BasicRuntime()
     wf = SimpleWorkflow(runtime=rt)
-    rt.launch()
+    rt.launch_sync()
     # Assigning the same runtime should not raise
     wf._switch_runtime(rt)
     assert wf.runtime is rt
@@ -244,5 +244,5 @@ def test_runtime_setter_before_launch_then_launch_locks() -> None:
     wf = SimpleWorkflow(runtime=rt1)
     wf._switch_runtime(rt2)
     assert wf._runtime_locked is False
-    rt2.launch()
+    rt2.launch_sync()
     assert wf._runtime_locked is True
