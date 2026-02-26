@@ -1,0 +1,139 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 LlamaIndex Inc.
+"""Tests for VerboseDecorator and _VerboseInternalRunAdapter."""
+
+from __future__ import annotations
+
+import logging
+from typing import Any
+
+from workflows import Workflow, step
+from workflows.events import Event, StartEvent, StepState, StepStateChanged, StopEvent
+from workflows.runtime.types.plugin import InternalRunAdapter, WaitResult, WorkflowTick
+from workflows.runtime.verbose import _VerboseInternalRunAdapter
+from workflows.testing import WorkflowTestRunner
+
+
+class FakeInternalRunAdapter(InternalRunAdapter):
+    """Minimal fake adapter that records events written to the stream."""
+
+    def __init__(self) -> None:
+        self.written_events: list[Event] = []
+
+    @property
+    def run_id(self) -> str:
+        return "fake-run-id"
+
+    async def write_to_event_stream(self, event: Event) -> None:
+        self.written_events.append(event)
+
+    async def get_now(self) -> float:
+        raise NotImplementedError
+
+    async def send_event(self, tick: WorkflowTick) -> None:
+        raise NotImplementedError
+
+    async def wait_receive(
+        self,
+        timeout_seconds: float | None = None,
+    ) -> WaitResult:
+        raise NotImplementedError
+
+    async def sleep(self, seconds: float) -> None:
+        raise NotImplementedError
+
+
+def _make_step_state_changed(
+    name: str = "my_step",
+    step_state: StepState = StepState.RUNNING,
+    worker_id: str = "worker-1",
+    input_event_name: str = "StartEvent",
+    output_event_name: str | None = None,
+) -> StepStateChanged:
+    return StepStateChanged(
+        name=name,
+        step_state=step_state,
+        worker_id=worker_id,
+        input_event_name=input_event_name,
+        output_event_name=output_event_name,
+    )
+
+
+async def test_verbose_print_step_running(capsys: Any) -> None:
+    fake = FakeInternalRunAdapter()
+    adapter = _VerboseInternalRunAdapter(fake, output=print)
+
+    event = _make_step_state_changed(name="my_step", step_state=StepState.RUNNING)
+    await adapter.write_to_event_stream(event)
+
+    captured = capsys.readouterr()
+    assert "Running step my_step" in captured.out
+
+
+async def test_verbose_print_step_completed_with_event(capsys: Any) -> None:
+    fake = FakeInternalRunAdapter()
+    adapter = _VerboseInternalRunAdapter(fake, output=print)
+
+    event = _make_step_state_changed(
+        name="my_step",
+        step_state=StepState.NOT_RUNNING,
+        output_event_name="MyEvent",
+    )
+    await adapter.write_to_event_stream(event)
+
+    captured = capsys.readouterr()
+    assert "Step my_step produced event MyEvent" in captured.out
+
+
+async def test_verbose_print_step_completed_no_event(capsys: Any) -> None:
+    fake = FakeInternalRunAdapter()
+    adapter = _VerboseInternalRunAdapter(fake, output=print)
+
+    event = _make_step_state_changed(
+        name="my_step",
+        step_state=StepState.NOT_RUNNING,
+        output_event_name=None,
+    )
+    await adapter.write_to_event_stream(event)
+
+    captured = capsys.readouterr()
+    assert "Step my_step produced no event" in captured.out
+
+
+async def test_verbose_logger_mode(caplog: Any) -> None:
+    fake = FakeInternalRunAdapter()
+    logger = logging.getLogger("workflows.verbose")
+    adapter = _VerboseInternalRunAdapter(fake, output=logger.info)
+
+    event = _make_step_state_changed(name="my_step", step_state=StepState.RUNNING)
+    with caplog.at_level(logging.INFO, logger="workflows.verbose"):
+        await adapter.write_to_event_stream(event)
+
+    assert "Running step my_step" in caplog.text
+
+
+async def test_verbose_forwards_events() -> None:
+    fake = FakeInternalRunAdapter()
+    adapter = _VerboseInternalRunAdapter(fake, output=print)
+
+    event = _make_step_state_changed(name="my_step", step_state=StepState.RUNNING)
+    await adapter.write_to_event_stream(event)
+
+    assert len(fake.written_events) == 1
+    assert fake.written_events[0] is event
+
+
+class TwoStepWorkflow(Workflow):
+    @step
+    async def first(self, ev: StartEvent) -> StopEvent:
+        return StopEvent(result="done")
+
+
+async def test_workflow_verbose_integration(capsys: Any) -> None:
+    wf = TwoStepWorkflow(verbose=True)
+    result = await WorkflowTestRunner(wf).run()
+    assert result.result == "done"
+
+    captured = capsys.readouterr()
+    assert "Running step first" in captured.out
+    assert "Step first produced event" in captured.out
