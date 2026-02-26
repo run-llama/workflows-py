@@ -227,22 +227,38 @@ DBOS(config={
 })
 ```
 
-With Postgres:
-- Multiple replicas share the same database for coordination
-- Each replica owns and recovers the workflows it started
-- Events sent to any replica are delivered to the correct owner via `pg_notify`
-- If a replica crashes, its workflows are automatically recovered on restart
-
 See the `examples/dbos/server_replicas.py` example for a complete multi-replica demo.
 
-## How It Works
+## Execution Model
 
-Under the hood, `DBOSRuntime` wraps the standard workflow runtime with a decorator chain that intercepts every step transition:
+Understanding the DBOS execution model helps you write workflows that behave correctly across restarts and replicas.
 
-1. **Tick persistence** — each step completion is recorded to the database
-2. **Event interception** — events are routed through DBOS durable messaging
-3. **Idle release** — optional decorator that releases inactive workflows from memory
+### Replica ownership
 
-On resume, the runtime replays the persisted ticks to rebuild the workflow's `Context` and `store`, then continues execution from the last recorded step. This replay is deterministic — the same sequence of events always produces the same state.
+Each replica is identified by its `executor_id` and **owns** every workflow it starts. A workflow and all of its steps run in the same process — there is no distribution of individual steps across replicas. This means your steps can safely rely on local state like in-memory caches, local files, or process-level singletons. The trade-off is that a single workflow's workload cannot be spread across multiple replicas.
 
-For a detailed look at the internal architecture (adapter boundaries, cross-process event delivery, crash recovery), see the [DBOS adapter architecture doc](https://github.com/run-llama/workflows-py/blob/dev/packages/llama-agents-dbos/ARCHITECTURE.md).
+### Journaling and replay
+
+Step completions and stream events are journaled to the database. When a workflow resumes after a crash or an idle release, the runtime replays the journal to rebuild the workflow's `Context` and `store`, then continues from the last recorded step.
+
+Because recovery is replay-based, **steps may execute more than once** if they were interrupted before the journal entry was committed. Design steps to be idempotent where possible, or use the context store to track progress within a step (as shown in the [durable workflows](/python/llamaagents/workflows/durable_workflows) page).
+
+### Scaling and draining
+
+Replica IDs and replica counts must be stable. If you scale down and remove a replica, any workflows that replica owned will be abandoned until that `executor_id` comes back. Before removing a replica, drain it by letting its in-flight workflows complete and not routing new work to it.
+
+### Code changes and versioning
+
+Since resumption is based on journal replay, changing a workflow's code while historical runs are still in progress can cause non-determinism — for example, a step that now accepts a different set of events than when the run was originally started. To avoid this:
+- **Drain in-flight workflows** before deploying code changes, or
+- **Register the updated workflow under a new name** so that old runs continue against the original code and new runs use the updated version
+
+### Event streaming behavior
+
+When using `handler.stream_events()` in-process (outside of a server), DBOS streams are replayed from the beginning on each call. This means you will receive all events the workflow has ever emitted, not just new ones.
+
+The [workflow server](/python/llamaagents/workflows/deployment) uses a cursor-based approach instead — its `GET /events/{handler_id}` endpoint tracks position so each consumer only receives events once. For production use cases, prefer the server's streaming endpoints.
+
+### Crash recovery
+
+When a replica restarts, DBOS automatically detects and relaunches any incomplete workflows belonging to its `executor_id`. No manual intervention is required — the replica picks up where it left off by replaying its journal.
