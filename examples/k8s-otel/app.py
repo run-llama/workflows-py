@@ -1,6 +1,9 @@
 """
 K8s OTEL Example — Counter + Greeter workflows with DBOS, OpenTelemetry, and structlog.
 
+Serves via FastAPI with the WorkflowServer mounted at /api and custom endpoints at the
+top level. FastAPI is instrumented with OpenTelemetry.
+
 Env vars:
   POSTGRES_DSN              — Postgres connection string
   OTEL_EXPORTER_OTLP_ENDPOINT — OTLP gRPC endpoint (e.g. http://phoenix:4317)
@@ -16,12 +19,16 @@ import os
 from typing import Any, MutableMapping
 
 import structlog
+import uvicorn
 from dbos import DBOS
+from fastapi import FastAPI
+from fastapi.responses import RedirectResponse
 from llama_agents.dbos import DBOSRuntime
 from llama_agents.server import WorkflowServer
 from llama_index.observability.otel import LlamaIndexOpenTelemetry
 from llama_index_instrumentation.dispatcher import active_instrument_tags
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from pydantic import Field
 from workflows import Context, Workflow, step
 from workflows.events import (
@@ -163,31 +170,66 @@ class GreeterWorkflow(Workflow):
 
 
 # ---------------------------------------------------------------------------
-# Server entrypoint
+# Workflow Server
+# ---------------------------------------------------------------------------
+
+runtime = DBOSRuntime()
+
+workflow_server = WorkflowServer(
+    workflow_store=runtime.create_workflow_store(),
+    runtime=runtime.build_server_runtime(idle_timeout=IDLE_TIMEOUT),
+)
+workflow_server.add_workflow("counter", CounterWorkflow(runtime=runtime))
+workflow_server.add_workflow("greeter", GreeterWorkflow(runtime=runtime))
+
+# ---------------------------------------------------------------------------
+# FastAPI app with WorkflowServer mounted
+# ---------------------------------------------------------------------------
+
+
+app = FastAPI(title="K8s OTEL Example")
+
+# Mount the workflow server's Starlette app under /api
+app.mount("/api", workflow_server.app)
+
+# Instrument FastAPI with OpenTelemetry
+FastAPIInstrumentor.instrument_app(app)
+
+
+@app.get("/")
+async def index() -> RedirectResponse:
+    return RedirectResponse(url="/api/?api=/api/")
+
+
+@app.get("/health")
+async def health() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+@app.get("/info")
+async def info() -> dict[str, Any]:
+    return {
+        "executor_id": EXECUTOR_ID,
+        "idle_timeout": IDLE_TIMEOUT,
+        "workflows": ["counter", "greeter"],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Entrypoint
 # ---------------------------------------------------------------------------
 
 
 async def main() -> None:
-    runtime = DBOSRuntime()
-
-    server = WorkflowServer(
-        workflow_store=runtime.create_workflow_store(),
-        runtime=runtime.build_server_runtime(idle_timeout=IDLE_TIMEOUT),
-    )
-    server.add_workflow("counter", CounterWorkflow(runtime=runtime))
-    server.add_workflow("greeter", GreeterWorkflow(runtime=runtime))
-
     log.info(
         "server.starting",
         port=SERVER_PORT,
         executor_id=EXECUTOR_ID,
         idle_timeout=IDLE_TIMEOUT,
     )
-    await server.start()
-    try:
-        await server.serve(host="0.0.0.0", port=SERVER_PORT)
-    finally:
-        await server.stop()
+    config = uvicorn.Config(app, host="0.0.0.0", port=SERVER_PORT)
+    server = uvicorn.Server(config)
+    await server.serve()
 
 
 if __name__ == "__main__":

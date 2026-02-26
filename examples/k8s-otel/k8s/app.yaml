@@ -72,7 +72,7 @@ spec:
             periodSeconds: 10
           readinessProbe:
             httpGet:
-              path: /workflows
+              path: /health
               port: 8080
             initialDelaySeconds: 5
             periodSeconds: 5
