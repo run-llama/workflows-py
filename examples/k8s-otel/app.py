@@ -16,7 +16,8 @@ from __future__ import annotations
 
 import asyncio
 import os
-from typing import Any, MutableMapping
+from contextlib import asynccontextmanager
+from typing import Any, AsyncGenerator, MutableMapping
 
 import structlog
 import uvicorn
@@ -187,7 +188,16 @@ workflow_server.add_workflow("greeter", GreeterWorkflow(runtime=runtime))
 # ---------------------------------------------------------------------------
 
 
-app = FastAPI(title="K8s OTEL Example")
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+    await workflow_server.start()
+    try:
+        yield
+    finally:
+        await workflow_server.stop()
+
+
+app = FastAPI(title="K8s OTEL Example", lifespan=lifespan)
 
 # Mount the workflow server's Starlette app under /api
 app.mount("/api", workflow_server.app)
