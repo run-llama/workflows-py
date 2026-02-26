@@ -1,0 +1,38 @@
+allow_k8s_contexts('kind-llama-k8s-otel')
+
+k8s_yaml(kustomize('./k8s'))
+
+docker_build(
+    'k8s-otel-app',
+    context='../..',
+    dockerfile='./Dockerfile',
+    only=[
+        'packages/',
+        'examples/k8s-otel/',
+        'pyproject.toml',
+        'uv.lock',
+    ],
+)
+
+k8s_resource(
+    'postgres',
+    labels=['infra'],
+    objects=[
+        'postgres-init:configmap',
+        'pgdata:persistentvolumeclaim',
+    ],
+)
+
+k8s_resource(
+    'phoenix',
+    labels=['observability'],
+    port_forwards='6006:6006',
+    resource_deps=['postgres'],
+)
+
+k8s_resource(
+    'app',
+    labels=['app'],
+    port_forwards='8080:8080',
+    resource_deps=['postgres'],
+)

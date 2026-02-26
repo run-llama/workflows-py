@@ -1,0 +1,13 @@
+[project]
+name = "k8s-otel-example"
+version = "0.0.0"
+requires-python = ">=3.9"
+dependencies = [
+  "llama-agents-dbos",
+  "opentelemetry-exporter-otlp",
+  "structlog",
+  "llama-index-observability-otel"
+]
+
+[tool.uv.sources]
+llama-agents-dbos = {workspace = true}

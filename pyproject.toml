@@ -152,5 +152,7 @@ members = [
   "packages/llama-agents-dbos",
   # internal
   "docs/api_docs",
-  "packages/llama-agents-integration-tests"
+  "packages/llama-agents-integration-tests",
+  # examples
+  "examples/k8s-otel"
 ]
