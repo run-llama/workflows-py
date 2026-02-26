@@ -1,0 +1,78 @@
+# Headless service for StatefulSet DNS
+apiVersion: v1
+kind: Service
+metadata:
+  name: app-headless
+  namespace: llama-k8s-otel
+spec:
+  clusterIP: None
+  selector:
+    app: workflow-app
+  ports:
+    - port: 8080
+      targetPort: 8080
+---
+# ClusterIP service for port-forwarding
+apiVersion: v1
+kind: Service
+metadata:
+  name: app
+  namespace: llama-k8s-otel
+spec:
+  selector:
+    app: workflow-app
+  ports:
+    - port: 8080
+      targetPort: 8080
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: app
+  namespace: llama-k8s-otel
+spec:
+  serviceName: app-headless
+  replicas: 2
+  selector:
+    matchLabels:
+      app: workflow-app
+  template:
+    metadata:
+      labels:
+        app: workflow-app
+    spec:
+      initContainers:
+        - name: wait-for-postgres
+          image: postgres:16
+          command:
+            - sh
+            - -c
+            - |
+              until pg_isready -h postgres -p 5432 -U workflows; do
+                echo "Waiting for postgres..."
+                sleep 2
+              done
+      containers:
+        - name: app
+          image: k8s-otel-app
+          ports:
+            - containerPort: 8080
+          env:
+            - name: POSTGRES_DSN
+              value: postgresql://workflows:workflows@postgres:5432/workflows
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: http://phoenix:4317
+            - name: SERVER_PORT
+              value: "8080"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 5
