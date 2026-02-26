@@ -102,6 +102,7 @@ from llama_agents.server._store.sqlite.sqlite_workflow_store import SqliteWorkfl
 from sqlalchemy.engine import URL as SaURL
 from sqlalchemy.engine import Engine
 
+from .executor_lease import ExecutorLeaseManager
 from .idle_release import DBOSIdleReleaseDecorator
 from .journal.crud import (
     JOURNAL_TABLE_NAME,
@@ -177,6 +178,26 @@ class DBOSWorkflowStore(AbstractWorkflowStore):
         return await self._resolve().get_ticks(run_id)
 
 
+class ExecutorLeaseConfig(TypedDict, total=False):
+    """Configuration for automatic executor lease management.
+
+    When provided, DBOSRuntime will acquire a lease from a pool of executor
+    slots on launch and release it on destroy. The leased slot ID replaces
+    the DBOS executor_id.
+    """
+
+    pool_size: int
+    """Number of executor slots available. Required."""
+    acquire_timeout: float
+    """Max seconds to wait for a slot. Default 60."""
+    heartbeat_interval: float
+    """Seconds between heartbeats. Default 10."""
+    lease_timeout: float
+    """Seconds before a lease is considered stale. Default 30."""
+    slot_prefix: str
+    """Prefix for slot names. Default "executor"."""
+
+
 class DBOSRuntimeConfig(TypedDict, total=False):
     """Configuration options for DBOSRuntime.
 
@@ -188,6 +209,7 @@ class DBOSRuntimeConfig(TypedDict, total=False):
     schema: str | None
     state_table_name: str
     journal_table_name: str
+    executor_lease: ExecutorLeaseConfig | None
 
 
 DEFAULT_STATE_TABLE_NAME = STATE_TABLE_NAME
@@ -281,6 +303,8 @@ class DBOSRuntime(Runtime):
         self._db_path: str | None = None  # sqlite path
         self._schema: str | None = None
         self._workflow_store: AbstractWorkflowStore | None = None
+        self._lease_manager: ExecutorLeaseManager | None = None
+        self._lease_watch_task: asyncio.Task[None] | None = None
 
     def _track_task(self, task: asyncio.Task[Any]) -> None:
         self._tasks.append(task)
@@ -681,9 +705,45 @@ class DBOSRuntime(Runtime):
 
         Must be called before running any workflows.
         Runs database migrations unless run_migrations_on_launch=False.
+        If ``executor_lease`` is set in the config, acquires a lease slot first.
         """
         if self._dbos_launched:
             return  # Already launched
+
+        # Acquire executor lease if configured
+        lease_config = self.config.get("executor_lease")
+        if lease_config is not None:
+            pool_size = lease_config.get("pool_size")
+            if pool_size is None:
+                raise ValueError("executor_lease.pool_size is required")
+
+            # Get DSN from DBOS config before launch
+            dbos_inst = _get_dbos_instance()
+            dsn = dbos_inst._config.get("system_database_url", "")
+            if not dsn or dsn.startswith("sqlite"):
+                raise ValueError(
+                    "Executor leasing requires a PostgreSQL system_database_url in DBOS config"
+                )
+
+            schema = self.config.get("schema", "dbos") or "dbos"
+            self._lease_manager = ExecutorLeaseManager(
+                dsn=dsn,
+                pool_size=pool_size,
+                heartbeat_interval=lease_config.get("heartbeat_interval", 10.0),
+                lease_timeout=lease_config.get("lease_timeout", 30.0),
+                slot_prefix=lease_config.get("slot_prefix", "executor"),
+                schema=schema,
+            )
+            acquire_timeout = lease_config.get("acquire_timeout", 60.0)
+            await self._lease_manager.acquire(timeout=acquire_timeout)
+
+            # Reinitialize DBOS with the leased executor_id.
+            # DBOS is a singleton and hasn't been launched yet, so reinit is safe.
+            config = dict(dbos_inst._config)
+            config["executor_id"] = self._lease_manager.executor_id
+            DBOS(config=cast(Any, config))
+            logger.info("Acquired executor lease: %s", self._lease_manager.executor_id)
+            self._lease_watch_task = asyncio.create_task(self._watch_lease())
 
         # Register each pending workflow with DBOS
         for workflow in self._tracked_workflows:
@@ -713,6 +773,22 @@ class DBOSRuntime(Runtime):
     def is_launched(self) -> bool:
         return self._dbos_launched
 
+    @property
+    def lease_lost_event(self) -> asyncio.Event | None:
+        """Event that is set when the executor lease is lost.
+
+        Returns None if executor leasing is not configured.
+        """
+        if self._lease_manager is None:
+            return None
+        return self._lease_manager.lease_lost_event
+
+    async def _watch_lease(self) -> None:
+        assert self._lease_manager is not None
+        await self._lease_manager.lease_lost_event.wait()
+        logger.critical("Executor lease lost — shutting down runtime")
+        await self.destroy()
+
     async def destroy(self, destroy_dbos: bool = True) -> None:
         """Clean up DBOS runtime resources.
 
@@ -721,6 +797,20 @@ class DBOSRuntime(Runtime):
                 Set to False when DBOS lifecycle is managed externally
                 (e.g., shared across multiple runtimes in tests).
         """
+        # Cancel lease watcher first to avoid re-entrant destroy
+        if self._lease_watch_task is not None:
+            self._lease_watch_task.cancel()
+            try:
+                await self._lease_watch_task
+            except asyncio.CancelledError:
+                pass
+            self._lease_watch_task = None
+
+        # Release executor lease if held
+        if self._lease_manager is not None:
+            await self._lease_manager.release()
+            self._lease_manager = None
+
         self._tracked_workflows.clear()
         self._tracked_workflow_ids.clear()
         self._registered.clear()

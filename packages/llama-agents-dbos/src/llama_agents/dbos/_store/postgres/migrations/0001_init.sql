@@ -14,3 +14,10 @@ CREATE TABLE IF NOT EXISTS run_lifecycle (
     state VARCHAR(20) NOT NULL DEFAULT 'active',
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+CREATE TABLE IF NOT EXISTS executor_leases (
+    slot_id TEXT PRIMARY KEY,
+    holder TEXT,
+    heartbeat_at TIMESTAMPTZ,
+    acquired_at TIMESTAMPTZ
+);

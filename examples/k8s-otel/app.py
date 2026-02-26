@@ -50,6 +50,10 @@ OTEL_ENDPOINT = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:
 SERVER_PORT = int(os.environ.get("SERVER_PORT", "8080"))
 IDLE_TIMEOUT = float(os.environ.get("IDLE_TIMEOUT", "30"))
 EXECUTOR_ID = os.environ.get("HOSTNAME", "local-dev")
+# Alternative: use executor_lease config for automatic slot-based executor IDs.
+# Set EXECUTOR_LEASE_POOL_SIZE env var to enable (e.g., "3").
+# When enabled, the runtime acquires a lease on startup and overrides executor_id.
+EXECUTOR_LEASE_POOL_SIZE = os.environ.get("EXECUTOR_LEASE_POOL_SIZE")
 
 # ---------------------------------------------------------------------------
 # Structlog setup — must happen before any logging
@@ -174,7 +178,11 @@ class GreeterWorkflow(Workflow):
 # Workflow Server
 # ---------------------------------------------------------------------------
 
-runtime = DBOSRuntime()
+runtime = DBOSRuntime(
+    executor_lease={"pool_size": int(EXECUTOR_LEASE_POOL_SIZE)}
+    if EXECUTOR_LEASE_POOL_SIZE
+    else None,
+)
 
 workflow_server = WorkflowServer(
     workflow_store=runtime.create_workflow_store(),
