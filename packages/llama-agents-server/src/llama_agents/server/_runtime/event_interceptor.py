@@ -16,13 +16,12 @@ import logging
 
 from typing_extensions import override
 from workflows.events import Event
-from workflows.runtime.types.plugin import InternalRunAdapter
-from workflows.workflow import Workflow
-
-from .runtime_decorators import (
+from workflows.runtime.runtime_decorators import (
     BaseInternalRunAdapterDecorator,
     BaseRuntimeDecorator,
 )
+from workflows.runtime.types.plugin import InternalRunAdapter
+from workflows.workflow import Workflow
 
 logger = logging.getLogger(__name__)
 

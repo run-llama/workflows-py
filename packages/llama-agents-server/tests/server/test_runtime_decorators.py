@@ -7,15 +7,15 @@ from __future__ import annotations
 from typing import Any, AsyncGenerator
 from unittest.mock import MagicMock
 
-from llama_agents.server._runtime.runtime_decorators import (
-    BaseExternalRunAdapterDecorator,
-    BaseInternalRunAdapterDecorator,
-    BaseRuntimeDecorator,
-)
 from workflows.context.state_store import StateStore
 from workflows.events import (
     Event,
     StopEvent,
+)
+from workflows.runtime.runtime_decorators import (
+    BaseExternalRunAdapterDecorator,
+    BaseInternalRunAdapterDecorator,
+    BaseRuntimeDecorator,
 )
 from workflows.runtime.types.plugin import (
     ExternalRunAdapter,

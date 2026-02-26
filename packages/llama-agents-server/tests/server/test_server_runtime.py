@@ -16,7 +16,6 @@ from llama_agents.server import (
     WorkflowServer,
 )
 from llama_agents.server._runtime.idle_release_runtime import IdleReleaseDecorator
-from llama_agents.server._runtime.runtime_decorators import BaseRuntimeDecorator
 from llama_agents.server._runtime.server_runtime import (
     ServerRuntimeDecorator,
     _ServerInternalRunAdapter,
@@ -31,6 +30,7 @@ from workflows.events import (
     WorkflowFailedEvent,
     WorkflowTimedOutEvent,
 )
+from workflows.runtime.runtime_decorators import BaseRuntimeDecorator
 from workflows.runtime.types.plugin import (
     ExternalRunAdapter,
     InternalRunAdapter,

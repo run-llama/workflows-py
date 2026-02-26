@@ -18,7 +18,6 @@ from llama_agents.dbos.idle_release import (
 )
 from llama_agents.dbos.journal.crud import JournalCrud
 from llama_agents.dbos.journal.lifecycle import RunLifecycleLock, RunLifecycleState
-from llama_agents.server._runtime.runtime_decorators import BaseRuntimeDecorator
 from llama_agents.server._store.abstract_workflow_store import (
     PersistentHandler,
 )
@@ -28,6 +27,7 @@ from workflows.context import Context
 from workflows.context.state_store import InMemoryStateStore, StateStore
 from workflows.decorators import step
 from workflows.events import Event, StartEvent, StopEvent, WorkflowIdleEvent
+from workflows.runtime.runtime_decorators import BaseRuntimeDecorator
 from workflows.runtime.types.plugin import (
     ExternalRunAdapter,
     InternalRunAdapter,
