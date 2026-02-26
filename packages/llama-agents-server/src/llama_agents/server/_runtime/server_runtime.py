@@ -74,6 +74,7 @@ class _ServerInternalRunAdapter(BaseInternalRunAdapterDecorator):
         self._store = runtime._store
         self._state_type = state_type
         self._state_store: StateStore[Any] | None = None
+        self._write_lock = asyncio.Lock()
 
     @override
     def get_state_store(self) -> StateStore[Any]:
@@ -92,38 +93,43 @@ class _ServerInternalRunAdapter(BaseInternalRunAdapterDecorator):
 
     @override
     async def write_to_event_stream(self, event: Event) -> None:
-        """Record events to the workflow store, skipping duplicates on replay."""
-        replaying = self.is_replaying()
+        """Record events to the workflow store, skipping duplicates on replay.
 
-        if not replaying:
-            if isinstance(event, WorkflowFailedEvent):
-                await self._runtime._handle_status_update(
-                    run_id=self.run_id,
-                    status="failed",
-                    error=event.exception_message,
-                )
-            elif isinstance(event, WorkflowTimedOutEvent):
-                await self._runtime._handle_status_update(
-                    run_id=self.run_id,
-                    status="failed",
-                    error=f"Workflow timed out after {event.timeout}s",
-                )
-            elif isinstance(event, WorkflowCancelledEvent):
-                await self._runtime._handle_status_update(
-                    run_id=self.run_id, status="cancelled"
-                )
-            elif isinstance(event, StopEvent):
-                await self._runtime._handle_status_update(
-                    run_id=self.run_id,
-                    status="completed",
-                    result=event,
-                )
+        Uses a lock to serialize writes, ensuring events are stored in the
+        order they were emitted even when called from concurrent tasks.
+        """
+        async with self._write_lock:
+            replaying = self.is_replaying()
 
-            envelope = EventEnvelopeWithMetadata.from_event(event)
-            await self._store.append_event(self.run_id, envelope)
+            if not replaying:
+                if isinstance(event, WorkflowFailedEvent):
+                    await self._runtime._handle_status_update(
+                        run_id=self.run_id,
+                        status="failed",
+                        error=event.exception_message,
+                    )
+                elif isinstance(event, WorkflowTimedOutEvent):
+                    await self._runtime._handle_status_update(
+                        run_id=self.run_id,
+                        status="failed",
+                        error=f"Workflow timed out after {event.timeout}s",
+                    )
+                elif isinstance(event, WorkflowCancelledEvent):
+                    await self._runtime._handle_status_update(
+                        run_id=self.run_id, status="cancelled"
+                    )
+                elif isinstance(event, StopEvent):
+                    await self._runtime._handle_status_update(
+                        run_id=self.run_id,
+                        status="completed",
+                        result=event,
+                    )
 
-        # Always forward to inner adapter (e.g. idle detection, DBOS stream)
-        await super().write_to_event_stream(event)
+                envelope = EventEnvelopeWithMetadata.from_event(event)
+                await self._store.append_event(self.run_id, envelope)
+
+            # Always forward to inner adapter (e.g. idle detection, DBOS stream)
+            await super().write_to_event_stream(event)
 
 
 # ---------------------------------------------------------------------------
