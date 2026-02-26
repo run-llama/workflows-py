@@ -253,11 +253,23 @@ Since resumption is based on journal replay, changing a workflow's code while hi
 - **Drain in-flight workflows** before deploying code changes, or
 - **Register the updated workflow under a new name** so that old runs continue against the original code and new runs use the updated version
 
+A workflow's name defaults to its module-qualified class name (e.g. `my_app.CounterWorkflow`). You can set it explicitly with the `workflow_name` parameter:
+
+```python
+wf = CounterWorkflow(runtime=runtime, workflow_name="counter-v2")
+```
+
+When using a server, the name passed to `add_workflow` is the HTTP route name, independent of the workflow's internal name:
+
+```python
+server.add_workflow("counter-v2", CounterWorkflow(runtime=runtime, workflow_name="counter-v2"))
+```
+
 ### Event streaming behavior
 
 When using `handler.stream_events()` in-process (outside of a server), DBOS streams are replayed from the beginning on each call. This means you will receive all events the workflow has ever emitted, not just new ones.
 
-The [workflow server](/python/llamaagents/workflows/deployment) uses a cursor-based approach instead — its `GET /events/{handler_id}` endpoint tracks position so each consumer only receives events once. For production use cases, prefer the server's streaming endpoints.
+The [workflow server](/python/llamaagents/workflows/deployment) uses a cursor-based approach instead — its `GET /events/{handler_id}` endpoint tracks position so each consumer only receives events once.
 
 ### Crash recovery
 
