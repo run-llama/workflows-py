@@ -4,7 +4,7 @@ sidebar:
 title: DBOS Durable Execution
 ---
 
-The [durable workflows](/python/llamaagents/workflows/durable_workflows) page shows how to make workflows survive restarts and errors using manual context snapshots. The `llama-agents-dbos` package removes that manual work by plugging a [DBOS](https://docs.dbos.dev/)-backed runtime into your workflows. Every step transition is persisted automatically, so a crashed workflow resumes exactly where it left off — no snapshot code required.
+The [durable workflows](/python/llamaagents/workflows/durable_workflows) page shows how to make workflows survive restarts and errors using manual context snapshots. The `llama-agents-dbos` package removes that manual work by plugging a [DBOS](https://www.dbos.dev/)-backed runtime into your workflows. Every step transition is persisted automatically, so a crashed workflow resumes exactly where it left off — no snapshot code required.
 
 ## Installation
 
@@ -223,7 +223,9 @@ DBOS(config={
 })
 ```
 
-See the `examples/dbos/server_replicas.py` example for a complete multi-replica demo.
+See the `examples/dbos/server_replicas.py` example for a complete multi-replica demo. For a deeper look at how replicas coordinate, see the [DBOS architecture overview](https://docs.dbos.dev/architecture).
+
+For production multi-replica deployments, [DBOS Conductor](https://docs.dbos.dev/production/conductor) adds auto-scaling and monitoring dashboards on top of the core runtime.
 
 ## Execution Model
 
