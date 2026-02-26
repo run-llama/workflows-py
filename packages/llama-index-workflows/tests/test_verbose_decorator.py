@@ -100,16 +100,39 @@ async def test_verbose_print_step_completed_no_event(capsys: Any) -> None:
     assert "Step my_step produced no event" in captured.out
 
 
-async def test_verbose_logger_mode(caplog: Any) -> None:
-    fake = FakeInternalRunAdapter()
+async def test_verbose_auto_detects_logger_when_info_enabled(caplog: Any) -> None:
     logger = logging.getLogger("workflows.verbose")
-    adapter = _VerboseInternalRunAdapter(fake, output=logger.info)
+    old_level = logger.level
+    try:
+        logger.setLevel(logging.INFO)
+        # Construct decorator after configuring logger so auto-detect picks it up
+        from workflows.runtime.verbose import _resolve_output
 
-    event = _make_step_state_changed(name="my_step", step_state=StepState.RUNNING)
-    with caplog.at_level(logging.INFO, logger="workflows.verbose"):
-        await adapter.write_to_event_stream(event)
+        output = _resolve_output()
+        fake = FakeInternalRunAdapter()
+        adapter = _VerboseInternalRunAdapter(fake, output=output)
 
-    assert "Running step my_step" in caplog.text
+        event = _make_step_state_changed(name="my_step", step_state=StepState.RUNNING)
+        with caplog.at_level(logging.INFO, logger="workflows.verbose"):
+            await adapter.write_to_event_stream(event)
+
+        assert "Running step my_step" in caplog.text
+    finally:
+        logger.setLevel(old_level)
+
+
+async def test_verbose_falls_back_to_print_by_default(capsys: Any) -> None:
+    logger = logging.getLogger("workflows.verbose")
+    old_level = logger.level
+    try:
+        # Ensure logger is at default (WARNING effective level)
+        logger.setLevel(logging.NOTSET)
+        from workflows.runtime.verbose import _resolve_output
+
+        output = _resolve_output()
+        assert output is print
+    finally:
+        logger.setLevel(old_level)
 
 
 async def test_verbose_forwards_events() -> None:

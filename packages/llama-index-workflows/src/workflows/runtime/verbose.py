@@ -2,6 +2,10 @@
 # Copyright (c) 2026 LlamaIndex Inc.
 """
 Verbose runtime decorator that prints step activity by observing StepStateChanged events.
+
+Output destination is auto-detected: if the ``"workflows.verbose"`` logger is
+configured to emit DEBUG or INFO messages, those levels are used (in that
+priority order).  Otherwise output falls back to :func:`print`.
 """
 
 from __future__ import annotations
@@ -18,6 +22,15 @@ from workflows.runtime.types.plugin import InternalRunAdapter, Runtime
 from workflows.workflow import Workflow
 
 verbose_logger = logging.getLogger("workflows.verbose")
+
+
+def _resolve_output() -> Callable[[str], None]:
+    """Pick the best output sink based on current logging configuration."""
+    if verbose_logger.isEnabledFor(logging.DEBUG):
+        return verbose_logger.debug
+    if verbose_logger.isEnabledFor(logging.INFO):
+        return verbose_logger.info
+    return print
 
 
 class _VerboseInternalRunAdapter(BaseInternalRunAdapterDecorator):
@@ -48,18 +61,15 @@ class _VerboseInternalRunAdapter(BaseInternalRunAdapterDecorator):
 class VerboseDecorator(BaseRuntimeDecorator):
     """Runtime decorator that prints step starts and completions.
 
-    Args:
-        decorated: The inner runtime to wrap.
-        mode: Output mode — ``"print"`` (default) uses :func:`print`,
-              ``"logger"`` uses ``logging.getLogger("workflows.verbose").info``.
+    Output destination is auto-detected at construction time based on the
+    ``"workflows.verbose"`` logger's effective level.  If DEBUG or INFO
+    messages would be emitted, the logger is used; otherwise falls back to
+    :func:`print`.
     """
 
-    def __init__(self, decorated: Runtime, mode: str = "print") -> None:
+    def __init__(self, decorated: Runtime) -> None:
         super().__init__(decorated)
-        if mode == "logger":
-            self._output: Callable[[str], None] = verbose_logger.info
-        else:
-            self._output = print
+        self._output = _resolve_output()
 
     def get_internal_adapter(self, workflow: Workflow) -> InternalRunAdapter:
         inner = self._decorated.get_internal_adapter(workflow)

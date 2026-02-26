@@ -114,7 +114,6 @@ class Workflow(metaclass=WorkflowMeta):
         timeout: float | None = 45.0,
         disable_validation: bool = False,
         verbose: bool = False,
-        verbose_mode: str = "print",
         resource_manager: ResourceManager | None = None,
         num_concurrent_runs: int | None = None,
         runtime: Runtime | None = None,
@@ -169,7 +168,7 @@ class Workflow(metaclass=WorkflowMeta):
         if self._verbose:
             from workflows.runtime.verbose import VerboseDecorator
 
-            self._runtime = VerboseDecorator(self._runtime, mode=verbose_mode)
+            self._runtime = VerboseDecorator(self._runtime)
 
         # Register with runtime for tracking (no-op for BasicRuntime)
         self._runtime.track_workflow(self)
