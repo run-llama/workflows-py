@@ -263,9 +263,9 @@ async def test_error_message_format(client: WorkflowClient) -> None:
 
     # Verify error message contains the expected components
     assert (
-        "404 Not Found for POST http://test/workflows/nonexistent_workflow/run. Response: Workflow not found"
+        '404 Not Found for POST http://test/workflows/nonexistent_workflow/run. Response: {"detail":"Workflow not found"}'
         == error_message
-    )  # Status code
+    )
 
 
 def _envelope(msg: str) -> EventEnvelopeWithMetadata:
