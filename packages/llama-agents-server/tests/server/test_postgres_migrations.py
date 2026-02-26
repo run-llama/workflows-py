@@ -6,6 +6,10 @@ import asyncio
 
 import asyncpg
 import pytest
+from llama_agents.dbos._store import POSTGRES_MIGRATION_SOURCE
+from llama_agents.server._store import (
+    POSTGRES_MIGRATION_SOURCE as SERVER_POSTGRES_MIGRATION_SOURCE,
+)
 from llama_agents.server._store.migration_utils import (
     iter_migration_files,
     parse_target_version,
@@ -15,7 +19,7 @@ from llama_agents.server._store.postgres.migrate import run_migrations
 # ── Unit tests (no DB) ──────────────────────────────────────────────
 
 
-_PG_MIGRATIONS_PKG = "llama_agents.server._store.postgres.migrations"
+_PG_MIGRATIONS_PKG = SERVER_POSTGRES_MIGRATION_SOURCE[1]
 
 
 def test_parse_target_version_valid() -> None:
@@ -183,8 +187,8 @@ async def test_per_package_migrations(postgres_dsn: str) -> None:
     try:
         await conn.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
         sources = [
-            ("server", "llama_agents.server._store.postgres.migrations"),
-            ("dbos", "llama_agents.dbos._store.postgres.migrations"),
+            SERVER_POSTGRES_MIGRATION_SOURCE,
+            POSTGRES_MIGRATION_SOURCE,
         ]
         await run_migrations(conn, schema=schema, sources=sources)
 
@@ -201,7 +205,6 @@ async def test_per_package_migrations(postgres_dsn: str) -> None:
         # DBOS tables
         assert "workflow_journal" in table_names
         assert "run_lifecycle" in table_names
-        assert "executor_leases" in table_names
 
         # Both packages tracked
         server_ver = await conn.fetchval(

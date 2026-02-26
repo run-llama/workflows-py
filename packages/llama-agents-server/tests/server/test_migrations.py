@@ -8,6 +8,7 @@ from collections.abc import Generator
 from pathlib import Path
 
 import pytest
+from llama_agents.server._store import SQLITE_MIGRATION_SOURCE
 from llama_agents.server._store.sqlite.migrate import run_migrations
 
 _FAKE_MIGRATION_SQL = """\
@@ -134,7 +135,7 @@ def test_per_package_migrations(tmp_path: Path, fake_migrations_pkg: str) -> Non
     conn = sqlite3.connect(str(db_path))
     try:
         sources = [
-            ("server", "llama_agents.server._store.sqlite.migrations"),
+            SQLITE_MIGRATION_SOURCE,
             ("fake", fake_migrations_pkg),
         ]
         run_migrations(conn, sources=sources)
@@ -187,7 +188,7 @@ def test_legacy_upgrade_with_extra_package(
         )
 
         sources = [
-            ("server", "llama_agents.server._store.sqlite.migrations"),
+            SQLITE_MIGRATION_SOURCE,
             ("fake", fake_migrations_pkg),
         ]
         run_migrations(conn, sources=sources)

@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 
+from llama_agents.server._store import SQLITE_MIGRATION_SOURCE
 from llama_agents.server._store.migration_utils import (
     iter_migration_files,
     parse_target_version,
@@ -12,8 +13,7 @@ from llama_agents.server._store.migration_utils import (
 
 logger = logging.getLogger(__name__)
 
-
-_MIGRATIONS_PKG = "llama_agents.server._store.sqlite.migrations"
+_MIGRATIONS_PKG = SQLITE_MIGRATION_SOURCE[1]
 
 _SCHEMA_MIGRATIONS_DDL = """\
 CREATE TABLE IF NOT EXISTS schema_migrations (

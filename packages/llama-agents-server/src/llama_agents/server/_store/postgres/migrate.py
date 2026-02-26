@@ -6,6 +6,7 @@ import logging
 import re
 
 import asyncpg
+from llama_agents.server._store import POSTGRES_MIGRATION_SOURCE
 from llama_agents.server._store.migration_utils import (
     iter_migration_files,
     parse_target_version,
@@ -13,7 +14,7 @@ from llama_agents.server._store.migration_utils import (
 
 logger = logging.getLogger(__name__)
 
-_MIGRATIONS_PKG = "llama_agents.server._store.postgres.migrations"
+_MIGRATIONS_PKG = POSTGRES_MIGRATION_SOURCE[1]
 # Arbitrary but fixed int64 used as a pg_advisory_lock key so that
 # concurrent replicas serialize their migration runs.
 _LOCK_ID = 7_201_407_233_458_173

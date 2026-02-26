@@ -8,6 +8,10 @@ from collections.abc import Generator
 from pathlib import Path
 
 import pytest
+from llama_agents.dbos._store import SQLITE_MIGRATION_SOURCE
+from llama_agents.server._store import (
+    SQLITE_MIGRATION_SOURCE as SERVER_SQLITE_MIGRATION_SOURCE,
+)
 from llama_agents.server._store.sqlite.migrate import (
     run_migrations as sqlite_run_migrations,
 )
@@ -23,8 +27,8 @@ from sqlalchemy.pool import StaticPool
 from testcontainers.postgres import PostgresContainer
 
 _SQLITE_SOURCES = [
-    ("server", "llama_agents.server._store.sqlite.migrations"),
-    ("dbos", "llama_agents.dbos._store.sqlite.migrations"),
+    SERVER_SQLITE_MIGRATION_SOURCE,
+    SQLITE_MIGRATION_SOURCE,
 ]
 
 

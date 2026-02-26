@@ -19,6 +19,13 @@ from dataclasses import dataclass
 from typing import Any, AsyncGenerator, TypedDict, cast
 
 import asyncpg
+from llama_agents.dbos._store import POSTGRES_MIGRATION_SOURCE, SQLITE_MIGRATION_SOURCE
+from llama_agents.server._store import (
+    POSTGRES_MIGRATION_SOURCE as SERVER_POSTGRES_MIGRATION_SOURCE,
+)
+from llama_agents.server._store import (
+    SQLITE_MIGRATION_SOURCE as SERVER_SQLITE_MIGRATION_SOURCE,
+)
 from llama_index_instrumentation.dispatcher import active_instrument_tags
 from pydantic import BaseModel
 from typing_extensions import Unpack
@@ -405,12 +412,12 @@ class DBOSRuntime(Runtime):
         schema = _resolve_schema(self.config, engine)
 
         _PG_SOURCES = [
-            ("server", "llama_agents.server._store.postgres.migrations"),
-            ("dbos", "llama_agents.dbos._store.postgres.migrations"),
+            SERVER_POSTGRES_MIGRATION_SOURCE,
+            POSTGRES_MIGRATION_SOURCE,
         ]
         _SQLITE_SOURCES = [
-            ("server", "llama_agents.server._store.sqlite.migrations"),
-            ("dbos", "llama_agents.dbos._store.sqlite.migrations"),
+            SERVER_SQLITE_MIGRATION_SOURCE,
+            SQLITE_MIGRATION_SOURCE,
         ]
 
         if engine.dialect.name == "postgresql":

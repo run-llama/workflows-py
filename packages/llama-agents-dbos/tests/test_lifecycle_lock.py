@@ -11,12 +11,16 @@ from typing import Protocol
 
 import asyncpg
 import pytest
+from llama_agents.dbos._store import POSTGRES_MIGRATION_SOURCE
 from llama_agents.dbos.journal.lifecycle import (
     LIFECYCLE_TABLE_NAME,
     PostgresRunLifecycleLock,
     RunLifecycleLock,
     RunLifecycleState,
     SqliteRunLifecycleLock,
+)
+from llama_agents.server._store import (
+    POSTGRES_MIGRATION_SOURCE as SERVER_POSTGRES_MIGRATION_SOURCE,
 )
 from llama_agents.server._store.postgres.migrate import run_migrations as pg_migrations
 
@@ -74,7 +78,14 @@ async def lock_fixture(
         schema = "test_lifecycle_lock"
         try:
             await conn.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
-            await pg_migrations(conn, schema=schema)
+            await pg_migrations(
+                conn,
+                schema=schema,
+                sources=[
+                    SERVER_POSTGRES_MIGRATION_SOURCE,
+                    POSTGRES_MIGRATION_SOURCE,
+                ],
+            )
         finally:
             await conn.close()
         pool = await asyncpg.create_pool(dsn, server_settings={"search_path": schema})
