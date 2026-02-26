@@ -3,9 +3,40 @@
 from __future__ import annotations
 
 import sqlite3
+import sys
+from collections.abc import Generator
 from pathlib import Path
 
+import pytest
 from llama_agents.server._store.sqlite.migrate import run_migrations
+
+_FAKE_MIGRATION_SQL = """\
+-- migration: 1
+
+CREATE TABLE IF NOT EXISTS fake_journal (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id TEXT NOT NULL,
+    seq_num INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS fake_lifecycle (
+    run_id TEXT PRIMARY KEY,
+    state TEXT NOT NULL DEFAULT 'active',
+    updated_at TEXT NOT NULL
+);
+"""
+
+
+@pytest.fixture()
+def fake_migrations_pkg(tmp_path: Path) -> Generator[str]:
+    """Create a temporary importable migrations package and return its dotted name."""
+    pkg_dir = tmp_path / "fake_migrations"
+    pkg_dir.mkdir()
+    (pkg_dir / "__init__.py").write_text("")
+    (pkg_dir / "0001_init.sql").write_text(_FAKE_MIGRATION_SQL)
+    sys.path.insert(0, str(tmp_path))
+    yield "fake_migrations"
+    sys.path.remove(str(tmp_path))
 
 
 def _get_tables(conn: sqlite3.Connection) -> set[str]:
@@ -97,14 +128,14 @@ def test_migrate_from_version_1(tmp_path: Path) -> None:
         conn.close()
 
 
-def test_per_package_migrations(tmp_path: Path) -> None:
+def test_per_package_migrations(tmp_path: Path, fake_migrations_pkg: str) -> None:
     """Test running migrations with multiple package sources."""
     db_path = tmp_path / "test_multi.sqlite"
     conn = sqlite3.connect(str(db_path))
     try:
         sources = [
             ("server", "llama_agents.server._store.sqlite.migrations"),
-            ("dbos", "llama_agents.dbos._store.sqlite.migrations"),
+            ("fake", fake_migrations_pkg),
         ]
         run_migrations(conn, sources=sources)
 
@@ -113,13 +144,13 @@ def test_per_package_migrations(tmp_path: Path) -> None:
         assert "handlers" in tables
         assert "ticks" in tables
 
-        # DBOS tables should exist
-        assert "workflow_journal" in tables
-        assert "run_lifecycle" in tables
+        # Fake package tables should exist
+        assert "fake_journal" in tables
+        assert "fake_lifecycle" in tables
 
         # Both packages should have version entries
         assert _max_version(conn, "server") >= 1
-        assert _max_version(conn, "dbos") >= 1
+        assert _max_version(conn, "fake") >= 1
 
         # Idempotent
         run_migrations(conn, sources=sources)
@@ -128,8 +159,10 @@ def test_per_package_migrations(tmp_path: Path) -> None:
         conn.close()
 
 
-def test_legacy_upgrade_with_dbos(tmp_path: Path) -> None:
-    """Simulate upgrading from released v3 deployment, then adding DBOS."""
+def test_legacy_upgrade_with_extra_package(
+    tmp_path: Path, fake_migrations_pkg: str
+) -> None:
+    """Simulate upgrading from released v3 deployment, then adding another package."""
     db_path = tmp_path / "test_upgrade.sqlite"
     conn = sqlite3.connect(str(db_path))
     try:
@@ -155,16 +188,16 @@ def test_legacy_upgrade_with_dbos(tmp_path: Path) -> None:
 
         sources = [
             ("server", "llama_agents.server._store.sqlite.migrations"),
-            ("dbos", "llama_agents.dbos._store.sqlite.migrations"),
+            ("fake", fake_migrations_pkg),
         ]
         run_migrations(conn, sources=sources)
 
         # Server should be seeded at 3 and advanced to 4+
         assert _max_version(conn, "server") >= 4
 
-        # DBOS tables should be created
+        # Fake package tables should be created
         tables = _get_tables(conn)
-        assert "workflow_journal" in tables
-        assert "run_lifecycle" in tables
+        assert "fake_journal" in tables
+        assert "fake_lifecycle" in tables
     finally:
         conn.close()
