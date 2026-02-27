@@ -174,7 +174,9 @@ class GreeterWorkflow(Workflow):
 # ---------------------------------------------------------------------------
 
 runtime = DBOSRuntime(
-    executor_lease={"pool_size": EXECUTOR_POOL_SIZE},
+    _experimental_executor_lease={
+        "pool_size": EXECUTOR_POOL_SIZE,
+    },
 )
 
 workflow_server = WorkflowServer(

@@ -209,7 +209,7 @@ class DBOSRuntimeConfig(TypedDict, total=False):
     schema: str | None
     state_table_name: str
     journal_table_name: str
-    executor_lease: ExecutorLeaseConfig | None
+    _experimental_executor_lease: ExecutorLeaseConfig | None
 
 
 DEFAULT_STATE_TABLE_NAME = STATE_TABLE_NAME
@@ -282,6 +282,27 @@ class DBOSRuntime(Runtime):
                     to force no schema even on PostgreSQL.
                 state_table_name: State table name. Default "workflow_state".
                 journal_table_name: Journal table name. Default "workflow_journal".
+                _experimental_executor_lease: Lease-based executor identity.
+                    When set, the runtime acquires a named slot from a
+                    Postgres-backed pool on launch and uses it as the DBOS
+                    executor_id. This replaces the need for stable hostnames
+                    (e.g. from a StatefulSet) and allows plain Deployments to
+                    coordinate executor identity across replicas.
+
+                    Operational requirements:
+
+                    - The deploying orchestrator must not run more than
+                      ``pool_size`` replicas simultaneously. In Kubernetes
+                      this means setting ``maxSurge: 0`` on the Deployment
+                      rolling-update strategy so that new pods only start
+                      after old ones terminate and release their lease.
+                      Without this, new replicas block on lease acquisition
+                      and never pass health checks.
+                    - Scaling down below the number of replicas that hold
+                      active workflows will orphan those workflows — they
+                      remain assigned to an executor that no longer exists
+                      and won't resume until the lease expires and another
+                      replica reclaims the slot.
         """
         super().__init__()
         self.config: DBOSRuntimeConfig = dict(kwargs)  # type: ignore[assignment]
@@ -705,18 +726,18 @@ class DBOSRuntime(Runtime):
 
         Must be called before running any workflows.
         Runs database migrations unless run_migrations_on_launch=False.
-        If ``executor_lease`` is set in the config, acquires a lease slot first.
+        If ``_experimental_executor_lease`` is set in the config, acquires a lease slot first.
         """
         if self._dbos_launched:
             return  # Already launched
 
         # Acquire executor lease if configured.
         # Migrations must run first so the executor_leases table exists.
-        lease_config = self.config.get("executor_lease")
+        lease_config = self.config.get("_experimental_executor_lease")
         if lease_config is not None:
             pool_size = lease_config.get("pool_size")
             if pool_size is None:
-                raise ValueError("executor_lease.pool_size is required")
+                raise ValueError("_experimental_executor_lease.pool_size is required")
 
             # Get DSN from DBOS config before launch
             dbos_inst = _get_dbos_instance()
