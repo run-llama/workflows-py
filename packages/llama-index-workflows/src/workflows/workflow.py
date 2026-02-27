@@ -46,7 +46,7 @@ from .types import RunResultT
 from .utils import get_steps_from_class, get_steps_from_instance
 
 dispatcher = get_dispatcher(__name__)
-logger = logging.getLogger()
+logger = logging.getLogger(__name__)
 
 
 class WorkflowMeta(type):

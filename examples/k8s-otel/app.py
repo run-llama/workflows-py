@@ -15,6 +15,8 @@ Env vars:
 from __future__ import annotations
 
 import asyncio
+import logging
+import logging.config
 import os
 import time
 from contextlib import asynccontextmanager
@@ -27,14 +29,12 @@ from fastapi import FastAPI
 from fastapi.responses import RedirectResponse
 from llama_agents.dbos import DBOSRuntime
 from llama_agents.server import WorkflowServer
+from llama_index.observability.otel import LlamaIndexOpenTelemetry
 from llama_index_instrumentation.dispatcher import active_instrument_tags
-from openinference.instrumentation.llama_index import LlamaIndexInstrumentor
+
+# from openinference.instrumentation.llama_index import LlamaIndexInstrumentor
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
-from opentelemetry.sdk.resources import SERVICE_NAME, Resource
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor
-from opentelemetry.trace import set_tracer_provider
 from pydantic import Field
 from starlette.types import ASGIApp, Receive, Scope, Send
 from workflows import Context, Workflow, step
@@ -58,12 +58,15 @@ IDLE_TIMEOUT = float(os.environ.get("IDLE_TIMEOUT", "30"))
 EXECUTOR_POOL_SIZE = int(os.environ.get("EXECUTOR_POOL_SIZE", "2"))
 
 # ---------------------------------------------------------------------------
-# Structlog setup — must happen before any logging
+# Logging helpers
 # ---------------------------------------------------------------------------
 
+log = structlog.get_logger("app")
+access_logger = logging.getLogger("access")
 
-def merge_custom_context(
-    _logger: structlog.BoundLogger,
+
+def _merge_instrument_tags(
+    _logger: logging.Logger,
     _method_name: str,
     event_dict: MutableMapping[str, Any],
 ) -> MutableMapping[str, Any]:
@@ -74,16 +77,67 @@ def merge_custom_context(
     return event_dict
 
 
-structlog.configure(
-    processors=[
-        merge_custom_context,
+def _drop_uvicorn_color_message(
+    _logger: logging.Logger,
+    _method_name: str,
+    event_dict: MutableMapping[str, Any],
+) -> MutableMapping[str, Any]:
+    event_dict.pop("color_message", None)
+    return event_dict
+
+
+def setup_logging() -> None:
+    """Configure all Python logging (stdlib + structlog) to emit JSON.
+
+    Must be called AFTER DBOS() init so we can clear its custom handlers.
+    """
+    shared_processors: list[structlog.types.Processor] = [
+        structlog.contextvars.merge_contextvars,
         structlog.processors.add_log_level,
         structlog.processors.TimeStamper(fmt="iso", utc=True),
-        structlog.dev.ConsoleRenderer(),
-    ],
-)
+        _merge_instrument_tags,
+    ]
 
-log = structlog.get_logger()
+    # structlog loggers → wrap into a stdlib LogRecord for the formatter
+    structlog.configure(
+        processors=[
+            *shared_processors,
+            structlog.stdlib.ProcessorFormatter.wrap_for_formatter,
+        ],
+        logger_factory=structlog.stdlib.LoggerFactory(),
+        wrapper_class=structlog.stdlib.BoundLogger,
+        cache_logger_on_first_use=True,
+    )
+
+    formatter = structlog.stdlib.ProcessorFormatter(
+        processors=[
+            structlog.stdlib.ProcessorFormatter.remove_processors_meta,
+            structlog.processors.JSONRenderer(),
+        ],
+        foreign_pre_chain=[
+            structlog.stdlib.add_logger_name,
+            *shared_processors,
+            _drop_uvicorn_color_message,
+            structlog.stdlib.ExtraAdder(),
+        ],
+    )
+
+    handler = logging.StreamHandler()
+    handler.setFormatter(formatter)
+
+    root = logging.getLogger()
+    root.handlers.clear()
+    root.addHandler(handler)
+    root.setLevel(logging.INFO)
+
+    # Clear DBOS's private handler so its logs propagate to root
+    dbos_logger = logging.getLogger("dbos")
+    dbos_logger.handlers.clear()
+    dbos_logger.propagate = True
+
+    # Suppress uvicorn's default access logger (we have our own middleware)
+    logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+
 
 # ---------------------------------------------------------------------------
 # OTEL setup — swap between openinference and llama-index-observability-otel
@@ -91,21 +145,20 @@ log = structlog.get_logger()
 # ---------------------------------------------------------------------------
 otel_exporter = OTLPSpanExporter(endpoint=OTEL_ENDPOINT, insecure=True)
 
-# --- Option A: openinference (active) ---
-tracer_provider = TracerProvider(
-    resource=Resource(attributes={SERVICE_NAME: "k8s-otel-example"})
+# --- Option A: llama-index-observability-otel (active) ---
+instrumentor = LlamaIndexOpenTelemetry(
+    span_exporter=otel_exporter,
+    service_name_or_resource="k8s-otel-example",
 )
-tracer_provider.add_span_processor(BatchSpanProcessor(otel_exporter))
-set_tracer_provider(tracer_provider)
-LlamaIndexInstrumentor().instrument(tracer_provider=tracer_provider)
+instrumentor.start_registering()
 
-# --- Option B: llama-index-observability-otel (inactive) ---
-# from llama_index.observability.otel import LlamaIndexOpenTelemetry
-# instrumentor = LlamaIndexOpenTelemetry(
-#     span_exporter=otel_exporter,
-#     service_name_or_resource="k8s-otel-example",
+# --- Option B: openinference (inactive) ---
+# tracer_provider = TracerProvider(
+#     resource=Resource(attributes={SERVICE_NAME: "k8s-otel-example"})
 # )
-# instrumentor.start_registering()
+# tracer_provider.add_span_processor(BatchSpanProcessor(otel_exporter))
+# set_tracer_provider(tracer_provider)
+# LlamaIndexInstrumentor().instrument(tracer_provider=tracer_provider)
 
 # ---------------------------------------------------------------------------
 # DBOS setup — must be called at module level before DBOSRuntime()
@@ -117,6 +170,9 @@ DBOS(
         "run_admin_server": False,
     }
 )
+
+# Must come AFTER DBOS() init — DBOS adds its own handlers in __init__
+setup_logging()
 
 # ---------------------------------------------------------------------------
 # Counter Workflow
@@ -218,8 +274,6 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         await workflow_server.stop()
 
 
-access_log = structlog.get_logger("access")
-
 HEALTH_PATHS = {"/health"}
 
 
@@ -252,10 +306,11 @@ class AccessLogMiddleware:
 
         dur_ms = (time.perf_counter() - start) * 1000
         method = scope.get("method", "?")
-        access_log.info(
-            f"{method} {path}",
-            status_code=status_code,
-            duration_ms=round(dur_ms, 1),
+        access_logger.info(
+            "%s %s",
+            method,
+            path,
+            extra={"status_code": status_code, "duration_ms": round(dur_ms, 1)},
         )
 
 
@@ -279,15 +334,6 @@ async def index() -> RedirectResponse:
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
-
-
-@app.get("/info")
-async def info() -> dict[str, Any]:
-    return {
-        "executor_pool_size": EXECUTOR_POOL_SIZE,
-        "idle_timeout": IDLE_TIMEOUT,
-        "workflows": ["counter", "greeter"],
-    }
 
 
 # ---------------------------------------------------------------------------
