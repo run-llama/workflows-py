@@ -1,5 +1,30 @@
 # llama-agents-server
 
+## 0.2.0
+
+### Minor Changes
+
+- d61646f: Add max_completed history cap to MemoryWorkflowStore in order to control memory consumption
+- 18a5d68: Refactor server internals from monolithic handler to composable runtime decorators (ServerRuntimeDecorator, PersistenceDecorator, IdleReleaseDecorator) enabling pluggable server runtimes
+- 6bccda7: Add AgentDataStore backed by LlamaCloud Agent Data API
+- 4ba29dc: Add tick storage, event storage with SSE subscription, per-run state stores, and centralized handler status transitions to AbstractWorkflowStore and SQLite/memory implementations
+
+### Patch Changes
+
+- 77a3f9c: Add workflow release for idle DBOS workflows (with replica support)
+- 96e437e: Move task execution into the runtime, for maximal control of specific runtime semantics around determinism
+- 23385c7: Add better 500 error logging and structured responses
+- Updated dependencies [4ba29dc]
+- Updated dependencies [77a3f9c]
+- Updated dependencies [62ffc15]
+- Updated dependencies [707a254]
+- Updated dependencies [05f5f4e]
+- Updated dependencies [3c22216]
+- Updated dependencies [96e437e]
+- Updated dependencies [23385c7]
+  - llama-agents-client@0.2.0
+  - llama-index-workflows@2.15.0
+
 ## 0.2.0-rc.3
 
 ### Minor Changes

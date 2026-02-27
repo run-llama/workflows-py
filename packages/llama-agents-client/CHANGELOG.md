@@ -1,5 +1,22 @@
 # llama-agents-client
 
+## 0.2.0
+
+### Minor Changes
+
+- 4ba29dc: Add SSE event streaming with sequence-based cursors and automatic reconnection on connection drop
+
+### Patch Changes
+
+- 62ffc15: Add last sequence id accessor to workflow client event stream
+- 23385c7: Add better 500 error logging and structured responses
+- Updated dependencies [77a3f9c]
+- Updated dependencies [707a254]
+- Updated dependencies [05f5f4e]
+- Updated dependencies [3c22216]
+- Updated dependencies [96e437e]
+  - llama-index-workflows@2.15.0
+
 ## 0.2.0-rc.1
 
 ### Patch Changes
