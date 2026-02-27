@@ -6,10 +6,7 @@ import asyncio
 
 import asyncpg
 import pytest
-from llama_agents.dbos._store import POSTGRES_MIGRATION_SOURCE
-from llama_agents.server._store import (
-    POSTGRES_MIGRATION_SOURCE as SERVER_POSTGRES_MIGRATION_SOURCE,
-)
+from llama_agents.server._store import POSTGRES_MIGRATION_SOURCE
 from llama_agents.server._store.migration_utils import (
     iter_migration_files,
     parse_target_version,
@@ -19,7 +16,7 @@ from llama_agents.server._store.postgres.migrate import run_migrations
 # ── Unit tests (no DB) ──────────────────────────────────────────────
 
 
-_PG_MIGRATIONS_PKG = SERVER_POSTGRES_MIGRATION_SOURCE[1]
+_PG_MIGRATIONS_PKG = POSTGRES_MIGRATION_SOURCE[1]
 
 
 def test_parse_target_version_valid() -> None:
@@ -174,47 +171,6 @@ async def test_concurrent_migrations_with_advisory_lock(
         table_names = {r["table_name"] for r in tables}
         assert "wf_handlers" in table_names
         assert "wf_events" in table_names
-    finally:
-        await conn.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
-        await conn.close()
-
-
-@pytest.mark.docker
-async def test_per_package_migrations(postgres_dsn: str) -> None:
-    """Test running migrations with both server and DBOS sources."""
-    conn = await asyncpg.connect(postgres_dsn)
-    schema = "test_multi_pkg"
-    try:
-        await conn.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
-        sources = [
-            SERVER_POSTGRES_MIGRATION_SOURCE,
-            POSTGRES_MIGRATION_SOURCE,
-        ]
-        await run_migrations(conn, schema=schema, sources=sources)
-
-        tables = await conn.fetch(
-            "SELECT table_name FROM information_schema.tables WHERE table_schema = $1",
-            schema,
-        )
-        table_names = {r["table_name"] for r in tables}
-        # Server tables
-        assert "wf_handlers" in table_names
-        assert "wf_events" in table_names
-        assert "wf_ticks" in table_names
-        assert "workflow_state" in table_names
-        # DBOS tables
-        assert "workflow_journal" in table_names
-        assert "run_lifecycle" in table_names
-
-        # Both packages tracked
-        server_ver = await conn.fetchval(
-            f"SELECT MAX(version) FROM {schema}.schema_migrations WHERE package = 'server'"
-        )
-        dbos_ver = await conn.fetchval(
-            f"SELECT MAX(version) FROM {schema}.schema_migrations WHERE package = 'dbos'"
-        )
-        assert server_ver >= 1
-        assert dbos_ver >= 1
     finally:
         await conn.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
         await conn.close()
