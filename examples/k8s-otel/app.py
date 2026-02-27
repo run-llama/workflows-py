@@ -9,7 +9,7 @@ Env vars:
   OTEL_EXPORTER_OTLP_ENDPOINT — OTLP gRPC endpoint (e.g. http://phoenix:4317)
   SERVER_PORT               — HTTP port (default 8080)
   IDLE_TIMEOUT              — Seconds before idle release (default 30)
-  HOSTNAME                  — Used as executor_id (set by StatefulSet)
+  EXECUTOR_POOL_SIZE        — Number of executor slots (e.g., "2")
 """
 
 from __future__ import annotations
@@ -49,7 +49,7 @@ POSTGRES_DSN = os.environ.get(
 OTEL_ENDPOINT = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317")
 SERVER_PORT = int(os.environ.get("SERVER_PORT", "8080"))
 IDLE_TIMEOUT = float(os.environ.get("IDLE_TIMEOUT", "30"))
-EXECUTOR_ID = os.environ.get("HOSTNAME", "local-dev")
+EXECUTOR_POOL_SIZE = int(os.environ.get("EXECUTOR_POOL_SIZE", "2"))
 
 # ---------------------------------------------------------------------------
 # Structlog setup — must happen before any logging
@@ -97,7 +97,6 @@ DBOS(
         "name": "k8s-otel-example",
         "system_database_url": POSTGRES_DSN,
         "run_admin_server": False,
-        "executor_id": EXECUTOR_ID,
     }
 )
 
@@ -174,7 +173,11 @@ class GreeterWorkflow(Workflow):
 # Workflow Server
 # ---------------------------------------------------------------------------
 
-runtime = DBOSRuntime()
+runtime = DBOSRuntime(
+    _experimental_executor_lease={
+        "pool_size": EXECUTOR_POOL_SIZE,
+    },
+)
 
 workflow_server = WorkflowServer(
     workflow_store=runtime.create_workflow_store(),
@@ -219,7 +222,7 @@ async def health() -> dict[str, str]:
 @app.get("/info")
 async def info() -> dict[str, Any]:
     return {
-        "executor_id": EXECUTOR_ID,
+        "executor_pool_size": EXECUTOR_POOL_SIZE,
         "idle_timeout": IDLE_TIMEOUT,
         "workflows": ["counter", "greeter"],
     }
@@ -234,7 +237,7 @@ async def main() -> None:
     log.info(
         "server.starting",
         port=SERVER_PORT,
-        executor_id=EXECUTOR_ID,
+        executor_pool_size=EXECUTOR_POOL_SIZE,
         idle_timeout=IDLE_TIMEOUT,
     )
     config = uvicorn.Config(app, host="0.0.0.0", port=SERVER_PORT)

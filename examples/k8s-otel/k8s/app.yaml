@@ -1,18 +1,3 @@
-# Headless service for StatefulSet DNS
-apiVersion: v1
-kind: Service
-metadata:
-  name: app-headless
-  namespace: llama-k8s-otel
-spec:
-  clusterIP: None
-  selector:
-    app: workflow-app
-  ports:
-    - port: 8080
-      targetPort: 8080
----
-# ClusterIP service for port-forwarding
 apiVersion: v1
 kind: Service
 metadata:
@@ -26,13 +11,19 @@ spec:
       targetPort: 8080
 ---
 apiVersion: apps/v1
-kind: StatefulSet
+kind: Deployment
 metadata:
   name: app
   namespace: llama-k8s-otel
 spec:
-  serviceName: app-headless
-  replicas: 2
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      # maxSurge 0 ensures new pods only start after old ones terminate,
+      # freeing executor lease slots for the incoming replicas.
+      maxSurge: 0
+      maxUnavailable: 1
   selector:
     matchLabels:
       app: workflow-app
@@ -64,6 +55,8 @@ spec:
               value: http://phoenix:4317
             - name: SERVER_PORT
               value: "8080"
+            - name: EXECUTOR_POOL_SIZE
+              value: "3"
           livenessProbe:
             httpGet:
               path: /health
