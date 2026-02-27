@@ -6,27 +6,31 @@ import asyncio
 
 import asyncpg
 import pytest
-from llama_agents.server._store.postgres.migrate import (
-    _iter_migration_files,
-    _parse_target_version,
-    run_migrations,
+from llama_agents.server._store import POSTGRES_MIGRATION_SOURCE
+from llama_agents.server._store.migration_utils import (
+    iter_migration_files,
+    parse_target_version,
 )
+from llama_agents.server._store.postgres.migrate import run_migrations
 
 # ── Unit tests (no DB) ──────────────────────────────────────────────
 
 
+_PG_MIGRATIONS_PKG = POSTGRES_MIGRATION_SOURCE[1]
+
+
 def test_parse_target_version_valid() -> None:
-    assert _parse_target_version("-- migration: 1\nCREATE TABLE ...") == 1
-    assert _parse_target_version("-- migration: 42\n") == 42
+    assert parse_target_version("-- migration: 1\nCREATE TABLE ...") == 1
+    assert parse_target_version("-- migration: 42\n") == 42
 
 
 def test_parse_target_version_missing() -> None:
-    assert _parse_target_version("CREATE TABLE ...") is None
-    assert _parse_target_version("") is None
+    assert parse_target_version("CREATE TABLE ...") is None
+    assert parse_target_version("") is None
 
 
 def test_iter_migration_files_returns_sorted_sql() -> None:
-    files = _iter_migration_files()
+    files = iter_migration_files(_PG_MIGRATIONS_PKG)
     assert len(files) >= 1
     assert all(f.name.endswith(".sql") for f in files)
     names = [f.name for f in files]
@@ -34,14 +38,14 @@ def test_iter_migration_files_returns_sorted_sql() -> None:
 
 
 def test_first_migration_has_version_1() -> None:
-    files = _iter_migration_files()
+    files = iter_migration_files(_PG_MIGRATIONS_PKG)
     sql = files[0].read_text()
-    assert _parse_target_version(sql) == 1
+    assert parse_target_version(sql) == 1
 
 
 # ── Integration tests (require Docker) ──────────────────────────────
 
-EXPECTED_VERSION = len(_iter_migration_files())
+EXPECTED_VERSION = len(iter_migration_files(_PG_MIGRATIONS_PKG))
 
 
 @pytest.mark.docker
@@ -53,7 +57,7 @@ async def test_run_migrations_fresh_db(postgres_dsn: str) -> None:
         await run_migrations(conn, schema=schema)
 
         version = await conn.fetchval(
-            f"SELECT MAX(version) FROM {schema}.schema_migrations"
+            f"SELECT MAX(version) FROM {schema}.schema_migrations WHERE package = 'server'"
         )
         assert version == EXPECTED_VERSION
 
@@ -64,6 +68,7 @@ async def test_run_migrations_fresh_db(postgres_dsn: str) -> None:
         table_names = {r["table_name"] for r in tables}
         assert "wf_handlers" in table_names
         assert "wf_events" in table_names
+        assert "wf_ticks" in table_names
         assert "workflow_state" in table_names
         assert "schema_migrations" in table_names
     finally:
@@ -81,11 +86,13 @@ async def test_run_migrations_idempotent(postgres_dsn: str) -> None:
         await run_migrations(conn, schema=schema)
 
         version = await conn.fetchval(
-            f"SELECT MAX(version) FROM {schema}.schema_migrations"
+            f"SELECT MAX(version) FROM {schema}.schema_migrations WHERE package = 'server'"
         )
         assert version == EXPECTED_VERSION
 
-        count = await conn.fetchval(f"SELECT COUNT(*) FROM {schema}.schema_migrations")
+        count = await conn.fetchval(
+            f"SELECT COUNT(*) FROM {schema}.schema_migrations WHERE package = 'server'"
+        )
         assert count == EXPECTED_VERSION
     finally:
         await conn.execute(f"DROP SCHEMA IF EXISTS {schema} CASCADE")
@@ -101,11 +108,12 @@ async def test_run_migrations_no_schema(postgres_dsn: str) -> None:
         await conn.execute("DROP TABLE IF EXISTS wf_events CASCADE")
         await conn.execute("DROP TABLE IF EXISTS wf_ticks CASCADE")
         await conn.execute("DROP TABLE IF EXISTS workflow_state CASCADE")
-        await conn.execute("DROP TABLE IF EXISTS workflow_journal CASCADE")
 
         await run_migrations(conn, schema=None)
 
-        version = await conn.fetchval("SELECT MAX(version) FROM schema_migrations")
+        version = await conn.fetchval(
+            "SELECT MAX(version) FROM schema_migrations WHERE package = 'server'"
+        )
         assert version == EXPECTED_VERSION
     finally:
         await conn.execute("DROP TABLE IF EXISTS schema_migrations CASCADE")
@@ -113,7 +121,6 @@ async def test_run_migrations_no_schema(postgres_dsn: str) -> None:
         await conn.execute("DROP TABLE IF EXISTS wf_events CASCADE")
         await conn.execute("DROP TABLE IF EXISTS wf_ticks CASCADE")
         await conn.execute("DROP TABLE IF EXISTS workflow_state CASCADE")
-        await conn.execute("DROP TABLE IF EXISTS workflow_journal CASCADE")
         await conn.close()
 
 
@@ -150,7 +157,9 @@ async def test_concurrent_migrations_with_advisory_lock(
 
     conn = await asyncpg.connect(postgres_dsn)
     try:
-        count = await conn.fetchval(f"SELECT COUNT(*) FROM {schema}.schema_migrations")
+        count = await conn.fetchval(
+            f"SELECT COUNT(*) FROM {schema}.schema_migrations WHERE package = 'server'"
+        )
         assert count == EXPECTED_VERSION, (
             f"Expected {EXPECTED_VERSION} migration rows, got {count}"
         )

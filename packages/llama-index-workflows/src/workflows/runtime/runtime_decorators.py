@@ -75,12 +75,16 @@ class BaseRuntimeDecorator(Runtime):
     def get_external_adapter(self, run_id: str) -> ExternalRunAdapter:
         return self._decorated.get_external_adapter(run_id)
 
-    def launch(self) -> None:
-        super().launch()
-        self._decorated.launch()
+    async def launch(self) -> None:
+        await super().launch()
+        await self._decorated.launch()
 
-    def destroy(self) -> None:
-        self._decorated.destroy()
+    @property
+    def is_launched(self) -> bool:
+        return self._decorated.is_launched
+
+    async def destroy(self) -> None:
+        await self._decorated.destroy()
 
     def track_workflow(self, workflow: Workflow) -> None:
         self._pending.add(workflow)

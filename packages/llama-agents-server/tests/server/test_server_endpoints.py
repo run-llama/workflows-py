@@ -172,6 +172,26 @@ async def test_health_check(client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
+async def test_health_check_returns_503_when_not_launched(
+    server: WorkflowServer,
+) -> None:
+    """Health endpoint returns 503 when runtime is not launched."""
+    from unittest.mock import PropertyMock, patch
+
+    with patch.object(
+        type(server._service._runtime),
+        "is_launched",
+        new_callable=PropertyMock,
+        return_value=False,
+    ):
+        transport = ASGITransport(app=server.app)
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            response = await client.get("/health")
+    assert response.status_code == 503
+    assert response.json() == {"status": "unhealthy"}
+
+
+@pytest.mark.asyncio
 async def test_list_workflows(client: AsyncClient) -> None:
     response = await client.get("/workflows")
     assert response.status_code == 200

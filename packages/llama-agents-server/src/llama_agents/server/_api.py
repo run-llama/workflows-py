@@ -277,11 +277,12 @@ class _WorkflowAPI:
                       example: healthy
                   required: [status]
         """
-        return JSONResponse(
-            HealthResponse(
-                status="healthy",
-            ).model_dump()
-        )
+        if not self._service._runtime.is_launched:
+            return JSONResponse(
+                HealthResponse(status="unhealthy").model_dump(),
+                status_code=503,
+            )
+        return JSONResponse(HealthResponse(status="healthy").model_dump())
 
     async def _list_workflows(self, request: Request) -> JSONResponse:
         """

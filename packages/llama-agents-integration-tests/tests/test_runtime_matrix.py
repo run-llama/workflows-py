@@ -91,13 +91,17 @@ def dbos_runtime_sqlite(
     }
     DBOS(config=config)
     runtime = DBOSRuntime(polling_interval_sec=0.01)
+    # Capture the event loop before destroy_sync() can close it (asyncio.run()
+    # creates and closes a temporary loop, which removes the thread-local loop).
+    loop = asyncio.get_event_loop()
     try:
         yield runtime
     finally:
-        runtime.destroy()
+        runtime.destroy_sync()
         # DBOS sets itself as the default executor and destroy() shuts it down.
         # Restore a fresh executor so the module-scoped event loop remains usable.
-        loop = asyncio.get_event_loop()
+        # Re-set the event loop since asyncio.run() cleared it.
+        asyncio.set_event_loop(loop)
         loop.set_default_executor(ThreadPoolExecutor())
 
 
@@ -118,7 +122,7 @@ def dbos_runtime_postgres(
     try:
         yield runtime
     finally:
-        runtime.destroy()
+        runtime.destroy_sync()
 
 
 @pytest.fixture(params=_get_runtime_params())
@@ -138,7 +142,7 @@ async def runtime(
         try:
             yield rt
         finally:
-            rt.destroy()
+            await rt.destroy()
     elif request.param == "dbos":
         dbos_rt: DBOSRuntime = request.getfixturevalue("dbos_runtime_sqlite")
         yield dbos_rt
@@ -362,7 +366,7 @@ class TimeoutStreamingWorkflow(Workflow):
 @pytest.mark.asyncio
 async def test_workflow_run(runtime: Runtime) -> None:
     workflow = SimpleWorkflow(runtime=runtime)
-    runtime.launch()
+    await runtime.launch()
     r = await WorkflowTestRunner(workflow).run()
     assert r.result == "Workflow completed"
 
@@ -370,7 +374,7 @@ async def test_workflow_run(runtime: Runtime) -> None:
 @pytest.mark.asyncio
 async def test_workflow_timeout(runtime: Runtime) -> None:
     wf = SlowWorkflow(timeout=0.1, runtime=runtime)
-    runtime.launch()
+    await runtime.launch()
     with pytest.raises(WorkflowTimeoutError):
         await WorkflowTestRunner(wf).run()
 
@@ -391,7 +395,7 @@ async def test_workflow_event_propagation(runtime: Runtime) -> None:
             return StopEvent(result="Done")
 
     wf = LocalEventTrackingWorkflow(runtime=runtime)
-    runtime.launch()
+    await runtime.launch()
     await WorkflowTestRunner(wf).run()
     assert events == ["step1", "step2"]
 
@@ -399,21 +403,21 @@ async def test_workflow_event_propagation(runtime: Runtime) -> None:
 @pytest.mark.asyncio
 async def test_workflow_sync_async_steps(runtime: Runtime) -> None:
     wf = SyncAsyncWorkflow(runtime=runtime)
-    runtime.launch()
+    await runtime.launch()
     await WorkflowTestRunner(wf).run()
 
 
 @pytest.mark.asyncio
 async def test_workflow_sync_steps_only(runtime: Runtime) -> None:
     wf = SyncWorkflow(runtime=runtime)
-    runtime.launch()
+    await runtime.launch()
     await WorkflowTestRunner(wf).run()
 
 
 @pytest.mark.asyncio
 async def test_workflow_multiple_runs(runtime: Runtime) -> None:
     wf = MultiRunWorkflow(runtime=runtime)
-    runtime.launch()
+    await runtime.launch()
     runner = WorkflowTestRunner(wf)
     results = await asyncio.gather(
         runner.run(StartEvent(number=3)),  # type: ignore
@@ -426,7 +430,7 @@ async def test_workflow_multiple_runs(runtime: Runtime) -> None:
 @pytest.mark.asyncio
 async def test_workflow_task_raises(runtime: Runtime) -> None:
     wf = ErrorWorkflow(runtime=runtime)
-    runtime.launch()
+    await runtime.launch()
     with pytest.raises(ValueError, match="The step raised an error!"):
         await WorkflowTestRunner(wf).run()
 
@@ -434,7 +438,7 @@ async def test_workflow_task_raises(runtime: Runtime) -> None:
 @pytest.mark.asyncio
 async def test_workflow_step_send_event(runtime: Runtime) -> None:
     workflow = StepSendEventWorkflow(runtime=runtime)
-    runtime.launch()
+    await runtime.launch()
     r = await WorkflowTestRunner(workflow).run()
     assert r.result == "step2"
 
@@ -496,7 +500,7 @@ async def test_workflow_num_workers(runtime: Runtime) -> None:
             return StopEvent(result=[e.another_test_param for e in events])
 
     workflow = NumWorkersWorkflow(timeout=10, runtime=runtime)
-    runtime.launch()
+    await runtime.launch()
     r = await WorkflowTestRunner(workflow).run()
 
     # Verify all events were processed
@@ -509,7 +513,7 @@ async def test_workflow_num_workers(runtime: Runtime) -> None:
 @pytest.mark.asyncio
 async def test_custom_stop_event(runtime: Runtime) -> None:
     wf = CustomEventsWorkflow(runtime=runtime)
-    runtime.launch()
+    await runtime.launch()
 
     assert wf._start_event_class == MyStart
     assert wf.start_event_class == wf._start_event_class
@@ -534,7 +538,7 @@ async def test_human_in_the_loop(runtime: Runtime) -> None:
     # Create both workflow instances before launch
     timeout_wf = HITLWorkflow(timeout=0.01, runtime=runtime)
     workflow = HITLWorkflow(runtime=runtime)
-    runtime.launch()
+    await runtime.launch()
 
     # workflow should raise a timeout error because hitl only works with streaming
     with pytest.raises(WorkflowTimeoutError):
@@ -555,7 +559,7 @@ async def test_human_in_the_loop(runtime: Runtime) -> None:
 @pytest.mark.asyncio
 async def test_workflow_stream_events_exits(runtime: Runtime) -> None:
     wf = CustomEventsWorkflow(runtime=runtime)
-    runtime.launch()
+    await runtime.launch()
     handler = wf.run(query="foo")
 
     async def _stream_events() -> MyStop:
@@ -574,7 +578,7 @@ async def test_workflow_stream_events_exits(runtime: Runtime) -> None:
 @pytest.mark.asyncio
 async def test_streaming_e2e(runtime: Runtime) -> None:
     wf = StreamWorkflow(runtime=runtime)
-    runtime.launch()
+    await runtime.launch()
     test_runner = WorkflowTestRunner(wf)
     r = await test_runner.run(expose_internal=False, exclude_events=[StopEvent])
     assert all("msg" in ev for ev in r.collected)
@@ -583,7 +587,7 @@ async def test_streaming_e2e(runtime: Runtime) -> None:
 @pytest.mark.asyncio
 async def test_streaming_task_raised(runtime: Runtime) -> None:
     wf = ErrorStreamingWorkflow(runtime=runtime)
-    runtime.launch()
+    await runtime.launch()
     r = wf.run()
 
     async for ev in r.stream_events():
@@ -597,7 +601,7 @@ async def test_streaming_task_raised(runtime: Runtime) -> None:
 @pytest.mark.asyncio
 async def test_streaming_task_timeout(runtime: Runtime) -> None:
     wf = TimeoutStreamingWorkflow(timeout=0.1, runtime=runtime)
-    runtime.launch()
+    await runtime.launch()
     r = wf.run()
 
     async for ev in r.stream_events():
@@ -645,7 +649,7 @@ class NestedStateWorkflow(Workflow):
 async def test_workflow_state_basic(runtime: Runtime) -> None:
     """Test basic state operations within a workflow."""
     wf = CounterWorkflow(runtime=runtime)
-    runtime.launch()
+    await runtime.launch()
     result = await WorkflowTestRunner(wf).run()
     assert result.result == 1
 
@@ -654,7 +658,7 @@ async def test_workflow_state_basic(runtime: Runtime) -> None:
 async def test_workflow_state_across_steps(runtime: Runtime) -> None:
     """Test state persistence across multiple workflow steps."""
     wf = StatefulWorkflow(runtime=runtime)
-    runtime.launch()
+    await runtime.launch()
     result = await WorkflowTestRunner(wf).run()
     assert result.result == {"counter": 2}
 
@@ -663,7 +667,7 @@ async def test_workflow_state_across_steps(runtime: Runtime) -> None:
 async def test_workflow_nested_state(runtime: Runtime) -> None:
     """Test nested state path access within workflows."""
     wf = NestedStateWorkflow(runtime=runtime)
-    runtime.launch()
+    await runtime.launch()
     result = await WorkflowTestRunner(wf).run()
     assert result.result == {"name": "Alice", "level": 2}
 
@@ -672,7 +676,7 @@ async def test_workflow_nested_state(runtime: Runtime) -> None:
 async def test_workflow_state_multiple_runs(runtime: Runtime) -> None:
     """Test that each workflow run has isolated state."""
     wf = CounterWorkflow(runtime=runtime)
-    runtime.launch()
+    await runtime.launch()
     runner = WorkflowTestRunner(wf)
 
     # Run multiple times - each should start fresh
@@ -739,7 +743,7 @@ async def test_typed_state_workflow(runtime: Runtime) -> None:
     3. Typed field access works correctly
     """
     wf = TypedStateWorkflow(runtime=runtime)
-    runtime.launch()
+    await runtime.launch()
 
     result = await WorkflowTestRunner(wf).run()
 
@@ -774,7 +778,7 @@ class TypedStateWithDefaultsWorkflow(Workflow):
 async def test_typed_state_defaults(runtime: Runtime) -> None:
     """Test that typed state is initialized with correct defaults."""
     wf = TypedStateWithDefaultsWorkflow(runtime=runtime)
-    runtime.launch()
+    await runtime.launch()
 
     result = await WorkflowTestRunner(wf).run()
 
@@ -793,7 +797,7 @@ async def test_typed_state_with_initial_values(runtime: Runtime) -> None:
     3. Modifications build on the initial values
     """
     wf = TypedStateWorkflow(runtime=runtime)
-    runtime.launch()
+    await runtime.launch()
 
     # Create a context and set initial state with counter=1 (default is 0)
     ctx = Context(wf)

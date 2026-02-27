@@ -74,7 +74,7 @@ class _ServerInternalRunAdapter(BaseInternalRunAdapterDecorator):
         self._store = runtime._store
         self._state_type = state_type
         self._state_store: StateStore[Any] | None = None
-        self._write_lock = asyncio.Lock()
+        self._write_lock: asyncio.Lock | None = None
 
     @override
     def get_state_store(self) -> StateStore[Any]:
@@ -98,6 +98,8 @@ class _ServerInternalRunAdapter(BaseInternalRunAdapterDecorator):
         Uses a lock to serialize writes, ensuring events are stored in the
         order they were emitted even when called from concurrent tasks.
         """
+        if self._write_lock is None:
+            self._write_lock = asyncio.Lock()
         async with self._write_lock:
             replaying = self.is_replaying()
 

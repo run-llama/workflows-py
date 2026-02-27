@@ -224,8 +224,8 @@ class IdleReleaseDecorator(BaseRuntimeDecorator):
         )
 
     @override
-    def destroy(self) -> None:
-        super().destroy()
+    async def destroy(self) -> None:
+        await super().destroy()
         if self.stop_task is not None:
             try:
                 self.stop_task.cancel()

@@ -105,7 +105,7 @@ async def _start_postgres_server(
     }
     DBOS(config=dbos_config)
     runtime = DBOSRuntime(polling_interval_sec=0.01)
-    runtime.launch()
+    await runtime.launch()
     store = runtime.create_workflow_store()
     server_runtime = runtime.build_server_runtime()
 

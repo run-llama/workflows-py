@@ -42,14 +42,16 @@ def dbos_config(tmp_path_factory: pytest.TempPathFactory) -> DBOSConfig:
 
 
 @pytest.fixture(scope="module")
-def dbos_runtime(dbos_config: DBOSConfig) -> Generator[DBOSRuntime, None, None]:
+def dbos_runtime(
+    dbos_config: DBOSConfig,
+) -> Generator[DBOSRuntime, None, None]:
     """Module-scoped DBOS runtime with fast polling for tests."""
     DBOS(config=dbos_config)
     runtime = DBOSRuntime(polling_interval_sec=0.01)
     try:
         yield runtime
     finally:
-        runtime.destroy()
+        runtime.destroy_sync()
 
 
 class DebugEvent(Event):
@@ -109,7 +111,7 @@ class StateStoreCounterWorkflow(Workflow):
 async def test_dbos_workflow_id_available(dbos_runtime: DBOSRuntime) -> None:
     """Verify DBOS.workflow_id is set inside workflow execution."""
     wf = RunIdCaptureWorkflow(runtime=dbos_runtime)
-    dbos_runtime.launch()
+    await dbos_runtime.launch()
 
     r = await WorkflowTestRunner(wf).run()
     result = r.result
@@ -123,7 +125,7 @@ async def test_dbos_workflow_id_available(dbos_runtime: DBOSRuntime) -> None:
 async def test_state_store_access_in_step(dbos_runtime: DBOSRuntime) -> None:
     """Test whether state store is accessible inside a workflow step."""
     wf = StateStoreAccessWorkflow(runtime=dbos_runtime)
-    dbos_runtime.launch()
+    await dbos_runtime.launch()
 
     r = await WorkflowTestRunner(wf).run()
     result = r.result
@@ -152,7 +154,7 @@ async def test_internal_adapter_run_id_matches(dbos_runtime: DBOSRuntime) -> Non
             return StopEvent(result="done")
 
     wf = IdTracingWorkflow(runtime=dbos_runtime)
-    dbos_runtime.launch()
+    await dbos_runtime.launch()
 
     await WorkflowTestRunner(wf).run()
 
@@ -176,7 +178,7 @@ async def test_external_run_id_vs_internal(dbos_runtime: DBOSRuntime) -> None:
             return StopEvent(result="done")
 
     wf = CompareWorkflow(runtime=dbos_runtime)
-    dbos_runtime.launch()
+    await dbos_runtime.launch()
 
     handler = wf.run()
     external_run_id = handler.run_id
@@ -217,7 +219,7 @@ async def test_state_store_lazy_creation(dbos_runtime: DBOSRuntime) -> None:
             return StopEvent(result="done")
 
     wf = LazyStoreWorkflow(runtime=dbos_runtime)
-    dbos_runtime.launch()
+    await dbos_runtime.launch()
 
     await WorkflowTestRunner(wf).run()
 
@@ -242,7 +244,7 @@ async def test_run_workflow_does_not_create_store(dbos_runtime: DBOSRuntime) -> 
             return StopEvent(result="done")
 
     wf = SimpleWf(runtime=dbos_runtime)
-    dbos_runtime.launch()
+    await dbos_runtime.launch()
 
     with patch.object(dbos_runtime, "run_workflow", patched_run_workflow):
         handler = wf.run()

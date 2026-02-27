@@ -122,10 +122,10 @@ class StubRuntime(Runtime):
     def get_external_adapter(self, run_id: str) -> ExternalRunAdapter:
         return StubExternalAdapter()
 
-    def launch(self) -> None:
+    async def launch(self) -> None:
         self.launched = True
 
-    def destroy(self) -> None:
+    async def destroy(self) -> None:
         pass
 
 

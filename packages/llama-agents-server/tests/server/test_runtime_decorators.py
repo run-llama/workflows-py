@@ -108,10 +108,10 @@ class StubRuntime(Runtime):
     def get_external_adapter(self, run_id: str) -> ExternalRunAdapter:
         return StubExternalAdapter()
 
-    def launch(self) -> None:
+    async def launch(self) -> None:
         self.launched = True
 
-    def destroy(self) -> None:
+    async def destroy(self) -> None:
         pass
 
 
@@ -121,7 +121,7 @@ class StubRuntime(Runtime):
 def test_runtime_decorator_forwards() -> None:
     inner = StubRuntime()
     dec = BaseRuntimeDecorator(inner)
-    dec.launch()
+    dec.launch_sync()
     assert inner.launched
 
 
