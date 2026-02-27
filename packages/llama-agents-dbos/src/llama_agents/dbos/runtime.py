@@ -710,7 +710,8 @@ class DBOSRuntime(Runtime):
         if self._dbos_launched:
             return  # Already launched
 
-        # Acquire executor lease if configured
+        # Acquire executor lease if configured.
+        # Migrations must run first so the executor_leases table exists.
         lease_config = self.config.get("executor_lease")
         if lease_config is not None:
             pool_size = lease_config.get("pool_size")
@@ -726,6 +727,24 @@ class DBOSRuntime(Runtime):
                 )
 
             schema = self.config.get("schema", "dbos") or "dbos"
+
+            # Run migrations before lease acquisition so the table exists
+            if self.config.get("run_migrations_on_launch", True):
+                conn = await asyncpg.connect(dsn)
+                try:
+                    await pg_run_migrations(
+                        conn,
+                        schema=schema,
+                        sources=[
+                            SERVER_POSTGRES_MIGRATION_SOURCE,
+                            POSTGRES_MIGRATION_SOURCE,
+                        ],
+                    )
+                finally:
+                    await conn.close()
+                self._migrations_run = True
+                logger.info("Database migrations completed (pre-lease)")
+
             self._lease_manager = ExecutorLeaseManager(
                 dsn=dsn,
                 pool_size=pool_size,
