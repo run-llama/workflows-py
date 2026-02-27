@@ -1,66 +1,114 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 LlamaIndex Inc.
 from __future__ import annotations
 
-try:
-    from importlib.resources.abc import Traversable  # type: ignore
-except ImportError:  # pre 3.11
-    from importlib.abc import Traversable  # type: ignore
 import logging
-import re
 import sqlite3
-from importlib import import_module, resources
+
+from llama_agents.server._store import SQLITE_MIGRATION_SOURCE
+from llama_agents.server._store.migration_utils import (
+    iter_migration_files,
+    parse_target_version,
+)
 
 logger = logging.getLogger(__name__)
 
+_MIGRATIONS_PKG = SQLITE_MIGRATION_SOURCE[1]
 
-_MIGRATIONS_PKG = "llama_agents.server._store.sqlite.migrations"
-_USER_VERSION_PATTERN = re.compile(r"pragma\s+user_version\s*=\s*(\d+)", re.IGNORECASE)
-
-
-def _iter_migration_files() -> list[Traversable]:
-    """Yield packaged SQL migration files in lexicographic order."""
-    pkg = import_module(_MIGRATIONS_PKG)
-    root = resources.files(pkg)
-    files = (p for p in root.iterdir() if p.name.endswith(".sql"))
-    return sorted(files, key=lambda p: p.name)  # type: ignore
-
-
-def _parse_target_version(sql_text: str) -> int | None:
-    """Return target schema version declared in the first PRAGMA line, if any."""
-    first_line = sql_text.splitlines()[0] if sql_text else ""
-    match = _USER_VERSION_PATTERN.search(first_line)
-    return int(match.group(1)) if match else None
+_SCHEMA_MIGRATIONS_DDL = """\
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    package TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    applied_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (package, version)
+)
+"""
 
 
-def run_migrations(conn: sqlite3.Connection) -> None:
-    """Apply pending migrations found under the migrations package.
+def _bootstrap_schema_migrations(conn: sqlite3.Connection) -> None:
+    """Create the schema_migrations table, seeding from PRAGMA user_version if needed."""
+    cur = conn.cursor()
 
-    Each migration file should start with a `PRAGMA user_version=N;` line.
-    Files are applied in lexicographic order and only when N > current_version.
+    # Check if schema_migrations already exists
+    row = cur.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_migrations'"
+    ).fetchone()
+    if row:
+        return
+
+    # Check legacy user_version
+    uv_row = cur.execute("PRAGMA user_version").fetchone()
+    legacy_version = int(uv_row[0]) if uv_row else 0
+
+    cur.executescript(_SCHEMA_MIGRATIONS_DDL)
+
+    if legacy_version > 0:
+        # Seed rows for existing server migrations
+        for v in range(1, legacy_version + 1):
+            cur.execute(
+                "INSERT OR IGNORE INTO schema_migrations (package, version) VALUES (?, ?)",
+                ("server", v),
+            )
+        conn.commit()
+        logger.debug(
+            "Bootstrapped schema_migrations from PRAGMA user_version=%d", legacy_version
+        )
+
+
+def run_migrations(
+    conn: sqlite3.Connection,
+    sources: list[tuple[str, str]] | None = None,
+) -> None:
+    """Apply pending migrations for one or more packages.
+
+    Parameters
+    ----------
+    conn:
+        An open SQLite connection.
+    sources:
+        List of ``(package_name, importable_migrations_pkg)`` pairs.
+        Defaults to ``[("server", _MIGRATIONS_PKG)]``.
     """
-    # Enable WAL mode for concurrent read/write access. This is a file-level
-    # setting that persists across connections, preventing "database is locked"
-    # errors when multiple async tasks access the same database.
+    # Enable WAL mode for concurrent read/write access.
     conn.execute("PRAGMA journal_mode=WAL")
 
+    if sources is None:
+        sources = [("server", _MIGRATIONS_PKG)]
+
+    _bootstrap_schema_migrations(conn)
+
     cur = conn.cursor()
-    current_version_row = cur.execute("PRAGMA user_version").fetchone()
-    current_version = int(current_version_row[0]) if current_version_row else 0
 
-    for path in _iter_migration_files():
-        sql_text = path.read_text()
-        target_version = _parse_target_version(sql_text) or 0
-        if target_version <= current_version:
-            continue
+    for package_name, source_pkg in sources:
+        # Determine already-applied versions for this package
+        rows = cur.execute(
+            "SELECT version FROM schema_migrations WHERE package = ?",
+            (package_name,),
+        ).fetchall()
+        applied: set[int] = {int(r[0]) for r in rows}
 
-        try:
-            logger.debug(
-                "Applying migration %s → target version %s", path.name, target_version
-            )
-            cur.executescript("BEGIN;\n" + sql_text)
-        except Exception as exc:  # noqa: BLE001 – we surface the exact error
-            logger.error("Failed migration %s: %s", path.name, exc)
-            cur.execute("ROLLBACK")
-            raise
-        else:
-            cur.execute("COMMIT")
-            current_version = target_version
+        for path in iter_migration_files(source_pkg):
+            sql_text = path.read_text()
+            target_version = parse_target_version(sql_text) or 0
+            if target_version in applied or target_version == 0:
+                continue
+
+            try:
+                logger.debug(
+                    "Applying migration %s:%s → version %s",
+                    package_name,
+                    path.name,
+                    target_version,
+                )
+                cur.executescript("BEGIN;\n" + sql_text)
+            except Exception as exc:  # noqa: BLE001 – we surface the exact error
+                logger.error("Failed migration %s:%s: %s", package_name, path.name, exc)
+                cur.execute("ROLLBACK")
+                raise
+            else:
+                cur.execute(
+                    "INSERT INTO schema_migrations (package, version) VALUES (?, ?)",
+                    (package_name, target_version),
+                )
+                cur.execute("COMMIT")
+                applied.add(target_version)

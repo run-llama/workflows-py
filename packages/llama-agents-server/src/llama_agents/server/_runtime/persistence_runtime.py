@@ -221,8 +221,8 @@ class PersistenceDecorator(TickPersistenceDecorator):
         return task
 
     @override
-    def launch(self) -> None:
-        super().launch()
+    async def launch(self) -> None:
+        await super().launch()
         self.resume_task = self._spawn_task(
             self._on_server_start(self._workflows_by_name)
         )
@@ -273,8 +273,8 @@ class PersistenceDecorator(TickPersistenceDecorator):
                 continue
 
     @override
-    def destroy(self) -> None:
-        super().destroy()
+    async def destroy(self) -> None:
+        await super().destroy()
         if self.resume_task is not None:
             try:
                 self.resume_task.cancel()

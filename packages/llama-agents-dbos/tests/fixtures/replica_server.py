@@ -45,7 +45,7 @@ async def main() -> None:
     dbos_runtime = DBOSRuntime(polling_interval_sec=0.01)
 
     wf = workflow_class(runtime=dbos_runtime)
-    dbos_runtime.launch()
+    await dbos_runtime.launch()
 
     store = dbos_runtime.create_workflow_store()
     idle_kwargs = (
@@ -70,7 +70,7 @@ async def main() -> None:
         await server.serve(host="0.0.0.0", port=args.port)
     finally:
         await server.stop()
-        dbos_runtime.destroy()
+        await dbos_runtime.destroy()
 
 
 if __name__ == "__main__":

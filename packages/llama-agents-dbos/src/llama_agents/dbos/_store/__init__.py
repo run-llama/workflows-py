@@ -2,11 +2,11 @@
 # Copyright (c) 2026 LlamaIndex Inc.
 
 SQLITE_MIGRATION_SOURCE: tuple[str, str] = (
-    "server",
-    "llama_agents.server._store.sqlite.migrations",
+    "dbos",
+    "llama_agents.dbos._store.sqlite.migrations",
 )
 
 POSTGRES_MIGRATION_SOURCE: tuple[str, str] = (
-    "server",
-    "llama_agents.server._store.postgres.migrations",
+    "dbos",
+    "llama_agents.dbos._store.postgres.migrations",
 )

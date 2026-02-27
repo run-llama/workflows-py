@@ -29,8 +29,8 @@ def test_basic_runtime_has_lifecycle_methods() -> None:
     """BasicRuntime has launch() and destroy() methods."""
     runtime = BasicRuntime()
     # Should not raise
-    runtime.launch()
-    runtime.destroy()
+    runtime.launch_sync()
+    runtime.destroy_sync()
 
 
 def test_get_current_runtime_returns_basic_runtime_by_default() -> None:
@@ -72,7 +72,7 @@ def test_registering_does_not_call_launch_on_exit() -> None:
     launched = False
 
     class TrackingRuntime(BasicRuntime):
-        def launch(self) -> None:
+        async def launch(self) -> None:
             nonlocal launched
             launched = True
 
@@ -88,7 +88,7 @@ def test_registering_does_not_call_launch_on_exception() -> None:
     launched = False
 
     class TrackingRuntime(BasicRuntime):
-        def launch(self) -> None:
+        async def launch(self) -> None:
             nonlocal launched
             launched = True
 
@@ -165,7 +165,7 @@ def test_workflow_runs_after_registering_exit() -> None:
         SimpleWorkflow()
 
     # Explicit launch() should be called before running
-    custom_runtime.launch()
+    custom_runtime.launch_sync()
     # BasicRuntime doesn't actually need launch(), but the pattern should work
 
 
@@ -201,3 +201,9 @@ def test_registering_with_exception_still_resets_context() -> None:
 
     # Context should still be reset after exception
     assert get_current_runtime() is basic_runtime
+
+
+def test_basic_runtime_is_always_launched() -> None:
+    """BasicRuntime is always launched — no explicit launch() needed."""
+    runtime = BasicRuntime()
+    assert runtime.is_launched is True

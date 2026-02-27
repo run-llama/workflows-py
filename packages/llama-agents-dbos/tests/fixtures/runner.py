@@ -102,7 +102,7 @@ async def run_workflow(
 
     # Create workflow instance and launch
     wf = workflow_class(runtime=runtime)
-    runtime.launch()
+    await runtime.launch()
 
     try:
         # Check if the workflow already exists (i.e., we're resuming after interrupt).
@@ -154,7 +154,7 @@ async def run_workflow(
         raise
 
     finally:
-        runtime.destroy()
+        await runtime.destroy()
 
 
 def main() -> None:

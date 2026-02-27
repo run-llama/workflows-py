@@ -2,21 +2,20 @@
 # Copyright (c) 2026 LlamaIndex Inc.
 from __future__ import annotations
 
-try:
-    from importlib.resources.abc import Traversable  # type: ignore
-except ImportError:  # pre 3.11
-    from importlib.abc import Traversable  # type: ignore
 import logging
 import re
-from importlib import import_module, resources
 
 import asyncpg
+from llama_agents.server._store import POSTGRES_MIGRATION_SOURCE
+from llama_agents.server._store.migration_utils import (
+    iter_migration_files,
+    parse_target_version,
+)
 
 logger = logging.getLogger(__name__)
 
-_MIGRATIONS_PKG = "llama_agents.server._store.postgres.migrations"
-_VERSION_PATTERN = re.compile(r"--\s*migration:\s*(\d+)")
-# Arbitrary but fixed int64 used as a pg_advisory_xact_lock key so that
+_MIGRATIONS_PKG = POSTGRES_MIGRATION_SOURCE[1]
+# Arbitrary but fixed int64 used as a pg_advisory_lock key so that
 # concurrent replicas serialize their migration runs.
 _LOCK_ID = 7_201_407_233_458_173
 
@@ -31,74 +30,100 @@ def _quote_identifier(name: str) -> str:
     return f'"{name}"'
 
 
-def _iter_migration_files() -> list[Traversable]:
-    """Yield packaged SQL migration files in lexicographic order."""
-    pkg = import_module(_MIGRATIONS_PKG)
-    root = resources.files(pkg)
-    files = (p for p in root.iterdir() if p.name.endswith(".sql"))
-    return sorted(files, key=lambda p: p.name)  # type: ignore
+async def run_migrations(
+    conn: asyncpg.Connection,
+    schema: str | None = None,
+    sources: list[tuple[str, str]] | None = None,
+) -> None:
+    """Apply pending migrations found under the migrations package(s).
 
+    Each migration file should start with a ``-- migration: N`` line.
+    Files are applied in lexicographic order and only when N > current_version
+    for the corresponding package.
 
-def _parse_target_version(sql_text: str) -> int | None:
-    """Return target schema version declared in the first line comment."""
-    first_line = sql_text.splitlines()[0] if sql_text else ""
-    match = _VERSION_PATTERN.search(first_line)
-    return int(match.group(1)) if match else None
-
-
-async def run_migrations(conn: asyncpg.Connection, schema: str | None = None) -> None:
-    """Apply pending migrations found under the migrations package.
-
-    Each migration file should start with a `-- migration: N` line.
-    Files are applied in lexicographic order and only when N > current_version.
+    *sources* is a list of ``(package_name, importable_pkg)`` pairs.  When
+    ``None`` it defaults to ``[("server", _MIGRATIONS_PKG)]``.
 
     A session-level advisory lock ensures that concurrent replicas serialize
     their migration runs so DDL and version bookkeeping never race.
     """
-    # Acquire a session-level advisory lock *before* any DDL so that
-    # concurrent callers (e.g. multiple replicas starting up) don't race
-    # on CREATE SCHEMA / CREATE TABLE.
+    if sources is None:
+        sources = [("server", _MIGRATIONS_PKG)]
+
     await conn.execute("SELECT pg_advisory_lock($1)", _LOCK_ID)
     try:
-        await _run_migrations_locked(conn, schema)
+        await _run_migrations_locked(conn, schema, sources)
     finally:
         await conn.execute("SELECT pg_advisory_unlock($1)", _LOCK_ID)
 
 
-async def _run_migrations_locked(conn: asyncpg.Connection, schema: str | None) -> None:
+async def _run_migrations_locked(
+    conn: asyncpg.Connection,
+    schema: str | None,
+    sources: list[tuple[str, str]],
+) -> None:
     if schema:
         quoted = _quote_identifier(schema)
         await conn.execute(f"CREATE SCHEMA IF NOT EXISTS {quoted}")
         await conn.execute(f"SET search_path TO {quoted}")
 
+    # Create the schema_migrations table with a composite PK on (package, version).
     await conn.execute("""
         CREATE TABLE IF NOT EXISTS schema_migrations (
-            version INTEGER PRIMARY KEY,
-            applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+            package TEXT NOT NULL DEFAULT 'server',
+            version INTEGER NOT NULL,
+            applied_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+            PRIMARY KEY (package, version)
         )
     """)
 
-    row = await conn.fetchval("SELECT MAX(version) FROM schema_migrations")
-    current_version = row if row is not None else 0
+    # Defensive upgrade: if table exists but lacks the package column, add it.
+    has_package = await conn.fetchval("""
+        SELECT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name = 'schema_migrations' AND column_name = 'package'
+        )
+    """)
+    if not has_package:
+        await conn.execute(
+            "ALTER TABLE schema_migrations ADD COLUMN package TEXT NOT NULL DEFAULT 'server'"
+        )
+        await conn.execute(
+            "ALTER TABLE schema_migrations DROP CONSTRAINT IF EXISTS schema_migrations_pkey"
+        )
+        await conn.execute(
+            "ALTER TABLE schema_migrations ADD PRIMARY KEY (package, version)"
+        )
 
-    for path in _iter_migration_files():
-        sql_text = path.read_text()
-        target_version = _parse_target_version(sql_text) or 0
-        if target_version <= current_version:
-            continue
+    for package_name, source_pkg in sources:
+        row = await conn.fetchval(
+            "SELECT MAX(version) FROM schema_migrations WHERE package = $1",
+            package_name,
+        )
+        current_version = row if row is not None else 0
 
-        try:
-            logger.debug(
-                "Applying migration %s -> target version %s", path.name, target_version
-            )
-            async with conn.transaction():
-                await conn.execute(sql_text)
-                await conn.execute(
-                    "INSERT INTO schema_migrations (version) VALUES ($1)",
+        for path in iter_migration_files(source_pkg):
+            sql_text = path.read_text()
+            target_version = parse_target_version(sql_text) or 0
+            if target_version <= current_version:
+                continue
+
+            try:
+                logger.debug(
+                    "Applying migration %s [%s] -> target version %s",
+                    path.name,
+                    package_name,
                     target_version,
                 )
-        except Exception:
-            logger.error("Failed migration %s", path.name)
-            raise
+                async with conn.transaction():
+                    await conn.execute(sql_text)
+                    await conn.execute(
+                        "INSERT INTO schema_migrations (package, version) VALUES ($1, $2)",
+                        package_name,
+                        target_version,
+                    )
+            except Exception:
+                logger.error("Failed migration %s [%s]", path.name, package_name)
+                raise
 
-        current_version = target_version
+            current_version = target_version

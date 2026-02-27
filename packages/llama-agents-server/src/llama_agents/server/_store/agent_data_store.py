@@ -75,12 +75,17 @@ class AgentDataStore(AbstractWorkflowStore):
         # Per-run_id sequence counters for events and ticks
         self._event_sequences: dict[str, int] = {}
         self._tick_sequences: dict[str, int] = {}
-        self._seq_lock = asyncio.Lock()
+        self._seq_lock: asyncio.Lock | None = None
 
         # Per-run_id asyncio.Condition for event subscription
         self._conditions: weakref.WeakValueDictionary[str, asyncio.Condition] = (
             weakref.WeakValueDictionary()
         )
+
+    def _get_seq_lock(self) -> asyncio.Lock:
+        if self._seq_lock is None:
+            self._seq_lock = asyncio.Lock()
+        return self._seq_lock
 
     # ------------------------------------------------------------------
     # Notification helpers
@@ -213,7 +218,7 @@ class AgentDataStore(AbstractWorkflowStore):
     # ------------------------------------------------------------------
 
     async def _next_event_sequence(self, run_id: str) -> int:
-        async with self._seq_lock:
+        async with self._get_seq_lock():
             if run_id not in self._event_sequences:
                 self._event_sequences[run_id] = await self._max_sequence(
                     self._events_collection, run_id
@@ -293,7 +298,7 @@ class AgentDataStore(AbstractWorkflowStore):
     # ------------------------------------------------------------------
 
     async def _next_tick_sequence(self, run_id: str) -> int:
-        async with self._seq_lock:
+        async with self._get_seq_lock():
             if run_id not in self._tick_sequences:
                 self._tick_sequences[run_id] = await self._max_sequence(
                     self._ticks_collection, run_id

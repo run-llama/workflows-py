@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sqlite3
 import sys
 import time
 from collections.abc import Awaitable, Callable
@@ -18,6 +19,13 @@ from dataclasses import dataclass
 from typing import Any, AsyncGenerator, TypedDict, cast
 
 import asyncpg
+from llama_agents.dbos._store import POSTGRES_MIGRATION_SOURCE, SQLITE_MIGRATION_SOURCE
+from llama_agents.server._store import (
+    POSTGRES_MIGRATION_SOURCE as SERVER_POSTGRES_MIGRATION_SOURCE,
+)
+from llama_agents.server._store import (
+    SQLITE_MIGRATION_SOURCE as SERVER_SQLITE_MIGRATION_SOURCE,
+)
 from llama_index_instrumentation.dispatcher import active_instrument_tags
 from pydantic import BaseModel
 from typing_extensions import Unpack
@@ -79,9 +87,15 @@ from llama_agents.server._store.abstract_workflow_store import (
     StoredEvent,
     StoredTick,
 )
+from llama_agents.server._store.postgres.migrate import (
+    run_migrations as pg_run_migrations,
+)
 from llama_agents.server._store.postgres_state_store import PostgresStateStore
 from llama_agents.server._store.postgres_workflow_store import (
     PostgresWorkflowStore,
+)
+from llama_agents.server._store.sqlite.migrate import (
+    run_migrations as sqlite_run_migrations,
 )
 from llama_agents.server._store.sqlite.sqlite_state_store import SqliteStateStore
 from llama_agents.server._store.sqlite.sqlite_workflow_store import SqliteWorkflowStore
@@ -380,7 +394,7 @@ class DBOSRuntime(Runtime):
             self._pool = await asyncpg.create_pool(dsn=self._dsn)
             return self._pool
 
-    def run_migrations(self) -> None:
+    async def run_migrations(self) -> None:
         """Run database migrations for all workflow tables.
 
         Uses the file-based migration system to create/update workflow store,
@@ -397,12 +411,29 @@ class DBOSRuntime(Runtime):
         engine = self._get_sql_engine()
         schema = _resolve_schema(self.config, engine)
 
+        _PG_SOURCES = [
+            SERVER_POSTGRES_MIGRATION_SOURCE,
+            POSTGRES_MIGRATION_SOURCE,
+        ]
+        _SQLITE_SOURCES = [
+            SERVER_SQLITE_MIGRATION_SOURCE,
+            SQLITE_MIGRATION_SOURCE,
+        ]
+
         if engine.dialect.name == "postgresql":
             dsn = _sqlalchemy_url_to_asyncpg_dsn(engine.url)
-            PostgresWorkflowStore.run_migrations_sync(dsn, schema=schema)
+            conn = await asyncpg.connect(dsn)
+            try:
+                await pg_run_migrations(conn, schema=schema, sources=_PG_SOURCES)
+            finally:
+                await conn.close()
         else:
             db_path = str(engine.url.database) if engine.url.database else ":memory:"
-            SqliteWorkflowStore.run_migrations(db_path)
+            conn = sqlite3.connect(db_path)
+            try:
+                sqlite_run_migrations(conn, sources=_SQLITE_SOURCES)
+            finally:
+                conn.close()
 
         self._migrations_run = True
         logger.info("Database migrations completed")
@@ -644,7 +675,7 @@ class DBOSRuntime(Runtime):
             lifecycle_lock=self._create_lifecycle_lock_factory(),
         )
 
-    def launch(self) -> None:
+    async def launch(self) -> None:
         """
         Launch DBOS and register all tracked workflows.
 
@@ -676,9 +707,13 @@ class DBOSRuntime(Runtime):
 
         # Run migrations after DBOS is launched (if configured)
         if self.config.get("run_migrations_on_launch", True):
-            self.run_migrations()
+            await self.run_migrations()
 
-    def destroy(self, destroy_dbos: bool = True) -> None:
+    @property
+    def is_launched(self) -> bool:
+        return self._dbos_launched
+
+    async def destroy(self, destroy_dbos: bool = True) -> None:
         """Clean up DBOS runtime resources.
 
         Args:

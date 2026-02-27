@@ -204,6 +204,11 @@ class ExternalAsyncioAdapter(
 class BasicRuntime(Runtime):
     """Default asyncio-based runtime with no durability."""
 
+    @property
+    def is_launched(self) -> bool:
+        # BasicRuntime doesn't require launch() — always ready
+        return True
+
     def __init__(self) -> None:
         super().__init__()
         # WeakValueDictionary allows queues to be GC'd when no adapters reference them.

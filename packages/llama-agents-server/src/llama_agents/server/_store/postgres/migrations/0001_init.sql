@@ -44,11 +44,23 @@ CREATE TABLE IF NOT EXISTS workflow_state (
     updated_at TIMESTAMPTZ
 );
 
-CREATE TABLE IF NOT EXISTS workflow_journal (
+CREATE TABLE IF NOT EXISTS wf_ticks (
     id SERIAL PRIMARY KEY,
     run_id VARCHAR(255) NOT NULL,
-    seq_num INTEGER NOT NULL,
-    task_key VARCHAR(512) NOT NULL
+    sequence INTEGER NOT NULL,
+    timestamp TIMESTAMPTZ NOT NULL,
+    tick_data JSONB NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_workflow_journal_run_id ON workflow_journal (run_id);
+CREATE INDEX IF NOT EXISTS idx_wf_ticks_run_id ON wf_ticks (run_id);
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'uq_wf_ticks_run_id_sequence'
+    ) THEN
+        ALTER TABLE wf_ticks
+            ADD CONSTRAINT uq_wf_ticks_run_id_sequence UNIQUE (run_id, sequence);
+    END IF;
+END
+$$;
