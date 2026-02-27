@@ -5,11 +5,18 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import inspect
 import time
+import uuid
 from contextvars import copy_context
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Optional, Protocol, TypeVar
 
-from llama_index_instrumentation.dispatcher import instrument_tags
+from llama_index_instrumentation import get_dispatcher
+from llama_index_instrumentation.dispatcher import (
+    active_instrument_tags,
+    instrument_tags,
+)
+from llama_index_instrumentation.events.span import SpanDropEvent
 from llama_index_instrumentation.span import active_span_id
 from workflows.decorators import P, StepConfig
 from workflows.errors import WorkflowRuntimeError
@@ -40,6 +47,8 @@ from workflows.workflow import Workflow
 
 if TYPE_CHECKING:
     from workflows.context.context import Context
+
+_dispatcher = get_dispatcher(__name__)
 
 StepReturnT = TypeVar("StepReturnT", bound=Optional[Event])
 
@@ -228,28 +237,69 @@ def create_workflow_run_function(
 
         try:
             with instrument_tags(tags):
-                # defer execution to make sure the task can be captured and passed
-                # to the handler as async exception, protecting against exceptions from before_start
-                await asyncio.sleep(0)
+                # Create a wrapping span so that all step spans have a parent.
+                # On initial execution this is a child of Workflow.run()'s span.
+                # On recovery (where Workflow.run() is bypassed), this becomes
+                # the root span linked to the original trace via parent_span_id.
+                cls_name = workflow.__class__.__name__
+                span_id = f"{cls_name}.run-{uuid.uuid4()}"
+                outer_parent_span_id = active_span_id.get()
+                span_token = active_span_id.set(span_id)
 
-                run_ctx = RunContext(
-                    workflow=workflow,
-                    run_adapter=internal_adapter,
-                    context=internal_ctx,
-                    steps=registered.steps,
+                bound_args = inspect.signature(run_workflow).bind(
+                    init_state, start_event, tags
                 )
+
+                _dispatcher.span_enter(
+                    id_=span_id,
+                    bound_args=bound_args,
+                    instance=workflow,
+                    parent_id=outer_parent_span_id,
+                    tags=active_instrument_tags.get(),
+                )
+
                 try:
-                    with run_context(run_ctx):
-                        result = await control_loop_fn(
-                            start_event,
-                            init_state,
-                            internal_adapter.run_id,
-                        )
-                        return result
+                    # defer execution to make sure the task can be captured and passed
+                    # to the handler as async exception, protecting against exceptions from before_start
+                    await asyncio.sleep(0)
+
+                    run_ctx = RunContext(
+                        workflow=workflow,
+                        run_adapter=internal_adapter,
+                        context=internal_ctx,
+                        steps=registered.steps,
+                    )
+                    try:
+                        with run_context(run_ctx):
+                            result = await control_loop_fn(
+                                start_event,
+                                init_state,
+                                internal_adapter.run_id,
+                            )
+
+                            _dispatcher.span_exit(
+                                id_=span_id,
+                                bound_args=bound_args,
+                                instance=workflow,
+                                result=result,
+                            )
+
+                            return result
+                    finally:
+                        # Cancel any background tasks from InternalContext on completion or cancellation
+                        if isinstance(internal_ctx._face, InternalContext):
+                            internal_ctx._face.cancel_background_tasks()
+                except BaseException as e:
+                    _dispatcher.event(SpanDropEvent(span_id=span_id, err_str=str(e)))
+                    _dispatcher.span_drop(
+                        id_=span_id, bound_args=bound_args, instance=workflow, err=e
+                    )
+                    raise
                 finally:
-                    # Cancel any background tasks from InternalContext on completion or cancellation
-                    if isinstance(internal_ctx._face, InternalContext):
-                        internal_ctx._face.cancel_background_tasks()
+                    try:
+                        active_span_id.reset(span_token)
+                    except ValueError:
+                        pass
         finally:
             # Reset parent span ID if it was set
             if parent_span_token is not None:

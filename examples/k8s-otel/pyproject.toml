@@ -7,7 +7,10 @@ dependencies = [
   "opentelemetry-exporter-otlp",
   "opentelemetry-instrumentation-fastapi",
   "structlog",
+  # otel bridges — swap between them by commenting in app.py
   "llama-index-observability-otel",
+  "openinference-instrumentation-llama-index",
+  "llama-index-core",
   "fastapi",
   "uvicorn"
 ]

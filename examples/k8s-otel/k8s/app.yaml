@@ -16,7 +16,7 @@ metadata:
   name: app
   namespace: llama-k8s-otel
 spec:
-  replicas: 3
+  replicas: 1
   strategy:
     type: RollingUpdate
     rollingUpdate:
@@ -52,7 +52,7 @@ spec:
             - name: POSTGRES_DSN
               value: postgresql://workflows:workflows@postgres:5432/workflows
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
-              value: http://phoenix:4317
+              value: http://otel-collector:4317
             - name: SERVER_PORT
               value: "8080"
             - name: EXECUTOR_POOL_SIZE

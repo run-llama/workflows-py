@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 from contextlib import asynccontextmanager
 from typing import Any, AsyncGenerator, MutableMapping
 
@@ -26,11 +27,16 @@ from fastapi import FastAPI
 from fastapi.responses import RedirectResponse
 from llama_agents.dbos import DBOSRuntime
 from llama_agents.server import WorkflowServer
-from llama_index.observability.otel import LlamaIndexOpenTelemetry
 from llama_index_instrumentation.dispatcher import active_instrument_tags
+from openinference.instrumentation.llama_index import LlamaIndexInstrumentor
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+from opentelemetry.sdk.resources import SERVICE_NAME, Resource
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.trace import set_tracer_provider
 from pydantic import Field
+from starlette.types import ASGIApp, Receive, Scope, Send
 from workflows import Context, Workflow, step
 from workflows.events import (
     Event,
@@ -80,14 +86,26 @@ structlog.configure(
 log = structlog.get_logger()
 
 # ---------------------------------------------------------------------------
-# OTEL setup
+# OTEL setup — swap between openinference and llama-index-observability-otel
+# by commenting/uncommenting the blocks below. Keep BOTH blocks present.
 # ---------------------------------------------------------------------------
 otel_exporter = OTLPSpanExporter(endpoint=OTEL_ENDPOINT, insecure=True)
-instrumentor = LlamaIndexOpenTelemetry(
-    span_exporter=otel_exporter,
-    service_name_or_resource="k8s-otel-example",
+
+# --- Option A: openinference (active) ---
+tracer_provider = TracerProvider(
+    resource=Resource(attributes={SERVICE_NAME: "k8s-otel-example"})
 )
-instrumentor.start_registering()
+tracer_provider.add_span_processor(BatchSpanProcessor(otel_exporter))
+set_tracer_provider(tracer_provider)
+LlamaIndexInstrumentor().instrument(tracer_provider=tracer_provider)
+
+# --- Option B: llama-index-observability-otel (inactive) ---
+# from llama_index.observability.otel import LlamaIndexOpenTelemetry
+# instrumentor = LlamaIndexOpenTelemetry(
+#     span_exporter=otel_exporter,
+#     service_name_or_resource="k8s-otel-example",
+# )
+# instrumentor.start_registering()
 
 # ---------------------------------------------------------------------------
 # DBOS setup — must be called at module level before DBOSRuntime()
@@ -200,13 +218,57 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         await workflow_server.stop()
 
 
+access_log = structlog.get_logger("access")
+
+HEALTH_PATHS = {"/health"}
+
+
+class AccessLogMiddleware:
+    """Raw ASGI middleware so it covers mounted sub-apps (e.g. /api)."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        path = scope.get("path", "")
+        if path in HEALTH_PATHS:
+            await self.app(scope, receive, send)
+            return
+
+        start = time.perf_counter()
+        status_code = 0
+
+        async def send_wrapper(message: MutableMapping[str, Any]) -> None:
+            nonlocal status_code
+            if message["type"] == "http.response.start":
+                status_code = message["status"]
+            await send(message)
+
+        await self.app(scope, receive, send_wrapper)
+
+        dur_ms = (time.perf_counter() - start) * 1000
+        method = scope.get("method", "?")
+        access_log.info(
+            f"{method} {path}",
+            status_code=status_code,
+            duration_ms=round(dur_ms, 1),
+        )
+
+
 app = FastAPI(title="K8s OTEL Example", lifespan=lifespan)
 
 # Mount the workflow server's Starlette app under /api
 app.mount("/api", workflow_server.app)
 
+# Access log middleware wraps the entire ASGI app including mounts
+app.add_middleware(AccessLogMiddleware)
+
 # Instrument FastAPI with OpenTelemetry
-FastAPIInstrumentor.instrument_app(app)
+FastAPIInstrumentor.instrument_app(app, excluded_urls="health")
 
 
 @app.get("/")
@@ -240,7 +302,9 @@ async def main() -> None:
         executor_pool_size=EXECUTOR_POOL_SIZE,
         idle_timeout=IDLE_TIMEOUT,
     )
-    config = uvicorn.Config(app, host="0.0.0.0", port=SERVER_PORT)
+    config = uvicorn.Config(
+        app, host="0.0.0.0", port=SERVER_PORT, log_config=None, access_log=False
+    )
     server = uvicorn.Server(config)
     await server.serve()
 
