@@ -1,5 +1,17 @@
 # llama-agents-dbos
 
+## 0.1.0
+
+### Minor Changes
+
+- d56be47: Add postgres and DBOS support to the workflow server
+- 57902d5: Add alternate DBOS runtime plugin for running workflows against a DBOS backend
+
+### Patch Changes
+
+- 77a3f9c: Add workflow release for idle DBOS workflows (with replica support)
+- 96e437e: Move task execution into the runtime, for maximal control of specific runtime semantics around determinism
+
 ## 0.1.0-rc.1
 
 ### Patch Changes
