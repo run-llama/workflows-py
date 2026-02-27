@@ -78,11 +78,12 @@ class ExecutorLeaseManager:
                         f"""
                         SELECT slot_id FROM {self._table}
                         WHERE holder IS NULL
-                           OR heartbeat_at < NOW() - INTERVAL '{self._lease_timeout} seconds'
+                           OR heartbeat_at < NOW() - make_interval(secs => $1)
                         ORDER BY slot_id
                         LIMIT 1
                         FOR UPDATE SKIP LOCKED
                         """,
+                        self._lease_timeout,
                     )
                     if row is not None:
                         slot_id: str = row["slot_id"]
