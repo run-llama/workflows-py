@@ -68,7 +68,7 @@ class ExecutorLeaseManager:
         self._pool = await asyncpg.create_pool(dsn=self._dsn)
         await self._seed_slots()
 
-        backoff = 0.5
+        poll = 0.1
         elapsed = 0.0
 
         while True:
@@ -109,9 +109,9 @@ class ExecutorLeaseManager:
                     f"Could not acquire executor lease within {timeout}s"
                 )
 
-            await asyncio.sleep(backoff)
-            elapsed += backoff
-            backoff = min(backoff * 2, 5.0)
+            await asyncio.sleep(poll)
+            elapsed += poll
+            poll = min(poll * 2, 2.0)
 
     async def release(self) -> None:
         if self._heartbeat_task is not None:

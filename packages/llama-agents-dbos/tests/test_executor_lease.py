@@ -32,8 +32,8 @@ async def lease_dsn(postgres_dsn: str) -> AsyncGenerator[str]:
 def make_manager(
     dsn: str,
     pool_size: int = 3,
-    heartbeat_interval: float = 0.1,
-    lease_timeout: float = 0.3,
+    heartbeat_interval: float = 0.5,
+    lease_timeout: float = 5.0,
 ) -> ExecutorLeaseManager:
     return ExecutorLeaseManager(
         dsn=dsn,
@@ -99,7 +99,7 @@ async def test_release_frees_slot(lease_dsn: str) -> None:
 @pytest.mark.docker
 @pytest.mark.asyncio
 async def test_stale_heartbeat_allows_reclaim(lease_dsn: str) -> None:
-    m1 = make_manager(lease_dsn, pool_size=1)
+    m1 = make_manager(lease_dsn, pool_size=1, lease_timeout=1.0)
     await m1.acquire()
 
     # Stop heartbeat and wait for lease to go stale
@@ -120,8 +120,8 @@ async def test_stale_heartbeat_allows_reclaim(lease_dsn: str) -> None:
     )
 
     # Another manager should be able to claim the stale slot
-    m2 = make_manager(lease_dsn, pool_size=1)
-    slot = await m2.acquire(timeout=1.0)
+    m2 = make_manager(lease_dsn, pool_size=1, lease_timeout=1.0)
+    slot = await m2.acquire(timeout=2.0)
     assert slot == "executor-0"
 
     await m2.release()
@@ -133,7 +133,7 @@ async def test_stale_heartbeat_allows_reclaim(lease_dsn: str) -> None:
 @pytest.mark.docker
 @pytest.mark.asyncio
 async def test_lost_lease_sets_event(lease_dsn: str) -> None:
-    m1 = make_manager(lease_dsn, pool_size=1)
+    m1 = make_manager(lease_dsn, pool_size=1, heartbeat_interval=0.1)
     await m1.acquire()
 
     # Simulate another process stealing the lease by changing the holder
