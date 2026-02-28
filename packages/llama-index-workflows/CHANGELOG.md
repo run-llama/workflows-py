@@ -1,5 +1,18 @@
 # llama-index-workflows
 
+## 2.15.0
+
+### Minor Changes
+
+- 3c22216: Make WorkflowTick serializable, and support switching workflow name and runtime before launch
+
+### Patch Changes
+
+- 77a3f9c: Add workflow release for idle DBOS workflows (with replica support)
+- 707a254: Fix `Workflow(verbose=True)` being a no-op by adding a `VerboseDecorator` that intercepts `StepStateChanged` events to print step starts and completions
+- 05f5f4e: Fix idle detection only working for wait_for_event, not for steps waiting on InputRequiredEvent
+- 96e437e: Move task execution into the runtime, for maximal control of specific runtime semantics around determinism
+
 ## 2.15.0-rc.1
 
 ### Patch Changes
