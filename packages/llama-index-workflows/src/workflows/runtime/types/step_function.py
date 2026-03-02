@@ -125,8 +125,25 @@ def as_step_worker_function(
                 call_func = getattr(workflow, step_name)
             except AttributeError:
                 call_func = original_func
+            # For async steps, intercept WaitingForEvent before it reaches
+            # dispatcher.span() to prevent it from being recorded as an error span.
+            captured_waiting: list[WaitingForEvent] = []
+            if asyncio.iscoroutinefunction(call_func):
+
+                @functools.wraps(call_func)
+                async def span_safe_call(*args: Any, **kwargs: Any) -> Any:
+                    try:
+                        return await call_func(*args, **kwargs)
+                    except WaitingForEvent as e:
+                        captured_waiting.append(e)
+                        return None
+
+                span_target = span_safe_call
+            else:
+                span_target = call_func
+
             partial_func = await partial(
-                func=workflow._dispatcher.span(call_func),
+                func=workflow._dispatcher.span(span_target),
                 step_config=config,
                 event=event,
                 context=internal_context,
@@ -147,6 +164,8 @@ def as_step_worker_function(
                     )
                 else:
                     result = await partial_func()
+                    if captured_waiting:
+                        raise captured_waiting[0]
                 if result is not None and not isinstance(result, Event):
                     msg = f"Step function {step_name} returned {type(result).__name__} instead of an Event instance."
                     raise WorkflowRuntimeError(msg)
