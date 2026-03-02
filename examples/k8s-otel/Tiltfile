@@ -11,6 +11,7 @@ docker_build(
         'workflows-py/examples/k8s-otel/',
         'workflows-py/pyproject.toml',
         'workflows-py/uv.lock',
+        'llama_index/llama-index-instrumentation/',
         'llama_index/llama-index-integrations/observability/llama-index-observability-otel/',
     ],
 )

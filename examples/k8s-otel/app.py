@@ -18,6 +18,7 @@ import asyncio
 import logging
 import logging.config
 import os
+import signal
 import time
 from contextlib import asynccontextmanager
 from typing import Any, AsyncGenerator, MutableMapping
@@ -30,6 +31,7 @@ from fastapi.responses import RedirectResponse
 from llama_agents.dbos import DBOSRuntime
 from llama_agents.server import WorkflowServer
 from llama_index.observability.otel import LlamaIndexOpenTelemetry
+from llama_index_instrumentation import get_dispatcher
 from llama_index_instrumentation.dispatcher import active_instrument_tags
 
 # from openinference.instrumentation.llama_index import LlamaIndexInstrumentor
@@ -149,6 +151,7 @@ otel_exporter = OTLPSpanExporter(endpoint=OTEL_ENDPOINT, insecure=True)
 instrumentor = LlamaIndexOpenTelemetry(
     span_exporter=otel_exporter,
     service_name_or_resource="k8s-otel-example",
+    span_processor="simple",
 )
 instrumentor.start_registering()
 
@@ -265,12 +268,35 @@ workflow_server.add_workflow("greeter", GreeterWorkflow(runtime=runtime))
 # ---------------------------------------------------------------------------
 
 
+def _flush_and_shutdown() -> None:
+    """Flush open spans and shut down the OTel pipeline synchronously."""
+    dispatcher = get_dispatcher()
+    for h in dispatcher.span_handlers:
+        log.info(
+            "shutdown.spans",
+            handler=h.class_name(),
+            open_span_ids=list(h.open_spans.keys()),
+        )
+        if hasattr(h, "all_spans"):
+            log.info(
+                "shutdown.otel_spans",
+                otel_span_ids=list(h.all_spans.keys()),
+            )
+    dispatcher.shutdown()
+    log.info("shutdown.dispatcher_done")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
+    # Register signal handler so spans flush on SIGTERM even if uvicorn
+    # is still waiting for connections to drain.
+    loop = asyncio.get_running_loop()
+    loop.add_signal_handler(signal.SIGTERM, _flush_and_shutdown)
     await workflow_server.start()
     try:
         yield
     finally:
+        _flush_and_shutdown()
         await workflow_server.stop()
 
 

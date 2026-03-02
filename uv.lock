@@ -2160,14 +2160,23 @@ wheels = [
 [[package]]
 name = "llama-index-instrumentation"
 version = "0.4.2"
-source = { registry = "https://pypi.org/simple" }
+source = { directory = "../llama_index/llama-index-instrumentation" }
 dependencies = [
     { name = "deprecated" },
     { name = "pydantic" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/af/b9/a7a74de6d8aacf4be329329495983d78d96b1a6e69b6d9fcf4a233febd4b/llama_index_instrumentation-0.4.2.tar.gz", hash = "sha256:dc4957b64da0922060690e85a6be9698ac08e34e0f69e90b01364ddec4f3de7f", size = 46146, upload-time = "2025-10-13T20:44:48.85Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/40/54/df8063b0441242e250e03d1e31ebde5dffbe24e1af32b025cb1a4544150c/llama_index_instrumentation-0.4.2-py3-none-any.whl", hash = "sha256:b4989500e6454059ab3f3c4a193575d47ab1fadb730c2e8f2b962649ae88b70b", size = 15411, upload-time = "2025-10-13T20:44:47.685Z" },
+
+[package.metadata]
+requires-dist = [
+    { name = "deprecated", specifier = ">=1.2.18" },
+    { name = "pydantic", specifier = ">=2.11.5" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pytest", specifier = ">=8.4.0" },
+    { name = "pytest-asyncio", specifier = ">=1.0.0" },
+    { name = "pytest-cov", specifier = ">=6.1.1" },
 ]
 
 [[package]]
@@ -2292,7 +2301,7 @@ requires-dist = [
     { name = "eval-type-backport", marker = "python_full_version < '3.10'", specifier = ">=0.2.2" },
     { name = "llama-agents-client", marker = "extra == 'client'", editable = "packages/llama-agents-client" },
     { name = "llama-agents-server", marker = "extra == 'server'", editable = "packages/llama-agents-server" },
-    { name = "llama-index-instrumentation", specifier = ">=0.1.0" },
+    { name = "llama-index-instrumentation", directory = "../llama_index/llama-index-instrumentation" },
     { name = "pydantic", specifier = ">=2.11.5" },
     { name = "typing-extensions", specifier = ">=4.6.0" },
 ]

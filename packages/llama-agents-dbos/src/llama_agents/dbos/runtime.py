@@ -26,8 +26,7 @@ from llama_agents.server._store import (
 from llama_agents.server._store import (
     SQLITE_MIGRATION_SOURCE as SERVER_SQLITE_MIGRATION_SOURCE,
 )
-from llama_index_instrumentation.dispatcher import active_instrument_tags
-from llama_index_instrumentation.span import active_span_id
+from llama_index_instrumentation import get_dispatcher
 from pydantic import BaseModel
 from typing_extensions import Unpack
 from workflows.context.serializers import BaseSerializer, JsonSerializer
@@ -555,16 +554,11 @@ class DBOSRuntime(Runtime):
                     await store.set_state(state)
 
                 try:
-                    captured_tags = {**active_instrument_tags.get()}
-                    parent_span_id = active_span_id.get()
-                    if parent_span_id is not None:
-                        captured_tags["parent_span_id"] = parent_span_id
-
                     return await DBOS.start_workflow_async(
                         registered.workflow_run_fn,
                         init_state,
                         start_event,
-                        captured_tags,
+                        get_dispatcher().capture_propagation_context(),
                     )
                 except Exception as e:
                     logger.error(

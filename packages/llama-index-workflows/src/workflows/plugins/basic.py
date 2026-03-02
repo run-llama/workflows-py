@@ -14,8 +14,7 @@ from typing import TYPE_CHECKING, Any, AsyncGenerator, Generator
 if TYPE_CHECKING:
     from workflows.workflow import Workflow
 
-from llama_index_instrumentation.dispatcher import active_instrument_tags
-from llama_index_instrumentation.span import active_span_id
+from llama_index_instrumentation import get_dispatcher
 
 from workflows.context.serializers import BaseSerializer, JsonSerializer
 from workflows.context.state_store import (
@@ -290,12 +289,9 @@ class BasicRuntime(Runtime):
         queues = self._get_or_create_queues(run_id, init_state)
         queues.state_store = state_store
 
-        # Capture parent span ID and instrument tags BEFORE creating the task
-        # (they won't be inherited by the background task)
-        captured_tags = {**active_instrument_tags.get()}
-        parent_span_id = active_span_id.get()
-        if parent_span_id is not None:
-            captured_tags["parent_span_id"] = parent_span_id
+        # Capture propagation context (otel trace, instrument tags, etc.)
+        # BEFORE creating the task — contextvars won't be inherited.
+        captured_tags = get_dispatcher().capture_propagation_context()
 
         async def run_with_concurrency_limit() -> StopEvent:
             # Capture strong reference to queues for the task's lifetime,

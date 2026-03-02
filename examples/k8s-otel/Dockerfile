@@ -14,8 +14,9 @@ COPY workflows-py/packages/llama-agents-client/pyproject.toml packages/llama-age
 COPY workflows-py/packages/llama-agents-dbos/pyproject.toml packages/llama-agents-dbos/pyproject.toml
 COPY workflows-py/packages/llama-agents-integration-tests/pyproject.toml packages/llama-agents-integration-tests/pyproject.toml
 COPY workflows-py/examples/k8s-otel/pyproject.toml examples/k8s-otel/pyproject.toml
-# Local otel package for development
-# Local otel package — path resolves from /src/examples/k8s-otel/ via ../../../llama_index/...
+# Local llama_index packages for development
+COPY llama_index/llama-index-instrumentation \
+     /llama_index/llama-index-instrumentation
 COPY llama_index/llama-index-integrations/observability/llama-index-observability-otel \
      /llama_index/llama-index-integrations/observability/llama-index-observability-otel
 
