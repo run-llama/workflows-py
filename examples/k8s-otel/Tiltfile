@@ -35,7 +35,10 @@ k8s_resource(
 k8s_resource(
     'jaeger',
     labels=['observability'],
-    port_forwards='16686:16686',
+    port_forwards=[
+        '16686:16686',  # Jaeger UI
+        '4317:4317',    # OTLP gRPC (for verify_spans.py)
+    ],
 )
 
 k8s_resource(
