@@ -510,15 +510,25 @@ class Workflow(metaclass=WorkflowMeta):
                         result=result,
                     )
                 finally:
-                    # Reset span token
+                    # Reset span token (may already have been reset by the
+                    # caller's context — see the reset after add_done_callback)
                     try:
                         active_span_id.reset(span_token)
-                    except ValueError:
-                        # Token might be from different context, ignore
+                    except (ValueError, RuntimeError):
                         pass
 
             # Attach callback to the handler's result task
             handler._result_task.add_done_callback(_on_workflow_complete)
+
+            # Reset active_span_id in the caller's context now that the handler's
+            # task has captured its own context copy.  Without this, a second
+            # Workflow.run() in the same async context would inherit a stale
+            # parent span ID, causing silent span-creation failures in the OTel
+            # handler (KeyError on all_spans lookup, swallowed by Dispatcher).
+            try:
+                active_span_id.reset(span_token)
+            except ValueError:
+                pass
 
             return handler
         except BaseException as e:

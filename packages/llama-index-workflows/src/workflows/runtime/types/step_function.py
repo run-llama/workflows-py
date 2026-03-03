@@ -12,10 +12,11 @@ from contextvars import copy_context
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Optional, Protocol, TypeVar
 
 from llama_index_instrumentation import get_dispatcher
+from llama_index_instrumentation.base import BaseEvent
 from llama_index_instrumentation.events.span import SpanDropEvent
 from llama_index_instrumentation.span import active_span_id
 from workflows.decorators import P, StepConfig
-from workflows.errors import WorkflowRuntimeError
+from workflows.errors import WorkflowCancelledByUser, WorkflowRuntimeError
 from workflows.events import (
     Event,
     StartEvent,
@@ -47,6 +48,16 @@ if TYPE_CHECKING:
 _dispatcher = get_dispatcher(__name__)
 
 StepReturnT = TypeVar("StepReturnT", bound=Optional[Event])
+
+
+class SpanCancelledEvent(BaseEvent):
+    """Instrumentation event emitted when a span exits due to cancellation."""
+
+    reason: str
+
+    @classmethod
+    def class_name(cls) -> str:
+        return "SpanCancelledEvent"
 
 
 class StepWorkerFunction(Protocol):
@@ -130,9 +141,11 @@ def as_step_worker_function(
                 call_func = getattr(workflow, step_name)
             except AttributeError:
                 call_func = original_func
-            # For async steps, intercept WaitingForEvent before it reaches
-            # dispatcher.span() to prevent it from being recorded as an error span.
+            # For async steps, intercept WaitingForEvent and CancelledError before
+            # they reach dispatcher.span() to prevent them from being recorded as
+            # error spans.
             captured_waiting: list[WaitingForEvent] = []
+            captured_cancelled: list[BaseException] = []
             if asyncio.iscoroutinefunction(call_func):
 
                 @functools.wraps(call_func)
@@ -141,6 +154,10 @@ def as_step_worker_function(
                         return await call_func(*args, **kwargs)
                     except WaitingForEvent as e:
                         captured_waiting.append(e)
+                        return None
+                    except asyncio.CancelledError as e:
+                        _dispatcher.event(SpanCancelledEvent(reason="step cancelled"))
+                        captured_cancelled.append(e)
                         return None
 
                 span_target = span_safe_call
@@ -169,6 +186,8 @@ def as_step_worker_function(
                     )
                 else:
                     result = await partial_func()
+                    if captured_cancelled:
+                        raise captured_cancelled[0]
                     if captured_waiting:
                         raise captured_waiting[0]
                 if result is not None and not isinstance(result, Event):
@@ -279,6 +298,17 @@ def create_workflow_run_function(
                 # Cancel any background tasks from InternalContext on completion or cancellation
                 if isinstance(internal_ctx._face, InternalContext):
                     internal_ctx._face.cancel_background_tasks()
+        except WorkflowCancelledByUser:
+            # User-initiated cancellation is not an error — exit the span
+            # cleanly so it shows as OK rather than ERROR in traces.
+            _dispatcher.event(SpanCancelledEvent(reason="workflow cancelled by user"))
+            _dispatcher.span_exit(
+                id_=span_id,
+                bound_args=bound_args,
+                instance=workflow,
+                result=None,
+            )
+            raise
         except BaseException as e:
             _dispatcher.event(SpanDropEvent(span_id=span_id, err_str=str(e)))
             _dispatcher.span_drop(

@@ -16,7 +16,6 @@ Usage:
 from __future__ import annotations
 
 import asyncio
-from typing import Any
 
 from llama_index.observability.otel import LlamaIndexOpenTelemetry
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
@@ -102,7 +101,9 @@ async def run_cancel_test() -> None:
     except Exception as e:
         print(f"Caught expected exception: {type(e).__name__}: {e}")
 
-    print("OK — workflow cancelled. Check Jaeger for OK span on 'sleep_step' (no ERROR).")
+    print(
+        "OK — workflow cancelled. Check Jaeger for OK span on 'sleep_step' (no ERROR)."
+    )
 
 
 async def main() -> None:
