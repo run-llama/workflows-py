@@ -17,4 +17,3 @@ dependencies = [
 
 [tool.uv.sources]
 llama-agents-dbos = {workspace = true}
-llama-index-observability-otel = {path = "../../../llama_index/llama-index-integrations/observability/llama-index-observability-otel"}

@@ -22,7 +22,6 @@ _SYS_PATHS = [
     str(DBOS_PACKAGE_DIR.parent / "llama-index-workflows" / "src"),
     str(DBOS_PACKAGE_DIR.parent / "llama-agents-server" / "src"),
     str(DBOS_PACKAGE_DIR.parent / "llama-agents-client" / "src"),
-    str(DBOS_PACKAGE_DIR.parent / "llama-index-instrumentation" / "src"),
 ]
 
 for _p in _SYS_PATHS:

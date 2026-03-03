@@ -137,8 +137,6 @@ llama-index-workflows = {workspace = true}
 llama-agents-client = {workspace = true}
 llama-agents-server = {workspace = true}
 llama-agents-dbos = {workspace = true}
-llama-index-instrumentation = {path = "../llama_index/llama-index-instrumentation"}
-llama-index-observability-otel = {path = "../llama_index/llama-index-integrations/observability/llama-index-observability-otel"}
 
 [tool.uv.workspace]
 exclude = [
