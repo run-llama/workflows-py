@@ -11,6 +11,7 @@ pip install llama-agents-dbos
 ## Usage
 
 ```python
+import asyncio
 from llama_agents.dbos import DBOSRuntime
 from dbos import DBOS, DBOSConfig
 from workflows import Workflow, step, StartEvent, StopEvent
@@ -32,9 +33,13 @@ class MyWorkflow(Workflow):
 
 workflow = MyWorkflow(runtime=runtime)
 
-# Launch runtime and run workflow
-runtime.launch()
-result = await workflow.run()
+# launch_sync() works outside async contexts; use await runtime.launch() inside one
+runtime.launch_sync()
+
+async def main():
+    result = await workflow.run()
+
+asyncio.run(main())
 ```
 
 ## Features

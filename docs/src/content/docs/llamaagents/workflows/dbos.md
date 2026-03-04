@@ -62,10 +62,10 @@ class CounterWorkflow(Workflow):
 # 3. Create runtime, attach to workflow, and launch
 runtime = DBOSRuntime()
 workflow = CounterWorkflow(runtime=runtime)
-runtime.launch()
 
 
 async def main() -> None:
+    await runtime.launch()
     result = await workflow.run(run_id="counter-run-1")
     print(f"Result: final_count = {result.final_count}")
 
@@ -244,6 +244,8 @@ Because recovery is replay-based, **steps may execute more than once** if they w
 ### Scaling and draining
 
 Replica IDs and replica counts must be stable. If you scale down and remove a replica, any workflows that replica owned will be abandoned until that `executor_id` comes back. Before removing a replica, drain it by letting its in-flight workflows complete and not routing new work to it.
+
+[DBOS Conductor](https://docs.dbos.dev/production/conductor) handles this automatically — it detects drained or timed-out replicas via heartbeats and re-assigns their in-flight workflows to healthy replicas.
 
 ### Code changes and versioning
 
