@@ -33,14 +33,14 @@ class MyWorkflow(Workflow):
 
 workflow = MyWorkflow(runtime=runtime)
 
+# launch_sync() works outside async contexts; use await runtime.launch() inside one
+runtime.launch_sync()
+
 async def main():
-    await runtime.launch()
     result = await workflow.run()
 
 asyncio.run(main())
 ```
-
-If you're not in an async context, use `runtime.launch_sync()` instead.
 
 ## Features
 
