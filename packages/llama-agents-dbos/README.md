@@ -37,9 +37,10 @@ async def main():
     await runtime.launch()
     result = await workflow.run()
 
-# Or from a sync context: runtime.launch_sync()
 asyncio.run(main())
 ```
+
+If you're not in an async context, use `runtime.launch_sync()` instead.
 
 ## Features
 
