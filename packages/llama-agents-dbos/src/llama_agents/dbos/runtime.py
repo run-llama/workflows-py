@@ -972,9 +972,16 @@ class InternalDBOSAdapter(InternalRunAdapter):
         if self._closed:
             raise asyncio.CancelledError("Adapter closed")
 
+        import time as _time
+        _t0 = _time.monotonic()
         result = await DBOS.recv_async(
             _IO_STREAM_TICK_TOPIC,
             timeout_seconds=timeout_seconds or _UNBOUNDED_WAIT_TIMEOUT_SECONDS,
+        )
+        _elapsed = _time.monotonic() - _t0
+        logger.debug(
+            f"[DEBUG-RECV] took={_elapsed:.4f}s, "
+            f"result_type={type(result).__name__}, result_is_none={result is None}"
         )
         if result is None:
             return WaitResultTimeout()
@@ -1126,17 +1133,30 @@ class InternalDBOSAdapter(InternalRunAdapter):
                 except (asyncio.TimeoutError, TimeoutError):
                     return WaitForNextTaskResult(None, started)
                 journal.advance()
+                logger.debug(
+                    f"[DEBUG-JOURNAL] Replay: expected={expected_key}, "
+                    f"replay_index={journal._replay_index}/{len(journal._entries or [])}"
+                )
                 return WaitForNextTaskResult(target_task, started)
 
         # Fresh execution: wait for first, record it
+        import time as _time
+        _t0 = _time.monotonic()
         done, _ = await asyncio.wait(
             tasks, timeout=timeout, return_when=asyncio.FIRST_COMPLETED
         )
+        _elapsed = _time.monotonic() - _t0
         if not done:
             return WaitForNextTaskResult(None, started)
 
         completed = done.pop()
         key = get_key(all_named, completed)
+        all_done_keys = [get_key(all_named, t) for t in done]
+        logger.debug(
+            f"[DEBUG-JOURNAL] Fresh: winner={key}, wait_took={_elapsed:.4f}s, "
+            f"done_count={len(done)+1}, other_done={all_done_keys}, "
+            f"total_tasks={len(tasks)}"
+        )
         await journal.record(key)
 
         return WaitForNextTaskResult(completed, started)
