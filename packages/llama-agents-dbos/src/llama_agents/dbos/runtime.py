@@ -790,19 +790,27 @@ class DBOSRuntime(Runtime):
         # This prevents DBOS from capturing a reference to the caller's loop,
         # which may be temporary (e.g. launch_sync's asyncio.run). Without
         # this, DBOS's recovery thread submits coroutines to a dead loop.
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, DBOS.launch)
-        self._dbos_launched = True
+        #
+        # Config resolution and _dbos_launched are set inside the same
+        # executor call so they're visible before DBOS's recovery thread
+        # can call get_internal_adapter on the background loop.
+        def _launch_and_configure() -> None:
+            DBOS.launch()
+            # Resolve native driver config from SQLAlchemy engine.
+            # Must happen here (same thread, before returning) so that
+            # recovery workflows can call get_internal_adapter immediately.
+            engine = self._get_sql_engine()
+            self._schema = _resolve_schema(self.config, engine)
+            if engine.dialect.name == "postgresql":
+                self._dsn = _sqlalchemy_url_to_asyncpg_dsn(engine.url)
+            else:
+                self._db_path = (
+                    str(engine.url.database) if engine.url.database else ":memory:"
+                )
+            self._dbos_launched = True
 
-        # Resolve native driver config from SQLAlchemy engine
-        engine = self._get_sql_engine()
-        self._schema = _resolve_schema(self.config, engine)
-        if engine.dialect.name == "postgresql":
-            self._dsn = _sqlalchemy_url_to_asyncpg_dsn(engine.url)
-        else:
-            self._db_path = (
-                str(engine.url.database) if engine.url.database else ":memory:"
-            )
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, _launch_and_configure)
 
         # Run migrations after DBOS is launched (if configured)
         if self.config.get("run_migrations_on_launch", True):
