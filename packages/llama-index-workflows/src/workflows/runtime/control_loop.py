@@ -83,7 +83,6 @@ from workflows.workflow import Workflow
 
 
 def _is_shutdown_error(e: BaseException) -> bool:
-    """Check if an exception is caused by event loop or executor shutdown."""
     if isinstance(e, (asyncio.CancelledError, KeyboardInterrupt)):
         return True
     msg = str(e)

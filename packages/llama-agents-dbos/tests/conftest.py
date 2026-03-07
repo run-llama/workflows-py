@@ -73,11 +73,6 @@ def postgres_dsn(postgres_container: PostgresContainer) -> str:
     return get_asyncpg_dsn(postgres_container)
 
 
-# ---------------------------------------------------------------------------
-# Subprocess runner helpers (shared by test_dbos_determinism_subprocess.py
-# and test_journal_double_restart_hang.py)
-# ---------------------------------------------------------------------------
-
 RUNNER_PATH = str(Path(__file__).parent / "fixtures" / "runner.py")
 
 

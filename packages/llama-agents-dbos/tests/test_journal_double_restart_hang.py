@@ -1,17 +1,6 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 LlamaIndex Inc.
-"""Reproduce the journal hang on second Ctrl+C restart.
-
-Bug: after two interrupt-restart cycles, the workflow hangs forever.
-
-The workflow_journal table accumulates entries across restarts. Events that
-flow through DBOS.send/recv create __pull__ entries in the journal. After
-two restarts, the accumulated journal entries cause DBOS's function_id
-tracking to diverge, and recv_async blocks forever instead of replaying.
-
-This test uses the subprocess runner pattern to realistically simulate
-two interrupt-restart cycles with proper DBOS process isolation.
-"""
+"""Regression: HITL workflow must survive two interrupt-restart cycles."""
 
 from __future__ import annotations
 
@@ -53,7 +42,6 @@ def _get_journal_rows(db_path: Path, run_id: str) -> list[tuple[Any, ...]]:
 
 
 def _log_journal(db_path: Path, run_id: str, label: str) -> None:
-    """Print journal stats for debugging — no assertions."""
     rows = _get_journal_rows(db_path, run_id)
     pull_count = sum(1 for r in rows if "__pull__" in r[3])
     print(f"{label}: {len(rows)} journal rows ({pull_count} __pull__)")
@@ -64,12 +52,6 @@ def _run_double_restart(
     run_id: str,
     call_close: bool = False,
 ) -> None:
-    """Three-phase double-restart test for the HITL counter.
-
-    Run 1: start, interrupt at tick 5
-    Run 2: resume, interrupt at tick 15
-    Run 3: resume, should complete to 40
-    """
     db_url = f"sqlite+pysqlite:///{db_path}?check_same_thread=false"
 
     # --- Run 1: start, interrupt at tick 5 ---
@@ -129,24 +111,9 @@ def _run_double_restart(
 
 
 def test_double_restart_counter_workflow(test_db_path: Path) -> None:
-    """Two interrupt-restart cycles on the HITL counter workflow.
-
-    Run 1: Start counter, interrupt at tick 5
-    Run 2: Resume, interrupt at tick 15
-    Run 3: Resume, should complete to tick 40 — but may hang due to
-            journal accumulation causing DBOS function_id desync.
-    """
     _run_double_restart(test_db_path, run_id="counter-double-restart")
 
 
 def test_double_restart_with_close(test_db_path: Path) -> None:
-    """Two interrupt cycles where adapter.close() is called before exit.
-
-    This is the actual bug scenario: close() on the old code called
-    DBOS.send(_DBOSInternalShutdown, ...) which persisted a poison message
-    to the notifications table. On resume, DBOS replays that notification,
-    which poisons the adapter's _closed flag. After two such cycles, the
-    accumulated __pull__ journal entries cause DBOS's function_id tracking
-    to diverge, and recv_async blocks forever.
-    """
+    """Same as above, but calls adapter.close() before each exit."""
     _run_double_restart(test_db_path, run_id="close-double-restart", call_close=True)

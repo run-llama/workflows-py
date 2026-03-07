@@ -1,11 +1,6 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 LlamaIndex Inc.
-"""Counter workflow using HITL ticks for double-restart testing.
-
-Each tick cycle: workflow emits CounterTickEvent (InputRequired), runner
-responds with CounterContinueEvent, workflow increments and loops.
-Events flow through DBOS.send/recv, producing __pull__ journal entries.
-"""
+"""HITL counter workflow for double-restart testing."""
 
 from __future__ import annotations
 

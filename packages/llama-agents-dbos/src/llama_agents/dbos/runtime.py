@@ -785,20 +785,10 @@ class DBOSRuntime(Runtime):
             registered = self.register(workflow)
             self._registered[id(workflow)] = registered
 
-        # Launch DBOS runtime from a threadpool worker so that
-        # BackgroundEventLoop.set_main_loop() finds no running event loop.
-        # This prevents DBOS from capturing a reference to the caller's loop,
-        # which may be temporary (e.g. launch_sync's asyncio.run). Without
-        # this, DBOS's recovery thread submits coroutines to a dead loop.
-        #
-        # Config resolution and _dbos_launched are set inside the same
-        # executor call so they're visible before DBOS's recovery thread
-        # can call get_internal_adapter on the background loop.
+        # Launch from a threadpool worker so DBOS doesn't capture the
+        # caller's event loop (which may be temporary, e.g. launch_sync).
         def _launch_and_configure() -> None:
             DBOS.launch()
-            # Resolve native driver config from SQLAlchemy engine.
-            # Must happen here (same thread, before returning) so that
-            # recovery workflows can call get_internal_adapter immediately.
             engine = self._get_sql_engine()
             self._schema = _resolve_schema(self.config, engine)
             if engine.dialect.name == "postgresql":
@@ -897,9 +887,7 @@ class DBOSRuntime(Runtime):
                 inner._pool = None
                 inner._listen_conn = None
             self._workflow_store = None
-        # Cancel tracked tasks and wait for them to finish unwinding
-        # before destroying DBOS, so their error handlers don't hit
-        # a destroyed runtime.
+        # Wait for cancelled tasks to unwind before destroying DBOS.
         tasks_to_cancel = [t for t in self._tasks if not t.done()]
         for task in tasks_to_cancel:
             task.cancel()
@@ -978,13 +966,7 @@ class InternalDBOSAdapter(InternalRunAdapter):
         self,
         timeout_seconds: float | None = None,
     ) -> WaitResult:
-        """Wait for tick using DBOS.recv_async with timeout.
-
-        For bounded waits (timeout_seconds specified), uses the specified timeout.
-        For unbounded waits (timeout_seconds=None), loops with very long timeouts
-        (hours) to encourage the workflow to sleep. Uses shutdown signal from
-        close() to exit cleanly - raises CancelledError on shutdown.
-        """
+        """Wait for tick via DBOS.recv_async. Raises CancelledError on shutdown."""
         if self._closed:
             raise asyncio.CancelledError("Adapter closed")
 

@@ -21,9 +21,6 @@ Config modes:
     - respond: Respond to InputRequiredEvent subtypes with specified events
     - run-to-completion: Empty config or omit both fields
 
-CLI flags:
-    --call-close: Before os._exit(0) on interrupt, create a fresh adapter and
-                  call close(). Tests that close() doesn't poison the DB.
 """
 
 from __future__ import annotations
@@ -52,12 +49,7 @@ from workflows.handler import WorkflowHandler  # noqa: E402
 
 
 def _call_adapter_close(run_id: str) -> None:
-    """Create a fresh adapter and call close() while DBOS is still alive.
-
-    On old code, close() calls DBOS.send(_DBOSInternalShutdown, ...) which
-    persists a poison message to the notifications table.
-    On new code, close() just sets a process-local asyncio.Event.
-    """
+    """Call adapter.close() while DBOS is still alive."""
     from llama_agents.dbos.runtime import InternalDBOSAdapter
 
     adapter = InternalDBOSAdapter(
