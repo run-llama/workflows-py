@@ -13,6 +13,7 @@ import asyncio
 import logging
 import sqlite3
 import sys
+import threading
 import time
 from collections.abc import Awaitable, Callable
 from typing import Any, AsyncGenerator, TypedDict, cast
@@ -307,6 +308,11 @@ class DBOSRuntime(Runtime):
         self._registered: dict[int, RegisteredWorkflow] = {}  # keyed by id(workflow)
 
         self._dbos_launched = False
+        # Signaled once DBOS is launched and config (engine, schema, etc.) is
+        # resolved.  Recovery workflows on DBOS's background loop may call
+        # get_internal_adapter before our launch() method returns; this event
+        # lets them block briefly until the config is ready.
+        self._launch_ready = threading.Event()
         self._tasks: list[asyncio.Task[None]] = []
         self._sql_engine: Engine | None = None
         self._migrations_run = False
@@ -572,6 +578,9 @@ class DBOSRuntime(Runtime):
         )
 
     def get_internal_adapter(self, workflow: Workflow) -> InternalRunAdapter:
+        # Wait for launch config to be ready. Recovery workflows on DBOS's
+        # background loop may arrive before launch() finishes setting up.
+        self._launch_ready.wait(timeout=30)
         if not self._dbos_launched:
             raise RuntimeError(
                 "DBOS runtime not launched. Call runtime.launch() before running workflows."
@@ -798,6 +807,7 @@ class DBOSRuntime(Runtime):
                     str(engine.url.database) if engine.url.database else ":memory:"
                 )
             self._dbos_launched = True
+            self._launch_ready.set()
 
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, _launch_and_configure)
@@ -855,6 +865,7 @@ class DBOSRuntime(Runtime):
         self._tracked_workflow_ids.clear()
         self._registered.clear()
         self._dbos_launched = False
+        self._launch_ready = threading.Event()
         self._sql_engine = None
         self._migrations_run = False
         self._dsn = None
