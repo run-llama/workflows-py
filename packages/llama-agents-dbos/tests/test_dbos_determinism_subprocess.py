@@ -8,103 +8,20 @@ real Ctrl+C interruptions during workflow execution.
 
 from __future__ import annotations
 
-import json
-import subprocess
-import sys
 from pathlib import Path
-from typing import Any
 
 import pytest
-
-RUNNER_PATH = str(Path(__file__).parent / "fixtures" / "runner.py")
-
-
-def log_on_failure(result: subprocess.CompletedProcess[str], label: str) -> None:
-    if result.returncode != 0:
-        print(f"\n=== {label} FAILED ===")
-        print(f"stdout: {result.stdout}")
-        print(f"stderr: {result.stderr}")
+from conftest import (
+    assert_no_determinism_errors,  # pyright: ignore[reportAttributeAccessIssue]
+    log_on_failure,  # pyright: ignore[reportAttributeAccessIssue]
+    run_scenario,  # pyright: ignore[reportAttributeAccessIssue]
+)
 
 
 @pytest.fixture
 def test_db_path(tmp_path: Path) -> Path:
     """Create a temporary database path."""
     return tmp_path / "dbos_test.sqlite3"
-
-
-def run_scenario(
-    workflow: str,
-    db_url: str,
-    run_id: str,
-    config: dict[str, Any] | None = None,
-    timeout: float = 45.0,
-) -> subprocess.CompletedProcess[str]:
-    """Run a workflow scenario in a subprocess.
-
-    Args:
-        workflow: Module path with class name (e.g., "tests.fixtures.sample_workflows.hitl:TestWorkflow")
-        db_url: SQLite database URL
-        run_id: Unique run ID for the workflow
-        config: Optional config dict with interrupt_on and/or respond settings
-        timeout: Subprocess timeout in seconds. Keep below pytest-timeout (60s)
-            so we can capture output on timeout instead of losing it.
-
-    Returns:
-        CompletedProcess with stdout and stderr captured.
-    """
-    cmd = [
-        sys.executable,
-        RUNNER_PATH,
-        "--workflow",
-        workflow,
-        "--db-url",
-        db_url,
-        "--run-id",
-        run_id,
-    ]
-    if config:
-        cmd.extend(["--config", json.dumps(config)])
-    try:
-        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-    except subprocess.TimeoutExpired as e:
-        stdout = e.stdout.decode() if isinstance(e.stdout, bytes) else (e.stdout or "")
-        stderr = e.stderr.decode() if isinstance(e.stderr, bytes) else (e.stderr or "")
-        pytest.fail(
-            f"Subprocess timed out after {timeout}s\n"
-            f"stdout:\n{stdout}\n"
-            f"stderr:\n{stderr}"
-        )
-        raise AssertionError("unreachable")  # pytest.fail always raises  # noqa: B904
-
-
-def assert_no_determinism_errors(result: subprocess.CompletedProcess[str]) -> None:
-    """Check subprocess result for crashes and DBOS determinism errors."""
-    combined = result.stdout + result.stderr
-
-    # Check for non-zero exit code (catches segfaults, killed processes, etc.)
-    if result.returncode != 0:
-        pytest.fail(
-            f"Subprocess exited with code {result.returncode}\n"
-            f"stdout: {result.stdout}\n"
-            f"stderr: {result.stderr}"
-        )
-
-    # Catch unhandled Python exceptions in stdout (main process output).
-    # We only check stdout because stderr may contain logged tracebacks from
-    # DBOS background tasks (e.g., SQLite locking retries) that don't affect
-    # the workflow result.
-    if "Traceback (most recent call last)" in result.stdout:
-        pytest.fail(
-            f"Subprocess exception!\nstdout: {result.stdout}\nstderr: {result.stderr}"
-        )
-
-    # Check for DBOS-specific determinism errors
-    if "DBOSUnexpectedStepError" in combined or "Error 11" in combined:
-        pytest.fail(
-            f"DBOS determinism error on resume!\n"
-            f"stdout: {result.stdout}\n"
-            f"stderr: {result.stderr}"
-        )
 
 
 # =============================================================================

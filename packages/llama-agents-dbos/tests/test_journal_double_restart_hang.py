@@ -15,18 +15,15 @@ two interrupt-restart cycles with proper DBOS process isolation.
 
 from __future__ import annotations
 
-import json
 import sqlite3
-import subprocess
-import sys
 from pathlib import Path
 from typing import Any
 
 import pytest
-
-RUNNER_PATH = str(Path(__file__).parent / "fixtures" / "runner.py")
-SIMPLE_COUNTER_RUNNER_PATH = str(
-    Path(__file__).parent / "fixtures" / "simple_counter_runner.py"
+from conftest import (
+    assert_no_determinism_errors,  # pyright: ignore[reportAttributeAccessIssue]
+    run_scenario,  # pyright: ignore[reportAttributeAccessIssue]
+    run_simple_counter,  # pyright: ignore[reportAttributeAccessIssue]
 )
 
 
@@ -35,78 +32,7 @@ def test_db_path(tmp_path: Path) -> Path:
     return tmp_path / "double_restart_test.sqlite3"
 
 
-def run_scenario(
-    workflow: str,
-    db_url: str,
-    run_id: str,
-    config: dict[str, Any] | None = None,
-    timeout: float = 30.0,
-) -> subprocess.CompletedProcess[str]:
-    cmd = [
-        sys.executable,
-        RUNNER_PATH,
-        "--workflow",
-        workflow,
-        "--db-url",
-        db_url,
-        "--run-id",
-        run_id,
-    ]
-    if config:
-        cmd.extend(["--config", json.dumps(config)])
-    try:
-        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-    except subprocess.TimeoutExpired as e:
-        stdout = e.stdout.decode() if isinstance(e.stdout, bytes) else (e.stdout or "")
-        stderr = e.stderr.decode() if isinstance(e.stderr, bytes) else (e.stderr or "")
-        pytest.fail(
-            f"Subprocess timed out after {timeout}s — likely the double-restart "
-            f"hang bug.\nstdout:\n{stdout}\nstderr:\n{stderr}"
-        )
-        raise AssertionError("unreachable")  # noqa: B904
-
-
-def run_simple_counter(
-    db_url: str,
-    run_id: str,
-    interrupt_at: int | None = None,
-    target: int = 20,
-    fast_polling: bool = True,
-    graceful_interrupt: bool = False,
-    call_close: bool = False,
-    timeout: float = 30.0,
-) -> subprocess.CompletedProcess[str]:
-    cmd = [
-        sys.executable,
-        SIMPLE_COUNTER_RUNNER_PATH,
-        "--db-url",
-        db_url,
-        "--run-id",
-        run_id,
-        "--target",
-        str(target),
-    ]
-    if interrupt_at is not None:
-        cmd.extend(["--interrupt-at", str(interrupt_at)])
-    if fast_polling:
-        cmd.append("--fast-polling")
-    if graceful_interrupt:
-        cmd.append("--graceful-interrupt")
-    if call_close:
-        cmd.append("--call-close")
-    try:
-        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-    except subprocess.TimeoutExpired as e:
-        stdout = e.stdout.decode() if isinstance(e.stdout, bytes) else (e.stdout or "")
-        stderr = e.stderr.decode() if isinstance(e.stderr, bytes) else (e.stderr or "")
-        pytest.fail(
-            f"Subprocess timed out after {timeout}s — likely the double-restart "
-            f"hang bug.\nstdout:\n{stdout}\nstderr:\n{stderr}"
-        )
-        raise AssertionError("unreachable")  # noqa: B904
-
-
-def get_journal_rows(db_path: Path, run_id: str) -> list[tuple[Any, ...]]:
+def _get_journal_rows(db_path: Path, run_id: str) -> list[tuple[Any, ...]]:
     conn = sqlite3.connect(str(db_path))
     try:
         return conn.execute(
@@ -115,6 +41,13 @@ def get_journal_rows(db_path: Path, run_id: str) -> list[tuple[Any, ...]]:
         ).fetchall()
     finally:
         conn.close()
+
+
+def _log_journal(db_path: Path, run_id: str, label: str) -> None:
+    """Print journal stats for debugging — no assertions."""
+    rows = _get_journal_rows(db_path, run_id)
+    pull_count = sum(1 for r in rows if "__pull__" in r[3])
+    print(f"{label}: {len(rows)} journal rows ({pull_count} __pull__)")
 
 
 COUNTER_WORKFLOW = "tests.fixtures.sample_workflows.counter:CounterWorkflow"
@@ -126,6 +59,69 @@ RESPOND_CONFIG = {
         }
     }
 }
+
+
+def _run_double_restart_simple_counter(
+    db_path: Path,
+    run_id: str,
+    fast_polling: bool = True,
+    call_close: bool = False,
+) -> None:
+    """Three-phase double-restart test for the simple (non-HITL) counter.
+
+    Run 1: start, interrupt at tick 5
+    Run 2: resume, interrupt at tick 12
+    Run 3: resume, should complete to 20
+    """
+    db_url = f"sqlite+pysqlite:///{db_path}?check_same_thread=false"
+
+    # --- Run 1: start, interrupt at tick 5 ---
+    result1 = run_simple_counter(
+        db_url=db_url,
+        run_id=run_id,
+        interrupt_at=5,
+        fast_polling=fast_polling,
+        call_close=call_close,
+    )
+    assert "STEP:start:complete" in result1.stdout, (
+        f"Start step should complete.\nstdout: {result1.stdout}\nstderr: {result1.stderr}"
+    )
+    assert "INTERRUPTING" in result1.stdout, (
+        f"Should interrupt at tick 5.\nstdout: {result1.stdout}\nstderr: {result1.stderr}"
+    )
+    if call_close:
+        assert "CLOSE_CALLED" in result1.stdout
+    _log_journal(db_path, run_id, "After run 1")
+
+    # --- Run 2: resume, interrupt at tick 12 ---
+    result2 = run_simple_counter(
+        db_url=db_url,
+        run_id=run_id,
+        interrupt_at=12,
+        fast_polling=fast_polling,
+        call_close=call_close,
+    )
+    assert "INTERRUPTING" in result2.stdout, (
+        f"Should interrupt at tick 12.\nstdout: {result2.stdout}\nstderr: {result2.stderr}"
+    )
+    if call_close:
+        assert "CLOSE_CALLED" in result2.stdout
+    _log_journal(db_path, run_id, "After run 2")
+
+    # --- Run 3: resume, should complete to 20 ---
+    result3 = run_simple_counter(
+        db_url=db_url,
+        run_id=run_id,
+        fast_polling=fast_polling,
+        timeout=30.0,
+    )
+    _log_journal(db_path, run_id, "After run 3")
+
+    assert_no_determinism_errors(result3)
+    assert "SUCCESS" in result3.stdout, (
+        f"Should complete successfully.\n"
+        f"stdout: {result3.stdout}\nstderr: {result3.stderr}"
+    )
 
 
 def test_double_restart_counter_workflow(test_db_path: Path) -> None:
@@ -152,17 +148,13 @@ def test_double_restart_counter_workflow(test_db_path: Path) -> None:
             "interrupt_on": {"event": "CounterTickEvent", "condition": {"count": 5}},
         },
     )
-
     assert "STEP:start:complete" in result1.stdout, (
         f"Start step should complete.\nstdout: {result1.stdout}\nstderr: {result1.stderr}"
     )
     assert "INTERRUPTING" in result1.stdout, (
         f"Should interrupt at tick 5.\nstdout: {result1.stdout}\nstderr: {result1.stderr}"
     )
-
-    rows1 = get_journal_rows(test_db_path, run_id)
-    pull_count1 = sum(1 for r in rows1 if "__pull__" in r[3])
-    print(f"\nAfter run 1: {len(rows1)} journal rows ({pull_count1} __pull__)")
+    _log_journal(test_db_path, run_id, "After run 1")
 
     # --- Run 2: resume, interrupt at tick 15 ---
     result2 = run_scenario(
@@ -174,14 +166,10 @@ def test_double_restart_counter_workflow(test_db_path: Path) -> None:
             "interrupt_on": {"event": "CounterTickEvent", "condition": {"count": 15}},
         },
     )
-
     assert "INTERRUPTING" in result2.stdout, (
         f"Should interrupt at tick 15.\nstdout: {result2.stdout}\nstderr: {result2.stderr}"
     )
-
-    rows2 = get_journal_rows(test_db_path, run_id)
-    pull_count2 = sum(1 for r in rows2 if "__pull__" in r[3])
-    print(f"After run 2: {len(rows2)} journal rows ({pull_count2} __pull__)")
+    _log_journal(test_db_path, run_id, "After run 2")
 
     # --- Run 3: resume, should complete to 40 ---
     result3 = run_scenario(
@@ -191,19 +179,9 @@ def test_double_restart_counter_workflow(test_db_path: Path) -> None:
         config=RESPOND_CONFIG,
         timeout=15.0,
     )
+    _log_journal(test_db_path, run_id, "After run 3")
 
-    rows3 = get_journal_rows(test_db_path, run_id)
-    pull_count3 = sum(1 for r in rows3 if "__pull__" in r[3])
-    print(f"After run 3: {len(rows3)} journal rows ({pull_count3} __pull__)")
-
-    combined = result3.stdout + result3.stderr
-    assert "DBOSUnexpectedStepError" not in combined, (
-        f"DBOS determinism error!\nstdout: {result3.stdout}\nstderr: {result3.stderr}"
-    )
-    assert result3.returncode == 0, (
-        f"Process exited with code {result3.returncode}.\n"
-        f"stdout: {result3.stdout}\nstderr: {result3.stderr}"
-    )
+    assert_no_determinism_errors(result3)
     assert "SUCCESS" in result3.stdout, (
         f"Should complete successfully after second resume.\n"
         f"stdout: {result3.stdout}\nstderr: {result3.stderr}"
@@ -213,59 +191,10 @@ def test_double_restart_counter_workflow(test_db_path: Path) -> None:
 def test_double_restart_simple_counter_fast_polling(test_db_path: Path) -> None:
     """Two interrupt-restart cycles on the non-HITL quickstart counter.
 
-    This matches the exact workflow from the DBOS quickstart docs.
     Uses fast polling (test default) — no HITL, plain Tick events.
     """
-    run_id = "simple-counter-fast"
-    db_url = f"sqlite+pysqlite:///{test_db_path}?check_same_thread=false"
-
-    # --- Run 1: start, interrupt at tick 5 ---
-    result1 = run_simple_counter(
-        db_url=db_url, run_id=run_id, interrupt_at=5, fast_polling=True
-    )
-    assert "STEP:start:complete" in result1.stdout, (
-        f"Start step should complete.\nstdout: {result1.stdout}\nstderr: {result1.stderr}"
-    )
-    assert "INTERRUPTING" in result1.stdout, (
-        f"Should interrupt at tick 5.\nstdout: {result1.stdout}\nstderr: {result1.stderr}"
-    )
-
-    rows1 = get_journal_rows(test_db_path, run_id)
-    pull_count1 = sum(1 for r in rows1 if "__pull__" in r[3])
-    print(f"\nAfter run 1: {len(rows1)} journal rows ({pull_count1} __pull__)")
-
-    # --- Run 2: resume, interrupt at tick 12 ---
-    result2 = run_simple_counter(
-        db_url=db_url, run_id=run_id, interrupt_at=12, fast_polling=True
-    )
-    assert "INTERRUPTING" in result2.stdout, (
-        f"Should interrupt at tick 12.\nstdout: {result2.stdout}\nstderr: {result2.stderr}"
-    )
-
-    rows2 = get_journal_rows(test_db_path, run_id)
-    pull_count2 = sum(1 for r in rows2 if "__pull__" in r[3])
-    print(f"After run 2: {len(rows2)} journal rows ({pull_count2} __pull__)")
-
-    # --- Run 3: resume, should complete to 20 ---
-    result3 = run_simple_counter(
-        db_url=db_url, run_id=run_id, fast_polling=True, timeout=30.0
-    )
-
-    rows3 = get_journal_rows(test_db_path, run_id)
-    pull_count3 = sum(1 for r in rows3 if "__pull__" in r[3])
-    print(f"After run 3: {len(rows3)} journal rows ({pull_count3} __pull__)")
-
-    combined = result3.stdout + result3.stderr
-    assert "DBOSUnexpectedStepError" not in combined, (
-        f"DBOS determinism error!\nstdout: {result3.stdout}\nstderr: {result3.stderr}"
-    )
-    assert result3.returncode == 0, (
-        f"Process exited with code {result3.returncode}.\n"
-        f"stdout: {result3.stdout}\nstderr: {result3.stderr}"
-    )
-    assert "SUCCESS" in result3.stdout, (
-        f"Should complete successfully.\n"
-        f"stdout: {result3.stdout}\nstderr: {result3.stderr}"
+    _run_double_restart_simple_counter(
+        test_db_path, run_id="simple-counter-fast", fast_polling=True
     )
 
 
@@ -278,122 +207,18 @@ def test_double_restart_with_close(test_db_path: Path) -> None:
     which poisons the adapter's _closed flag. After two such cycles, the
     accumulated __pull__ journal entries cause DBOS's function_id tracking
     to diverge, and recv_async blocks forever.
-
-    The --call-close flag creates a fresh adapter and calls close() while
-    DBOS is still fully alive (before os._exit), reliably triggering the
-    old bug. Hard-kill tests (os._exit alone) don't catch this because
-    close() never runs.
     """
-    run_id = "close-double-restart"
-    db_url = f"sqlite+pysqlite:///{test_db_path}?check_same_thread=false"
-
-    # --- Run 1: start, call close() then exit at tick 5 ---
-    result1 = run_simple_counter(
-        db_url=db_url,
-        run_id=run_id,
-        interrupt_at=5,
-        fast_polling=True,
-        call_close=True,
-    )
-    assert "STEP:start:complete" in result1.stdout, (
-        f"Start step should complete.\nstdout: {result1.stdout}\nstderr: {result1.stderr}"
-    )
-    assert "INTERRUPTING" in result1.stdout, (
-        f"Should interrupt at tick 5.\nstdout: {result1.stdout}\nstderr: {result1.stderr}"
-    )
-    assert "CLOSE_CALLED" in result1.stdout, (
-        f"Should call close() before exit.\nstdout: {result1.stdout}\nstderr: {result1.stderr}"
-    )
-
-    # --- Run 2: resume, call close() then exit at tick 12 ---
-    result2 = run_simple_counter(
-        db_url=db_url,
-        run_id=run_id,
-        interrupt_at=12,
-        fast_polling=True,
-        call_close=True,
-    )
-    assert "INTERRUPTING" in result2.stdout, (
-        f"Should interrupt at tick 12.\nstdout: {result2.stdout}\nstderr: {result2.stderr}"
-    )
-    assert "CLOSE_CALLED" in result2.stdout, (
-        f"Should call close() before exit.\nstdout: {result2.stdout}\nstderr: {result2.stderr}"
-    )
-
-    # --- Run 3: resume, should complete to 20 ---
-    result3 = run_simple_counter(
-        db_url=db_url, run_id=run_id, fast_polling=True, timeout=15.0
-    )
-
-    combined = result3.stdout + result3.stderr
-    assert "DBOSUnexpectedStepError" not in combined, (
-        f"DBOS determinism error!\nstdout: {result3.stdout}\nstderr: {result3.stderr}"
-    )
-    assert result3.returncode == 0, (
-        f"Process exited with code {result3.returncode}.\n"
-        f"stdout: {result3.stdout}\nstderr: {result3.stderr}"
-    )
-    assert "SUCCESS" in result3.stdout, (
-        f"Should complete after two close() + restart cycles.\n"
-        f"stdout: {result3.stdout}\nstderr: {result3.stderr}"
+    _run_double_restart_simple_counter(
+        test_db_path, run_id="close-double-restart", call_close=True
     )
 
 
 def test_double_restart_simple_counter_default_polling(test_db_path: Path) -> None:
-    """Same as above but with DEFAULT DBOS polling intervals.
+    """Same as fast_polling variant but with DEFAULT DBOS polling intervals.
 
     The user's quickstart example uses DBOSRuntime() with no polling config,
     meaning DBOS uses its default notification_listener_polling_interval_sec.
-    This may behave differently during recovery than the fast polling variant.
     """
-    run_id = "simple-counter-default"
-    db_url = f"sqlite+pysqlite:///{test_db_path}?check_same_thread=false"
-
-    # --- Run 1: start, interrupt at tick 5 ---
-    result1 = run_simple_counter(
-        db_url=db_url, run_id=run_id, interrupt_at=5, fast_polling=False
-    )
-    assert "STEP:start:complete" in result1.stdout, (
-        f"Start step should complete.\nstdout: {result1.stdout}\nstderr: {result1.stderr}"
-    )
-    assert "INTERRUPTING" in result1.stdout, (
-        f"Should interrupt at tick 5.\nstdout: {result1.stdout}\nstderr: {result1.stderr}"
-    )
-
-    rows1 = get_journal_rows(test_db_path, run_id)
-    pull_count1 = sum(1 for r in rows1 if "__pull__" in r[3])
-    print(f"\nAfter run 1: {len(rows1)} journal rows ({pull_count1} __pull__)")
-
-    # --- Run 2: resume, interrupt at tick 12 ---
-    result2 = run_simple_counter(
-        db_url=db_url, run_id=run_id, interrupt_at=12, fast_polling=False
-    )
-    assert "INTERRUPTING" in result2.stdout, (
-        f"Should interrupt at tick 12.\nstdout: {result2.stdout}\nstderr: {result2.stderr}"
-    )
-
-    rows2 = get_journal_rows(test_db_path, run_id)
-    pull_count2 = sum(1 for r in rows2 if "__pull__" in r[3])
-    print(f"After run 2: {len(rows2)} journal rows ({pull_count2} __pull__)")
-
-    # --- Run 3: resume, should complete to 20 ---
-    result3 = run_simple_counter(
-        db_url=db_url, run_id=run_id, fast_polling=False, timeout=30.0
-    )
-
-    rows3 = get_journal_rows(test_db_path, run_id)
-    pull_count3 = sum(1 for r in rows3 if "__pull__" in r[3])
-    print(f"After run 3: {len(rows3)} journal rows ({pull_count3} __pull__)")
-
-    combined = result3.stdout + result3.stderr
-    assert "DBOSUnexpectedStepError" not in combined, (
-        f"DBOS determinism error!\nstdout: {result3.stdout}\nstderr: {result3.stderr}"
-    )
-    assert result3.returncode == 0, (
-        f"Process exited with code {result3.returncode}.\n"
-        f"stdout: {result3.stdout}\nstderr: {result3.stderr}"
-    )
-    assert "SUCCESS" in result3.stdout, (
-        f"Should complete successfully.\n"
-        f"stdout: {result3.stdout}\nstderr: {result3.stderr}"
+    _run_double_restart_simple_counter(
+        test_db_path, run_id="simple-counter-default", fast_polling=False
     )

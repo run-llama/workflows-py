@@ -36,35 +36,27 @@ import signal
 import sys
 import threading
 from pathlib import Path
+from typing import Any
 
-# Add necessary source paths
-_DBOS_PACKAGE_DIR = Path(__file__).parent.parent.parent
-_SYS_PATHS = [
-    str(_DBOS_PACKAGE_DIR),
-    str(_DBOS_PACKAGE_DIR / "src"),
-    str(_DBOS_PACKAGE_DIR.parent / "llama-index-workflows" / "src"),
-    str(_DBOS_PACKAGE_DIR.parent / "llama-agents-server" / "src"),
-    str(_DBOS_PACKAGE_DIR.parent / "llama-agents-client" / "src"),
-    str(_DBOS_PACKAGE_DIR.parent / "llama-index-instrumentation" / "src"),
-]
-for _p in _SYS_PATHS:
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
+# Add fixtures dir to find runner_common
+sys.path.insert(0, str(Path(__file__).parent))
 
-from dbos import DBOS  # noqa: E402
+import runner_common  # noqa: E402, F401  # ty: ignore[unresolved-import]  # side-effect: sys.path setup
+from dbos import DBOS, DBOSConfig  # noqa: E402
 from llama_agents.dbos import DBOSRuntime  # noqa: E402
-from sample_workflows.simple_counter import SimpleCounterWorkflow  # noqa: E402
+from sample_workflows.simple_counter import (  # noqa: E402  # ty: ignore[unresolved-import]
+    SimpleCounterWorkflow,
+)
 from workflows.events import StartEvent  # noqa: E402
 
 
 async def run(
     db_url: str,
     run_id: str,
-    interrupt_at: int | None,
     target: int,
     fast_polling: bool,
 ) -> None:
-    config: dict = {
+    config: DBOSConfig = {
         "name": "simple-counter-test",
         "system_database_url": db_url,
         "run_admin_server": False,
@@ -131,7 +123,7 @@ def _call_adapter_close(run_id: str) -> None:
     t.join(timeout=5)
 
 
-def _intercepting_print(*args: object, **kwargs: object) -> None:
+def _intercepting_print(*args: object, **kwargs: Any) -> None:
     """Intercept print calls to detect tick count for interruption."""
     _original_print(*args, **kwargs)
     if args and isinstance(args[0], str) and args[0].startswith("STEP:increment:"):
@@ -181,7 +173,6 @@ def main() -> None:
             run(
                 db_url=args.db_url,
                 run_id=args.run_id,
-                interrupt_at=args.interrupt_at,
                 target=args.target,
                 fast_polling=args.fast_polling,
             )
