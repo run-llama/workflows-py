@@ -15,7 +15,6 @@ import sqlite3
 import sys
 import time
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
 from typing import Any, AsyncGenerator, TypedDict, cast
 
 import asyncpg
@@ -243,11 +242,6 @@ def _sqlalchemy_url_to_asyncpg_dsn(url: SaURL) -> str:
 # Very long timeout for unbounded waits - encourages workflow to sleep.
 # DBOS's default 60s is too short and gets recorded to event logs.
 _UNBOUNDED_WAIT_TIMEOUT_SECONDS = 60 * 60 * 24  # 1 day
-
-
-@dataclass
-class _DBOSInternalShutdown:
-    """Internal signal sent via DBOS.send to wake blocked recv for shutdown."""
 
 
 @DBOS.step()
@@ -934,6 +928,7 @@ class InternalDBOSAdapter(InternalRunAdapter):
         self._resolved_pool: asyncpg.Pool | None = pool
         self._db_path = db_path
         self._closed = False
+        self._shutdown_event = asyncio.Event()
         self._state_store: StateStore[Any] | None = None
         # Journal for deterministic task ordering - lazily initialized
         self._journal: TaskJournal | None = None
@@ -972,30 +967,38 @@ class InternalDBOSAdapter(InternalRunAdapter):
         if self._closed:
             raise asyncio.CancelledError("Adapter closed")
 
-        result = await DBOS.recv_async(
-            _IO_STREAM_TICK_TOPIC,
-            timeout_seconds=timeout_seconds or _UNBOUNDED_WAIT_TIMEOUT_SECONDS,
+        recv_task = asyncio.ensure_future(
+            DBOS.recv_async(
+                _IO_STREAM_TICK_TOPIC,
+                timeout_seconds=timeout_seconds or _UNBOUNDED_WAIT_TIMEOUT_SECONDS,
+            )
         )
+        shutdown_task = asyncio.ensure_future(self._shutdown_event.wait())
+        try:
+            done, _ = await asyncio.wait(
+                {recv_task, shutdown_task}, return_when=asyncio.FIRST_COMPLETED
+            )
+        except asyncio.CancelledError:
+            recv_task.cancel()
+            shutdown_task.cancel()
+            raise
+
+        if shutdown_task in done:
+            recv_task.cancel()
+            raise asyncio.CancelledError("Adapter closed")
+
+        shutdown_task.cancel()
+        result = recv_task.result()
         if result is None:
             return WaitResultTimeout()
-        if isinstance(result, _DBOSInternalShutdown):
-            self._closed = True
-            raise asyncio.CancelledError("Adapter closed")
         return WaitResultTick(tick=result)
 
     async def close(self) -> None:
-        """Signal shutdown by sending internal message to wake blocked recv."""
+        """Signal shutdown using process-local event to wake blocked recv."""
         if self._closed:
             return
         self._closed = True
-
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(
-            None,
-            lambda: DBOS.send(
-                self._run_id, _DBOSInternalShutdown(), topic=_IO_STREAM_TICK_TOPIC
-            ),
-        )
+        self._shutdown_event.set()
 
     async def _resolve_pool(self) -> asyncpg.Pool:
         """Resolve the asyncpg pool, lazily creating it via the runtime callback."""

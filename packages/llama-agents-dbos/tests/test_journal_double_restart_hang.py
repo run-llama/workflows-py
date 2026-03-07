@@ -73,6 +73,7 @@ def run_simple_counter(
     target: int = 20,
     fast_polling: bool = True,
     graceful_interrupt: bool = False,
+    call_close: bool = False,
     timeout: float = 30.0,
 ) -> subprocess.CompletedProcess[str]:
     cmd = [
@@ -91,6 +92,8 @@ def run_simple_counter(
         cmd.append("--fast-polling")
     if graceful_interrupt:
         cmd.append("--graceful-interrupt")
+    if call_close:
+        cmd.append("--call-close")
     try:
         return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired as e:
@@ -266,31 +269,31 @@ def test_double_restart_simple_counter_fast_polling(test_db_path: Path) -> None:
     )
 
 
-def test_double_restart_graceful_shutdown(test_db_path: Path) -> None:
-    """Two graceful-shutdown restart cycles on the simple counter.
+def test_double_restart_with_close(test_db_path: Path) -> None:
+    """Two interrupt cycles where adapter.close() is called before exit.
 
-    This is the actual bug scenario: when the process shuts down gracefully
-    (e.g. Ctrl+C caught by try/finally), runtime.destroy() calls close()
-    on the adapter. The old close() implementation sent a _DBOSInternalShutdown
-    message via DBOS.send(), which persisted to the notifications table.
+    This is the actual bug scenario: close() on the old code called
+    DBOS.send(_DBOSInternalShutdown, ...) which persisted a poison message
+    to the notifications table. On resume, DBOS replays that notification,
+    which poisons the adapter's _closed flag. After two such cycles, the
+    accumulated __pull__ journal entries cause DBOS's function_id tracking
+    to diverge, and recv_async blocks forever.
 
-    On resume, DBOS replays that notification, which poisons the adapter's
-    _closed flag. After two such cycles, the accumulated __pull__ journal
-    entries cause DBOS's function_id tracking to diverge, and recv_async
-    blocks forever.
-
-    Hard-kill tests (os._exit) don't catch this because close() never runs.
+    The --call-close flag creates a fresh adapter and calls close() while
+    DBOS is still fully alive (before os._exit), reliably triggering the
+    old bug. Hard-kill tests (os._exit alone) don't catch this because
+    close() never runs.
     """
-    run_id = "graceful-double-restart"
+    run_id = "close-double-restart"
     db_url = f"sqlite+pysqlite:///{test_db_path}?check_same_thread=false"
 
-    # --- Run 1: start, graceful interrupt at tick 5 ---
+    # --- Run 1: start, call close() then exit at tick 5 ---
     result1 = run_simple_counter(
         db_url=db_url,
         run_id=run_id,
         interrupt_at=5,
         fast_polling=True,
-        graceful_interrupt=True,
+        call_close=True,
     )
     assert "STEP:start:complete" in result1.stdout, (
         f"Start step should complete.\nstdout: {result1.stdout}\nstderr: {result1.stderr}"
@@ -298,28 +301,28 @@ def test_double_restart_graceful_shutdown(test_db_path: Path) -> None:
     assert "INTERRUPTING" in result1.stdout, (
         f"Should interrupt at tick 5.\nstdout: {result1.stdout}\nstderr: {result1.stderr}"
     )
-    assert "GRACEFUL_SHUTDOWN" in result1.stdout, (
-        f"Should show graceful shutdown.\nstdout: {result1.stdout}\nstderr: {result1.stderr}"
+    assert "CLOSE_CALLED" in result1.stdout, (
+        f"Should call close() before exit.\nstdout: {result1.stdout}\nstderr: {result1.stderr}"
     )
 
-    # --- Run 2: resume, graceful interrupt at tick 12 ---
+    # --- Run 2: resume, call close() then exit at tick 12 ---
     result2 = run_simple_counter(
         db_url=db_url,
         run_id=run_id,
         interrupt_at=12,
         fast_polling=True,
-        graceful_interrupt=True,
+        call_close=True,
     )
     assert "INTERRUPTING" in result2.stdout, (
         f"Should interrupt at tick 12.\nstdout: {result2.stdout}\nstderr: {result2.stderr}"
     )
-    assert "GRACEFUL_SHUTDOWN" in result2.stdout, (
-        f"Should show graceful shutdown.\nstdout: {result2.stdout}\nstderr: {result2.stderr}"
+    assert "CLOSE_CALLED" in result2.stdout, (
+        f"Should call close() before exit.\nstdout: {result2.stdout}\nstderr: {result2.stderr}"
     )
 
     # --- Run 3: resume, should complete to 20 ---
     result3 = run_simple_counter(
-        db_url=db_url, run_id=run_id, fast_polling=True, timeout=30.0
+        db_url=db_url, run_id=run_id, fast_polling=True, timeout=15.0
     )
 
     combined = result3.stdout + result3.stderr
@@ -331,7 +334,7 @@ def test_double_restart_graceful_shutdown(test_db_path: Path) -> None:
         f"stdout: {result3.stdout}\nstderr: {result3.stderr}"
     )
     assert "SUCCESS" in result3.stdout, (
-        f"Should complete after two graceful shutdowns.\n"
+        f"Should complete after two close() + restart cycles.\n"
         f"stdout: {result3.stdout}\nstderr: {result3.stderr}"
     )
 

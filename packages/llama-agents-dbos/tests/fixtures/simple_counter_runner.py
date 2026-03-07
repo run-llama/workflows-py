@@ -5,12 +5,16 @@
 Mimics the user's durable_workflow.py pattern: runs the counter and
 interrupts after a specified tick count.
 
-Two interrupt modes:
+Three interrupt modes:
   - Hard (default): os._exit(0) — skips all teardown, like kill -9
   - Graceful (--graceful-interrupt): sends SIGINT to self, which raises
     KeyboardInterrupt. The finally block calls runtime.destroy() →
     adapter.close(). This is what matters for the double-restart bug:
     close() used to persist a poisoned shutdown message via DBOS.send().
+  - Call-close (--call-close): creates a fresh adapter and calls close()
+    while DBOS is still fully alive, then os._exit(0). This reliably
+    triggers the old bug where close() persisted a _DBOSInternalShutdown
+    message via DBOS.send().
 
 Usage:
     python simple_counter_runner.py \
@@ -19,7 +23,8 @@ Usage:
         [--interrupt-at 5] \
         [--target 20] \
         [--fast-polling] \
-        [--graceful-interrupt]
+        [--graceful-interrupt] \
+        [--call-close]
 """
 
 from __future__ import annotations
@@ -29,6 +34,7 @@ import asyncio
 import os
 import signal
 import sys
+import threading
 from pathlib import Path
 
 # Add necessary source paths
@@ -102,6 +108,29 @@ async def run(
 _original_print = print
 
 
+def _call_adapter_close(run_id: str) -> None:
+    """Create a fresh adapter and call close() while DBOS is still alive.
+
+    On old code, close() calls DBOS.send(_DBOSInternalShutdown, ...) which
+    persists a poison message to the notifications table.
+    On new code, close() just sets a process-local asyncio.Event.
+    """
+    from llama_agents.dbos.runtime import InternalDBOSAdapter
+
+    adapter = InternalDBOSAdapter(
+        run_id=run_id,
+        engine=None,  # type: ignore[arg-type]
+        state_type=None,
+    )
+
+    def _run() -> None:
+        asyncio.run(adapter.close())
+
+    t = threading.Thread(target=_run)
+    t.start()
+    t.join(timeout=5)
+
+
 def _intercepting_print(*args: object, **kwargs: object) -> None:
     """Intercept print calls to detect tick count for interruption."""
     _original_print(*args, **kwargs)
@@ -110,7 +139,15 @@ def _intercepting_print(*args: object, **kwargs: object) -> None:
         interrupt_at = getattr(_intercepting_print, "_interrupt_at", None)
         if interrupt_at is not None and count >= interrupt_at:
             _original_print("INTERRUPTING", flush=True)
-            if getattr(_intercepting_print, "_graceful", False):
+            if getattr(_intercepting_print, "_call_close", False):
+                # Call adapter.close() while DBOS is still alive, then hard-exit.
+                # On old code this poisons the DB; on new code it's harmless.
+                run_id = getattr(_intercepting_print, "_run_id", None)
+                if run_id:
+                    _call_adapter_close(run_id)
+                    _original_print("CLOSE_CALLED", flush=True)
+                os._exit(0)
+            elif getattr(_intercepting_print, "_graceful", False):
                 # Send SIGINT to ourselves — KeyboardInterrupt unwinds through
                 # asyncio.run(), the finally block calls runtime.destroy() which
                 # calls close() on adapters. This is what Ctrl+C does.
@@ -127,11 +164,14 @@ def main() -> None:
     parser.add_argument("--target", type=int, default=20)
     parser.add_argument("--fast-polling", action="store_true")
     parser.add_argument("--graceful-interrupt", action="store_true")
+    parser.add_argument("--call-close", action="store_true")
     args = parser.parse_args()
 
     if args.interrupt_at is not None:
         _intercepting_print._interrupt_at = args.interrupt_at  # type: ignore[attr-defined]
         _intercepting_print._graceful = args.graceful_interrupt  # type: ignore[attr-defined]
+        _intercepting_print._call_close = args.call_close  # type: ignore[attr-defined]
+        _intercepting_print._run_id = args.run_id  # type: ignore[attr-defined]
         import builtins
 
         builtins.print = _intercepting_print  # type: ignore[assignment]
