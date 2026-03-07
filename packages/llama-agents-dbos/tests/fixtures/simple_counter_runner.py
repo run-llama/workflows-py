@@ -2,8 +2,15 @@
 # Copyright (c) 2026 LlamaIndex Inc.
 """Runner for simple (non-HITL) counter workflow.
 
-Mimics the user's durable_workflow.py pattern: runs the counter and uses
-os._exit() to simulate Ctrl+C after a specified tick count.
+Mimics the user's durable_workflow.py pattern: runs the counter and
+interrupts after a specified tick count.
+
+Two interrupt modes:
+  - Hard (default): os._exit(0) — skips all teardown, like kill -9
+  - Graceful (--graceful-interrupt): sends SIGINT to self, which raises
+    KeyboardInterrupt. The finally block calls runtime.destroy() →
+    adapter.close(). This is what matters for the double-restart bug:
+    close() used to persist a poisoned shutdown message via DBOS.send().
 
 Usage:
     python simple_counter_runner.py \
@@ -11,7 +18,8 @@ Usage:
         --run-id "test-001" \
         [--interrupt-at 5] \
         [--target 20] \
-        [--fast-polling]
+        [--fast-polling] \
+        [--graceful-interrupt]
 """
 
 from __future__ import annotations
@@ -19,6 +27,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
+import signal
 import sys
 from pathlib import Path
 
@@ -101,7 +110,13 @@ def _intercepting_print(*args: object, **kwargs: object) -> None:
         interrupt_at = getattr(_intercepting_print, "_interrupt_at", None)
         if interrupt_at is not None and count >= interrupt_at:
             _original_print("INTERRUPTING", flush=True)
-            os._exit(0)
+            if getattr(_intercepting_print, "_graceful", False):
+                # Send SIGINT to ourselves — KeyboardInterrupt unwinds through
+                # asyncio.run(), the finally block calls runtime.destroy() which
+                # calls close() on adapters. This is what Ctrl+C does.
+                os.kill(os.getpid(), signal.SIGINT)
+            else:
+                os._exit(0)
 
 
 def main() -> None:
@@ -111,23 +126,28 @@ def main() -> None:
     parser.add_argument("--interrupt-at", type=int, default=None)
     parser.add_argument("--target", type=int, default=20)
     parser.add_argument("--fast-polling", action="store_true")
+    parser.add_argument("--graceful-interrupt", action="store_true")
     args = parser.parse_args()
 
     if args.interrupt_at is not None:
         _intercepting_print._interrupt_at = args.interrupt_at  # type: ignore[attr-defined]
+        _intercepting_print._graceful = args.graceful_interrupt  # type: ignore[attr-defined]
         import builtins
 
         builtins.print = _intercepting_print  # type: ignore[assignment]
 
-    asyncio.run(
-        run(
-            db_url=args.db_url,
-            run_id=args.run_id,
-            interrupt_at=args.interrupt_at,
-            target=args.target,
-            fast_polling=args.fast_polling,
+    try:
+        asyncio.run(
+            run(
+                db_url=args.db_url,
+                run_id=args.run_id,
+                interrupt_at=args.interrupt_at,
+                target=args.target,
+                fast_polling=args.fast_polling,
+            )
         )
-    )
+    except KeyboardInterrupt:
+        _original_print("GRACEFUL_SHUTDOWN", flush=True)
 
 
 if __name__ == "__main__":

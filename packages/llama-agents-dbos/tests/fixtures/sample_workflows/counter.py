@@ -16,7 +16,6 @@ from pydantic import Field
 from workflows.context import Context
 from workflows.decorators import step
 from workflows.events import (
-    Event,
     HumanResponseEvent,
     InputRequiredEvent,
     StartEvent,

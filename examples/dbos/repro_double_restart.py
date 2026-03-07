@@ -29,7 +29,6 @@ import asyncio
 import os
 import signal
 import sqlite3
-import threading
 import uuid
 from pathlib import Path
 
@@ -107,7 +106,9 @@ def _schedule_self_interrupt(after_tick: int) -> None:
     _schedule_self_interrupt._tick_count = 0
     _schedule_self_interrupt._target = after_tick
 
-    original_print = __builtins__["print"] if isinstance(__builtins__, dict) else __builtins__.print
+    original_print = (
+        __builtins__["print"] if isinstance(__builtins__, dict) else __builtins__.print
+    )
 
     def counting_print(*args, **kwargs):
         original_print(*args, **kwargs, flush=True)
@@ -115,17 +116,22 @@ def _schedule_self_interrupt(after_tick: int) -> None:
         if "[Tick" in msg:
             _schedule_self_interrupt._tick_count += 1
             if _schedule_self_interrupt._tick_count >= _schedule_self_interrupt._target:
-                original_print(f"\n>>> Self-interrupting after tick {_schedule_self_interrupt._tick_count}", flush=True)
+                original_print(
+                    f"\n>>> Self-interrupting after tick {_schedule_self_interrupt._tick_count}",
+                    flush=True,
+                )
                 # Send SIGINT to ourselves - this is what Ctrl+C does
                 os.kill(os.getpid(), signal.SIGINT)
 
     import builtins
+
     builtins.print = counting_print
 
 
 def run(run_id: str, interrupt_at: int | None = None, debug: bool = False) -> None:
     if debug:
         import logging
+
         logging.basicConfig(level=logging.DEBUG)
         logging.getLogger("llama_agents.dbos").setLevel(logging.DEBUG)
 
@@ -161,8 +167,12 @@ def main() -> None:
     parser.add_argument("--resume", action="store_true", help="Resume last workflow")
     parser.add_argument("--clean", action="store_true", help="Remove state files")
     parser.add_argument("--journal", action="store_true", help="Dump journal table")
-    parser.add_argument("--interrupt-at", type=int, default=None,
-                        help="Self-interrupt (SIGINT) after N ticks")
+    parser.add_argument(
+        "--interrupt-at",
+        type=int,
+        default=None,
+        help="Self-interrupt (SIGINT) after N ticks",
+    )
     parser.add_argument("--debug", action="store_true", help="Enable debug logging")
     args = parser.parse_args()
 
