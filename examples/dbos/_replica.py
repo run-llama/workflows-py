@@ -85,7 +85,7 @@ async def main() -> None:
         workflow_store=runtime.create_workflow_store(),
         runtime=runtime.build_server_runtime(),
     )
-    server.add_workflow("counter", CounterWorkflow(runtime=runtime))
+    server.add_workflow("counter", CounterWorkflow(runtime=runtime, timeout=None))
 
     print(f"Serving on port {args.port}")
     await server.start()

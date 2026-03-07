@@ -785,8 +785,13 @@ class DBOSRuntime(Runtime):
             registered = self.register(workflow)
             self._registered[id(workflow)] = registered
 
-        # Launch DBOS runtime
-        DBOS.launch()
+        # Launch DBOS runtime from a threadpool worker so that
+        # BackgroundEventLoop.set_main_loop() finds no running event loop.
+        # This prevents DBOS from capturing a reference to the caller's loop,
+        # which may be temporary (e.g. launch_sync's asyncio.run). Without
+        # this, DBOS's recovery thread submits coroutines to a dead loop.
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, DBOS.launch)
         self._dbos_launched = True
 
         # Resolve native driver config from SQLAlchemy engine
@@ -831,6 +836,9 @@ class DBOSRuntime(Runtime):
                 Set to False when DBOS lifecycle is managed externally
                 (e.g., shared across multiple runtimes in tests).
         """
+        if not self._dbos_launched:
+            return  # Already destroyed or never launched
+
         # Cancel lease watcher first to avoid re-entrant destroy
         if self._lease_watch_task is not None:
             self._lease_watch_task.cancel()
@@ -881,9 +889,14 @@ class DBOSRuntime(Runtime):
                 inner._pool = None
                 inner._listen_conn = None
             self._workflow_store = None
-        for task in self._tasks:
-            if not task.done():
-                task.cancel()
+        # Cancel tracked tasks and wait for them to finish unwinding
+        # before destroying DBOS, so their error handlers don't hit
+        # a destroyed runtime.
+        tasks_to_cancel = [t for t in self._tasks if not t.done()]
+        for task in tasks_to_cancel:
+            task.cancel()
+        if tasks_to_cancel:
+            await asyncio.gather(*tasks_to_cancel, return_exceptions=True)
         if destroy_dbos:
             DBOS.destroy()
 

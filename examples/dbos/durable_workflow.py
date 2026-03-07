@@ -24,6 +24,7 @@ from llama_agents.dbos import DBOSRuntime
 from pydantic import Field
 from workflows import Context, Workflow, step
 from workflows.events import Event, StartEvent, StopEvent
+from workflows.handler import WorkflowHandler
 
 _DIR = Path(__file__).parent
 _DB_FILE = _DIR / ".dbos_data.sqlite3"
@@ -60,7 +61,7 @@ class CounterWorkflow(Workflow):
         return Tick(count=count)
 
 
-def run(run_id: str) -> None:
+def run(run_id: str, resume: bool = False) -> None:
     """Run the counter workflow."""
     DBOS(
         config={
@@ -71,18 +72,23 @@ def run(run_id: str) -> None:
     )
 
     runtime = DBOSRuntime()
-    workflow = CounterWorkflow(runtime=runtime)
+    workflow = CounterWorkflow(runtime=runtime, timeout=None)
     runtime.launch_sync()
 
     async def _run() -> None:
-        result = await workflow.run(run_id=run_id)
+        if resume:
+            external_adapter = runtime.get_external_adapter(run_id)
+            handler = WorkflowHandler(workflow, external_adapter)
+        else:
+            handler = workflow.run(start_event=StartEvent(), run_id=run_id)
+        result = await handler
         print(f"\nResult: final_count = {result.final_count}")
 
     try:
         asyncio.run(_run())
     except KeyboardInterrupt:
         print("\nInterrupted - workflow state saved. Use --resume to continue.")
-    finally:
+    else:
         runtime.destroy_sync()
 
 
@@ -107,7 +113,7 @@ def main() -> None:
         _RUN_FILE.write_text(run_id)
         print(f"Starting: {run_id}")
 
-    run(run_id)
+    run(run_id, resume=args.resume)
 
 
 if __name__ == "__main__":
