@@ -79,9 +79,6 @@ def postgres_dsn(postgres_container: PostgresContainer) -> str:
 # ---------------------------------------------------------------------------
 
 RUNNER_PATH = str(Path(__file__).parent / "fixtures" / "runner.py")
-SIMPLE_COUNTER_RUNNER_PATH = str(
-    Path(__file__).parent / "fixtures" / "simple_counter_runner.py"
-)
 
 
 def run_scenario(
@@ -89,6 +86,7 @@ def run_scenario(
     db_url: str,
     run_id: str,
     config: dict[str, Any] | None = None,
+    call_close: bool = False,
     timeout: float = 45.0,
 ) -> subprocess.CompletedProcess[str]:
     """Run a workflow scenario in a subprocess via runner.py."""
@@ -104,46 +102,6 @@ def run_scenario(
     ]
     if config:
         cmd.extend(["--config", json.dumps(config)])
-    try:
-        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-    except subprocess.TimeoutExpired as e:
-        stdout = e.stdout.decode() if isinstance(e.stdout, bytes) else (e.stdout or "")
-        stderr = e.stderr.decode() if isinstance(e.stderr, bytes) else (e.stderr or "")
-        pytest.fail(
-            f"Subprocess timed out after {timeout}s\n"
-            f"stdout:\n{stdout}\n"
-            f"stderr:\n{stderr}"
-        )
-        raise AssertionError("unreachable")  # noqa: B904
-
-
-def run_simple_counter(
-    db_url: str,
-    run_id: str,
-    interrupt_at: int | None = None,
-    target: int = 20,
-    fast_polling: bool = True,
-    graceful_interrupt: bool = False,
-    call_close: bool = False,
-    timeout: float = 30.0,
-) -> subprocess.CompletedProcess[str]:
-    """Run the simple (non-HITL) counter workflow in a subprocess."""
-    cmd = [
-        sys.executable,
-        SIMPLE_COUNTER_RUNNER_PATH,
-        "--db-url",
-        db_url,
-        "--run-id",
-        run_id,
-        "--target",
-        str(target),
-    ]
-    if interrupt_at is not None:
-        cmd.extend(["--interrupt-at", str(interrupt_at)])
-    if fast_polling:
-        cmd.append("--fast-polling")
-    if graceful_interrupt:
-        cmd.append("--graceful-interrupt")
     if call_close:
         cmd.append("--call-close")
     try:
