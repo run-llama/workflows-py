@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import os
 import signal
 import subprocess
 import sys
@@ -184,13 +183,15 @@ async def async_main() -> None:
         for proc in replicas:
             proc.wait()
 
+    current_task = asyncio.current_task()
+
     def handle_sigint() -> None:
         print()
         log("Interrupted. Workflow state is safe in Postgres.", YELLOW)
         log(f"Run with {BOLD}--resume{RESET} to continue where you left off.", YELLOW)
         print()
-        cleanup()
-        os._exit(130)
+        if current_task:
+            current_task.cancel()
 
     asyncio.get_running_loop().add_signal_handler(signal.SIGINT, handle_sigint)
 
@@ -246,7 +247,10 @@ async def async_main() -> None:
 
 
 def main() -> None:
-    asyncio.run(async_main())
+    try:
+        asyncio.run(async_main())
+    except (KeyboardInterrupt, asyncio.CancelledError):
+        pass
 
 
 if __name__ == "__main__":

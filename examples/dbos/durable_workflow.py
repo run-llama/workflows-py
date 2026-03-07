@@ -16,10 +16,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import os
-import signal
-import threading
-import time
 import uuid
 from pathlib import Path
 
@@ -78,39 +74,16 @@ def run(run_id: str) -> None:
     workflow = CounterWorkflow(runtime=runtime)
     runtime.launch_sync()
 
-    interrupted = False
-
-    def handle_sigint(signum: int, frame: object) -> None:
-        nonlocal interrupted
-        if interrupted:
-            # Second Ctrl+C - force exit
-            os._exit(130)
-        interrupted = True
-        print("\nInterrupted - workflow state saved. Use --resume to continue.")
-
-        def delayed_exit() -> None:
-            time.sleep(0.1)
-            os._exit(130)
-
-        threading.Thread(target=delayed_exit, daemon=True).start()
-
-    # Install signal handler before running
-    signal.signal(signal.SIGINT, handle_sigint)
-
     async def _run() -> None:
         result = await workflow.run(run_id=run_id)
         print(f"\nResult: final_count = {result.final_count}")
 
     try:
         asyncio.run(_run())
-    except (KeyboardInterrupt, SystemExit):
-        pass  # Already handled by signal handler
+    except KeyboardInterrupt:
+        print("\nInterrupted - workflow state saved. Use --resume to continue.")
     finally:
-        if not interrupted:
-            try:
-                runtime.destroy_sync()
-            except Exception:
-                pass
+        runtime.destroy_sync()
 
 
 def main() -> None:
