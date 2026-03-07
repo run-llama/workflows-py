@@ -1,5 +1,15 @@
 # llama-agents-server
 
+## 0.2.1
+
+### Patch Changes
+
+- 6605457: Bump dependency requirements
+- Updated dependencies [6605457]
+- Updated dependencies [6ec262c]
+  - llama-agents-client@0.2.1
+  - llama-index-workflows@2.15.1
+
 ## 0.2.0
 
 ### Minor Changes

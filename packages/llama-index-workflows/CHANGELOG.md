@@ -1,5 +1,11 @@
 # llama-index-workflows
 
+## 2.15.1
+
+### Patch Changes
+
+- 6ec262c: Reduce noisy errors during shutdown
+
 ## 2.15.0
 
 ### Minor Changes

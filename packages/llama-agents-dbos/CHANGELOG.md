@@ -1,5 +1,12 @@
 # llama-agents-dbos
 
+## 0.1.1
+
+### Patch Changes
+
+- 6605457: Bump dependency requirements
+- 6ec262c: Fix graceful teardown leading to poisoned DBOS workflow
+
 ## 0.1.0
 
 ### Minor Changes
