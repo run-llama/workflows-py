@@ -82,6 +82,16 @@ from workflows.runtime.types.ticks import (
 from workflows.workflow import Workflow
 
 
+def _is_shutdown_error(e: BaseException) -> bool:
+    if isinstance(e, (asyncio.CancelledError, KeyboardInterrupt)):
+        return True
+    msg = str(e)
+    return (
+        "cannot schedule new futures after shutdown" in msg
+        or "Event loop is closed" in msg
+    )
+
+
 async def _single_pull(adapter: InternalRunAdapter) -> WorkflowTick | None:
     """Single-iteration pull: calls wait_receive once and returns the tick.
 
@@ -209,7 +219,12 @@ class _ControlLoopRunner:
                     result=result,
                 )
             except Exception as e:
-                logger.error("error running step worker function: %s", e, exc_info=True)
+                if _is_shutdown_error(e):
+                    logger.debug("step worker interrupted by shutdown: %s", e)
+                else:
+                    logger.error(
+                        "error running step worker function: %s", e, exc_info=True
+                    )
                 return TickStepResult(
                     step_name=command.step_name,
                     worker_id=command.id,

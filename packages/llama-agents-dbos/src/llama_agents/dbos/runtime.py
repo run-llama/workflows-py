@@ -13,9 +13,9 @@ import asyncio
 import logging
 import sqlite3
 import sys
+import threading
 import time
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
 from typing import Any, AsyncGenerator, TypedDict, cast
 
 import asyncpg
@@ -245,11 +245,6 @@ def _sqlalchemy_url_to_asyncpg_dsn(url: SaURL) -> str:
 _UNBOUNDED_WAIT_TIMEOUT_SECONDS = 60 * 60 * 24  # 1 day
 
 
-@dataclass
-class _DBOSInternalShutdown:
-    """Internal signal sent via DBOS.send to wake blocked recv for shutdown."""
-
-
 @DBOS.step()
 def _durable_time() -> float:
     """
@@ -313,6 +308,11 @@ class DBOSRuntime(Runtime):
         self._registered: dict[int, RegisteredWorkflow] = {}  # keyed by id(workflow)
 
         self._dbos_launched = False
+        # Signaled once DBOS is launched and config (engine, schema, etc.) is
+        # resolved.  Recovery workflows on DBOS's background loop may call
+        # get_internal_adapter before our launch() method returns; this event
+        # lets them block briefly until the config is ready.
+        self._launch_ready = threading.Event()
         self._tasks: list[asyncio.Task[None]] = []
         self._sql_engine: Engine | None = None
         self._migrations_run = False
@@ -578,6 +578,9 @@ class DBOSRuntime(Runtime):
         )
 
     def get_internal_adapter(self, workflow: Workflow) -> InternalRunAdapter:
+        # Wait for launch config to be ready. Recovery workflows on DBOS's
+        # background loop may arrive before launch() finishes setting up.
+        self._launch_ready.wait(timeout=30)
         if not self._dbos_launched:
             raise RuntimeError(
                 "DBOS runtime not launched. Call runtime.launch() before running workflows."
@@ -791,19 +794,23 @@ class DBOSRuntime(Runtime):
             registered = self.register(workflow)
             self._registered[id(workflow)] = registered
 
-        # Launch DBOS runtime
-        DBOS.launch()
-        self._dbos_launched = True
+        # Launch from a threadpool worker so DBOS doesn't capture the
+        # caller's event loop (which may be temporary, e.g. launch_sync).
+        def _launch_and_configure() -> None:
+            DBOS.launch()
+            engine = self._get_sql_engine()
+            self._schema = _resolve_schema(self.config, engine)
+            if engine.dialect.name == "postgresql":
+                self._dsn = _sqlalchemy_url_to_asyncpg_dsn(engine.url)
+            else:
+                self._db_path = (
+                    str(engine.url.database) if engine.url.database else ":memory:"
+                )
+            self._dbos_launched = True
+            self._launch_ready.set()
 
-        # Resolve native driver config from SQLAlchemy engine
-        engine = self._get_sql_engine()
-        self._schema = _resolve_schema(self.config, engine)
-        if engine.dialect.name == "postgresql":
-            self._dsn = _sqlalchemy_url_to_asyncpg_dsn(engine.url)
-        else:
-            self._db_path = (
-                str(engine.url.database) if engine.url.database else ":memory:"
-            )
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, _launch_and_configure)
 
         # Run migrations after DBOS is launched (if configured)
         if self.config.get("run_migrations_on_launch", True):
@@ -837,6 +844,9 @@ class DBOSRuntime(Runtime):
                 Set to False when DBOS lifecycle is managed externally
                 (e.g., shared across multiple runtimes in tests).
         """
+        if not self._dbos_launched:
+            return  # Already destroyed or never launched
+
         # Cancel lease watcher first to avoid re-entrant destroy
         if self._lease_watch_task is not None:
             self._lease_watch_task.cancel()
@@ -855,6 +865,7 @@ class DBOSRuntime(Runtime):
         self._tracked_workflow_ids.clear()
         self._registered.clear()
         self._dbos_launched = False
+        self._launch_ready = threading.Event()
         self._sql_engine = None
         self._migrations_run = False
         self._dsn = None
@@ -887,9 +898,12 @@ class DBOSRuntime(Runtime):
                 inner._pool = None
                 inner._listen_conn = None
             self._workflow_store = None
-        for task in self._tasks:
-            if not task.done():
-                task.cancel()
+        # Wait for cancelled tasks to unwind before destroying DBOS.
+        tasks_to_cancel = [t for t in self._tasks if not t.done()]
+        for task in tasks_to_cancel:
+            task.cancel()
+        if tasks_to_cancel:
+            await asyncio.gather(*tasks_to_cancel, return_exceptions=True)
         if destroy_dbos:
             DBOS.destroy()
 
@@ -934,6 +948,7 @@ class InternalDBOSAdapter(InternalRunAdapter):
         self._resolved_pool: asyncpg.Pool | None = pool
         self._db_path = db_path
         self._closed = False
+        self._shutdown_event = asyncio.Event()
         self._state_store: StateStore[Any] | None = None
         # Journal for deterministic task ordering - lazily initialized
         self._journal: TaskJournal | None = None
@@ -962,40 +977,42 @@ class InternalDBOSAdapter(InternalRunAdapter):
         self,
         timeout_seconds: float | None = None,
     ) -> WaitResult:
-        """Wait for tick using DBOS.recv_async with timeout.
-
-        For bounded waits (timeout_seconds specified), uses the specified timeout.
-        For unbounded waits (timeout_seconds=None), loops with very long timeouts
-        (hours) to encourage the workflow to sleep. Uses shutdown signal from
-        close() to exit cleanly - raises CancelledError on shutdown.
-        """
+        """Wait for tick via DBOS.recv_async. Raises CancelledError on shutdown."""
         if self._closed:
             raise asyncio.CancelledError("Adapter closed")
 
-        result = await DBOS.recv_async(
-            _IO_STREAM_TICK_TOPIC,
-            timeout_seconds=timeout_seconds or _UNBOUNDED_WAIT_TIMEOUT_SECONDS,
+        recv_task = asyncio.ensure_future(
+            DBOS.recv_async(
+                _IO_STREAM_TICK_TOPIC,
+                timeout_seconds=timeout_seconds or _UNBOUNDED_WAIT_TIMEOUT_SECONDS,
+            )
         )
+        shutdown_task = asyncio.ensure_future(self._shutdown_event.wait())
+        try:
+            done, _ = await asyncio.wait(
+                {recv_task, shutdown_task}, return_when=asyncio.FIRST_COMPLETED
+            )
+        except asyncio.CancelledError:
+            recv_task.cancel()
+            shutdown_task.cancel()
+            raise
+
+        if shutdown_task in done:
+            recv_task.cancel()
+            raise asyncio.CancelledError("Adapter closed")
+
+        shutdown_task.cancel()
+        result = recv_task.result()
         if result is None:
             return WaitResultTimeout()
-        if isinstance(result, _DBOSInternalShutdown):
-            self._closed = True
-            raise asyncio.CancelledError("Adapter closed")
         return WaitResultTick(tick=result)
 
     async def close(self) -> None:
-        """Signal shutdown by sending internal message to wake blocked recv."""
+        """Signal shutdown using process-local event to wake blocked recv."""
         if self._closed:
             return
         self._closed = True
-
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(
-            None,
-            lambda: DBOS.send(
-                self._run_id, _DBOSInternalShutdown(), topic=_IO_STREAM_TICK_TOPIC
-            ),
-        )
+        self._shutdown_event.set()
 
     async def _resolve_pool(self) -> asyncpg.Pool:
         """Resolve the asyncpg pool, lazily creating it via the runtime callback."""

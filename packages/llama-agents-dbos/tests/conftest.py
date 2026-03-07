@@ -2,10 +2,14 @@
 # Copyright (c) 2026 LlamaIndex Inc.
 from __future__ import annotations
 
+import json
 import sqlite3
+import subprocess
+import sys
 import tempfile
 from collections.abc import Generator
 from pathlib import Path
+from typing import Any
 
 import pytest
 from llama_agents.dbos._store import SQLITE_MIGRATION_SOURCE
@@ -67,3 +71,73 @@ def postgres_container() -> Generator[PostgresContainer, None, None]:
 def postgres_dsn(postgres_container: PostgresContainer) -> str:
     """Return a plain postgresql:// DSN suitable for asyncpg."""
     return get_asyncpg_dsn(postgres_container)
+
+
+RUNNER_PATH = str(Path(__file__).parent / "fixtures" / "runner.py")
+
+
+def run_scenario(
+    workflow: str,
+    db_url: str,
+    run_id: str,
+    config: dict[str, Any] | None = None,
+    call_close: bool = False,
+    timeout: float = 45.0,
+) -> subprocess.CompletedProcess[str]:
+    """Run a workflow scenario in a subprocess via runner.py."""
+    cmd = [
+        sys.executable,
+        RUNNER_PATH,
+        "--workflow",
+        workflow,
+        "--db-url",
+        db_url,
+        "--run-id",
+        run_id,
+    ]
+    if config:
+        cmd.extend(["--config", json.dumps(config)])
+    if call_close:
+        cmd.append("--call-close")
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except subprocess.TimeoutExpired as e:
+        stdout = e.stdout.decode() if isinstance(e.stdout, bytes) else (e.stdout or "")
+        stderr = e.stderr.decode() if isinstance(e.stderr, bytes) else (e.stderr or "")
+        pytest.fail(
+            f"Subprocess timed out after {timeout}s\n"
+            f"stdout:\n{stdout}\n"
+            f"stderr:\n{stderr}"
+        )
+        raise AssertionError("unreachable")  # noqa: B904
+
+
+def assert_no_determinism_errors(result: subprocess.CompletedProcess[str]) -> None:
+    """Check subprocess result for crashes and DBOS determinism errors."""
+    combined = result.stdout + result.stderr
+
+    if result.returncode != 0:
+        pytest.fail(
+            f"Subprocess exited with code {result.returncode}\n"
+            f"stdout: {result.stdout}\n"
+            f"stderr: {result.stderr}"
+        )
+
+    if "Traceback (most recent call last)" in result.stdout:
+        pytest.fail(
+            f"Subprocess exception!\nstdout: {result.stdout}\nstderr: {result.stderr}"
+        )
+
+    if "DBOSUnexpectedStepError" in combined or "Error 11" in combined:
+        pytest.fail(
+            f"DBOS determinism error on resume!\n"
+            f"stdout: {result.stdout}\n"
+            f"stderr: {result.stderr}"
+        )
+
+
+def log_on_failure(result: subprocess.CompletedProcess[str], label: str) -> None:
+    if result.returncode != 0:
+        print(f"\n=== {label} FAILED ===")
+        print(f"stdout: {result.stdout}")
+        print(f"stderr: {result.stderr}")

@@ -20,6 +20,7 @@ Config modes:
                    - interrupt only when type matches AND all condition fields match
     - respond: Respond to InputRequiredEvent subtypes with specified events
     - run-to-completion: Empty config or omit both fields
+
 """
 
 from __future__ import annotations
@@ -29,6 +30,7 @@ import asyncio
 import json
 import os
 import sys
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -46,11 +48,30 @@ from workflows.events import Event, InputRequiredEvent, StartEvent  # noqa: E402
 from workflows.handler import WorkflowHandler  # noqa: E402
 
 
+def _call_adapter_close(run_id: str) -> None:
+    """Call adapter.close() while DBOS is still alive."""
+    from llama_agents.dbos.runtime import InternalDBOSAdapter
+
+    adapter = InternalDBOSAdapter(
+        run_id=run_id,
+        engine=None,  # type: ignore[arg-type]
+        state_type=None,
+    )
+
+    def _run() -> None:
+        asyncio.run(adapter.close())
+
+    t = threading.Thread(target=_run)
+    t.start()
+    t.join(timeout=5)
+
+
 async def run_workflow(
     workflow_path: str,
     db_url: str,
     run_id: str,
     config: dict[str, Any],
+    call_close: bool = False,
 ) -> None:
     """Run the workflow with the specified configuration."""
     # Import workflow and get module for event class lookup
@@ -134,6 +155,9 @@ async def run_workflow(
                             break
                 if should_interrupt:
                     print("INTERRUPTING", flush=True)
+                    if call_close:
+                        _call_adapter_close(run_id)
+                        print("CLOSE_CALLED", flush=True)
                     os._exit(0)
 
             # Check for response condition (InputRequiredEvent subtypes)
@@ -166,6 +190,7 @@ def main() -> None:
     parser.add_argument("--db-url", required=True)
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--config", default=None)
+    parser.add_argument("--call-close", action="store_true")
 
     args = parser.parse_args()
 
@@ -175,6 +200,7 @@ def main() -> None:
             db_url=args.db_url,
             run_id=args.run_id,
             config=json.loads(args.config) if args.config else {},
+            call_close=args.call_close,
         )
     )
 

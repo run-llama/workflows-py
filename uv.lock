@@ -925,7 +925,7 @@ wheels = [
 
 [[package]]
 name = "dbos"
-version = "2.13.0"
+version = "2.14.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "psycopg", version = "3.3.2", source = { registry = "https://pypi.org/simple" }, extra = ["binary"], marker = "python_full_version >= '3.10'" },
@@ -935,9 +935,9 @@ dependencies = [
     { name = "typer-slim", marker = "python_full_version >= '3.10'" },
     { name = "websockets", marker = "python_full_version >= '3.10'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/7f/35/cb30c941e79d09e4fbfc7bc948ddef008f6028a86839720a13ffd9fb372f/dbos-2.13.0.tar.gz", hash = "sha256:1f735149aee301f9056f0866bd2d3ca9c22f3288a2b21d00439a709e990bde78", size = 248701, upload-time = "2026-02-19T18:29:29.399Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/a5/56/d30d45ef1194c6609b746c9f57bf250c7160c6d3790068fc7554dff73110/dbos-2.14.0.tar.gz", hash = "sha256:1f79f1e5db6f57c02fdca156903bbaf0ef7c49c80ecb427565cdd2381af49fb5", size = 417752, upload-time = "2026-03-05T17:44:03.25Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/a1/eb/4eb7d8a00d7319f82b909af824a300406781145d86a446860e47c68109a1/dbos-2.13.0-py3-none-any.whl", hash = "sha256:5b24772ef257f6107b14ea36fa80d65dbefea1a5fc102ed5bf23935f9ed56e6e", size = 156207, upload-time = "2026-02-19T18:29:27.451Z" },
+    { url = "https://files.pythonhosted.org/packages/94/11/9896eb8b41fd4b6c2fd3eb892543657b07c813b9f7c703f6ccd0dde5d94f/dbos-2.14.0-py3-none-any.whl", hash = "sha256:82622bc7a440d4c65d041c257b311dca914f854d872b9443ddda86a078a3897f", size = 167312, upload-time = "2026-03-05T17:44:01.401Z" },
 ]
 
 [[package]]
@@ -1929,7 +1929,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "dbos", marker = "python_full_version >= '3.10'", specifier = ">=2.13.0" },
+    { name = "dbos", marker = "python_full_version >= '3.10'", specifier = ">=2.14.0" },
     { name = "llama-agents-server", extras = ["asyncpg"], editable = "packages/llama-agents-server" },
     { name = "llama-index-workflows", editable = "packages/llama-index-workflows" },
 ]

@@ -56,7 +56,7 @@ class CounterResult(StopEvent):
 
 
 class CounterWorkflow(Workflow):
-    """Counts to 5, emitting stream events along the way."""
+    """Counts to 20, emitting stream events along the way."""
 
     @step
     async def start(self, ctx: Context, ev: StartEvent) -> Tick:
@@ -68,7 +68,7 @@ class CounterWorkflow(Workflow):
         ctx.write_event_to_stream(Tick(count=count))
         print(f"  tick {count}")
         await asyncio.sleep(0.5)
-        if count >= 5:
+        if count >= 20:
             return CounterResult(final_count=count)
         return Tick(count=count)
 
@@ -83,16 +83,20 @@ async def main() -> None:
         workflow_store=runtime.create_workflow_store(),
         runtime=runtime.build_server_runtime(),
     )
-    server.add_workflow("counter", CounterWorkflow(runtime=runtime))
+    server.add_workflow("counter", CounterWorkflow(runtime=runtime, timeout=None))
 
     print("Serving on http://localhost:8000")
     print("Try: curl -X POST http://localhost:8000/workflows/counter/run")
     await server.start()
-    try:
-        await server.serve(host="0.0.0.0", port=8000)
-    finally:
-        await server.stop()
+    await server.serve(
+        host="0.0.0.0",
+        port=8000,
+        uvicorn_config={"timeout_graceful_shutdown": 0.1},
+    )
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        pass

@@ -90,7 +90,7 @@ async def main() -> None:
         workflow_store=runtime.create_workflow_store(),
         runtime=runtime.build_server_runtime(idle_timeout=IDLE_TIMEOUT),
     )
-    server.add_workflow("greeter", GreeterWorkflow(runtime=runtime))
+    server.add_workflow("greeter", GreeterWorkflow(runtime=runtime, timeout=None))
 
     print(f"Serving on http://localhost:{port} (idle_timeout={IDLE_TIMEOUT}s)")
     driver = asyncio.create_task(drive_workflow(port))
