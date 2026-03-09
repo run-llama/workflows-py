@@ -33,8 +33,6 @@ from llama_agents.server import WorkflowServer
 from llama_index.observability.otel import LlamaIndexOpenTelemetry
 from llama_index_instrumentation import get_dispatcher
 from llama_index_instrumentation.dispatcher import active_instrument_tags
-
-# from openinference.instrumentation.llama_index import LlamaIndexInstrumentor
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from pydantic import Field
@@ -142,26 +140,15 @@ def setup_logging() -> None:
 
 
 # ---------------------------------------------------------------------------
-# OTEL setup — swap between openinference and llama-index-observability-otel
-# by commenting/uncommenting the blocks below. Keep BOTH blocks present.
+# OTEL setup
 # ---------------------------------------------------------------------------
 otel_exporter = OTLPSpanExporter(endpoint=OTEL_ENDPOINT, insecure=True)
-
-# --- Option A: llama-index-observability-otel (active) ---
 instrumentor = LlamaIndexOpenTelemetry(
     span_exporter=otel_exporter,
     service_name_or_resource="k8s-otel-example",
     span_processor="simple",
 )
 instrumentor.start_registering()
-
-# --- Option B: openinference (inactive) ---
-# tracer_provider = TracerProvider(
-#     resource=Resource(attributes={SERVICE_NAME: "k8s-otel-example"})
-# )
-# tracer_provider.add_span_processor(BatchSpanProcessor(otel_exporter))
-# set_tracer_provider(tracer_provider)
-# LlamaIndexInstrumentor().instrument(tracer_provider=tracer_provider)
 
 # ---------------------------------------------------------------------------
 # DBOS setup — must be called at module level before DBOSRuntime()
@@ -277,10 +264,11 @@ def _flush_and_shutdown() -> None:
             handler=h.class_name(),
             open_span_ids=list(h.open_spans.keys()),
         )
-        if hasattr(h, "all_spans"):
+        all_spans = getattr(h, "all_spans", None)
+        if all_spans is not None:
             log.info(
                 "shutdown.otel_spans",
-                otel_span_ids=list(h.all_spans.keys()),
+                otel_span_ids=list(all_spans.keys()),
             )
     dispatcher.shutdown()
     log.info("shutdown.dispatcher_done")

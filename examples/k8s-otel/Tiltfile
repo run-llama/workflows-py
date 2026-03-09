@@ -4,15 +4,13 @@ k8s_yaml(kustomize('./k8s'))
 
 docker_build(
     'k8s-otel-app',
-    context='../../..',
+    context='../..',
     dockerfile='./Dockerfile',
     only=[
-        'workflows-py/packages/',
-        'workflows-py/examples/k8s-otel/',
-        'workflows-py/pyproject.toml',
-        'workflows-py/uv.lock',
-        'llama_index/llama-index-instrumentation/',
-        'llama_index/llama-index-integrations/observability/llama-index-observability-otel/',
+        'packages/',
+        'examples/k8s-otel/',
+        'pyproject.toml',
+        'uv.lock',
     ],
 )
 
