@@ -405,13 +405,51 @@ wheels = [
 ]
 
 [[package]]
+name = "bedrock-agentcore"
+version = "0.0.1"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "python_full_version >= '3.9.2' and python_full_version < '3.10'",
+    "python_full_version > '3.9' and python_full_version < '3.9.2'",
+    "python_full_version <= '3.9'",
+]
+sdist = { url = "https://files.pythonhosted.org/packages/5e/2d/5d682abcf2a860e8a2e297421e7c6ee31dad9eb510f8559a916c2958d662/bedrock_agentcore-0.0.1.tar.gz", hash = "sha256:2e37d83a6a52ad14cb04f561c0d52776e96b540e3c85bf24689b3c5f5a2b0633", size = 1268, upload-time = "2025-07-08T07:39:37.666Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/65/73/f03bb88b9ec3253b0d8636e4750aa8ded63549939ecac185757bda312169/bedrock_agentcore-0.0.1-py3-none-any.whl", hash = "sha256:5f3d202eefba4cba1d0fcba73f69e31fa7808986740686b084b4f2959707f222", size = 1485, upload-time = "2025-07-08T07:39:36.644Z" },
+]
+
+[[package]]
+name = "bedrock-agentcore"
+version = "1.4.3"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "python_full_version >= '3.13'",
+    "python_full_version >= '3.11' and python_full_version < '3.13'",
+    "python_full_version == '3.10.*'",
+]
+dependencies = [
+    { name = "boto3", marker = "python_full_version >= '3.10'" },
+    { name = "botocore", marker = "python_full_version >= '3.10'" },
+    { name = "pydantic", marker = "python_full_version >= '3.10'" },
+    { name = "starlette", marker = "python_full_version >= '3.10'" },
+    { name = "typing-extensions", marker = "python_full_version >= '3.10'" },
+    { name = "urllib3", version = "2.6.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+    { name = "uvicorn", marker = "python_full_version >= '3.10'" },
+    { name = "websockets", marker = "python_full_version >= '3.10'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/02/ec/8ac7e069be9b0b543ed2007d898cdb7576bae27827733a0a1762cd42ec73/bedrock_agentcore-1.4.3.tar.gz", hash = "sha256:c1d05e86a6ef8d927389c5ead4b97ad2d8b9c4e2d612fe7f7268eff8f3d316e3", size = 437274, upload-time = "2026-03-04T18:45:44.912Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/52/02/39c556a60606db1b26756138924ca9a7ac273dbcfbc17c4d2151b4fdf4f1/bedrock_agentcore-1.4.3-py3-none-any.whl", hash = "sha256:9498c3b8a9692ffbbdb0fa7cdfdfb8404d4bf9548b61e9d851e722943fe1d56f", size = 125988, upload-time = "2026-03-04T18:45:43.211Z" },
+]
+
+[[package]]
 name = "boto3"
 version = "1.42.62"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "botocore" },
-    { name = "jmespath" },
-    { name = "s3transfer" },
+    { name = "botocore", marker = "python_full_version >= '3.10'" },
+    { name = "jmespath", marker = "python_full_version >= '3.10'" },
+    { name = "s3transfer", marker = "python_full_version >= '3.10'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/f7/7e/c952803c8900f14e6f6158fddbd35da5afb2e3fa68bf498a761e6ba2c2ae/boto3-1.42.62.tar.gz", hash = "sha256:6b26ff56c458685caec3d42adde0549f6a55410e557e1f51bebde5c8abcf3037", size = 112848, upload-time = "2026-03-05T21:20:37.755Z" }
 wheels = [
@@ -423,9 +461,8 @@ name = "botocore"
 version = "1.42.62"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "jmespath" },
-    { name = "python-dateutil" },
-    { name = "urllib3", version = "1.26.20", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "jmespath", marker = "python_full_version >= '3.10'" },
+    { name = "python-dateutil", marker = "python_full_version >= '3.10'" },
     { name = "urllib3", version = "2.6.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/af/e7/031f2f03f22817f8a8def7ad1caa138979c20ac35062b055274e0a505c3f/botocore-1.42.62.tar.gz", hash = "sha256:c210dc93b0b81bf72cfe745a7b1c8df765d04bd90b4ac6c8707fbb6714141dae", size = 14966114, upload-time = "2026-03-05T21:20:25.518Z" }
@@ -2100,8 +2137,8 @@ dependencies = [
 
 [package.optional-dependencies]
 agentcore = [
-    { name = "boto3" },
-    { name = "botocore" },
+    { name = "bedrock-agentcore", version = "0.0.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "bedrock-agentcore", version = "1.4.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
 ]
 asyncpg = [
     { name = "asyncpg" },
@@ -2127,8 +2164,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "asyncpg", marker = "extra == 'asyncpg'", specifier = ">=0.29.0" },
-    { name = "boto3", marker = "extra == 'agentcore'", specifier = ">=1.42.62" },
-    { name = "botocore", marker = "extra == 'agentcore'", specifier = ">=1.42.62" },
+    { name = "bedrock-agentcore", marker = "extra == 'agentcore'", specifier = ">=0.0.1" },
     { name = "httpx", specifier = ">=0.27.0" },
     { name = "llama-agents-client", editable = "packages/llama-agents-client" },
     { name = "llama-index-workflows", editable = "packages/llama-index-workflows" },
@@ -4652,7 +4688,7 @@ name = "s3transfer"
 version = "0.16.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "botocore" },
+    { name = "botocore", marker = "python_full_version >= '3.10'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/05/04/74127fc843314818edfa81b5540e26dd537353b123a4edc563109d8f17dd/s3transfer-0.16.0.tar.gz", hash = "sha256:8e990f13268025792229cd52fa10cb7163744bf56e719e0b9cb925ab79abf920", size = 153827, upload-time = "2025-12-01T02:30:59.114Z" }
 wheels = [
