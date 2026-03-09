@@ -32,6 +32,26 @@ class MyWorkflow(Workflow):
         return StopEvent(result=result)
 ```
 
+For steps that call LLM providers or rate-limited APIs, exponential backoff is usually a
+better fit. `ExponentialBackoffRetryPolicy` increases the delay after each attempt and
+optionally adds random jitter to avoid thundering-herd effects:
+
+```python
+from workflows import Workflow, Context, step
+from workflows.events import StartEvent, StopEvent
+from workflows.retry_policy import ExponentialBackoffRetryPolicy
+
+
+class MyWorkflow(Workflow):
+    # Starts at 1s, doubles each retry, caps at 30s, up to 5 attempts
+    @step(retry_policy=ExponentialBackoffRetryPolicy(
+        initial_delay=1, multiplier=2, max_delay=30, maximum_attempts=5,
+    ))
+    async def call_llm(self, ctx: Context, ev: StartEvent) -> StopEvent:
+        result = await llm_call()  # this might raise on rate-limit
+        return StopEvent(result=result)
+```
+
 You can see the [API docs](/python/workflows-api-reference/retry_policy/) for a detailed description of the policies
 available in the framework. If you can't find a policy that's suitable for your use case, you can easily write a
 custom one. The only requirement for custom policies is to write a Python class that respects the `RetryPolicy`
