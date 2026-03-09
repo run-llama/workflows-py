@@ -164,15 +164,18 @@ def _patch_client(
     backend: FakeAgentDataBackend,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Patch an AgentDataClient's http_client to use the fake backend."""
-    original_http_client = client.http_client
+    """Patch an AgentDataClient's http_client to use the fake backend.
 
-    def patched_http_client() -> httpx.AsyncClient:
-        http = original_http_client()
-        http._transport = httpx.MockTransport(backend.handle_request)
-        return http
-
-    monkeypatch.setattr(client, "http_client", patched_http_client)
+    Creates a single mock-transport client and makes http_client() return it,
+    matching the shared-client pattern in AgentDataClient.
+    """
+    mock_http = httpx.AsyncClient(
+        base_url=client._base_url,
+        headers=client._headers(),
+        params={"project_id": client._project_id},
+        transport=httpx.MockTransport(backend.handle_request),
+    )
+    monkeypatch.setattr(client, "_shared_client", mock_http)
 
 
 def create_agent_data_store(

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
+from typing import Any
 
 import pytest
 from llama_agents.client.protocol.serializable_events import EventEnvelopeWithMetadata
@@ -477,3 +478,210 @@ async def test_state_store_from_dict_preserves_collection(
     # Should be able to read data written by the original store
     val = await restored.get("key")
     assert val == "hello"
+
+
+# ---------------------------------------------------------------------------
+# Phase 1: HTTP client reuse
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_agent_data_client_reuses_http_client(store: AgentDataStore) -> None:
+    client = store._client
+    c1 = client.http_client()
+    c2 = client.http_client()
+    assert c1 is c2
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: In-memory fan-out queues
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_subscribe_events_multiple_concurrent_subscribers(
+    store: AgentDataStore,
+) -> None:
+    collected_a: list[StoredEvent] = []
+    collected_b: list[StoredEvent] = []
+
+    async def consumer_a() -> None:
+        async for event in store.subscribe_events("run-1"):
+            collected_a.append(event)
+
+    async def consumer_b() -> None:
+        async for event in store.subscribe_events("run-1"):
+            collected_b.append(event)
+
+    task_a = asyncio.create_task(consumer_a())
+    task_b = asyncio.create_task(consumer_b())
+    await asyncio.sleep(0.01)
+
+    await store.append_event("run-1", make_envelope(seq_label=0))
+    await store.append_event("run-1", make_envelope(seq_label=1))
+    await store.append_event("run-1", make_envelope(event=StopEvent(data="done")))
+
+    await asyncio.wait_for(task_a, timeout=2.0)
+    await asyncio.wait_for(task_b, timeout=2.0)
+
+    assert len(collected_a) == 3
+    assert len(collected_b) == 3
+    assert [e.sequence for e in collected_a] == [0, 1, 2]
+    assert [e.sequence for e in collected_b] == [0, 1, 2]
+
+
+@pytest.mark.asyncio
+async def test_subscribe_events_backfill_and_live(store: AgentDataStore) -> None:
+    # Append some events before subscribing (these will be backfilled)
+    await store.append_event("run-1", make_envelope(seq_label=0))
+    await store.append_event("run-1", make_envelope(seq_label=1))
+
+    collected: list[StoredEvent] = []
+
+    async def consumer() -> None:
+        async for event in store.subscribe_events("run-1", after_sequence=-1):
+            collected.append(event)
+
+    task = asyncio.create_task(consumer())
+    await asyncio.sleep(0.01)
+
+    # Append live events after subscriber is listening
+    await store.append_event("run-1", make_envelope(seq_label=2))
+    await store.append_event("run-1", make_envelope(event=StopEvent(data="done")))
+
+    await asyncio.wait_for(task, timeout=2.0)
+
+    assert len(collected) == 4
+    assert [e.sequence for e in collected] == [0, 1, 2, 3]
+
+
+# ---------------------------------------------------------------------------
+# Phase 3: Buffered / deferred persistence
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_events_batched_during_streaming(
+    store: AgentDataStore, backend: FakeAgentDataBackend
+) -> None:
+    collected: list[StoredEvent] = []
+
+    async def consumer() -> None:
+        async for event in store.subscribe_events("run-1"):
+            collected.append(event)
+
+    task = asyncio.create_task(consumer())
+    await asyncio.sleep(0.01)
+
+    # Append several non-terminal events (should be buffered, not persisted yet)
+    for i in range(5):
+        await store.append_event("run-1", make_envelope(seq_label=i))
+
+    events_key = ("test-deploy", store._events_collection)
+    persisted_before_terminal = len(backend._items.get(events_key, []))
+
+    # Events should be buffered — fewer API creates than events appended
+    assert persisted_before_terminal < 5
+
+    # Terminal event flushes everything
+    await store.append_event("run-1", make_envelope(event=StopEvent(data="done")))
+    await asyncio.wait_for(task, timeout=2.0)
+
+    persisted_after = len(backend._items.get(events_key, []))
+    assert persisted_after == 6
+    assert len(collected) == 6
+
+
+@pytest.mark.asyncio
+async def test_terminal_event_flushes_immediately(
+    store: AgentDataStore, backend: FakeAgentDataBackend
+) -> None:
+    collected: list[StoredEvent] = []
+
+    async def consumer() -> None:
+        async for event in store.subscribe_events("run-1"):
+            collected.append(event)
+
+    task = asyncio.create_task(consumer())
+    await asyncio.sleep(0.01)
+
+    await store.append_event("run-1", make_envelope(seq_label=0))
+    await store.append_event("run-1", make_envelope(seq_label=1))
+    await store.append_event("run-1", make_envelope(event=StopEvent(data="done")))
+
+    # After terminal append returns, all events should be persisted
+    events_key = ("test-deploy", store._events_collection)
+    persisted = len(backend._items.get(events_key, []))
+    assert persisted == 3
+
+    await asyncio.wait_for(task, timeout=2.0)
+
+
+@pytest.mark.asyncio
+async def test_append_tick_flushes_event_buffer(
+    store: AgentDataStore, backend: FakeAgentDataBackend
+) -> None:
+    collected: list[StoredEvent] = []
+
+    async def consumer() -> None:
+        async for event in store.subscribe_events("run-1"):
+            collected.append(event)
+
+    task = asyncio.create_task(consumer())
+    await asyncio.sleep(0.01)
+
+    # Append events (buffered due to active subscriber)
+    await store.append_event("run-1", make_envelope(seq_label=0))
+    await store.append_event("run-1", make_envelope(seq_label=1))
+
+    events_key = ("test-deploy", store._events_collection)
+    persisted_before = len(backend._items.get(events_key, []))
+    assert persisted_before < 2
+
+    # append_tick should flush the event buffer
+    await store.append_tick("run-1", {"step": "a"})
+
+    persisted_after = len(backend._items.get(events_key, []))
+    assert persisted_after == 2
+
+    # Clean up: send terminal event to stop the subscriber
+    await store.append_event("run-1", make_envelope(event=StopEvent(data="done")))
+    await asyncio.wait_for(task, timeout=2.0)
+
+
+@pytest.mark.asyncio
+async def test_flush_error_does_not_crash_stream(
+    store: AgentDataStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    collected: list[StoredEvent] = []
+
+    async def consumer() -> None:
+        async for event in store.subscribe_events("run-1"):
+            collected.append(event)
+
+    task = asyncio.create_task(consumer())
+    await asyncio.sleep(0.01)
+
+    # Make client.create raise to simulate flush failure
+    original_create = store._client.create
+
+    async def broken_create(collection: str, data: dict[str, Any]) -> dict[str, Any]:
+        if collection == store._events_collection:
+            raise RuntimeError("simulated API failure")
+        return await original_create(collection, data)
+
+    monkeypatch.setattr(store._client, "create", broken_create)
+
+    await store.append_event("run-1", make_envelope(seq_label=0))
+    await store.append_event("run-1", make_envelope(seq_label=1))
+    # Let the consumer task process queue items
+    await asyncio.sleep(0.01)
+
+    # Subscriber should still receive events via in-memory queue
+    assert len(collected) == 2
+
+    # Restore create so terminal event can persist and clean up
+    monkeypatch.setattr(store._client, "create", original_create)
+    await store.append_event("run-1", make_envelope(event=StopEvent(data="done")))
+    await asyncio.wait_for(task, timeout=2.0)
+    assert len(collected) == 3

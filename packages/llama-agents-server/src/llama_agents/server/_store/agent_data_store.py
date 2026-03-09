@@ -5,10 +5,10 @@
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import logging
-import weakref
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from datetime import datetime, timezone
 from typing import Any, List
 
@@ -31,12 +31,22 @@ from .agent_data_state_store import AgentDataStateStore
 logger = logging.getLogger(__name__)
 
 
+@dataclass
+class _RunBuffer:
+    """Per-run buffer for deferred event persistence."""
+
+    events: list[StoredEvent] = dataclass_field(default_factory=list)
+    flush_task: asyncio.Task[None] | None = None
+
+
 class AgentDataStore(AbstractWorkflowStore):
     """Workflow store backed by the LlamaCloud Agent Data API.
 
-    Persists handlers, events, and ticks in separate Agent Data API
-    collections. Event subscription uses in-process ``asyncio.Condition``
-    notifications (single-node only, no polling).
+    Optimized for streaming performance:
+    - Same-process subscribers receive events via in-memory queues (no HTTP).
+    - Event writes are batched/throttled to amortize API call costs.
+    - Terminal events flush immediately for durability.
+    - HTTP connections are reused across operations.
 
     State stores are in-memory (``InMemoryStateStore``) — workflow state
     is reconstructed from ticks on reload, so cloud persistence of the
@@ -52,6 +62,7 @@ class AgentDataStore(AbstractWorkflowStore):
         deployment_name: str,
         collection: str = "workflow_contexts",
         poll_interval: float = 30.0,
+        flush_interval: float = 0.2,
     ) -> None:
         self._client = AgentDataClient(
             base_url=base_url,
@@ -61,6 +72,7 @@ class AgentDataStore(AbstractWorkflowStore):
         )
         self._collection = collection
         self.poll_interval = poll_interval
+        self._flush_interval = flush_interval
 
         # Derived collection names for events and ticks
         self._events_collection = f"{collection}_events"
@@ -77,10 +89,11 @@ class AgentDataStore(AbstractWorkflowStore):
         self._tick_sequences: dict[str, int] = {}
         self._seq_lock: asyncio.Lock | None = None
 
-        # Per-run_id asyncio.Condition for event subscription
-        self._conditions: weakref.WeakValueDictionary[str, asyncio.Condition] = (
-            weakref.WeakValueDictionary()
-        )
+        # Phase 2: Per-run_id fan-out queues for in-memory event delivery
+        self._subscriber_queues: dict[str, list[asyncio.Queue[StoredEvent | None]]] = {}
+
+        # Phase 3: Per-run_id event buffers for deferred persistence
+        self._buffers: dict[str, _RunBuffer] = {}
 
     def _get_seq_lock(self) -> asyncio.Lock:
         if self._seq_lock is None:
@@ -88,15 +101,93 @@ class AgentDataStore(AbstractWorkflowStore):
         return self._seq_lock
 
     # ------------------------------------------------------------------
-    # Notification helpers
+    # In-memory subscriber helpers (Phase 2)
     # ------------------------------------------------------------------
 
-    def _get_or_create_condition(self, run_id: str) -> asyncio.Condition:
-        cond = self._conditions.get(run_id)
-        if cond is None:
-            cond = asyncio.Condition()
-            self._conditions[run_id] = cond
-        return cond
+    def _add_subscriber_queue(self, run_id: str) -> asyncio.Queue[StoredEvent | None]:
+        """Create and register a new subscriber queue for a run."""
+        queue: asyncio.Queue[StoredEvent | None] = asyncio.Queue()
+        self._subscriber_queues.setdefault(run_id, []).append(queue)
+        return queue
+
+    def _remove_subscriber_queue(
+        self, run_id: str, queue: asyncio.Queue[StoredEvent | None]
+    ) -> None:
+        """Unregister a subscriber queue. Cleans up the list if empty."""
+        queues = self._subscriber_queues.get(run_id)
+        if queues is not None:
+            try:
+                queues.remove(queue)
+            except ValueError:
+                pass
+            if not queues:
+                del self._subscriber_queues[run_id]
+
+    def _broadcast_to_subscribers(self, run_id: str, event: StoredEvent) -> None:
+        """Deliver an event to all in-memory subscriber queues for a run."""
+        for queue in self._subscriber_queues.get(run_id, ()):
+            queue.put_nowait(event)
+
+    # ------------------------------------------------------------------
+    # Buffered persistence helpers (Phase 3)
+    # ------------------------------------------------------------------
+
+    def _get_or_create_buffer(self, run_id: str) -> _RunBuffer:
+        if run_id not in self._buffers:
+            self._buffers[run_id] = _RunBuffer()
+        return self._buffers[run_id]
+
+    async def _flush_buffer(self, run_id: str) -> None:
+        """Persist all buffered events for a run via parallel API creates."""
+        buf = self._buffers.get(run_id)
+        if not buf or not buf.events:
+            return
+        events_to_write = buf.events[:]
+        buf.events.clear()
+        if buf.flush_task and not buf.flush_task.done():
+            # Don't cancel if we're being called from within the flush task
+            # itself (via _deferred_flush), as that would raise CancelledError
+            # at the next await and abort the persist.
+            if buf.flush_task is not asyncio.current_task():
+                buf.flush_task.cancel()
+            buf.flush_task = None
+        try:
+            await asyncio.gather(
+                *[
+                    self._client.create(
+                        self._events_collection,
+                        e.model_dump(mode="json"),
+                    )
+                    for e in events_to_write
+                ]
+            )
+        except Exception:
+            logger.warning(
+                "Failed to flush event buffer for run %s", run_id, exc_info=True
+            )
+
+    async def _deferred_flush(self, run_id: str) -> None:
+        """Wait for the flush interval, then persist buffered events."""
+        await asyncio.sleep(self._flush_interval)
+        await self._flush_buffer(run_id)
+
+    def _schedule_deferred_flush(self, run_id: str, buf: _RunBuffer) -> None:
+        """Schedule a deferred flush if one isn't already pending."""
+        if buf.flush_task is None or buf.flush_task.done():
+            buf.flush_task = asyncio.create_task(self._deferred_flush(run_id))
+
+    def _cleanup_run(self, run_id: str) -> None:
+        """Clean up buffer state and subscriber queues for a completed run."""
+        buf = self._buffers.pop(run_id, None)
+        if buf and buf.flush_task and not buf.flush_task.done():
+            buf.flush_task.cancel()
+        # Signal subscribers that the run is done
+        for queue in self._subscriber_queues.get(run_id, []):
+            queue.put_nowait(None)
+
+    # ------------------------------------------------------------------
+    # Sequence helpers
+    # ------------------------------------------------------------------
 
     async def _max_sequence(self, collection: str, run_id: str) -> int:
         """Query the API for the max sequence in a collection for a run_id.
@@ -236,13 +327,33 @@ class AgentDataStore(AbstractWorkflowStore):
             timestamp=now,
             event=event,
         )
-        await self._client.create(
-            self._events_collection,
-            stored.model_dump(mode="json"),
-        )
-        if condition := self._conditions.get(run_id):
-            async with condition:
-                condition.notify_all()
+
+        # Deliver to in-memory subscribers immediately (Phase 2)
+        self._broadcast_to_subscribers(run_id, stored)
+
+        is_terminal = self._is_terminal_event(stored)
+        has_subscribers = bool(self._subscriber_queues.get(run_id))
+
+        if has_subscribers and not is_terminal:
+            # Buffer for deferred persistence (Phase 3) — only when subscribers
+            # exist, since the optimization is about decoupling subscriber
+            # delivery from HTTP writes.
+            buf = self._get_or_create_buffer(run_id)
+            buf.events.append(stored)
+            self._schedule_deferred_flush(run_id, buf)
+        else:
+            # No subscribers or terminal event: persist immediately for correctness
+            buf = self._buffers.get(run_id)
+            if buf and buf.events:
+                buf.events.append(stored)
+                await self._flush_buffer(run_id)
+            else:
+                await self._client.create(
+                    self._events_collection,
+                    stored.model_dump(mode="json"),
+                )
+            if is_terminal:
+                self._cleanup_run(run_id)
 
     async def query_events(
         self,
@@ -250,6 +361,9 @@ class AgentDataStore(AbstractWorkflowStore):
         after_sequence: int | None = None,
         limit: int | None = None,
     ) -> list[StoredEvent]:
+        # Flush any buffered events first so query results are complete
+        await self._flush_buffer(run_id)
+
         filters: dict[str, Any] = {"run_id": {"eq": run_id}}
         if after_sequence is not None:
             filters["sequence"] = {"gte": after_sequence + 1}
@@ -273,25 +387,39 @@ class AgentDataStore(AbstractWorkflowStore):
     async def subscribe_events(
         self, run_id: str, after_sequence: int = -1
     ) -> AsyncIterator[StoredEvent]:
-        """Condition-based subscription with timeout fallback."""
-        condition = self._get_or_create_condition(run_id)
-        cursor = after_sequence
+        """In-memory queue-based subscription.
 
-        while True:
-            async with condition:
-                batch = await self.query_events(run_id, after_sequence=cursor)
-                if not batch:
-                    with contextlib.suppress(TimeoutError):
-                        await asyncio.wait_for(
-                            condition.wait(), timeout=self.poll_interval
-                        )
-                    continue
+        Subscribes to the queue *before* running backfill to avoid losing
+        events in the race window. Deduplicates by sequence number.
+        """
+        # Register queue before backfill to avoid race condition
+        queue = self._add_subscriber_queue(run_id)
+        try:
+            cursor = after_sequence
 
-            for event in batch:
+            # Backfill: yield historical events already persisted
+            backfill = await self.query_events(run_id, after_sequence=cursor)
+            for event in backfill:
                 yield event
                 cursor = event.sequence
                 if self._is_terminal_event(event):
                     return
+
+            # Stream from in-memory queue
+            while True:
+                event = await queue.get()
+                if event is None:
+                    # Run completed, queue was signaled
+                    return
+                # Deduplicate: skip events already yielded in backfill
+                if event.sequence <= cursor:
+                    continue
+                yield event
+                cursor = event.sequence
+                if self._is_terminal_event(event):
+                    return
+        finally:
+            self._remove_subscriber_queue(run_id, queue)
 
     # ------------------------------------------------------------------
     # Tick journal
@@ -308,6 +436,9 @@ class AgentDataStore(AbstractWorkflowStore):
             return seq
 
     async def append_tick(self, run_id: str, tick_data: dict[str, Any]) -> None:
+        # Flush buffered events before persisting the tick (Phase 3)
+        await self._flush_buffer(run_id)
+
         seq = await self._next_tick_sequence(run_id)
         now = datetime.now(timezone.utc)
         stored = StoredTick(
