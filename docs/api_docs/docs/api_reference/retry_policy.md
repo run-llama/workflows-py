@@ -3,3 +3,4 @@
       members:
         - RetryPolicy
         - ConstantDelayRetryPolicy
+        - ExponentialBackoffRetryPolicy
