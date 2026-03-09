@@ -200,7 +200,7 @@ class _WorkflowService:
         start_event: StartEvent | None = None,
         context: Context | None = None,
     ) -> HandlerData:
-        with instrument_tags({"handler_id": handler_id}):
+        with instrument_tags({"llamaindex.handler_id": handler_id}):
             if context is None:
                 context = await self._context_from_handler_id(workflow, handler_id)
             # Pre-generate run_id and persist the handler record BEFORE starting

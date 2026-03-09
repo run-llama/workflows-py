@@ -257,21 +257,7 @@ workflow_server.add_workflow("greeter", GreeterWorkflow(runtime=runtime))
 
 def _flush_and_shutdown() -> None:
     """Flush open spans and shut down the OTel pipeline synchronously."""
-    dispatcher = get_dispatcher()
-    for h in dispatcher.span_handlers:
-        log.info(
-            "shutdown.spans",
-            handler=h.class_name(),
-            open_span_ids=list(h.open_spans.keys()),
-        )
-        all_spans = getattr(h, "all_spans", None)
-        if all_spans is not None:
-            log.info(
-                "shutdown.otel_spans",
-                otel_span_ids=list(all_spans.keys()),
-            )
-    dispatcher.shutdown()
-    log.info("shutdown.dispatcher_done")
+    get_dispatcher().shutdown()
 
 
 @asynccontextmanager

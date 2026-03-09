@@ -1841,7 +1841,7 @@ dependencies = [
 requires-dist = [
     { name = "fastapi" },
     { name = "llama-agents-dbos", editable = "packages/llama-agents-dbos" },
-    { name = "llama-index-observability-otel" },
+    { name = "llama-index-observability-otel", specifier = ">=0.5.1" },
     { name = "opentelemetry-exporter-otlp" },
     { name = "opentelemetry-instrumentation-fastapi" },
     { name = "structlog" },
@@ -2167,7 +2167,7 @@ wheels = [
 
 [[package]]
 name = "llama-index-observability-otel"
-version = "0.5.0"
+version = "0.5.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "llama-index-instrumentation" },
@@ -2177,9 +2177,9 @@ dependencies = [
     { name = "termcolor", version = "3.1.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
     { name = "termcolor", version = "3.3.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/3f/6b/891d600ae870fa30bb0b4921e0afd53722b78eaf0a6817dce1b802db0b42/llama_index_observability_otel-0.5.0.tar.gz", hash = "sha256:9ad33c2bbc980bcc083c0e493bfd381da0914d12b06a793cc63fb41e745804ee", size = 7092, upload-time = "2026-02-24T21:22:11.774Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/26/d2/195e564062b8287302c8fd343cd5208ef013e630115780c047a075e2ebe5/llama_index_observability_otel-0.5.1.tar.gz", hash = "sha256:fd8fe4aaeea56c6362b29299f2c40d42dd322e7ddfd83c6db5b47c006dd87578", size = 7790, upload-time = "2026-03-03T19:01:33.002Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/75/ef/3e9f5322612d3d97cb8eb780e0cb07fccbe41c37ac25228e3843a76914b0/llama_index_observability_otel-0.5.0-py3-none-any.whl", hash = "sha256:c75bbd154cbd4432d15cfb8403ff19876c545c444d312796d0ee5ed692653cfc", size = 6992, upload-time = "2026-02-24T21:22:12.82Z" },
+    { url = "https://files.pythonhosted.org/packages/9b/56/233eb89bb8ece176a3e3a4aeb15ac5a8a5a8ebc6fcab52fd964dc6b7fd1c/llama_index_observability_otel-0.5.1-py3-none-any.whl", hash = "sha256:d14efc562b96c675a4960ee9004e13a84cf22374f3920c4537f6c358c145664d", size = 7719, upload-time = "2026-03-03T19:01:32.162Z" },
 ]
 
 [[package]]
