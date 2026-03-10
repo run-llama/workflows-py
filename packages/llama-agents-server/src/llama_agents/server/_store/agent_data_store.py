@@ -74,34 +74,32 @@ class AgentDataStore(AbstractWorkflowStore):
         self.poll_interval = poll_interval
         self._flush_interval = flush_interval
 
-        # Derived collection names for events and ticks
         self._events_collection = f"{collection}_events"
         self._ticks_collection = f"{collection}_ticks"
 
-        # handler_id → agent_data_id cache (avoids search-before-update)
         self._id_cache: LRUCache[str, str] = LRUCache(maxsize=256)
-
-        # Per-key lock for serializing updates to the same handler
         self._locks = KeyedLock()
 
-        # Per-run_id sequence counters for events and ticks
         self._event_sequences: dict[str, int] = {}
         self._tick_sequences: dict[str, int] = {}
-        self._seq_lock: asyncio.Lock | None = None
+        self._event_seq_lock: asyncio.Lock | None = None
+        self._tick_seq_lock: asyncio.Lock | None = None
 
-        # Phase 2: Per-run_id fan-out queues for in-memory event delivery
         self._subscriber_queues: dict[str, list[asyncio.Queue[StoredEvent | None]]] = {}
-
-        # Phase 3: Per-run_id event buffers for deferred persistence
         self._buffers: dict[str, _RunBuffer] = {}
 
-    def _get_seq_lock(self) -> asyncio.Lock:
-        if self._seq_lock is None:
-            self._seq_lock = asyncio.Lock()
-        return self._seq_lock
+    def _get_event_seq_lock(self) -> asyncio.Lock:
+        if self._event_seq_lock is None:
+            self._event_seq_lock = asyncio.Lock()
+        return self._event_seq_lock
+
+    def _get_tick_seq_lock(self) -> asyncio.Lock:
+        if self._tick_seq_lock is None:
+            self._tick_seq_lock = asyncio.Lock()
+        return self._tick_seq_lock
 
     # ------------------------------------------------------------------
-    # In-memory subscriber helpers (Phase 2)
+    # In-memory subscriber helpers
     # ------------------------------------------------------------------
 
     def _add_subscriber_queue(self, run_id: str) -> asyncio.Queue[StoredEvent | None]:
@@ -129,7 +127,7 @@ class AgentDataStore(AbstractWorkflowStore):
             queue.put_nowait(event)
 
     # ------------------------------------------------------------------
-    # Buffered persistence helpers (Phase 3)
+    # Buffered persistence helpers
     # ------------------------------------------------------------------
 
     def _get_or_create_buffer(self, run_id: str) -> _RunBuffer:
@@ -151,20 +149,32 @@ class AgentDataStore(AbstractWorkflowStore):
             if buf.flush_task is not asyncio.current_task():
                 buf.flush_task.cancel()
             buf.flush_task = None
-        try:
-            await asyncio.gather(
-                *[
-                    self._client.create(
-                        self._events_collection,
-                        e.model_dump(mode="json"),
-                    )
-                    for e in events_to_write
-                ]
-            )
-        except Exception:
+        results = await asyncio.gather(
+            *[
+                self._client.create(
+                    self._events_collection,
+                    e.model_dump(mode="json"),
+                )
+                for e in events_to_write
+            ],
+            return_exceptions=True,
+        )
+        failed = [
+            events_to_write[i]
+            for i, r in enumerate(results)
+            if isinstance(r, BaseException)
+        ]
+        if failed:
             logger.warning(
-                "Failed to flush event buffer for run %s", run_id, exc_info=True
+                "Failed to flush %d/%d events for run %s",
+                len(failed),
+                len(events_to_write),
+                run_id,
+                exc_info=True,
             )
+            # Re-queue failed events at the front for the next flush cycle
+            if run_id in self._buffers:
+                self._buffers[run_id].events[:0] = failed
 
     async def _deferred_flush(self, run_id: str) -> None:
         """Wait for the flush interval, then persist buffered events."""
@@ -181,9 +191,13 @@ class AgentDataStore(AbstractWorkflowStore):
         buf = self._buffers.pop(run_id, None)
         if buf and buf.flush_task and not buf.flush_task.done():
             buf.flush_task.cancel()
-        # Signal subscribers that the run is done
+        # Signal subscribers that the run is done, then remove the key
         for queue in self._subscriber_queues.get(run_id, []):
             queue.put_nowait(None)
+        self._subscriber_queues.pop(run_id, None)
+        # Clean up sequence counters
+        self._event_sequences.pop(run_id, None)
+        self._tick_sequences.pop(run_id, None)
 
     # ------------------------------------------------------------------
     # Sequence helpers
@@ -309,7 +323,7 @@ class AgentDataStore(AbstractWorkflowStore):
     # ------------------------------------------------------------------
 
     async def _next_event_sequence(self, run_id: str) -> int:
-        async with self._get_seq_lock():
+        async with self._get_event_seq_lock():
             if run_id not in self._event_sequences:
                 self._event_sequences[run_id] = await self._max_sequence(
                     self._events_collection, run_id
@@ -328,24 +342,16 @@ class AgentDataStore(AbstractWorkflowStore):
             event=event,
         )
 
-        # Deliver to in-memory subscribers immediately (Phase 2)
         self._broadcast_to_subscribers(run_id, stored)
 
         buf = self._get_or_create_buffer(run_id)
         buf.events.append(stored)
 
-        if self._is_terminal_event(stored):
-            # Terminal event: flush everything immediately and clean up
+        if self._is_output_event(stored):
             await self._flush_buffer(run_id)
-            self._cleanup_run(run_id)
-        elif self._is_output_event(stored):
-            # Output event (e.g. InputRequiredEvent): flush immediately
-            # for durability but keep the run alive
-            await self._flush_buffer(run_id)
+            if self._is_terminal_event(stored):
+                self._cleanup_run(run_id)
         else:
-            # Buffer for deferred persistence — keeps in-memory
-            # subscriber delivery and the write_to_event_stream lock
-            # non-blocking regardless of whether subscribers exist yet.
             self._schedule_deferred_flush(run_id, buf)
 
     async def query_events(
@@ -354,7 +360,6 @@ class AgentDataStore(AbstractWorkflowStore):
         after_sequence: int | None = None,
         limit: int | None = None,
     ) -> list[StoredEvent]:
-        # Flush any buffered events first so query results are complete
         await self._flush_buffer(run_id)
 
         filters: dict[str, Any] = {"run_id": {"eq": run_id}}
@@ -368,10 +373,7 @@ class AgentDataStore(AbstractWorkflowStore):
             order_by="sequence",
         )
 
-        events = [StoredEvent.model_validate(item["data"]) for item in items]
-        if limit is not None:
-            events = events[:limit]
-        return events
+        return [StoredEvent.model_validate(item["data"]) for item in items]
 
     # ------------------------------------------------------------------
     # Event subscription
@@ -419,7 +421,7 @@ class AgentDataStore(AbstractWorkflowStore):
     # ------------------------------------------------------------------
 
     async def _next_tick_sequence(self, run_id: str) -> int:
-        async with self._get_seq_lock():
+        async with self._get_tick_seq_lock():
             if run_id not in self._tick_sequences:
                 self._tick_sequences[run_id] = await self._max_sequence(
                     self._ticks_collection, run_id
@@ -429,7 +431,6 @@ class AgentDataStore(AbstractWorkflowStore):
             return seq
 
     async def append_tick(self, run_id: str, tick_data: dict[str, Any]) -> None:
-        # Flush buffered events before persisting the tick (Phase 3)
         await self._flush_buffer(run_id)
 
         seq = await self._next_tick_sequence(run_id)

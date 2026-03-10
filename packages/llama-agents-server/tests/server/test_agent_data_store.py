@@ -409,14 +409,13 @@ async def test_update_uses_cache_on_second_call(store: AgentDataStore) -> None:
 async def test_sequence_continues_after_new_store_instance(
     backend: FakeAgentDataBackend, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """A new store instance should continue sequences from existing data.
-
-    Currently fails: in-memory counters reset to 0 on new instance, producing
-    duplicate sequence numbers. See plan: 2026-02-16-agent-data-staging-fixes.md
-    """
+    """A new store instance should continue sequences from existing data."""
     store1 = create_agent_data_store(backend, monkeypatch)
     await store1.append_event("run-1", make_envelope(seq_label=0))
     await store1.append_event("run-1", make_envelope(seq_label=1))
+
+    # Flush buffered events so they're visible to the next store instance
+    await store1.query_events("run-1")
 
     # Simulate server restart: new store instance, same backend
     store2 = create_agent_data_store(backend, monkeypatch)
@@ -458,12 +457,7 @@ async def test_tick_sequence_continues_after_new_store_instance(
 async def test_state_store_from_dict_preserves_collection(
     store: AgentDataStore,
 ) -> None:
-    """from_dict should produce a store pointing at the same collection.
-
-    Currently fails: to_dict doesn't serialize collection, so from_dict
-    defaults to 'workflow_state' instead of the original collection.
-    See plan: 2026-02-16-agent-data-staging-fixes.md
-    """
+    """from_dict should produce a store pointing at the same collection."""
     state_store = store.create_state_store("run-1")
     await state_store.set(path="key", value="hello")
 
@@ -481,7 +475,7 @@ async def test_state_store_from_dict_preserves_collection(
 
 
 # ---------------------------------------------------------------------------
-# Phase 1: HTTP client reuse
+# HTTP client reuse
 # ---------------------------------------------------------------------------
 
 
@@ -494,7 +488,7 @@ async def test_agent_data_client_reuses_http_client(store: AgentDataStore) -> No
 
 
 # ---------------------------------------------------------------------------
-# Phase 2: In-memory fan-out queues
+# In-memory fan-out queues
 # ---------------------------------------------------------------------------
 
 
@@ -556,7 +550,7 @@ async def test_subscribe_events_backfill_and_live(store: AgentDataStore) -> None
 
 
 # ---------------------------------------------------------------------------
-# Phase 3: Buffered / deferred persistence
+# Buffered / deferred persistence
 # ---------------------------------------------------------------------------
 
 
@@ -647,6 +641,83 @@ async def test_append_tick_flushes_event_buffer(
     # Clean up: send terminal event to stop the subscriber
     await store.append_event("run-1", make_envelope(event=StopEvent(data="done")))
     await asyncio.wait_for(task, timeout=2.0)
+
+
+@pytest.mark.asyncio
+async def test_partial_flush_failure_requeues_events(
+    store: AgentDataStore,
+    backend: FakeAgentDataBackend,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When some events fail to persist, they should be re-queued for the next flush."""
+    original_create = store._client.create
+    call_count = 0
+
+    async def fail_second_create(
+        collection: str, data: dict[str, Any]
+    ) -> dict[str, Any]:
+        nonlocal call_count
+        if collection == store._events_collection:
+            call_count += 1
+            # Fail the second event's create
+            if call_count == 2:
+                raise RuntimeError("simulated partial failure")
+        return await original_create(collection, data)
+
+    # Append 3 non-terminal events (buffered)
+    await store.append_event("run-1", make_envelope(seq_label=0))
+    await store.append_event("run-1", make_envelope(seq_label=1))
+    await store.append_event("run-1", make_envelope(seq_label=2))
+
+    # Patch create to fail on the second call, then trigger flush via query_events
+    monkeypatch.setattr(store._client, "create", fail_second_create)
+    await store._flush_buffer("run-1")
+
+    # The failed event (seq 1) should be re-queued in the buffer
+    buf = store._buffers.get("run-1")
+    assert buf is not None
+    assert len(buf.events) == 1
+    assert buf.events[0].sequence == 1
+
+    # Restore create and flush again — the re-queued event should persist
+    monkeypatch.setattr(store._client, "create", original_create)
+    await store._flush_buffer("run-1")
+
+    events_key = ("test-deploy", store._events_collection)
+    persisted = len(backend._items.get(events_key, []))
+    assert persisted == 3
+
+    # Buffer should be empty now
+    buf = store._buffers.get("run-1")
+    assert buf is not None
+    assert len(buf.events) == 0
+
+
+@pytest.mark.asyncio
+async def test_cleanup_run_removes_subscriber_queues(store: AgentDataStore) -> None:
+    """_cleanup_run should remove the run_id key from _subscriber_queues."""
+    store._add_subscriber_queue("run-1")
+    assert "run-1" in store._subscriber_queues
+
+    store._cleanup_run("run-1")
+    assert "run-1" not in store._subscriber_queues
+
+
+@pytest.mark.asyncio
+async def test_cleanup_run_removes_sequence_counters(store: AgentDataStore) -> None:
+    """_cleanup_run should remove sequence counters for the completed run."""
+    # Populate sequence counters by appending events and ticks
+    await store.append_event("run-1", make_envelope(seq_label=0))
+    await store.append_tick("run-1", {"step": "a"})
+
+    assert "run-1" in store._event_sequences
+    assert "run-1" in store._tick_sequences
+
+    # Trigger cleanup via terminal event
+    await store.append_event("run-1", make_envelope(event=StopEvent(data="done")))
+
+    assert "run-1" not in store._event_sequences
+    assert "run-1" not in store._tick_sequences
 
 
 @pytest.mark.asyncio

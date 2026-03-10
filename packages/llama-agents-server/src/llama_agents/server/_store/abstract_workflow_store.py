@@ -190,10 +190,10 @@ class AbstractWorkflowStore(ABC):
 
     @staticmethod
     def _is_output_event(event: StoredEvent) -> bool:
-        """Check if an event is an output event that should be flushed immediately.
+        """Check if an event is visible to external consumers.
 
-        Output events (InputRequiredEvent, StopEvent) are visible to external
-        consumers and should be persisted without waiting for the deferred flush.
+        Output events (StopEvent, InputRequiredEvent) should be persisted
+        without waiting for the deferred flush.
         """
         types = (event.event.types or []) + [event.event.type]
         return StopEvent.__name__ in types or InputRequiredEvent.__name__ in types
