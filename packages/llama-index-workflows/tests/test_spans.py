@@ -182,9 +182,8 @@ async def test_cancel_run_produces_exited_spans_not_dropped(
     assert run_drops == [], (
         f"Expected no dropped spans for run_workflow, got: {run_drops}"
     )
-    # 2 exits: the inner run_workflow span + the outer Workflow.run() span
-    assert len(run_exits) == 2, (
-        f"Expected 2 span exits for run_workflow, got {len(run_exits)}: {run_exits}"
+    assert len(run_exits) == 1, (
+        f"Expected 1 span exit for run_workflow, got {len(run_exits)}: {run_exits}"
     )
 
     # SpanCancelledEvents should have been emitted

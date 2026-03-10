@@ -327,9 +327,8 @@ def create_workflow_run_function(
             steps=registered.steps,
         )
         # Create a wrapping span so that all step spans have a parent.
-        # On initial execution this is a child of Workflow.run()'s span.
-        # On recovery (where Workflow.run() is bypassed), this becomes
-        # the root span linked to the original trace via restored propagation context.
+        # The caller's span context is captured via propagation context (tags)
+        # and restored above, so this span parents correctly under the caller.
         cls_name = workflow.__class__.__name__
         span_id = f"{cls_name}.run-{uuid.uuid4()}"
         outer_parent_span_id = active_span_id.get()
