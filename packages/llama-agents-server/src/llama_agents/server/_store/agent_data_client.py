@@ -15,6 +15,9 @@ class AgentDataClient:
     Holds connection parameters and exposes search/create/update/delete methods.
     Both AgentDataStore and AgentDataStateStore use this instead of duplicating
     HTTP helpers.
+
+    Uses a shared ``httpx.AsyncClient`` for connection pooling. The client is
+    lazily created on first use to avoid requiring an event loop at init time.
     """
 
     def __init__(
@@ -29,6 +32,7 @@ class AgentDataClient:
         self._api_key = api_key
         self._project_id = project_id
         self._deployment_name = deployment_name
+        self._shared_client: httpx.AsyncClient | None = None
 
     @property
     def deployment_name(self) -> str:
@@ -41,16 +45,24 @@ class AgentDataClient:
         }
 
     def http_client(self) -> httpx.AsyncClient:
-        """Create a fresh async HTTP client.
+        """Return the shared async HTTP client, creating it lazily.
 
-        Following the cloud pattern: a new client per operation to avoid
-        issues with shared state across concurrent async tasks.
+        The client is reused across operations for connection pooling.
+        ``httpx.AsyncClient`` is safe for concurrent use.
         """
-        return httpx.AsyncClient(
-            base_url=self._base_url,
-            headers=self._headers(),
-            params={"project_id": self._project_id},
-        )
+        if self._shared_client is None or self._shared_client.is_closed:
+            self._shared_client = httpx.AsyncClient(
+                base_url=self._base_url,
+                headers=self._headers(),
+                params={"project_id": self._project_id},
+            )
+        return self._shared_client
+
+    async def close(self) -> None:
+        """Close the shared HTTP client and release connections."""
+        if self._shared_client is not None and not self._shared_client.is_closed:
+            await self._shared_client.aclose()
+            self._shared_client = None
 
     async def search(
         self,
@@ -69,10 +81,10 @@ class AgentDataClient:
             body["filter"] = filters
         if order_by:
             body["order_by"] = order_by
-        async with self.http_client() as client:
-            resp = await client.post("/api/v1/beta/agent-data/:search", json=body)
-            resp.raise_for_status()
-            return resp.json().get("items", [])
+        client = self.http_client()
+        resp = await client.post("/api/v1/beta/agent-data/:search", json=body)
+        resp.raise_for_status()
+        return resp.json().get("items", [])
 
     async def create(self, collection: str, data: dict[str, Any]) -> dict[str, Any]:
         """Create an item in the Agent Data API."""
@@ -81,26 +93,26 @@ class AgentDataClient:
             "collection": collection,
             "data": data,
         }
-        async with self.http_client() as client:
-            resp = await client.post("/api/v1/beta/agent-data", json=body)
-            resp.raise_for_status()
-            return resp.json()
+        client = self.http_client()
+        resp = await client.post("/api/v1/beta/agent-data", json=body)
+        resp.raise_for_status()
+        return resp.json()
 
     async def update_item(self, item_id: str, data: dict[str, Any]) -> dict[str, Any]:
         """Update an existing item by its Agent Data API ID."""
-        async with self.http_client() as client:
-            resp = await client.put(
-                f"/api/v1/beta/agent-data/{item_id}",
-                json={"data": data},
-            )
-            resp.raise_for_status()
-            return resp.json()
+        client = self.http_client()
+        resp = await client.put(
+            f"/api/v1/beta/agent-data/{item_id}",
+            json={"data": data},
+        )
+        resp.raise_for_status()
+        return resp.json()
 
     async def delete_item(self, item_id: str) -> None:
         """Delete an item by its Agent Data API ID."""
-        async with self.http_client() as client:
-            resp = await client.delete(f"/api/v1/beta/agent-data/{item_id}")
-            resp.raise_for_status()
+        client = self.http_client()
+        resp = await client.delete(f"/api/v1/beta/agent-data/{item_id}")
+        resp.raise_for_status()
 
     async def delete_many(
         self,
@@ -113,7 +125,7 @@ class AgentDataClient:
             "collection": collection,
             "filter": filters,
         }
-        async with self.http_client() as client:
-            resp = await client.post("/api/v1/beta/agent-data/:delete", json=body)
-            resp.raise_for_status()
-            return resp.json().get("deleted_count", 0)
+        client = self.http_client()
+        resp = await client.post("/api/v1/beta/agent-data/:delete", json=body)
+        resp.raise_for_status()
+        return resp.json().get("deleted_count", 0)
