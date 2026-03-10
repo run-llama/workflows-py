@@ -31,7 +31,8 @@ def summarize_event(event: Event, max_length: int = 200) -> str:
         # Special-case StopEvent to include result
         if isinstance(event, StopEvent):
             result = event._result  # noqa: SLF001
-            parts.append(f"result={_summarize_value(result)}")
+            if result is not None:
+                parts.append(f"result={_summarize_value(result)}")
 
         # Declared pydantic fields
         for field_name in event.__class__.model_fields:

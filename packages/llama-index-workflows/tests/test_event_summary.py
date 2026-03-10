@@ -109,7 +109,8 @@ def test_stop_event_subclass_includes_result() -> None:
 def test_stop_event_with_none_result() -> None:
     ev = StopEvent()
     result = summarize_event(ev)
-    assert result.startswith("StopEvent(")
+    assert result == "StopEvent()"
+    assert "result=" not in result
 
 
 def test_empty_event() -> None:
