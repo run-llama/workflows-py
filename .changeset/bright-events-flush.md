@@ -2,4 +2,4 @@
 "llama-agents-server": patch
 ---
 
-Fix partial flush failures, memory leaks, and lock contention in AgentDataStore
+Fix performance issues during heavy streaming from excessive chatter
