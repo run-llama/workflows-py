@@ -270,6 +270,9 @@ async def test_event_sequence_new_store_instance_no_collision(
         await store1.append_event(run_id, _event_envelope(Note(text="from-store1-0")))
         await store1.append_event(run_id, _event_envelope(Note(text="from-store1-1")))
 
+        # Flush store1's buffer so events are persisted before store2 reads
+        await store1.query_events(run_id)
+
         store2 = store_factory()
         await store2.append_event(run_id, _event_envelope(Note(text="from-store2-0")))
 
