@@ -22,7 +22,7 @@ from pydantic import (
 from workflows.context import JsonSerializer
 from workflows.context.serializers import BaseSerializer
 from workflows.context.state_store import StateStore
-from workflows.events import StopEvent
+from workflows.events import InputRequiredEvent, StopEvent
 
 logger = logging.getLogger(__name__)
 
@@ -187,6 +187,16 @@ class AbstractWorkflowStore(ABC):
 
         types = (event.event.types or []) + [event.event.type]
         return StopEvent.__name__ in types
+
+    @staticmethod
+    def _is_output_event(event: StoredEvent) -> bool:
+        """Check if an event is an output event that should be flushed immediately.
+
+        Output events (InputRequiredEvent, StopEvent) are visible to external
+        consumers and should be persisted without waiting for the deferred flush.
+        """
+        types = (event.event.types or []) + [event.event.type]
+        return StopEvent.__name__ in types or InputRequiredEvent.__name__ in types
 
     async def subscribe_events(
         self, run_id: str, after_sequence: int = -1

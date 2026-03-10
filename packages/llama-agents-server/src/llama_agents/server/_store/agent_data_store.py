@@ -62,7 +62,7 @@ class AgentDataStore(AbstractWorkflowStore):
         deployment_name: str,
         collection: str = "workflow_contexts",
         poll_interval: float = 30.0,
-        flush_interval: float = 0.2,
+        flush_interval: float = 1.0,
     ) -> None:
         self._client = AgentDataClient(
             base_url=base_url,
@@ -331,29 +331,22 @@ class AgentDataStore(AbstractWorkflowStore):
         # Deliver to in-memory subscribers immediately (Phase 2)
         self._broadcast_to_subscribers(run_id, stored)
 
-        is_terminal = self._is_terminal_event(stored)
-        has_subscribers = bool(self._subscriber_queues.get(run_id))
+        buf = self._get_or_create_buffer(run_id)
+        buf.events.append(stored)
 
-        if has_subscribers and not is_terminal:
-            # Buffer for deferred persistence (Phase 3) — only when subscribers
-            # exist, since the optimization is about decoupling subscriber
-            # delivery from HTTP writes.
-            buf = self._get_or_create_buffer(run_id)
-            buf.events.append(stored)
-            self._schedule_deferred_flush(run_id, buf)
+        if self._is_terminal_event(stored):
+            # Terminal event: flush everything immediately and clean up
+            await self._flush_buffer(run_id)
+            self._cleanup_run(run_id)
+        elif self._is_output_event(stored):
+            # Output event (e.g. InputRequiredEvent): flush immediately
+            # for durability but keep the run alive
+            await self._flush_buffer(run_id)
         else:
-            # No subscribers or terminal event: persist immediately for correctness
-            buf = self._buffers.get(run_id)
-            if buf and buf.events:
-                buf.events.append(stored)
-                await self._flush_buffer(run_id)
-            else:
-                await self._client.create(
-                    self._events_collection,
-                    stored.model_dump(mode="json"),
-                )
-            if is_terminal:
-                self._cleanup_run(run_id)
+            # Buffer for deferred persistence — keeps in-memory
+            # subscriber delivery and the write_to_event_stream lock
+            # non-blocking regardless of whether subscribers exist yet.
+            self._schedule_deferred_flush(run_id, buf)
 
     async def query_events(
         self,
