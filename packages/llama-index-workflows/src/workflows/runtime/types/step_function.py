@@ -85,6 +85,14 @@ class WorkflowRunOutputEvent(BaseEvent):
         return "workflow.output"
 
 
+def _emit_output_event(event: BaseEvent) -> None:
+    """Fire an instrumentation event, silently ignoring failures."""
+    try:
+        _dispatcher.event(event)
+    except Exception:
+        pass
+
+
 def _run_with_tags(tags: dict[str, Any], func: Callable[[], Any]) -> Any:
     """Run a callable inside an instrument_tags context (for sync/executor use)."""
     with instrument_tags(tags):
@@ -175,30 +183,28 @@ def as_step_worker_function(
             # For async steps, intercept WaitingForEvent and CancelledError before
             # they reach dispatcher.span() to prevent them from being recorded as
             # error spans.
-            captured_waiting: list[WaitingForEvent] = []
-            captured_cancelled: list[BaseException] = []
+            captured_waiting: WaitingForEvent | None = None
+            captured_cancelled: BaseException | None = None
             if asyncio.iscoroutinefunction(call_func):
 
                 @functools.wraps(call_func)
                 async def span_safe_call(*args: Any, **kwargs: Any) -> Any:
+                    nonlocal captured_waiting, captured_cancelled
                     try:
                         step_result = await call_func(*args, **kwargs)
                         if step_result is not None and isinstance(step_result, Event):
-                            try:
-                                _dispatcher.event(
-                                    WorkflowStepOutputEvent(
-                                        output=summarize_event(step_result),
-                                    )
+                            _emit_output_event(
+                                WorkflowStepOutputEvent(
+                                    output=summarize_event(step_result)
                                 )
-                            except Exception:
-                                pass
+                            )
                         return step_result
                     except WaitingForEvent as e:
-                        captured_waiting.append(e)
+                        captured_waiting = e
                         return None
                     except asyncio.CancelledError as e:
                         _dispatcher.event(SpanCancelledEvent(reason="step cancelled"))
-                        captured_cancelled.append(e)
+                        captured_cancelled = e
                         return None
 
                 span_target = span_safe_call
@@ -208,14 +214,9 @@ def as_step_worker_function(
                 def span_safe_sync_call(*args: Any, **kwargs: Any) -> Any:
                     step_result = call_func(*args, **kwargs)
                     if step_result is not None and isinstance(step_result, Event):
-                        try:
-                            _dispatcher.event(
-                                WorkflowStepOutputEvent(
-                                    output=summarize_event(step_result),
-                                )
-                            )
-                        except Exception:
-                            pass
+                        _emit_output_event(
+                            WorkflowStepOutputEvent(output=summarize_event(step_result))
+                        )
                     return step_result
 
                 span_target = span_safe_sync_call
@@ -256,10 +257,10 @@ def as_step_worker_function(
                 else:
                     with instrument_tags(merged_tags):
                         result = await partial_func()
-                    if captured_cancelled:
-                        raise captured_cancelled[0]
-                    if captured_waiting:
-                        raise captured_waiting[0]
+                    if captured_cancelled is not None:
+                        raise captured_cancelled
+                    if captured_waiting is not None:
+                        raise captured_waiting
                 if result is not None and not isinstance(result, Event):
                     msg = f"Step function {step_name} returned {type(result).__name__} instead of an Event instance."
                     raise WorkflowRuntimeError(msg)
@@ -356,10 +357,6 @@ def create_workflow_run_function(
             )
 
         try:
-            # defer execution to make sure the task can be captured and passed
-            # to the handler as async exception, protecting against exceptions from before_start
-            await asyncio.sleep(0)
-
             try:
                 with run_context(run_ctx):
                     result = await control_loop_fn(
@@ -368,14 +365,9 @@ def create_workflow_run_function(
                         internal_adapter.run_id,
                     )
 
-                    try:
-                        _dispatcher.event(
-                            WorkflowRunOutputEvent(
-                                output=summarize_event(result),
-                            )
-                        )
-                    except Exception:
-                        pass
+                    _emit_output_event(
+                        WorkflowRunOutputEvent(output=summarize_event(result))
+                    )
 
                     _dispatcher.span_exit(
                         id_=span_id,
