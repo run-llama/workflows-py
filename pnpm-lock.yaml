@@ -104,11 +104,7 @@ importers:
         specifier: workspace:*
         version: link:../llama-index-workflows
 
-  packages/llama-index-utils-workflow:
-    dependencies:
-      llama-index-workflows:
-        specifier: workspace:*
-        version: link:../llama-index-workflows
+  packages/llama-index-utils-workflow: {}
 
   packages/llama-index-workflows: {}
 
