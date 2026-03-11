@@ -6,7 +6,13 @@ from typing import Annotated, Optional
 import pytest
 from pydantic import BaseModel
 from workflows.decorators import step
-from workflows.events import Event, StartEvent, StopEvent
+from workflows.events import (
+    Event,
+    HumanResponseEvent,
+    InputRequiredEvent,
+    StartEvent,
+    StopEvent,
+)
 from workflows.representation import (
     WorkflowEventNode,
     WorkflowExternalNode,
@@ -123,6 +129,31 @@ def test_get_workflow_representation(ground_truth_repr: WorkflowGraph) -> None:
         node.id for node in _nodes_of_type(ground_truth_repr, "event")
     ) == sorted(node.id for node in _nodes_of_type(graph, "event"))
     assert _edges_as_tuples(graph) >= _edges_as_tuples(ground_truth_repr)
+
+
+def test_representation_hitl_includes_external_step_bridge() -> None:
+    """HITL workflows get external_step node and bridging edges for graph validation."""
+
+    class HITLWorkflow(Workflow):
+        @step
+        async def ask(self, ev: StartEvent) -> InputRequiredEvent:
+            return InputRequiredEvent()
+
+        @step
+        async def handle(self, ev: HumanResponseEvent) -> StopEvent:
+            return StopEvent(result="ok")
+
+    wf = HITLWorkflow()
+    graph = get_workflow_representation(workflow=wf)
+    node_ids = {n.id for n in graph.nodes}
+    assert "external_step" in node_ids
+    edges = _edges_as_tuples(graph)
+    assert ("InputRequiredEvent", "external_step", None) in edges or any(
+        e[0] == "InputRequiredEvent" and e[1] == "external_step" for e in edges
+    )
+    assert ("external_step", "HumanResponseEvent", None) in edges or any(
+        e[0] == "external_step" and e[1] == "HumanResponseEvent" for e in edges
+    )
 
 
 def test_truncated_label() -> None:

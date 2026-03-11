@@ -916,3 +916,124 @@ async def test_stop_event_cancels_concurrent_step_stream_write() -> None:
         f"OtherEvent should not appear in stream - other_step should have been "
         f"cancelled after stop_step returned. Got events: {events}"
     )
+
+
+# --- Graph validation tests ---
+
+
+def test_graph_validation_unreachable_step_raises() -> None:
+    """Unreachable step (island with no path from StartEvent) raises WorkflowValidationError."""
+
+    class ProcessedEvent(Event):
+        pass
+
+    class IslandEvent(Event):
+        pass
+
+    class UnreachableStepWorkflow(Workflow):
+        @step
+        async def entry(self, ev: StartEvent) -> ProcessedEvent:
+            return ProcessedEvent()
+
+        @step
+        async def finish(self, ev: ProcessedEvent) -> StopEvent:
+            return StopEvent(result="done")
+
+        @step
+        async def island(self, ev: IslandEvent) -> IslandEvent:
+            return IslandEvent()
+
+    wf = UnreachableStepWorkflow()
+    with pytest.raises(
+        WorkflowValidationError,
+        match="not reachable from any input event",
+    ):
+        wf.validate()
+
+
+def test_graph_validation_human_response_event_mutation_allowed() -> None:
+    """HumanResponseEvent step returning None (mutation pattern) is allowed."""
+
+    class HITLMutationWorkflow(Workflow):
+        @step
+        async def ask(self, ev: StartEvent) -> InputRequiredEvent:
+            return InputRequiredEvent()
+
+        @step
+        async def mutate(self, ev: HumanResponseEvent) -> None:
+            return None  # type: ignore[return-value]
+
+        @step
+        async def finish(self, ev: StartEvent) -> StopEvent:
+            return StopEvent(result="ok")
+
+    wf = HITLMutationWorkflow()
+    wf.validate()
+
+
+class _GraphValidationIslandEvent(Event):
+    """Used in graph validation opt-out tests."""
+
+    pass
+
+
+class _GraphValidationProcessedEvent(Event):
+    """Used in graph validation opt-out tests."""
+
+    pass
+
+
+def test_graph_validation_skip_reachability_per_step() -> None:
+    """Per-step skip_graph_checks=['reachability'] allows unreachable step."""
+
+    class OptOutReachabilityWorkflow(Workflow):
+        @step
+        async def entry(self, ev: StartEvent) -> _GraphValidationProcessedEvent:
+            return _GraphValidationProcessedEvent()
+
+        @step
+        async def finish(self, ev: _GraphValidationProcessedEvent) -> StopEvent:
+            return StopEvent(result="done")
+
+        @step(skip_graph_checks=["reachability"])
+        async def island(
+            self, ev: _GraphValidationIslandEvent
+        ) -> _GraphValidationIslandEvent:
+            return _GraphValidationIslandEvent()
+
+    wf = OptOutReachabilityWorkflow()
+    wf.validate()
+
+
+def test_graph_validation_skip_reachability_workflow_level() -> None:
+    """Workflow skip_graph_checks={'reachability'} allows unreachable steps."""
+
+    class WorkflowLevelOptOut(Workflow):
+        @step
+        async def entry(self, ev: StartEvent) -> _GraphValidationProcessedEvent:
+            return _GraphValidationProcessedEvent()
+
+        @step
+        async def finish(self, ev: _GraphValidationProcessedEvent) -> StopEvent:
+            return StopEvent(result="done")
+
+        @step
+        async def island(
+            self, ev: _GraphValidationIslandEvent
+        ) -> _GraphValidationIslandEvent:
+            return _GraphValidationIslandEvent()
+
+    wf = WorkflowLevelOptOut(skip_graph_checks={"reachability"})
+    wf.validate()
+
+
+@pytest.mark.asyncio
+async def test_validation_cached_after_first_run() -> None:
+    """Validation result is cached; second run() does not re-run full validation."""
+    wf = DummyWorkflow()
+    assert wf._validation_result is None
+    await WorkflowTestRunner(wf).run()
+    assert wf._validation_result is not None
+    first_result = wf._validation_result
+    await WorkflowTestRunner(wf).run()
+    assert wf._validation_result is first_result

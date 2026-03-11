@@ -118,6 +118,7 @@ class Workflow(metaclass=WorkflowMeta):
         num_concurrent_runs: int | None = None,
         runtime: Runtime | None = None,
         workflow_name: str | None = None,
+        skip_graph_checks: set[str] | None = None,
     ) -> None:
         """
         Initialize a workflow instance.
@@ -137,6 +138,9 @@ class Workflow(metaclass=WorkflowMeta):
             workflow_name (str | None): Optional explicit name for this workflow.
                 If not provided, a module-qualified name is computed from
                 the class's `__module__` and `__qualname__` attributes.
+            skip_graph_checks (set[str] | None): Optional set of graph validation
+                checks to skip (e.g. "reachability", "terminal_event"). Use to
+                allow intentional patterns that would otherwise fail validation.
         """
         # Configuration
         self._timeout = timeout
@@ -154,6 +158,10 @@ class Workflow(metaclass=WorkflowMeta):
         # Instrumentation
         self._dispatcher = dispatcher
         self._runtime_locked = False
+        # Validation cache: set after first successful _validate(); skip re-validation on run() until invalidated
+        self._validation_result: bool | None = None
+        # Graph validation checks to skip for this workflow (e.g. "reachability", "terminal_event")
+        self._skip_graph_checks: set[str] = skip_graph_checks or set()
 
         # Runtime registration: explicit > context-scoped > basic_runtime
         from workflows.plugins._context import get_current_runtime
@@ -530,6 +538,75 @@ class Workflow(metaclass=WorkflowMeta):
             active_span_id.reset(span_token)
             raise
 
+    def _validate_graph_structure(self) -> None:
+        """Check that all steps are reachable from input events and only output events are terminal.
+
+        Input events: StartEvent, HumanResponseEvent (via external_step). Output events:
+        StopEvent, InputRequiredEvent. HumanResponseEvent steps that return None (mutation
+        pattern) are allowed as terminal steps.
+        """
+        from workflows.representation import get_workflow_representation
+        from workflows.representation.types import WorkflowEventNode, WorkflowStepNode
+
+        graph = get_workflow_representation(self)
+        node_by_id = {n.id: n for n in graph.nodes}
+        outgoing: dict[str, list[str]] = {}
+        for edge in graph.edges:
+            outgoing.setdefault(edge.source, []).append(edge.target)
+
+        step_ids = {n.id for n in graph.nodes if isinstance(n, WorkflowStepNode)}
+        event_nodes = [n for n in graph.nodes if isinstance(n, WorkflowEventNode)]
+
+        # Seeds: start event node and external_step (HITL entry)
+        seeds: list[str] = [self._start_event_class.__name__]
+        if "external_step" in node_by_id:
+            seeds.append("external_step")
+
+        # BFS from seeds
+        reachable: set[str] = set()
+        stack = list(seeds)
+        while stack:
+            nid = stack.pop()
+            if nid in reachable:
+                continue
+            reachable.add(nid)
+            for target in outgoing.get(nid, []):
+                if target not in reachable:
+                    stack.append(target)
+
+        # Exclude steps that opted out of reachability check
+        if "reachability" not in self._skip_graph_checks:
+            step_skip = {
+                name
+                for name, step_func in self._get_steps().items()
+                if "reachability" in step_func._step_config.skip_graph_checks
+            }
+            unreachable_steps = (step_ids - reachable) - step_skip
+        else:
+            unreachable_steps = set()
+        if unreachable_steps:
+            names = ", ".join(sorted(unreachable_steps))
+            raise WorkflowValidationError(
+                f"The following steps are not reachable from any input event "
+                f"(StartEvent or HumanResponseEvent): {names}"
+            )
+
+        # Terminal event nodes: event with no outgoing edge to a step (no consumer)
+        if "terminal_event" not in self._skip_graph_checks:
+            for node in event_nodes:
+                targets = outgoing.get(node.id, [])
+                consumed_by_step = any(t in step_ids for t in targets)
+                if consumed_by_step:
+                    continue
+                # Event is terminal; must be an output event type
+                if node.is_subclass_of("StopEvent", "InputRequiredEvent"):
+                    continue
+                raise WorkflowValidationError(
+                    f"Event '{node.id}' is produced but never consumed. "
+                    "Only StopEvent and InputRequiredEvent may be terminal. "
+                    "Ensure some step consumes this event or it is an output event type."
+                )
+
     def _validate_resource_configs(self) -> list[str]:
         """Validate all resource configs (including nested ones) by loading them."""
         errors: list[str] = []
@@ -594,9 +671,15 @@ class Workflow(metaclass=WorkflowMeta):
         Validate the workflow to ensure it's well-formed.
 
         This method validates the event graph and optionally validates resources:
+        - Event production/consumption (set-based checks)
+        - Graph structure: all steps reachable from an input event (StartEvent or HumanResponseEvent),
+          and only output events (StopEvent, InputRequiredEvent) may be terminal
         - Resource configs (JSON files with Pydantic validation) are validated by default
         - Resource factories are not validated by default (may require env vars)
         - Circular resource dependencies are caught when validate_resources=True
+
+        Validation result is cached after the first successful run(); subsequent run() calls
+        skip re-validation unless validate(force=True) is used or validation was disabled.
 
         Args:
             validate_resource_configs: If True (default), validate that resource
@@ -624,6 +707,8 @@ class Workflow(metaclass=WorkflowMeta):
     ) -> bool:
         if self._disable_validation and not force:
             return False
+        if not force and self._validation_result is not None:
+            return self._validation_result
 
         # Ensure at least one step is configured before inspecting events
         if not self._get_steps():
@@ -711,6 +796,9 @@ class Workflow(metaclass=WorkflowMeta):
                 f"The following events are produced but never consumed: {names}"
             )
 
+        # Graph structural checks: reachability from input events, terminal events
+        self._validate_graph_structure()
+
         # Resource validation
         if validate_resource_configs:
             if errors := self._validate_resource_configs():
@@ -732,11 +820,12 @@ class Workflow(metaclass=WorkflowMeta):
                     + "\n".join(f"  - {e}" for e in errors)
                 )
 
-        # Check if the workflow uses human-in-the-loop
-        return (
+        # Check if the workflow uses human-in-the-loop; cache result for subsequent run() calls
+        self._validation_result = (
             InputRequiredEvent in produced_events
             or HumanResponseEvent in consumed_events
         )
+        return self._validation_result
 
 
 @dataclass
