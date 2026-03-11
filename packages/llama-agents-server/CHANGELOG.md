@@ -1,5 +1,16 @@
 # llama-agents-server
 
+## 0.2.2
+
+### Patch Changes
+
+- 9c0b4a0: Fix performance issues during heavy streaming from excessive chatter
+- 5e7f9e5: Namespace handler_id instrument tag as `llamaindex.handler_id`.
+- Updated dependencies [5e7f9e5]
+- Updated dependencies [9f26314]
+  - llama-index-workflows@2.16.0
+  - llama-agents-client@0.2.2
+
 ## 0.2.1
 
 ### Patch Changes
