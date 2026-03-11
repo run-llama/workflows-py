@@ -1841,7 +1841,7 @@ dependencies = [
 requires-dist = [
     { name = "fastapi" },
     { name = "llama-agents-dbos", editable = "packages/llama-agents-dbos" },
-    { name = "llama-index-observability-otel" },
+    { name = "llama-index-observability-otel", specifier = ">=0.5.1" },
     { name = "opentelemetry-exporter-otlp" },
     { name = "opentelemetry-instrumentation-fastapi" },
     { name = "structlog" },
@@ -2154,20 +2154,20 @@ wheels = [
 
 [[package]]
 name = "llama-index-instrumentation"
-version = "0.4.2"
+version = "0.4.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "deprecated" },
     { name = "pydantic" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/af/b9/a7a74de6d8aacf4be329329495983d78d96b1a6e69b6d9fcf4a233febd4b/llama_index_instrumentation-0.4.2.tar.gz", hash = "sha256:dc4957b64da0922060690e85a6be9698ac08e34e0f69e90b01364ddec4f3de7f", size = 46146, upload-time = "2025-10-13T20:44:48.85Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/0b/45/293b89d330a989e444ade307252c190b497142761f1a6a8f20b300fefeb2/llama_index_instrumentation-0.4.3.tar.gz", hash = "sha256:6a8bd34b0c2fb9485971f952f3e5d63341eb87f8c55c82f2819a37e174494eb9", size = 48458, upload-time = "2026-03-03T19:01:27.146Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/40/54/df8063b0441242e250e03d1e31ebde5dffbe24e1af32b025cb1a4544150c/llama_index_instrumentation-0.4.2-py3-none-any.whl", hash = "sha256:b4989500e6454059ab3f3c4a193575d47ab1fadb730c2e8f2b962649ae88b70b", size = 15411, upload-time = "2025-10-13T20:44:47.685Z" },
+    { url = "https://files.pythonhosted.org/packages/c0/0f/5fe062395c8d444235fc228bb2577588be4e9db6fb5f4d1b662e9ac98aee/llama_index_instrumentation-0.4.3-py3-none-any.whl", hash = "sha256:4669d5f6da4b478784a196489d4b58072cb2e6928c3781d2bddd34f36da9cac1", size = 16446, upload-time = "2026-03-03T19:01:28.807Z" },
 ]
 
 [[package]]
 name = "llama-index-observability-otel"
-version = "0.5.0"
+version = "0.5.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "llama-index-instrumentation" },
@@ -2177,9 +2177,9 @@ dependencies = [
     { name = "termcolor", version = "3.1.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
     { name = "termcolor", version = "3.3.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/3f/6b/891d600ae870fa30bb0b4921e0afd53722b78eaf0a6817dce1b802db0b42/llama_index_observability_otel-0.5.0.tar.gz", hash = "sha256:9ad33c2bbc980bcc083c0e493bfd381da0914d12b06a793cc63fb41e745804ee", size = 7092, upload-time = "2026-02-24T21:22:11.774Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/26/d2/195e564062b8287302c8fd343cd5208ef013e630115780c047a075e2ebe5/llama_index_observability_otel-0.5.1.tar.gz", hash = "sha256:fd8fe4aaeea56c6362b29299f2c40d42dd322e7ddfd83c6db5b47c006dd87578", size = 7790, upload-time = "2026-03-03T19:01:33.002Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/75/ef/3e9f5322612d3d97cb8eb780e0cb07fccbe41c37ac25228e3843a76914b0/llama_index_observability_otel-0.5.0-py3-none-any.whl", hash = "sha256:c75bbd154cbd4432d15cfb8403ff19876c545c444d312796d0ee5ed692653cfc", size = 6992, upload-time = "2026-02-24T21:22:12.82Z" },
+    { url = "https://files.pythonhosted.org/packages/9b/56/233eb89bb8ece176a3e3a4aeb15ac5a8a5a8ebc6fcab52fd964dc6b7fd1c/llama_index_observability_otel-0.5.1-py3-none-any.whl", hash = "sha256:d14efc562b96c675a4960ee9004e13a84cf22374f3920c4537f6c358c145664d", size = 7719, upload-time = "2026-03-03T19:01:32.162Z" },
 ]
 
 [[package]]
@@ -2260,7 +2260,7 @@ requires-dist = [
     { name = "eval-type-backport", marker = "python_full_version < '3.10'", specifier = ">=0.2.2" },
     { name = "llama-agents-client", marker = "extra == 'client'", editable = "packages/llama-agents-client" },
     { name = "llama-agents-server", marker = "extra == 'server'", editable = "packages/llama-agents-server" },
-    { name = "llama-index-instrumentation", specifier = ">=0.1.0" },
+    { name = "llama-index-instrumentation", specifier = ">=0.4.3" },
     { name = "pydantic", specifier = ">=2.11.5" },
     { name = "typing-extensions", specifier = ">=4.6.0" },
 ]

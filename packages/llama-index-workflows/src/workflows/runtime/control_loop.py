@@ -108,7 +108,7 @@ if TYPE_CHECKING:
     from workflows.runtime.types.step_function import StepWorkerFunction
 
 
-logger = logging.getLogger()
+logger = logging.getLogger(__name__)
 
 
 class _ControlLoopRunner:

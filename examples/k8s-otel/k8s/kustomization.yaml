@@ -5,3 +5,5 @@ resources:
   - postgres.yaml
   - app.yaml
   - phoenix.yaml
+  - jaeger.yaml
+  - otel-collector.yaml

@@ -31,6 +31,22 @@ k8s_resource(
 )
 
 k8s_resource(
+    'jaeger',
+    labels=['observability'],
+    port_forwards=[
+        '16686:16686',  # Jaeger UI
+        '4317:4317',    # OTLP gRPC (for verify_spans.py)
+    ],
+)
+
+k8s_resource(
+    'otel-collector',
+    labels=['observability'],
+    objects=['otel-collector-config:configmap'],
+    resource_deps=['phoenix', 'jaeger'],
+)
+
+k8s_resource(
     'app',
     labels=['app'],
     port_forwards='8080:8080',

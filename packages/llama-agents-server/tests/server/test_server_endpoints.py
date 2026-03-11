@@ -1357,7 +1357,7 @@ async def test_instrument_tags_contains_handler_id_in_server_context() -> None:
         @step
         async def read_tags(self, ctx: Context, ev: StartEvent) -> StopEvent:
             # Read handler_id set by the server while streaming events
-            hid = active_instrument_tags.get().get("handler_id")
+            hid = active_instrument_tags.get().get("llamaindex.handler_id")
             seen_handler_id["handler_id"] = hid
             return StopEvent()
 

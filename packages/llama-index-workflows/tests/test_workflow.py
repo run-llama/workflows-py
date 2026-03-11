@@ -754,7 +754,7 @@ async def test_inner_step_can_access_run_id_and_others_from_instrument_tags() ->
         @step
         async def read_tags(self, ctx: Context, ev: StartEvent) -> StopEvent:
             tags = active_instrument_tags.get()
-            run_id["run_id"] = tags.get("run_id")
+            run_id["run_id"] = tags.get("llamaindex.run_id")
             run_id["foo"] = tags.get("foo")
             return StopEvent()
 

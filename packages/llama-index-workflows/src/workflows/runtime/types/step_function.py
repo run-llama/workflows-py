@@ -5,14 +5,23 @@ from __future__ import annotations
 
 import asyncio
 import functools
+import inspect
 import time
+import uuid
 from contextvars import copy_context
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Optional, Protocol, TypeVar
 
-from llama_index_instrumentation.dispatcher import instrument_tags
+from llama_index_instrumentation import get_dispatcher
+from llama_index_instrumentation.base import BaseEvent
+from llama_index_instrumentation.dispatcher import (
+    active_instrument_tags,
+    instrument_tags,
+)
+from llama_index_instrumentation.events.span import SpanDropEvent
 from llama_index_instrumentation.span import active_span_id
+from workflows._event_summary import summarize_event
 from workflows.decorators import P, StepConfig
-from workflows.errors import WorkflowRuntimeError
+from workflows.errors import WorkflowCancelledByUser, WorkflowRuntimeError
 from workflows.events import (
     Event,
     StartEvent,
@@ -41,7 +50,53 @@ from workflows.workflow import Workflow
 if TYPE_CHECKING:
     from workflows.context.context import Context
 
+_dispatcher = get_dispatcher(__name__)
+
 StepReturnT = TypeVar("StepReturnT", bound=Optional[Event])
+
+
+class SpanCancelledEvent(BaseEvent):
+    """Instrumentation event emitted when a span exits due to cancellation."""
+
+    reason: str
+
+    @classmethod
+    def class_name(cls) -> str:
+        return "SpanCancelledEvent"
+
+
+class WorkflowStepOutputEvent(BaseEvent):
+    """Instrumentation event emitted with output summary when a step returns."""
+
+    output: str
+
+    @classmethod
+    def class_name(cls) -> str:
+        return "step.output"
+
+
+class WorkflowRunOutputEvent(BaseEvent):
+    """Instrumentation event emitted with output summary when a workflow run completes."""
+
+    output: str
+
+    @classmethod
+    def class_name(cls) -> str:
+        return "workflow.output"
+
+
+def _emit_output_event(event: BaseEvent) -> None:
+    """Fire an instrumentation event, silently ignoring failures."""
+    try:
+        _dispatcher.event(event)
+    except Exception:
+        pass
+
+
+def _run_with_tags(tags: dict[str, Any], func: Callable[[], Any]) -> Any:
+    """Run a callable inside an instrument_tags context (for sync/executor use)."""
+    with instrument_tags(tags):
+        return func()
 
 
 class StepWorkerFunction(Protocol):
@@ -125,8 +180,60 @@ def as_step_worker_function(
                 call_func = getattr(workflow, step_name)
             except AttributeError:
                 call_func = original_func
+            # For async steps, intercept WaitingForEvent and CancelledError before
+            # they reach dispatcher.span() to prevent them from being recorded as
+            # error spans.
+            captured_waiting: WaitingForEvent | None = None
+            captured_cancelled: BaseException | None = None
+            if asyncio.iscoroutinefunction(call_func):
+
+                @functools.wraps(call_func)
+                async def span_safe_call(*args: Any, **kwargs: Any) -> Any:
+                    nonlocal captured_waiting, captured_cancelled
+                    try:
+                        step_result = await call_func(*args, **kwargs)
+                        if step_result is not None and isinstance(step_result, Event):
+                            _emit_output_event(
+                                WorkflowStepOutputEvent(
+                                    output=summarize_event(step_result)
+                                )
+                            )
+                        return step_result
+                    except WaitingForEvent as e:
+                        captured_waiting = e
+                        return None
+                    except asyncio.CancelledError as e:
+                        _dispatcher.event(SpanCancelledEvent(reason="step cancelled"))
+                        captured_cancelled = e
+                        return None
+
+                span_target = span_safe_call
+            else:
+
+                @functools.wraps(call_func)
+                def span_safe_sync_call(*args: Any, **kwargs: Any) -> Any:
+                    step_result = call_func(*args, **kwargs)
+                    if step_result is not None and isinstance(step_result, Event):
+                        _emit_output_event(
+                            WorkflowStepOutputEvent(output=summarize_event(step_result))
+                        )
+                    return step_result
+
+                span_target = span_safe_sync_call
+
+            # Prepare input event tags — these become span attributes when the
+            # span is entered (inside partial_func), not when the wrapper is created.
+            try:
+                input_tags = {
+                    "llamaindex.step.input_event": type(event).__name__,
+                    "llamaindex.step.input_summary": summarize_event(event),
+                }
+            except Exception:
+                input_tags = {}
+            merged_tags = {**active_instrument_tags.get(), **input_tags}
+
             partial_func = await partial(
-                func=workflow._dispatcher.span(call_func),
+                func=workflow._dispatcher.span(span_target),
                 step_config=config,
                 event=event,
                 context=internal_context,
@@ -142,11 +249,18 @@ def as_step_worker_function(
                     result: StepReturnT = (
                         await asyncio.get_event_loop().run_in_executor(
                             None,
-                            lambda: copy.run(partial_func),  # type: ignore
+                            lambda: copy.run(
+                                lambda: _run_with_tags(merged_tags, partial_func)
+                            ),  # type: ignore
                         )
                     )
                 else:
-                    result = await partial_func()
+                    with instrument_tags(merged_tags):
+                        result = await partial_func()
+                    if captured_cancelled is not None:
+                        raise captured_cancelled
+                    if captured_waiting is not None:
+                        raise captured_waiting
                 if result is not None and not isinstance(result, Event):
                     msg = f"Step function {step_name} returned {type(result).__name__} instead of an Event instance."
                     raise WorkflowRuntimeError(msg)
@@ -198,42 +312,95 @@ def create_workflow_run_function(
         internal_ctx = Context._create_internal(workflow=workflow)
         internal_adapter = workflow._runtime.get_internal_adapter(workflow)
 
-        # Extract parent span ID if present and remove from tags
-        tags = tags or {}
-        parent_span_id = tags.pop("parent_span_id", None)
+        # Restore propagation context (otel trace, instrument tags, etc.)
+        # before creating any spans so they parent correctly.
+        get_dispatcher().restore_propagation_context(tags or {})
 
-        # Set parent span ID context if provided
-        parent_span_token = None
-        if parent_span_id is not None:
-            parent_span_token = active_span_id.set(parent_span_id)
+        # defer execution to make sure the task can be captured and passed
+        # to the handler as async exception, protecting against exceptions from before_start
+        await asyncio.sleep(0)
+
+        run_ctx = RunContext(
+            workflow=workflow,
+            run_adapter=internal_adapter,
+            context=internal_ctx,
+            steps=registered.steps,
+        )
+        # Create a wrapping span so that all step spans have a parent.
+        # The caller's span context is captured via propagation context (tags)
+        # and restored above, so this span parents correctly under the caller.
+        cls_name = workflow.__class__.__name__
+        span_id = f"{cls_name}.run-{uuid.uuid4()}"
+        outer_parent_span_id = active_span_id.get()
+        span_token = active_span_id.set(span_id)
+
+        bound_args = inspect.signature(run_workflow).bind(init_state, start_event, tags)
+
+        # Set start event info as instrument tags for the run span
+        if start_event is not None:
+            try:
+                run_input_tags = {
+                    "llamaindex.start_event": summarize_event(start_event),
+                }
+            except Exception:
+                run_input_tags = {}
+        else:
+            run_input_tags = {}
+
+        with instrument_tags({**active_instrument_tags.get(), **run_input_tags}):
+            _dispatcher.span_enter(
+                id_=span_id,
+                bound_args=bound_args,
+                instance=workflow,
+                parent_id=outer_parent_span_id,
+            )
 
         try:
-            with instrument_tags(tags):
-                # defer execution to make sure the task can be captured and passed
-                # to the handler as async exception, protecting against exceptions from before_start
-                await asyncio.sleep(0)
+            try:
+                with run_context(run_ctx):
+                    result = await control_loop_fn(
+                        start_event,
+                        init_state,
+                        internal_adapter.run_id,
+                    )
 
-                run_ctx = RunContext(
-                    workflow=workflow,
-                    run_adapter=internal_adapter,
-                    context=internal_ctx,
-                    steps=registered.steps,
-                )
-                try:
-                    with run_context(run_ctx):
-                        result = await control_loop_fn(
-                            start_event,
-                            init_state,
-                            internal_adapter.run_id,
-                        )
-                        return result
-                finally:
-                    # Cancel any background tasks from InternalContext on completion or cancellation
-                    if isinstance(internal_ctx._face, InternalContext):
-                        internal_ctx._face.cancel_background_tasks()
+                    _emit_output_event(
+                        WorkflowRunOutputEvent(output=summarize_event(result))
+                    )
+
+                    _dispatcher.span_exit(
+                        id_=span_id,
+                        bound_args=bound_args,
+                        instance=workflow,
+                        result=result,
+                    )
+
+                    return result
+            finally:
+                # Cancel any background tasks from InternalContext on completion or cancellation
+                if isinstance(internal_ctx._face, InternalContext):
+                    internal_ctx._face.cancel_background_tasks()
+        except WorkflowCancelledByUser:
+            # User-initiated cancellation is not an error — exit the span
+            # cleanly so it shows as OK rather than ERROR in traces.
+            _dispatcher.event(SpanCancelledEvent(reason="workflow cancelled by user"))
+            _dispatcher.span_exit(
+                id_=span_id,
+                bound_args=bound_args,
+                instance=workflow,
+                result=None,
+            )
+            raise
+        except BaseException as e:
+            _dispatcher.event(SpanDropEvent(span_id=span_id, err_str=str(e)))
+            _dispatcher.span_drop(
+                id_=span_id, bound_args=bound_args, instance=workflow, err=e
+            )
+            raise
         finally:
-            # Reset parent span ID if it was set
-            if parent_span_token is not None:
-                active_span_id.reset(parent_span_token)
+            try:
+                active_span_id.reset(span_token)
+            except ValueError:
+                pass
 
     return run_workflow
