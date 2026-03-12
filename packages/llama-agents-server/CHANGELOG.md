@@ -1,5 +1,20 @@
 # llama-agents-server
 
+## 0.2.3
+
+### Patch Changes
+
+- 703ec92: Improve agent data store step and state performance
+- ccd0db6: Update debugger assets
+
+  - JavaScript: https://cdn.jsdelivr.net/npm/@llamaindex/workflow-debugger@0.2.34/dist/app.js
+  - CSS: https://cdn.jsdelivr.net/npm/@llamaindex/workflow-debugger@0.2.34/dist/app.css
+
+- Updated dependencies [c7bbedb]
+- Updated dependencies [703ec92]
+  - llama-index-workflows@2.16.1
+  - llama-agents-client@0.2.3
+
 ## 0.2.2
 
 ### Patch Changes
