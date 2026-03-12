@@ -2004,7 +2004,8 @@ dependencies = [
     { name = "llama-agents-client" },
     { name = "llama-agents-dbos", marker = "python_full_version > '3.9'" },
     { name = "llama-agents-server" },
-    { name = "llama-index-core" },
+    { name = "llama-index-core", version = "0.14.16", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "llama-index-core", version = "0.14.17", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
     { name = "llama-index-workflows" },
 ]
 
@@ -2112,46 +2113,91 @@ dev = [
 name = "llama-index-core"
 version = "0.14.16"
 source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "python_full_version >= '3.9.2' and python_full_version < '3.10'",
+    "python_full_version > '3.9' and python_full_version < '3.9.2'",
+    "python_full_version <= '3.9'",
+]
 dependencies = [
-    { name = "aiohttp" },
-    { name = "aiosqlite" },
-    { name = "banks" },
-    { name = "dataclasses-json" },
-    { name = "deprecated" },
-    { name = "dirtyjson" },
+    { name = "aiohttp", marker = "python_full_version < '3.10'" },
+    { name = "aiosqlite", marker = "python_full_version < '3.10'" },
+    { name = "banks", marker = "python_full_version < '3.10'" },
+    { name = "dataclasses-json", marker = "python_full_version < '3.10'" },
+    { name = "deprecated", marker = "python_full_version < '3.10'" },
+    { name = "dirtyjson", marker = "python_full_version < '3.10'" },
     { name = "eval-type-backport", marker = "python_full_version < '3.10'" },
-    { name = "filetype" },
-    { name = "fsspec" },
-    { name = "httpx" },
-    { name = "llama-index-workflows" },
-    { name = "nest-asyncio" },
+    { name = "filetype", marker = "python_full_version < '3.10'" },
+    { name = "fsspec", marker = "python_full_version < '3.10'" },
+    { name = "httpx", marker = "python_full_version < '3.10'" },
+    { name = "llama-index-workflows", marker = "python_full_version < '3.10'" },
+    { name = "nest-asyncio", marker = "python_full_version < '3.10'" },
     { name = "networkx", version = "3.2.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
-    { name = "networkx", version = "3.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.10.*'" },
-    { name = "networkx", version = "3.5", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
-    { name = "nltk" },
+    { name = "nltk", marker = "python_full_version < '3.10'" },
     { name = "numpy", version = "2.0.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
-    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.10.*'" },
-    { name = "numpy", version = "2.3.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "pillow", version = "11.3.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
-    { name = "pillow", version = "12.0.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
     { name = "platformdirs", version = "4.4.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
-    { name = "platformdirs", version = "4.5.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
-    { name = "pydantic" },
-    { name = "pyyaml" },
-    { name = "requests" },
-    { name = "setuptools" },
-    { name = "sqlalchemy", extra = ["asyncio"] },
-    { name = "tenacity" },
-    { name = "tiktoken" },
-    { name = "tinytag" },
-    { name = "tqdm" },
-    { name = "typing-extensions" },
-    { name = "typing-inspect" },
-    { name = "wrapt" },
+    { name = "pydantic", marker = "python_full_version < '3.10'" },
+    { name = "pyyaml", marker = "python_full_version < '3.10'" },
+    { name = "requests", marker = "python_full_version < '3.10'" },
+    { name = "setuptools", marker = "python_full_version < '3.10'" },
+    { name = "sqlalchemy", extra = ["asyncio"], marker = "python_full_version < '3.10'" },
+    { name = "tenacity", marker = "python_full_version < '3.10'" },
+    { name = "tiktoken", marker = "python_full_version < '3.10'" },
+    { name = "tinytag", marker = "python_full_version < '3.10'" },
+    { name = "tqdm", marker = "python_full_version < '3.10'" },
+    { name = "typing-extensions", marker = "python_full_version < '3.10'" },
+    { name = "typing-inspect", marker = "python_full_version < '3.10'" },
+    { name = "wrapt", marker = "python_full_version < '3.10'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/13/cb/1d7383f9f4520bb1d921c34f18c147b4b270007135212cedfa240edcd4c3/llama_index_core-0.14.16.tar.gz", hash = "sha256:cf2b7e4b798cb5ebad19c935174c200595c7ecff84a83793540cc27b03636a52", size = 11599715, upload-time = "2026-03-10T19:19:52.476Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b4/f5/a33839bae0bd07e4030969bdba1ac90665e359ae88c56c296991ae16b8a8/llama_index_core-0.14.16-py3-none-any.whl", hash = "sha256:0cc273ebc44d51ad636217661a25f9cd02fb2d0440641430f105da3ae9f43a6b", size = 11944927, upload-time = "2026-03-10T19:19:48.043Z" },
+]
+
+[[package]]
+name = "llama-index-core"
+version = "0.14.17"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "python_full_version >= '3.13'",
+    "python_full_version >= '3.11' and python_full_version < '3.13'",
+    "python_full_version == '3.10.*'",
+]
+dependencies = [
+    { name = "aiohttp", marker = "python_full_version >= '3.10'" },
+    { name = "aiosqlite", marker = "python_full_version >= '3.10'" },
+    { name = "banks", marker = "python_full_version >= '3.10'" },
+    { name = "dataclasses-json", marker = "python_full_version >= '3.10'" },
+    { name = "deprecated", marker = "python_full_version >= '3.10'" },
+    { name = "dirtyjson", marker = "python_full_version >= '3.10'" },
+    { name = "filetype", marker = "python_full_version >= '3.10'" },
+    { name = "fsspec", marker = "python_full_version >= '3.10'" },
+    { name = "httpx", marker = "python_full_version >= '3.10'" },
+    { name = "llama-index-workflows", marker = "python_full_version >= '3.10'" },
+    { name = "nest-asyncio", marker = "python_full_version >= '3.10'" },
+    { name = "networkx", version = "3.4.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.10.*'" },
+    { name = "networkx", version = "3.5", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "nltk", marker = "python_full_version >= '3.10'" },
+    { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.10.*'" },
+    { name = "numpy", version = "2.3.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "pillow", version = "12.0.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+    { name = "platformdirs", version = "4.5.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
+    { name = "pydantic", marker = "python_full_version >= '3.10'" },
+    { name = "pyyaml", marker = "python_full_version >= '3.10'" },
+    { name = "requests", marker = "python_full_version >= '3.10'" },
+    { name = "setuptools", marker = "python_full_version >= '3.10'" },
+    { name = "sqlalchemy", extra = ["asyncio"], marker = "python_full_version >= '3.10'" },
+    { name = "tenacity", marker = "python_full_version >= '3.10'" },
+    { name = "tiktoken", marker = "python_full_version >= '3.10'" },
+    { name = "tinytag", marker = "python_full_version >= '3.10'" },
+    { name = "tqdm", marker = "python_full_version >= '3.10'" },
+    { name = "typing-extensions", marker = "python_full_version >= '3.10'" },
+    { name = "typing-inspect", marker = "python_full_version >= '3.10'" },
+    { name = "wrapt", marker = "python_full_version >= '3.10'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/c8/ba/9b8ebc3946f04b4db4372bb5b3f462bf11102b014bd00951cc50489142b6/llama_index_core-0.14.17.tar.gz", hash = "sha256:7bd868fbc550492eb83645c2117b5e9e65fcb6e42179745d1cfbd69512032e05", size = 11599660, upload-time = "2026-03-12T21:45:55.005Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/3e/72/da13c57adba74b8c594fd0d03dc21bb5f05d7ffad463655bd18a08c145d4/llama_index_core-0.14.17-py3-none-any.whl", hash = "sha256:1a3fc4bdcc1f88d88bfca8b18d08a23ff950934fb133a6e8d157ecf8e9b8d8ce", size = 11945325, upload-time = "2026-03-12T21:45:52.097Z" },
 ]
 
 [[package]]
@@ -2189,7 +2235,8 @@ name = "llama-index-utils-workflow"
 version = "0.9.5"
 source = { editable = "packages/llama-index-utils-workflow" }
 dependencies = [
-    { name = "llama-index-core" },
+    { name = "llama-index-core", version = "0.14.16", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
+    { name = "llama-index-core", version = "0.14.17", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
     { name = "llama-index-workflows" },
     { name = "pyvis" },
 ]
