@@ -33,7 +33,11 @@ from workflows.runtime.types.plugin import (
     InternalRunAdapter,
     Runtime,
 )
-from workflows.runtime.types.ticks import WorkflowTick, WorkflowTickAdapter
+from workflows.runtime.types.ticks import (
+    TickStepResult,
+    WorkflowTick,
+    WorkflowTickAdapter,
+)
 from workflows.workflow import Workflow
 
 from .._store.abstract_workflow_store import (
@@ -73,8 +77,11 @@ class _PersistenceInternalRunAdapter(BaseInternalRunAdapterDecorator):
     @override
     async def after_tick(self, tick: WorkflowTick) -> None:
         await super().after_tick(tick)
+        if not isinstance(tick, TickStepResult):
+            return
+        tick_data = WorkflowTickAdapter.dump_python(tick, mode="json")
         try:
-            await self._store.gather_pending(self.run_id)
+            await self._store.after_tick(self.run_id, tick_data)
         except Exception:
             logger.exception(
                 "Failed to gather pending writes for run %s",

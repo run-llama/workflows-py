@@ -34,8 +34,8 @@ class AgentDataStore(AbstractWorkflowStore):
 
     Optimized for streaming performance:
     - Same-process subscribers receive events via in-memory queues (no HTTP).
-    - Event writes are batched/throttled to amortize API call costs.
-    - Terminal events flush immediately for durability.
+    - Tick and event writes are fire-and-forget, gathered at step boundaries.
+    - Terminal events gather all pending writes before cleanup.
     - HTTP connections are reused across operations.
 
     State stores are in-memory (``InMemoryStateStore``) — workflow state
@@ -149,14 +149,15 @@ class AgentDataStore(AbstractWorkflowStore):
     async def _regroup_events(self, run_id: str) -> None:
         await self._regroup(self._pending_events, run_id)
 
-    async def gather_pending(self, run_id: str) -> None:
-        """Await all in-flight tick and event writes for a run."""
+    async def after_tick(self, run_id: str, tick_data: dict[str, Any]) -> None:
+        """Gather all in-flight tick and event writes for a run."""
         await self._regroup_ticks(run_id)
         await self._regroup_events(run_id)
 
     async def _cleanup_run(self, run_id: str) -> None:
         """Clean up pending writes and subscriber queues for a completed run."""
-        await self.gather_pending(run_id)
+        await self._regroup_ticks(run_id)
+        await self._regroup_events(run_id)
         # Signal subscribers that the run is done, then remove the key
         for queue in self._subscriber_queues.get(run_id, []):
             queue.put_nowait(None)
