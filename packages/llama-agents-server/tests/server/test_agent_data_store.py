@@ -414,8 +414,8 @@ async def test_sequence_continues_after_new_store_instance(
     await store1.append_event("run-1", make_envelope(seq_label=0))
     await store1.append_event("run-1", make_envelope(seq_label=1))
 
-    # Flush buffered events so they're visible to the next store instance
-    await store1.query_events("run-1")
+    # Gather in-flight events so they're visible to the next store instance
+    await store1._regroup_events("run-1")
 
     # Simulate server restart: new store instance, same backend
     store2 = create_agent_data_store(backend, monkeypatch)
@@ -552,12 +552,12 @@ async def test_subscribe_events_backfill_and_live(store: AgentDataStore) -> None
 
 
 # ---------------------------------------------------------------------------
-# Buffered / deferred persistence
+# Fire-and-forget persistence
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_events_batched_during_streaming(
+async def test_events_fire_and_forget_during_streaming(
     store: AgentDataStore, backend: FakeAgentDataBackend
 ) -> None:
     collected: list[StoredEvent] = []
@@ -569,38 +569,28 @@ async def test_events_batched_during_streaming(
     task = asyncio.create_task(consumer())
     await asyncio.sleep(0.01)
 
-    # Append several non-terminal events (should be buffered, not persisted yet)
+    # Append several non-terminal events (fire-and-forget)
     for i in range(5):
         await store.append_event("run-1", make_envelope(seq_label=i))
 
-    events_key = ("test-deploy", store._events_collection)
-    persisted_before_terminal = len(backend._items.get(events_key, []))
+    # Subscriber receives events immediately via in-memory queue
+    await asyncio.sleep(0.01)
+    assert len(collected) == 5
 
-    # Events should be buffered — fewer API creates than events appended
-    assert persisted_before_terminal < 5
-
-    # Terminal event flushes everything
+    # Terminal event gathers all pending writes
     await store.append_event("run-1", make_envelope(event=StopEvent(data="done")))
     await asyncio.wait_for(task, timeout=2.0)
 
+    events_key = ("test-deploy", store._events_collection)
     persisted_after = len(backend._items.get(events_key, []))
     assert persisted_after == 6
     assert len(collected) == 6
 
 
 @pytest.mark.asyncio
-async def test_terminal_event_flushes_immediately(
+async def test_terminal_event_gathers_all_pending(
     store: AgentDataStore, backend: FakeAgentDataBackend
 ) -> None:
-    collected: list[StoredEvent] = []
-
-    async def consumer() -> None:
-        async for event in store.subscribe_events("run-1"):
-            collected.append(event)
-
-    task = asyncio.create_task(consumer())
-    await asyncio.sleep(0.01)
-
     await store.append_event("run-1", make_envelope(seq_label=0))
     await store.append_event("run-1", make_envelope(seq_label=1))
     await store.append_event("run-1", make_envelope(event=StopEvent(data="done")))
@@ -610,77 +600,46 @@ async def test_terminal_event_flushes_immediately(
     persisted = len(backend._items.get(events_key, []))
     assert persisted == 3
 
-    await asyncio.wait_for(task, timeout=2.0)
-
 
 @pytest.mark.asyncio
-async def test_append_tick_does_not_flush_event_buffer(
+async def test_events_not_persisted_until_gathered(
     store: AgentDataStore, backend: FakeAgentDataBackend
 ) -> None:
-    # Append events (buffered, not yet persisted)
+    """Events use fire-and-forget tasks; regroup_events gathers them."""
     await store.append_event("run-1", make_envelope(seq_label=0))
     await store.append_event("run-1", make_envelope(seq_label=1))
 
-    events_key = ("test-deploy", store._events_collection)
-    persisted_before = len(backend._items.get(events_key, []))
-    assert persisted_before < 2
+    # Pending tasks exist but may not have completed yet
+    assert "run-1" in store._pending_events
+    assert len(store._pending_events["run-1"]) == 2
 
-    # append_tick should NOT force an event flush — events flush on their own schedule
-    await store.append_tick("run-1", {"step": "a"})
-    await store._regroup_ticks("run-1")
-
-    persisted_after = len(backend._items.get(events_key, []))
-    assert persisted_after == persisted_before
-
-
-@pytest.mark.asyncio
-async def test_partial_flush_failure_requeues_events(
-    store: AgentDataStore,
-    backend: FakeAgentDataBackend,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """When some events fail to persist, they should be re-queued for the next flush."""
-    original_create = store._client.create
-    call_count = 0
-
-    async def fail_second_create(
-        collection: str, data: dict[str, Any]
-    ) -> dict[str, Any]:
-        nonlocal call_count
-        if collection == store._events_collection:
-            call_count += 1
-            # Fail the second event's create
-            if call_count == 2:
-                raise RuntimeError("simulated partial failure")
-        return await original_create(collection, data)
-
-    # Append 3 non-terminal events (buffered)
-    await store.append_event("run-1", make_envelope(seq_label=0))
-    await store.append_event("run-1", make_envelope(seq_label=1))
-    await store.append_event("run-1", make_envelope(seq_label=2))
-
-    # Patch create to fail on the second call, then trigger flush via query_events
-    monkeypatch.setattr(store._client, "create", fail_second_create)
-    await store._flush_buffer("run-1")
-
-    # The failed event (seq 1) should be re-queued in the buffer
-    buf = store._buffers.get("run-1")
-    assert buf is not None
-    assert len(buf.events) == 1
-    assert buf.events[0].sequence == 1
-
-    # Restore create and flush again — the re-queued event should persist
-    monkeypatch.setattr(store._client, "create", original_create)
-    await store._flush_buffer("run-1")
+    # After regrouping, events are persisted
+    await store._regroup_events("run-1")
 
     events_key = ("test-deploy", store._events_collection)
     persisted = len(backend._items.get(events_key, []))
-    assert persisted == 3
+    assert persisted == 2
 
-    # Buffer should be empty now
-    buf = store._buffers.get("run-1")
-    assert buf is not None
-    assert len(buf.events) == 0
+
+@pytest.mark.asyncio
+async def test_regroup_events_surfaces_errors(
+    store: AgentDataStore,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When an event create fails, _regroup_events raises the error."""
+    original_create = store._client.create
+
+    async def failing_create(collection: str, data: dict[str, Any]) -> dict[str, Any]:
+        if collection == store._events_collection:
+            raise RuntimeError("simulated failure")
+        return await original_create(collection, data)
+
+    monkeypatch.setattr(store._client, "create", failing_create)
+
+    await store.append_event("run-1", make_envelope(seq_label=0))
+
+    with pytest.raises(RuntimeError, match="simulated failure"):
+        await store._regroup_events("run-1")
 
 
 @pytest.mark.asyncio
@@ -711,9 +670,10 @@ async def test_cleanup_run_removes_sequence_counters(store: AgentDataStore) -> N
 
 
 @pytest.mark.asyncio
-async def test_flush_error_does_not_crash_stream(
+async def test_persist_error_does_not_block_in_memory_delivery(
     store: AgentDataStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """In-memory subscribers receive events even when HTTP persistence fails."""
     collected: list[StoredEvent] = []
 
     async def consumer() -> None:
@@ -723,7 +683,7 @@ async def test_flush_error_does_not_crash_stream(
     task = asyncio.create_task(consumer())
     await asyncio.sleep(0.01)
 
-    # Make client.create raise to simulate flush failure
+    # Make client.create raise to simulate persistence failure
     original_create = store._client.create
 
     async def broken_create(collection: str, data: dict[str, Any]) -> dict[str, Any]:
@@ -740,6 +700,10 @@ async def test_flush_error_does_not_crash_stream(
 
     # Subscriber should still receive events via in-memory queue
     assert len(collected) == 2
+
+    # The failed tasks are still pending — _regroup_events would raise
+    with pytest.raises(RuntimeError, match="simulated API failure"):
+        await store._regroup_events("run-1")
 
     # Restore create so terminal event can persist and clean up
     monkeypatch.setattr(store._client, "create", original_create)

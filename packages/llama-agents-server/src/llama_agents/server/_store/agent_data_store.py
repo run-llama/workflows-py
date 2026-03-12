@@ -7,8 +7,6 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
-from dataclasses import field as dataclass_field
 from datetime import datetime, timezone
 from typing import Any, List
 
@@ -29,14 +27,6 @@ from .agent_data_client import AgentDataClient
 from .agent_data_state_store import AgentDataStateStore
 
 logger = logging.getLogger(__name__)
-
-
-@dataclass
-class _RunBuffer:
-    """Per-run buffer for deferred event persistence."""
-
-    events: list[StoredEvent] = dataclass_field(default_factory=list)
-    flush_task: asyncio.Task[None] | None = None
 
 
 class AgentDataStore(AbstractWorkflowStore):
@@ -62,7 +52,6 @@ class AgentDataStore(AbstractWorkflowStore):
         deployment_name: str,
         collection: str = "workflow_contexts",
         poll_interval: float = 30.0,
-        flush_interval: float = 1.0,
     ) -> None:
         self._client = AgentDataClient(
             base_url=base_url,
@@ -72,7 +61,6 @@ class AgentDataStore(AbstractWorkflowStore):
         )
         self._collection = collection
         self.poll_interval = poll_interval
-        self._flush_interval = flush_interval
 
         self._events_collection = f"{collection}_events"
         self._ticks_collection = f"{collection}_ticks"
@@ -86,9 +74,9 @@ class AgentDataStore(AbstractWorkflowStore):
         self._tick_seq_lock: asyncio.Lock | None = None
 
         self._subscriber_queues: dict[str, list[asyncio.Queue[StoredEvent | None]]] = {}
-        self._buffers: dict[str, _RunBuffer] = {}
         self._state_stores: dict[str, AgentDataStateStore[Any]] = {}
         self._pending_ticks: dict[str, list[asyncio.Task[Any]]] = {}
+        self._pending_events: dict[str, list[asyncio.Task[Any]]] = {}
 
     def _get_event_seq_lock(self) -> asyncio.Lock:
         if self._event_seq_lock is None:
@@ -128,73 +116,47 @@ class AgentDataStore(AbstractWorkflowStore):
         for queue in self._subscriber_queues.get(run_id, ()):
             queue.put_nowait(event)
 
-    # ------------------------------------------------------------------
-    # Buffered persistence helpers
-    # ------------------------------------------------------------------
+    def _track_pending(
+        self,
+        pending: dict[str, list[asyncio.Task[Any]]],
+        run_id: str,
+        collection: str,
+        data: dict[str, Any],
+    ) -> None:
+        """Create a fire-and-forget task and track it in the pending dict."""
+        task = asyncio.create_task(self._client.create(collection, data))
+        tasks = pending.setdefault(run_id, [])
+        tasks.append(task)
+        if len(tasks) > 50:
+            pending[run_id] = [t for t in tasks if not t.done()]
 
-    def _get_or_create_buffer(self, run_id: str) -> _RunBuffer:
-        if run_id not in self._buffers:
-            self._buffers[run_id] = _RunBuffer()
-        return self._buffers[run_id]
-
-    async def _flush_buffer(self, run_id: str) -> None:
-        """Persist all buffered events for a run via parallel API creates."""
-        buf = self._buffers.get(run_id)
-        if not buf or not buf.events:
+    @staticmethod
+    async def _regroup(
+        pending: dict[str, list[asyncio.Task[Any]]], run_id: str
+    ) -> None:
+        """Await all in-flight tasks for a run. Raises the first error."""
+        tasks = pending.pop(run_id, [])
+        if not tasks:
             return
-        events_to_write = buf.events[:]
-        buf.events.clear()
-        if buf.flush_task and not buf.flush_task.done():
-            # Don't cancel if we're being called from within the flush task
-            # itself (via _deferred_flush), as that would raise CancelledError
-            # at the next await and abort the persist.
-            if buf.flush_task is not asyncio.current_task():
-                buf.flush_task.cancel()
-            buf.flush_task = None
-        results = await asyncio.gather(
-            *[
-                self._client.create(
-                    self._events_collection,
-                    e.model_dump(mode="json"),
-                )
-                for e in events_to_write
-            ],
-            return_exceptions=True,
-        )
-        failed = [
-            events_to_write[i]
-            for i, r in enumerate(results)
-            if isinstance(r, BaseException)
-        ]
-        if failed:
-            logger.warning(
-                "Failed to flush %d/%d events for run %s",
-                len(failed),
-                len(events_to_write),
-                run_id,
-                exc_info=True,
-            )
-            # Re-queue failed events at the front for the next flush cycle
-            if run_id in self._buffers:
-                self._buffers[run_id].events[:0] = failed
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        errors = [r for r in results if isinstance(r, BaseException)]
+        if errors:
+            raise errors[0]
 
-    async def _deferred_flush(self, run_id: str) -> None:
-        """Wait for the flush interval, then persist buffered events."""
-        await asyncio.sleep(self._flush_interval)
-        await self._flush_buffer(run_id)
+    async def _regroup_ticks(self, run_id: str) -> None:
+        await self._regroup(self._pending_ticks, run_id)
 
-    def _schedule_deferred_flush(self, run_id: str, buf: _RunBuffer) -> None:
-        """Schedule a deferred flush if one isn't already pending."""
-        if buf.flush_task is None or buf.flush_task.done():
-            buf.flush_task = asyncio.create_task(self._deferred_flush(run_id))
+    async def _regroup_events(self, run_id: str) -> None:
+        await self._regroup(self._pending_events, run_id)
+
+    async def gather_pending(self, run_id: str) -> None:
+        """Await all in-flight tick and event writes for a run."""
+        await self._regroup_ticks(run_id)
+        await self._regroup_events(run_id)
 
     async def _cleanup_run(self, run_id: str) -> None:
-        """Clean up buffer state and subscriber queues for a completed run."""
-        # Await any in-flight tick writes before discarding tracking state
-        await self._regroup_ticks(run_id)
-        buf = self._buffers.pop(run_id, None)
-        if buf and buf.flush_task and not buf.flush_task.done():
-            buf.flush_task.cancel()
+        """Clean up pending writes and subscriber queues for a completed run."""
+        await self.gather_pending(run_id)
         # Signal subscribers that the run is done, then remove the key
         for queue in self._subscriber_queues.get(run_id, []):
             queue.put_nowait(None)
@@ -347,17 +309,19 @@ class AgentDataStore(AbstractWorkflowStore):
             event=event,
         )
 
+        # Instant in-memory delivery
         self._broadcast_to_subscribers(run_id, stored)
 
-        buf = self._get_or_create_buffer(run_id)
-        buf.events.append(stored)
+        # Fire-and-forget HTTP persistence
+        self._track_pending(
+            self._pending_events,
+            run_id,
+            self._events_collection,
+            stored.model_dump(mode="json"),
+        )
 
-        if self._is_output_event(stored):
-            await self._flush_buffer(run_id)
-            if self._is_terminal_event(stored):
-                await self._cleanup_run(run_id)
-        else:
-            self._schedule_deferred_flush(run_id, buf)
+        if self._is_terminal_event(stored):
+            await self._cleanup_run(run_id)
 
     async def query_events(
         self,
@@ -365,7 +329,7 @@ class AgentDataStore(AbstractWorkflowStore):
         after_sequence: int | None = None,
         limit: int | None = None,
     ) -> list[StoredEvent]:
-        await self._flush_buffer(run_id)
+        await self._regroup_events(run_id)
 
         filters: dict[str, Any] = {"run_id": {"eq": run_id}}
         if after_sequence is not None:
@@ -447,27 +411,12 @@ class AgentDataStore(AbstractWorkflowStore):
 
         # Fire-and-forget: tick creates run in the background so they don't
         # block the control loop.  Failures surface at _regroup_ticks time.
-        task = asyncio.create_task(
-            self._client.create(
-                self._ticks_collection,
-                stored.model_dump(mode="json"),
-            )
+        self._track_pending(
+            self._pending_ticks,
+            run_id,
+            self._ticks_collection,
+            stored.model_dump(mode="json"),
         )
-        pending = self._pending_ticks.setdefault(run_id, [])
-        pending.append(task)
-        # Prune completed tasks to avoid unbounded growth
-        if len(pending) > 50:
-            self._pending_ticks[run_id] = [t for t in pending if not t.done()]
-
-    async def _regroup_ticks(self, run_id: str) -> None:
-        """Wait for all in-flight tick creates to complete. Raises on failure."""
-        tasks = self._pending_ticks.pop(run_id, [])
-        if not tasks:
-            return
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        errors = [r for r in results if isinstance(r, BaseException)]
-        if errors:
-            raise errors[0]
 
     async def get_ticks(self, run_id: str) -> list[StoredTick]:
         await self._regroup_ticks(run_id)

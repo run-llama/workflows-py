@@ -70,6 +70,17 @@ class _PersistenceInternalRunAdapter(BaseInternalRunAdapterDecorator):
                 self.run_id,
             )
 
+    @override
+    async def after_tick(self, tick: WorkflowTick) -> None:
+        await super().after_tick(tick)
+        try:
+            await self._store.gather_pending(self.run_id)
+        except Exception:
+            logger.exception(
+                "Failed to gather pending writes for run %s",
+                self.run_id,
+            )
+
 
 class TickPersistenceDecorator(BaseRuntimeDecorator):
     """Runtime decorator for tick persistence and workflow tracking.

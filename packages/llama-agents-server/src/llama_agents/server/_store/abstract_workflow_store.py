@@ -22,7 +22,7 @@ from pydantic import (
 from workflows.context import JsonSerializer
 from workflows.context.serializers import BaseSerializer
 from workflows.context.state_store import StateStore
-from workflows.events import InputRequiredEvent, StopEvent
+from workflows.events import StopEvent
 
 logger = logging.getLogger(__name__)
 
@@ -148,6 +148,10 @@ class AbstractWorkflowStore(ABC):
     @abstractmethod
     async def get_ticks(self, run_id: str) -> list[StoredTick]: ...
 
+    async def gather_pending(self, run_id: str) -> None:
+        """Await all in-flight writes for a run. Default is no-op."""
+        pass
+
     async def update_handler_status(
         self,
         run_id: str,
@@ -187,16 +191,6 @@ class AbstractWorkflowStore(ABC):
 
         types = (event.event.types or []) + [event.event.type]
         return StopEvent.__name__ in types
-
-    @staticmethod
-    def _is_output_event(event: StoredEvent) -> bool:
-        """Check if an event is visible to external consumers.
-
-        Output events (StopEvent, InputRequiredEvent) should be persisted
-        without waiting for the deferred flush.
-        """
-        types = (event.event.types or []) + [event.event.type]
-        return StopEvent.__name__ in types or InputRequiredEvent.__name__ in types
 
     async def subscribe_events(
         self, run_id: str, after_sequence: int = -1
