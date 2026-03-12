@@ -437,6 +437,8 @@ async def test_tick_sequence_continues_after_new_store_instance(
     store1 = create_agent_data_store(backend, monkeypatch)
     await store1.append_tick("run-1", {"step": 0})
     await store1.append_tick("run-1", {"step": 1})
+    # Ensure in-flight tick writes land before the new instance queries _max_sequence
+    await store1._regroup_ticks("run-1")
 
     store2 = create_agent_data_store(backend, monkeypatch)
     await store2.append_tick("run-1", {"step": 2})
@@ -612,19 +614,10 @@ async def test_terminal_event_flushes_immediately(
 
 
 @pytest.mark.asyncio
-async def test_append_tick_flushes_event_buffer(
+async def test_append_tick_does_not_flush_event_buffer(
     store: AgentDataStore, backend: FakeAgentDataBackend
 ) -> None:
-    collected: list[StoredEvent] = []
-
-    async def consumer() -> None:
-        async for event in store.subscribe_events("run-1"):
-            collected.append(event)
-
-    task = asyncio.create_task(consumer())
-    await asyncio.sleep(0.01)
-
-    # Append events (buffered due to active subscriber)
+    # Append events (buffered, not yet persisted)
     await store.append_event("run-1", make_envelope(seq_label=0))
     await store.append_event("run-1", make_envelope(seq_label=1))
 
@@ -632,15 +625,12 @@ async def test_append_tick_flushes_event_buffer(
     persisted_before = len(backend._items.get(events_key, []))
     assert persisted_before < 2
 
-    # append_tick should flush the event buffer
+    # append_tick should NOT force an event flush — events flush on their own schedule
     await store.append_tick("run-1", {"step": "a"})
+    await store._regroup_ticks("run-1")
 
     persisted_after = len(backend._items.get(events_key, []))
-    assert persisted_after == 2
-
-    # Clean up: send terminal event to stop the subscriber
-    await store.append_event("run-1", make_envelope(event=StopEvent(data="done")))
-    await asyncio.wait_for(task, timeout=2.0)
+    assert persisted_after == persisted_before
 
 
 @pytest.mark.asyncio
@@ -699,7 +689,7 @@ async def test_cleanup_run_removes_subscriber_queues(store: AgentDataStore) -> N
     store._add_subscriber_queue("run-1")
     assert "run-1" in store._subscriber_queues
 
-    store._cleanup_run("run-1")
+    await store._cleanup_run("run-1")
     assert "run-1" not in store._subscriber_queues
 
 

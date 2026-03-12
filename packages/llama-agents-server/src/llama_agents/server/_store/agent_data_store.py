@@ -87,6 +87,8 @@ class AgentDataStore(AbstractWorkflowStore):
 
         self._subscriber_queues: dict[str, list[asyncio.Queue[StoredEvent | None]]] = {}
         self._buffers: dict[str, _RunBuffer] = {}
+        self._state_stores: dict[str, AgentDataStateStore[Any]] = {}
+        self._pending_ticks: dict[str, list[asyncio.Task[Any]]] = {}
 
     def _get_event_seq_lock(self) -> asyncio.Lock:
         if self._event_seq_lock is None:
@@ -186,8 +188,10 @@ class AgentDataStore(AbstractWorkflowStore):
         if buf.flush_task is None or buf.flush_task.done():
             buf.flush_task = asyncio.create_task(self._deferred_flush(run_id))
 
-    def _cleanup_run(self, run_id: str) -> None:
+    async def _cleanup_run(self, run_id: str) -> None:
         """Clean up buffer state and subscriber queues for a completed run."""
+        # Await any in-flight tick writes before discarding tracking state
+        await self._regroup_ticks(run_id)
         buf = self._buffers.pop(run_id, None)
         if buf and buf.flush_task and not buf.flush_task.done():
             buf.flush_task.cancel()
@@ -195,9 +199,10 @@ class AgentDataStore(AbstractWorkflowStore):
         for queue in self._subscriber_queues.get(run_id, []):
             queue.put_nowait(None)
         self._subscriber_queues.pop(run_id, None)
-        # Clean up sequence counters
+        # Clean up sequence counters and cached state store
         self._event_sequences.pop(run_id, None)
         self._tick_sequences.pop(run_id, None)
+        self._state_stores.pop(run_id, None)
 
     # ------------------------------------------------------------------
     # Sequence helpers
@@ -350,7 +355,7 @@ class AgentDataStore(AbstractWorkflowStore):
         if self._is_output_event(stored):
             await self._flush_buffer(run_id)
             if self._is_terminal_event(stored):
-                self._cleanup_run(run_id)
+                await self._cleanup_run(run_id)
         else:
             self._schedule_deferred_flush(run_id, buf)
 
@@ -431,8 +436,6 @@ class AgentDataStore(AbstractWorkflowStore):
             return seq
 
     async def append_tick(self, run_id: str, tick_data: dict[str, Any]) -> None:
-        await self._flush_buffer(run_id)
-
         seq = await self._next_tick_sequence(run_id)
         now = datetime.now(timezone.utc)
         stored = StoredTick(
@@ -441,12 +444,33 @@ class AgentDataStore(AbstractWorkflowStore):
             timestamp=now,
             tick_data=tick_data,
         )
-        await self._client.create(
-            self._ticks_collection,
-            stored.model_dump(mode="json"),
+
+        # Fire-and-forget: tick creates run in the background so they don't
+        # block the control loop.  Failures surface at _regroup_ticks time.
+        task = asyncio.create_task(
+            self._client.create(
+                self._ticks_collection,
+                stored.model_dump(mode="json"),
+            )
         )
+        pending = self._pending_ticks.setdefault(run_id, [])
+        pending.append(task)
+        # Prune completed tasks to avoid unbounded growth
+        if len(pending) > 50:
+            self._pending_ticks[run_id] = [t for t in pending if not t.done()]
+
+    async def _regroup_ticks(self, run_id: str) -> None:
+        """Wait for all in-flight tick creates to complete. Raises on failure."""
+        tasks = self._pending_ticks.pop(run_id, [])
+        if not tasks:
+            return
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        errors = [r for r in results if isinstance(r, BaseException)]
+        if errors:
+            raise errors[0]
 
     async def get_ticks(self, run_id: str) -> list[StoredTick]:
+        await self._regroup_ticks(run_id)
         page_size = 100
         all_items: list[dict[str, Any]] = []
         last_sequence = -1
@@ -480,9 +504,14 @@ class AgentDataStore(AbstractWorkflowStore):
         serialized_state: dict[str, Any] | None = None,
         serializer: BaseSerializer | None = None,
     ) -> StateStore[Any]:
-        return AgentDataStateStore(
+        cached = self._state_stores.get(run_id)
+        if cached is not None:
+            return cached
+        store = AgentDataStateStore(
             client=self._client,
             run_id=run_id,
             state_type=state_type,
             collection=f"{self._collection}_state",
         )
+        self._state_stores[run_id] = store
+        return store
