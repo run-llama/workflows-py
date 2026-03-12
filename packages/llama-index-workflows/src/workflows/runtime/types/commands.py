@@ -60,6 +60,13 @@ class CommandPublishEvent:
 
 
 @dataclass(frozen=True)
+class CommandScheduleWaiterTimeout:
+    step_name: str
+    waiter_id: str
+    timeout: float
+
+
+@dataclass(frozen=True)
 class CommandScheduleIdleCheck:
     """Schedule a deferred idle check via TickIdleCheck.
 
@@ -80,6 +87,7 @@ WorkflowCommand = Union[
     CommandFailWorkflow,
     CommandPublishEvent,
     CommandScheduleIdleCheck,
+    CommandScheduleWaiterTimeout,
 ]
 
 

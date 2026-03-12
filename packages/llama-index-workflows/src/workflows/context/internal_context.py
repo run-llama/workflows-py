@@ -180,6 +180,9 @@ class InternalContext(Generic[MODEL_T]):
         waiter_id = waiter_id or f"waiter_{event_str}_{requirements_str}"
 
         waiter = next((w for w in collected_waiters if w.waiter_id == waiter_id), None)
+        if waiter is not None and waiter.timed_out:
+            step_ctx.returns.return_values.append(DeleteWaiter(waiter_id=waiter_id))
+            raise asyncio.TimeoutError(f"Timed out waiting for {event_type.__name__}")
         if waiter is None or waiter.resolved_event is None:
             raise WaitingForEvent(
                 AddWaiter(
