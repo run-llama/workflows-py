@@ -503,6 +503,7 @@ class _ControlLoopRunner:
             if result is not None:
                 return result
 
+        await self.adapter.after_tick(tick)
         return None
 
 

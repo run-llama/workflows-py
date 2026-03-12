@@ -147,6 +147,9 @@ class BaseInternalRunAdapterDecorator(InternalRunAdapter):
     async def on_tick(self, tick: WorkflowTick) -> None:
         await self._decorated.on_tick(tick)
 
+    async def after_tick(self, tick: WorkflowTick) -> None:
+        await self._decorated.after_tick(tick)
+
     async def wait_for_next_task(
         self,
         running: list[NamedTask],
