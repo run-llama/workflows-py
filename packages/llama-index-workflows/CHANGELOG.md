@@ -1,5 +1,12 @@
 # llama-index-workflows
 
+## 2.16.1
+
+### Patch Changes
+
+- c7bbedb: Fix wait_for_event timeout not being enforced
+- 703ec92: Internal support for post tick processed callbacks
+
 ## 2.16.0
 
 ### Minor Changes
