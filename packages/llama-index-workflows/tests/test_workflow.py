@@ -1002,6 +1002,24 @@ class _GraphValidationProcessedEvent(Event):
     pass
 
 
+class _DeadEndCycleA(Event):
+    """Used in dead-end graph validation tests."""
+
+    pass
+
+
+class _DeadEndCycleB(Event):
+    """Used in dead-end graph validation tests."""
+
+    pass
+
+
+class _DeadEndLoopEvent(Event):
+    """Used in dead-end graph validation tests."""
+
+    pass
+
+
 def test_graph_validation_skip_reachability_per_step() -> None:
     """Per-step skip_graph_checks=['reachability'] allows unreachable step."""
 
@@ -1014,7 +1032,7 @@ def test_graph_validation_skip_reachability_per_step() -> None:
         async def finish(self, ev: _GraphValidationProcessedEvent) -> StopEvent:
             return StopEvent(result="done")
 
-        @step(skip_graph_checks=["reachability"])
+        @step(skip_graph_checks=["reachability", "dead_end"])
         async def island(
             self, ev: _GraphValidationIslandEvent
         ) -> _GraphValidationIslandEvent:
@@ -1036,13 +1054,13 @@ def test_graph_validation_skip_reachability_workflow_level() -> None:
         async def finish(self, ev: _GraphValidationProcessedEvent) -> StopEvent:
             return StopEvent(result="done")
 
-        @step
+        @step(skip_graph_checks=["dead_end"])
         async def island(
             self, ev: _GraphValidationIslandEvent
         ) -> _GraphValidationIslandEvent:
             return _GraphValidationIslandEvent()
 
-    wf = WorkflowLevelOptOut(skip_graph_checks={"reachability"})
+    wf = WorkflowLevelOptOut(skip_graph_checks={"reachability", "dead_end"})
     wf.validate()
 
 
@@ -1084,7 +1102,87 @@ def test_graph_validation_skip_terminal_event_workflow_level() -> None:
         async def finish(self, ev: StartEvent) -> StopEvent:
             return StopEvent(result="done")
 
-    wf = SkipTerminalWorkflow(skip_graph_checks={"terminal_event"})
+    wf = SkipTerminalWorkflow(skip_graph_checks={"terminal_event", "dead_end"})
+    wf._validate_graph_structure()
+
+
+def test_graph_validation_dead_end_cycle_raises() -> None:
+    """A cycle with no exit to an output event raises WorkflowValidationError."""
+
+    class DeadEndCycleWorkflow(Workflow):
+        @step
+        async def entry(self, ev: StartEvent) -> _DeadEndCycleA | StopEvent:
+            return _DeadEndCycleA()
+
+        @step
+        async def loop1(self, ev: _DeadEndCycleA) -> _DeadEndCycleB:
+            return _DeadEndCycleB()
+
+        @step
+        async def loop2(self, ev: _DeadEndCycleB) -> _DeadEndCycleA:
+            return _DeadEndCycleA()
+
+    wf = DeadEndCycleWorkflow()
+    with pytest.raises(
+        WorkflowValidationError,
+        match="no path to an output event",
+    ):
+        wf._validate_graph_structure()
+
+
+def test_graph_validation_dead_end_with_exit_branch_passes() -> None:
+    """A cycle where one branch returns StopEvent passes validation."""
+
+    class CycleWithExitWorkflow(Workflow):
+        @step
+        async def entry(self, ev: StartEvent) -> _DeadEndLoopEvent:
+            return _DeadEndLoopEvent()
+
+        @step
+        async def looper(self, ev: _DeadEndLoopEvent) -> _DeadEndLoopEvent | StopEvent:
+            return StopEvent(result="done")
+
+    wf = CycleWithExitWorkflow()
+    wf._validate_graph_structure()
+
+
+def test_graph_validation_skip_dead_end_per_step() -> None:
+    """Per-step skip_graph_checks=['dead_end'] allows dead-end steps."""
+
+    class SkipDeadEndPerStepWorkflow(Workflow):
+        @step
+        async def entry(self, ev: StartEvent) -> _DeadEndCycleA | StopEvent:
+            return _DeadEndCycleA()
+
+        @step(skip_graph_checks=["dead_end"])
+        async def loop1(self, ev: _DeadEndCycleA) -> _DeadEndCycleB:
+            return _DeadEndCycleB()
+
+        @step(skip_graph_checks=["dead_end"])
+        async def loop2(self, ev: _DeadEndCycleB) -> _DeadEndCycleA:
+            return _DeadEndCycleA()
+
+    wf = SkipDeadEndPerStepWorkflow()
+    wf._validate_graph_structure()
+
+
+def test_graph_validation_skip_dead_end_workflow_level() -> None:
+    """Workflow skip_graph_checks={'dead_end'} suppresses dead-end error."""
+
+    class SkipDeadEndWorkflowLevel(Workflow):
+        @step
+        async def entry(self, ev: StartEvent) -> _DeadEndCycleA | StopEvent:
+            return _DeadEndCycleA()
+
+        @step
+        async def loop1(self, ev: _DeadEndCycleA) -> _DeadEndCycleB:
+            return _DeadEndCycleB()
+
+        @step
+        async def loop2(self, ev: _DeadEndCycleB) -> _DeadEndCycleA:
+            return _DeadEndCycleA()
+
+    wf = SkipDeadEndWorkflowLevel(skip_graph_checks={"dead_end"})
     wf._validate_graph_structure()
 
 
@@ -1098,3 +1196,28 @@ async def test_validation_cached_after_first_run() -> None:
     first_result = wf._validation_result
     await WorkflowTestRunner(wf).run()
     assert wf._validation_result is first_result
+
+
+@pytest.mark.asyncio
+async def test_validation_cache_invalidated_on_add_step() -> None:
+    """Validation cache is invalidated when add_step() registers a new step."""
+
+    class AddStepCacheWorkflow(Workflow):
+        @step
+        async def entry(self, ev: StartEvent) -> StopEvent:
+            return StopEvent(result="done")
+
+    wf = AddStepCacheWorkflow()
+    await WorkflowTestRunner(wf).run()
+    assert wf._validation_result is not None
+    old_version = wf._validated_version
+
+    @step(workflow=AddStepCacheWorkflow)
+    async def extra_step(ev: StartEvent) -> StopEvent:
+        return StopEvent(result="extra")
+
+    assert AddStepCacheWorkflow._step_functions_version > old_version
+
+    # Next run() must re-validate (cache is stale due to version bump)
+    await WorkflowTestRunner(wf).run()
+    assert wf._validated_version == AddStepCacheWorkflow._step_functions_version

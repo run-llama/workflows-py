@@ -98,10 +98,11 @@ class Workflow(metaclass=WorkflowMeta):
         - [RetryPolicy][workflows.retry_policy.RetryPolicy]
     """
 
-    VALID_GRAPH_CHECKS: set[str] = {"reachability", "terminal_event"}
+    VALID_GRAPH_CHECKS: set[str] = {"reachability", "terminal_event", "dead_end"}
 
     # Populated by the metaclass; declared here for type checkers.
     _step_functions: dict[str, StepFunction]
+    _step_functions_version: int = 0
 
     _runtime: Runtime
     _workflow_name: str | None
@@ -155,8 +156,10 @@ class Workflow(metaclass=WorkflowMeta):
         # Instrumentation
         self._dispatcher = dispatcher
         self._runtime_locked = False
-        # Validation cache: set after first successful _validate(); skip re-validation on run() until invalidated
+        # Validation cache: set after first successful _validate(); skip re-validation on run() until invalidated.
+        # _validated_version tracks which _step_functions_version was validated so add_step() invalidates the cache.
         self._validation_result: bool | None = None
+        self._validated_version: int = -1
         checks = skip_graph_checks or set()
         unknown = checks - self.VALID_GRAPH_CHECKS
         if unknown:
@@ -365,6 +368,7 @@ class Workflow(metaclass=WorkflowMeta):
             raise WorkflowValidationError(msg)
 
         cls._step_functions[func.__name__] = func
+        cls._step_functions_version += 1
 
     def _get_steps(self) -> dict[str, StepFunction]:
         """Returns all the steps, whether defined as methods or free functions."""
@@ -544,6 +548,53 @@ class Workflow(metaclass=WorkflowMeta):
                     "Ensure some step consumes this event or it is an output event type."
                 )
 
+        # Dead-end detection: every step that produces events must have a forward
+        # path to an output event. Steps returning only None are path terminators
+        # (e.g. mutation pattern, idle steps) and are exempt.
+        if "dead_end" not in self._skip_graph_checks:
+            incoming: dict[str, list[str]] = {}
+            for edge in graph.edges:
+                incoming.setdefault(edge.target, []).append(edge.source)
+
+            output_seeds: list[str] = [
+                n.id
+                for n in event_nodes
+                if n.is_subclass_of("StopEvent", "InputRequiredEvent")
+            ]
+            if "external_step" in node_ids:
+                output_seeds.append("external_step")
+
+            reverse_reachable: set[str] = set()
+            stack = list(output_seeds)
+            while stack:
+                nid = stack.pop()
+                if nid in reverse_reachable:
+                    continue
+                reverse_reachable.add(nid)
+                for source in incoming.get(nid, []):
+                    if source not in reverse_reachable:
+                        stack.append(source)
+
+            event_node_ids = {n.id for n in event_nodes}
+            steps_producing_events = {
+                s
+                for s in step_ids
+                if any(t in event_node_ids for t in outgoing.get(s, []))
+            }
+
+            step_skip = {
+                name
+                for name, step_func in self._get_steps().items()
+                if "dead_end" in step_func._step_config.skip_graph_checks
+            }
+            dead_end_steps = (steps_producing_events - reverse_reachable) - step_skip
+            if dead_end_steps:
+                names = ", ".join(sorted(dead_end_steps))
+                raise WorkflowValidationError(
+                    f"The following steps have no path to an output event "
+                    f"(StopEvent or InputRequiredEvent): {names}"
+                )
+
     def _validate_resource_configs(self) -> list[str]:
         """Validate all resource configs (including nested ones) by loading them."""
         errors: list[str] = []
@@ -644,7 +695,8 @@ class Workflow(metaclass=WorkflowMeta):
     ) -> bool:
         if self._disable_validation and not force:
             return False
-        if not force and self._validation_result is not None:
+        stale = self._validated_version != self.__class__._step_functions_version
+        if not force and not stale and self._validation_result is not None:
             return self._validation_result
 
         # Ensure at least one step is configured before inspecting events
@@ -762,6 +814,7 @@ class Workflow(metaclass=WorkflowMeta):
             InputRequiredEvent in produced_events
             or HumanResponseEvent in consumed_events
         )
+        self._validated_version = self.__class__._step_functions_version
         return self._validation_result
 
 

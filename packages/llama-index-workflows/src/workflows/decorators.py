@@ -36,7 +36,7 @@ if TYPE_CHECKING:  # pragma: no cover
     from .workflow import Workflow
 from .retry_policy import RetryPolicy
 
-_VALID_STEP_GRAPH_CHECKS: set[str] = {"reachability"}
+_VALID_STEP_GRAPH_CHECKS: set[str] = {"reachability", "dead_end"}
 
 
 class StepConfig(BaseModel):
