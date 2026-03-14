@@ -971,6 +971,25 @@ def test_graph_validation_human_response_event_mutation_allowed() -> None:
     wf.validate()
 
 
+def test_graph_validation_human_response_consumer_without_input_required() -> None:
+    """Workflow accepting HumanResponseEvent subclass without returning InputRequiredEvent passes validation."""
+
+    class ExternalTrigger(HumanResponseEvent):
+        pass
+
+    class IdleResumeWorkflow(Workflow):
+        @step
+        async def start(self, ev: StartEvent) -> None:
+            pass
+
+        @step
+        async def resume(self, ev: ExternalTrigger) -> StopEvent:
+            return StopEvent(result="resumed")
+
+    wf = IdleResumeWorkflow()
+    wf.validate()
+
+
 class _GraphValidationIslandEvent(Event):
     """Used in graph validation opt-out tests."""
 
