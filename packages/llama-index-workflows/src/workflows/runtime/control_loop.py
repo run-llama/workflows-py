@@ -38,6 +38,7 @@ from workflows.runtime.types.commands import (
     CommandQueueEvent,
     CommandRunWorker,
     CommandScheduleIdleCheck,
+    CommandScheduleWaiterTimeout,
     WorkflowCommand,
     indicates_exit,
 )
@@ -77,6 +78,7 @@ from workflows.runtime.types.ticks import (
     TickPublishEvent,
     TickStepResult,
     TickTimeout,
+    TickWaiterTimeout,
     WorkflowTick,
 )
 from workflows.workflow import Workflow
@@ -108,7 +110,7 @@ if TYPE_CHECKING:
     from workflows.runtime.types.step_function import StepWorkerFunction
 
 
-logger = logging.getLogger()
+logger = logging.getLogger(__name__)
 
 
 class _ControlLoopRunner:
@@ -275,6 +277,15 @@ class _ControlLoopRunner:
             if not self._idle_check_pending:
                 self.tick_buffer.append(TickIdleCheck())
                 self._idle_check_pending = True
+            return None
+        elif isinstance(command, CommandScheduleWaiterTimeout):
+            now = await self.adapter.get_now()
+            self.schedule_tick(
+                TickWaiterTimeout(
+                    step_name=command.step_name, waiter_id=command.waiter_id
+                ),
+                at_time=now + command.timeout,
+            )
             return None
         else:
             raise ValueError(f"Unknown command type: {type(command)}")
@@ -503,6 +514,7 @@ class _ControlLoopRunner:
             if result is not None:
                 return result
 
+        await self.adapter.after_tick(tick)
         return None
 
 
@@ -566,6 +578,8 @@ def _reduce_tick(
         state, commands = _process_publish_event_tick(tick, init)
     elif isinstance(tick, TickTimeout):
         state, commands = _process_timeout_tick(tick, init)
+    elif isinstance(tick, TickWaiterTimeout):
+        state, commands = _process_waiter_timeout_tick(tick, init, now_seconds)
     elif isinstance(tick, TickIdleCheck):
         # Return early — idle check ticks don't schedule further idle checks
         if _check_idle_state(init):
@@ -789,6 +803,14 @@ def _process_step_result_tick(
                 worker_state.collected_waiters.append(new_waiter)
                 if result.waiter_event:
                     commands.append(CommandPublishEvent(event=result.waiter_event))
+                if result.timeout is not None:
+                    commands.append(
+                        CommandScheduleWaiterTimeout(
+                            step_name=tick.step_name,
+                            waiter_id=result.waiter_id,
+                            timeout=result.timeout,
+                        )
+                    )
 
         elif isinstance(result, DeleteWaiter):
             if did_complete_step:  # allow retries to grab the waiter events
@@ -1008,3 +1030,29 @@ def _process_timeout_tick(
             )
         ),
     ]
+
+
+def _process_waiter_timeout_tick(
+    tick: TickWaiterTimeout, init: BrokerState, now_seconds: float
+) -> tuple[BrokerState, list[WorkflowCommand]]:
+    state = init.deepcopy()
+    commands: list[WorkflowCommand] = []
+    if tick.step_name not in state.workers:
+        return state, commands
+    worker_state = state.workers[tick.step_name]
+    waiter = next(
+        (w for w in worker_state.collected_waiters if w.waiter_id == tick.waiter_id),
+        None,
+    )
+    # Only act if the waiter is still pending (not yet resolved by an event)
+    if waiter is None or waiter.resolved_event is not None:
+        return state, commands
+    waiter.timed_out = True
+    subcommands = _add_or_enqueue_event(
+        EventAttempt(event=waiter.event),
+        tick.step_name,
+        worker_state,
+        now_seconds,
+    )
+    commands.extend(subcommands)
+    return state, commands

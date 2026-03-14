@@ -324,6 +324,36 @@ async def test_control_loop_timeout(
 
 
 @pytest.mark.asyncio
+async def test_wait_for_event_timeout(
+    test_plugin_with_time_machine: tuple[MockRunAdapter, time_machine.Coordinates],
+) -> None:
+    """wait_for_event raises asyncio.TimeoutError when the timeout elapses."""
+    test_plugin, _ = test_plugin_with_time_machine
+
+    class AwaitedEvent(Event):
+        pass
+
+    class WaiterWorkflow(Workflow):
+        @step
+        async def start(self, ev: StartEvent, ctx: Context) -> StopEvent:
+            await ctx.wait_for_event(AwaitedEvent, timeout=0.01)
+            return StopEvent(result="should not reach")
+
+    wf = WaiterWorkflow()
+    task = asyncio.create_task(
+        run_control_loop(
+            workflow=wf,
+            start_event=StartEvent(),
+            test_runtime=test_plugin,
+        )
+    )
+
+    # No event is sent — the waiter should time out
+    with pytest.raises(asyncio.TimeoutError):
+        await asyncio.wait_for(task, timeout=2.0)
+
+
+@pytest.mark.asyncio
 async def test_control_loop_retry_policy(test_plugin: MockRunAdapter) -> None:
     """
     Test that retry policy works correctly when a step fails initially but succeeds on retry.

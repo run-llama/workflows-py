@@ -73,6 +73,9 @@ class AgentDataStateStore(Generic[MODEL_T]):
         self._serializer = serializer or JsonSerializer()
         # Cache the agent data item ID once found
         self._item_id: str | None = None
+        # Write-through state cache — avoids HTTP searches when state is
+        # already known from a previous load or save.
+        self._cached_state: MODEL_T | None = None
 
     @property
     def run_id(self) -> str:
@@ -116,17 +119,25 @@ class AgentDataStateStore(Generic[MODEL_T]):
         return _StoredStateRecord.model_validate(items[0]["data"])
 
     async def _load_state(self) -> MODEL_T:
+        if self._cached_state is not None:
+            return self._cached_state.model_copy()
         record = await self._load_record()
         if record is not None:
-            return self._deserialize_state(record.data)
+            state = self._deserialize_state(record.data)
+            self._cached_state = state
+            return state.model_copy()
         state = self._create_default_state()
         await self._save_state(state)
-        return state
+        return state.model_copy()
 
     async def _load_state_or_none(self) -> MODEL_T | None:
+        if self._cached_state is not None:
+            return self._cached_state.model_copy()
         record = await self._load_record()
         if record is not None:
-            return self._deserialize_state(record.data)
+            state = self._deserialize_state(record.data)
+            self._cached_state = state
+            return state.model_copy()
         return None
 
     async def _save_state(self, state: BaseModel) -> None:
@@ -150,14 +161,14 @@ class AgentDataStateStore(Generic[MODEL_T]):
             else:
                 result = await self._client.create(self._collection, payload)
                 self._item_id = result["id"]
+        self._cached_state = state.model_copy()  # type: ignore[assignment]
 
     # ------------------------------------------------------------------
     # StateStore protocol
     # ------------------------------------------------------------------
 
     async def get_state(self) -> MODEL_T:
-        state = await self._load_state()
-        return state.model_copy()
+        return await self._load_state()
 
     async def set_state(self, state: MODEL_T) -> None:
         current = await self._load_state_or_none()
@@ -176,7 +187,8 @@ class AgentDataStateStore(Generic[MODEL_T]):
             set_by_path(state, path, value)
 
     async def clear(self) -> None:
-        await self._save_state(create_cleared_state(self.state_type))
+        cleared = create_cleared_state(self.state_type)
+        await self._save_state(cleared)
 
     @asynccontextmanager
     async def edit_state(self) -> AsyncGenerator[MODEL_T, None]:

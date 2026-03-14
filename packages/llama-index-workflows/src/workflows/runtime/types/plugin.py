@@ -220,6 +220,15 @@ class InternalRunAdapter(ABC):
         """
         pass
 
+    async def after_tick(self, tick: WorkflowTick) -> None:
+        """Called after a tick's commands have been processed.
+
+        Fires for non-terminal ticks only — terminal commands (CompleteRun,
+        Halt, FailWorkflow) return/raise before this hook runs. Terminal
+        cleanup is handled separately via the store's event persistence path.
+        """
+        pass
+
     async def wait_for_next_task(
         self,
         running: list[NamedTask],

@@ -113,7 +113,7 @@ class MockRunAdapter(
 
     @property
     def tags(self) -> dict[str, Any]:
-        return {"run_id": self._run_id}
+        return {"llamaindex.run_id": self._run_id}
 
     @property
     def init_state(self) -> BrokerState:

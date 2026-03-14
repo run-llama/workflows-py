@@ -237,7 +237,9 @@ class Context(Generic[MODEL_T]):
         called by package internally from the workflow to run it
         """
         run_id = run_id or nanoid()
-        with instrument_tags({**active_instrument_tags.get(), "run_id": run_id}):
+        with instrument_tags(
+            {**active_instrument_tags.get(), "llamaindex.run_id": run_id}
+        ):
             # Get or create PreContext for initialization
             if isinstance(self._face, PreContext):
                 pre = self._face

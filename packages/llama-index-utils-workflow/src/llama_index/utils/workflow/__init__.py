@@ -6,13 +6,17 @@ import ast
 import inspect
 import json
 import textwrap
-from typing import Any, Callable, Dict, List, Tuple, Union, cast
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Tuple, Union, cast
 
-from llama_index.core.agent.workflow import (
-    AgentWorkflow,
-    BaseWorkflowAgent,
-)
-from llama_index.core.tools import AsyncBaseTool, BaseTool
+# llama-index-core uses PEP 604 union syntax (`X | Y`) at runtime which
+# crashes on Python 3.9.  Guard imports behind TYPE_CHECKING so the module
+# loads without pulling the full llama-index-core import chain.
+if TYPE_CHECKING:
+    from llama_index.core.agent.workflow import (
+        AgentWorkflow,
+        BaseWorkflowAgent,
+    )
+
 from pyvis.network import Network
 from workflows import Workflow
 from workflows.context.external_context import ExternalContext
@@ -338,6 +342,12 @@ def _get_type_chain(cls: type, base: type) -> list[str]:
 
 def _extract_single_agent_structure(agent: BaseWorkflowAgent) -> WorkflowGraph:
     """Extract the structure of a single agent."""
+    # Deferred import: llama-index-core uses PEP 604 union syntax (`X | Y`) at
+    # runtime which crashes on Python 3.9.  Importing here avoids pulling the
+    # whole llama-index-core import chain at module-load time.
+    from llama_index.core.agent.workflow import BaseWorkflowAgent as _BaseWorkflowAgent
+    from llama_index.core.tools import AsyncBaseTool, BaseTool
+
     nodes: List[WorkflowGraphNode] = []
     edges: List[WorkflowGraphEdge] = []
 
@@ -348,7 +358,7 @@ def _extract_single_agent_structure(agent: BaseWorkflowAgent) -> WorkflowGraph:
         label=agent.name,
         node_type="agent",
         event_type=agent_type.__name__,
-        event_types=_get_type_chain(agent_type, BaseWorkflowAgent),
+        event_types=_get_type_chain(agent_type, _BaseWorkflowAgent),
     )
     nodes.append(agent_node)
 
@@ -378,6 +388,8 @@ def _process_tools_and_handoffs(
     edges: List[WorkflowGraphEdge],
     root_agent: str,
 ) -> Tuple[List[WorkflowGraphNode], List[WorkflowGraphEdge], List[str]]:
+    from llama_index.core.tools import BaseTool
+
     if agent.name not in processed_agents:
         nodes.append(
             WorkflowGenericNode(

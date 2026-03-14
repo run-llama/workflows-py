@@ -376,20 +376,21 @@ wheels = [
 
 [[package]]
 name = "banks"
-version = "2.2.0"
+version = "2.4.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "deprecated" },
     { name = "eval-type-backport", marker = "python_full_version < '3.10'" },
+    { name = "filetype" },
     { name = "griffe" },
     { name = "jinja2" },
     { name = "platformdirs", version = "4.4.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
     { name = "platformdirs", version = "4.5.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
     { name = "pydantic" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/7d/f8/25ef24814f77f3fd7f0fd3bd1ef3749e38a9dbd23502fbb53034de49900c/banks-2.2.0.tar.gz", hash = "sha256:d1446280ce6e00301e3e952dd754fd8cee23ff277d29ed160994a84d0d7ffe62", size = 179052, upload-time = "2025-07-18T16:28:26.892Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/47/5d/54c79aaaa9aa1278af24cae98d81d6ef635ad840f046bc2ccb5041ddeb1b/banks-2.4.1.tar.gz", hash = "sha256:8cbf1553f14c44d4f7e9c2064ad9212ce53ee4da000b2f8308d548b60db56655", size = 188033, upload-time = "2026-02-17T11:21:14.855Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/b4/d6/f9168956276934162ec8d48232f9920f2985ee45aa7602e3c6b4bc203613/banks-2.2.0-py3-none-any.whl", hash = "sha256:963cd5c85a587b122abde4f4064078def35c50c688c1b9d36f43c92503854e7d", size = 29244, upload-time = "2025-07-18T16:28:27.835Z" },
+    { url = "https://files.pythonhosted.org/packages/b8/5a/f38b49e8b225b0c774e97c9495e52ab9ccdf6d82bde68c513bd736820eb2/banks-2.4.1-py3-none-any.whl", hash = "sha256:40e6d9b6e9b69fb403fa31f2853b3297e4919c1b6f2179b2119d2d4473c6ed13", size = 35032, upload-time = "2026-02-17T11:21:13.236Z" },
 ]
 
 [[package]]
@@ -1841,7 +1842,7 @@ dependencies = [
 requires-dist = [
     { name = "fastapi" },
     { name = "llama-agents-dbos", editable = "packages/llama-agents-dbos" },
-    { name = "llama-index-observability-otel" },
+    { name = "llama-index-observability-otel", specifier = ">=0.5.1" },
     { name = "opentelemetry-exporter-otlp" },
     { name = "opentelemetry-instrumentation-fastapi" },
     { name = "structlog" },
@@ -1869,7 +1870,7 @@ wheels = [
 
 [[package]]
 name = "llama-agents-client"
-version = "0.2.1"
+version = "0.2.3"
 source = { editable = "packages/llama-agents-client" }
 dependencies = [
     { name = "httpx" },
@@ -1904,7 +1905,7 @@ dev = [
 
 [[package]]
 name = "llama-agents-dbos"
-version = "0.1.1"
+version = "0.1.2"
 source = { editable = "packages/llama-agents-dbos" }
 dependencies = [
     { name = "dbos", marker = "python_full_version >= '3.10'" },
@@ -2049,7 +2050,7 @@ dev = [
 
 [[package]]
 name = "llama-agents-server"
-version = "0.2.1"
+version = "0.2.3"
 source = { editable = "packages/llama-agents-server" }
 dependencies = [
     { name = "httpx" },
@@ -2109,7 +2110,7 @@ dev = [
 
 [[package]]
 name = "llama-index-core"
-version = "0.14.14"
+version = "0.14.16"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohttp" },
@@ -2142,32 +2143,33 @@ dependencies = [
     { name = "sqlalchemy", extra = ["asyncio"] },
     { name = "tenacity" },
     { name = "tiktoken" },
+    { name = "tinytag" },
     { name = "tqdm" },
     { name = "typing-extensions" },
     { name = "typing-inspect" },
     { name = "wrapt" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/9a/04/fdbb528681342d362cce55a58a52b620394b1d332c53f8d8d4c54a33a228/llama_index_core-0.14.14.tar.gz", hash = "sha256:505a252c7e357cb12fb9bef41498ae2be3f2baa07666a939f8107f3faef2823b", size = 11587282, upload-time = "2026-02-10T23:07:54.27Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/13/cb/1d7383f9f4520bb1d921c34f18c147b4b270007135212cedfa240edcd4c3/llama_index_core-0.14.16.tar.gz", hash = "sha256:cf2b7e4b798cb5ebad19c935174c200595c7ecff84a83793540cc27b03636a52", size = 11599715, upload-time = "2026-03-10T19:19:52.476Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/67/96/962ef4088b489e2e4c5392910744bd1206bfb89de4c0d98e93cf0125f985/llama_index_core-0.14.14-py3-none-any.whl", hash = "sha256:b62512a4ba1911b50b30d25d721535b30c9242f5f2dd6a4d5a4a712cca7b570e", size = 11930841, upload-time = "2026-02-10T23:07:56.698Z" },
+    { url = "https://files.pythonhosted.org/packages/b4/f5/a33839bae0bd07e4030969bdba1ac90665e359ae88c56c296991ae16b8a8/llama_index_core-0.14.16-py3-none-any.whl", hash = "sha256:0cc273ebc44d51ad636217661a25f9cd02fb2d0440641430f105da3ae9f43a6b", size = 11944927, upload-time = "2026-03-10T19:19:48.043Z" },
 ]
 
 [[package]]
 name = "llama-index-instrumentation"
-version = "0.4.2"
+version = "0.4.3"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "deprecated" },
     { name = "pydantic" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/af/b9/a7a74de6d8aacf4be329329495983d78d96b1a6e69b6d9fcf4a233febd4b/llama_index_instrumentation-0.4.2.tar.gz", hash = "sha256:dc4957b64da0922060690e85a6be9698ac08e34e0f69e90b01364ddec4f3de7f", size = 46146, upload-time = "2025-10-13T20:44:48.85Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/0b/45/293b89d330a989e444ade307252c190b497142761f1a6a8f20b300fefeb2/llama_index_instrumentation-0.4.3.tar.gz", hash = "sha256:6a8bd34b0c2fb9485971f952f3e5d63341eb87f8c55c82f2819a37e174494eb9", size = 48458, upload-time = "2026-03-03T19:01:27.146Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/40/54/df8063b0441242e250e03d1e31ebde5dffbe24e1af32b025cb1a4544150c/llama_index_instrumentation-0.4.2-py3-none-any.whl", hash = "sha256:b4989500e6454059ab3f3c4a193575d47ab1fadb730c2e8f2b962649ae88b70b", size = 15411, upload-time = "2025-10-13T20:44:47.685Z" },
+    { url = "https://files.pythonhosted.org/packages/c0/0f/5fe062395c8d444235fc228bb2577588be4e9db6fb5f4d1b662e9ac98aee/llama_index_instrumentation-0.4.3-py3-none-any.whl", hash = "sha256:4669d5f6da4b478784a196489d4b58072cb2e6928c3781d2bddd34f36da9cac1", size = 16446, upload-time = "2026-03-03T19:01:28.807Z" },
 ]
 
 [[package]]
 name = "llama-index-observability-otel"
-version = "0.5.0"
+version = "0.5.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "llama-index-instrumentation" },
@@ -2177,14 +2179,14 @@ dependencies = [
     { name = "termcolor", version = "3.1.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.10'" },
     { name = "termcolor", version = "3.3.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.10'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/3f/6b/891d600ae870fa30bb0b4921e0afd53722b78eaf0a6817dce1b802db0b42/llama_index_observability_otel-0.5.0.tar.gz", hash = "sha256:9ad33c2bbc980bcc083c0e493bfd381da0914d12b06a793cc63fb41e745804ee", size = 7092, upload-time = "2026-02-24T21:22:11.774Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/26/d2/195e564062b8287302c8fd343cd5208ef013e630115780c047a075e2ebe5/llama_index_observability_otel-0.5.1.tar.gz", hash = "sha256:fd8fe4aaeea56c6362b29299f2c40d42dd322e7ddfd83c6db5b47c006dd87578", size = 7790, upload-time = "2026-03-03T19:01:33.002Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/75/ef/3e9f5322612d3d97cb8eb780e0cb07fccbe41c37ac25228e3843a76914b0/llama_index_observability_otel-0.5.0-py3-none-any.whl", hash = "sha256:c75bbd154cbd4432d15cfb8403ff19876c545c444d312796d0ee5ed692653cfc", size = 6992, upload-time = "2026-02-24T21:22:12.82Z" },
+    { url = "https://files.pythonhosted.org/packages/9b/56/233eb89bb8ece176a3e3a4aeb15ac5a8a5a8ebc6fcab52fd964dc6b7fd1c/llama_index_observability_otel-0.5.1-py3-none-any.whl", hash = "sha256:d14efc562b96c675a4960ee9004e13a84cf22374f3920c4537f6c358c145664d", size = 7719, upload-time = "2026-03-03T19:01:32.162Z" },
 ]
 
 [[package]]
 name = "llama-index-utils-workflow"
-version = "0.9.4"
+version = "0.9.5"
 source = { editable = "packages/llama-index-utils-workflow" }
 dependencies = [
     { name = "llama-index-core" },
@@ -2221,7 +2223,7 @@ dev = [
 
 [[package]]
 name = "llama-index-workflows"
-version = "2.15.1"
+version = "2.16.1"
 source = { editable = "packages/llama-index-workflows" }
 dependencies = [
     { name = "eval-type-backport", marker = "python_full_version < '3.10'" },
@@ -2260,7 +2262,7 @@ requires-dist = [
     { name = "eval-type-backport", marker = "python_full_version < '3.10'", specifier = ">=0.2.2" },
     { name = "llama-agents-client", marker = "extra == 'client'", editable = "packages/llama-agents-client" },
     { name = "llama-agents-server", marker = "extra == 'server'", editable = "packages/llama-agents-server" },
-    { name = "llama-index-instrumentation", specifier = ">=0.1.0" },
+    { name = "llama-index-instrumentation", specifier = ">=0.4.3" },
     { name = "pydantic", specifier = ">=2.11.5" },
     { name = "typing-extensions", specifier = ">=4.6.0" },
 ]
@@ -5032,6 +5034,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/b0/19/586f15159083ec84f178d494c60758c46603b00c9641b04deb63f1950128/time_machine-2.19.0-cp39-cp39-win32.whl", hash = "sha256:67772c7197a3a712d1b970ed545c6e98db73524bd90e245fd3c8fa7ad7630768", size = 17133, upload-time = "2025-08-19T17:22:04.989Z" },
     { url = "https://files.pythonhosted.org/packages/6a/c2/bfe4b906a9fe0bf2d011534314212ed752d6b8f392c9c82f6ac63dccc5ab/time_machine-2.19.0-cp39-cp39-win_amd64.whl", hash = "sha256:011d7859089263204dc5fdf83dce7388f986fe833c9381d6106b4edfda2ebd3e", size = 17972, upload-time = "2025-08-19T17:22:06.026Z" },
     { url = "https://files.pythonhosted.org/packages/5d/73/182343eba05aa5787732aaa68f3b3feb5e40ddf86b928ae941be45646393/time_machine-2.19.0-cp39-cp39-win_arm64.whl", hash = "sha256:e1af66550fa4685434f00002808a525f176f1f92746646c0019bb86fbff48b27", size = 16820, upload-time = "2025-08-19T17:22:07.227Z" },
+]
+
+[[package]]
+name = "tinytag"
+version = "2.2.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/98/07/fb260bac73119f369a10e884016516d07cd760b5068e703773f83dd5e7bf/tinytag-2.2.0.tar.gz", hash = "sha256:f15b082510f6e0fc717e597edc8759d6f2d3ff6194ac0f3bcd675a9a09d9b798", size = 38120, upload-time = "2025-12-15T21:10:19.093Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b1/e2/9818fcebb348237389d2ac2fea97cf2b2638378a0866105a45ae9be49728/tinytag-2.2.0-py3-none-any.whl", hash = "sha256:d2cf3ef8ee0f6c854663f77d9d5f8159ee1c834c70f5ea4f214ddc4af8148f79", size = 32861, upload-time = "2025-12-15T21:10:17.63Z" },
 ]
 
 [[package]]

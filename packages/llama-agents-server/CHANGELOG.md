@@ -1,5 +1,31 @@
 # llama-agents-server
 
+## 0.2.3
+
+### Patch Changes
+
+- 703ec92: Improve agent data store step and state performance
+- ccd0db6: Update debugger assets
+
+  - JavaScript: https://cdn.jsdelivr.net/npm/@llamaindex/workflow-debugger@0.2.34/dist/app.js
+  - CSS: https://cdn.jsdelivr.net/npm/@llamaindex/workflow-debugger@0.2.34/dist/app.css
+
+- Updated dependencies [c7bbedb]
+- Updated dependencies [703ec92]
+  - llama-index-workflows@2.16.1
+  - llama-agents-client@0.2.3
+
+## 0.2.2
+
+### Patch Changes
+
+- 9c0b4a0: Fix performance issues during heavy streaming from excessive chatter
+- 5e7f9e5: Namespace handler_id instrument tag as `llamaindex.handler_id`.
+- Updated dependencies [5e7f9e5]
+- Updated dependencies [9f26314]
+  - llama-index-workflows@2.16.0
+  - llama-agents-client@0.2.2
+
 ## 0.2.1
 
 ### Patch Changes

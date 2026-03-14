@@ -74,6 +74,15 @@ class TickTimeout(BaseModel):
     timeout: float
 
 
+class TickWaiterTimeout(BaseModel):
+    """When processed, marks a specific waiter as timed out and replays the step."""
+
+    model_config = ConfigDict(frozen=True)
+    type: Literal["waiter_timeout"] = "waiter_timeout"
+    step_name: str
+    waiter_id: str
+
+
 class TickIdleCheck(BaseModel):
     """Scheduled after state appears idle, to re-check after async events drain.
 
@@ -93,6 +102,7 @@ WorkflowTick = Annotated[
         TickCancelRun,
         TickPublishEvent,
         TickTimeout,
+        TickWaiterTimeout,
         TickIdleCheck,
         TickIdleRelease,
     ],
