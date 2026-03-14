@@ -10,7 +10,7 @@ import logging
 import pickle
 import threading
 import weakref
-from typing import Any, Callable, Optional, cast
+from typing import Any, Callable, Optional, Union, cast
 from unittest import mock
 
 import pytest
@@ -1111,7 +1111,7 @@ def test_graph_validation_dead_end_cycle_raises() -> None:
 
     class DeadEndCycleWorkflow(Workflow):
         @step
-        async def entry(self, ev: StartEvent) -> _DeadEndCycleA | StopEvent:
+        async def entry(self, ev: StartEvent) -> Union[_DeadEndCycleA, StopEvent]:
             return _DeadEndCycleA()
 
         @step
@@ -1139,7 +1139,9 @@ def test_graph_validation_dead_end_with_exit_branch_passes() -> None:
             return _DeadEndLoopEvent()
 
         @step
-        async def looper(self, ev: _DeadEndLoopEvent) -> _DeadEndLoopEvent | StopEvent:
+        async def looper(
+            self, ev: _DeadEndLoopEvent
+        ) -> Union[_DeadEndLoopEvent, StopEvent]:
             return StopEvent(result="done")
 
     wf = CycleWithExitWorkflow()
@@ -1151,7 +1153,7 @@ def test_graph_validation_skip_dead_end_per_step() -> None:
 
     class SkipDeadEndPerStepWorkflow(Workflow):
         @step
-        async def entry(self, ev: StartEvent) -> _DeadEndCycleA | StopEvent:
+        async def entry(self, ev: StartEvent) -> Union[_DeadEndCycleA, StopEvent]:
             return _DeadEndCycleA()
 
         @step(skip_graph_checks=["dead_end"])
@@ -1171,7 +1173,7 @@ def test_graph_validation_skip_dead_end_workflow_level() -> None:
 
     class SkipDeadEndWorkflowLevel(Workflow):
         @step
-        async def entry(self, ev: StartEvent) -> _DeadEndCycleA | StopEvent:
+        async def entry(self, ev: StartEvent) -> Union[_DeadEndCycleA, StopEvent]:
             return _DeadEndCycleA()
 
         @step
