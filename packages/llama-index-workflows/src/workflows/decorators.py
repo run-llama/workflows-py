@@ -22,7 +22,7 @@ if sys.version_info >= (3, 10):
 else:
     from typing_extensions import ParamSpec
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from .errors import WorkflowValidationError
 from .resource import ResourceDefinition
@@ -35,6 +35,8 @@ from .utils import (
 if TYPE_CHECKING:  # pragma: no cover
     from .workflow import Workflow
 from .retry_policy import RetryPolicy
+
+_VALID_STEP_GRAPH_CHECKS: set[str] = {"reachability"}
 
 
 class StepConfig(BaseModel):
@@ -52,6 +54,17 @@ class StepConfig(BaseModel):
         default_factory=list,
         description="Graph validation checks to skip for this step (e.g. 'reachability').",
     )
+
+    @field_validator("skip_graph_checks")
+    @classmethod
+    def _validate_check_names(cls, v: list[str]) -> list[str]:
+        unknown = set(v) - _VALID_STEP_GRAPH_CHECKS
+        if unknown:
+            raise ValueError(
+                f"Unknown step-level graph check names: {', '.join(sorted(unknown))}. "
+                f"Valid names are: {', '.join(sorted(_VALID_STEP_GRAPH_CHECKS))}"
+            )
+        return v
 
 
 P = ParamSpec("P")
@@ -107,6 +120,9 @@ def step(
             function step to. Not required for methods.
         num_workers (int): Number of workers for this step. Defaults to 4.
         retry_policy (RetryPolicy | None): Optional retry policy for failures.
+        skip_graph_checks (list[str] | None): Graph validation checks to skip
+            for this step. Currently supports ``"reachability"`` to allow
+            intentionally unreachable steps.
 
     Returns:
         Callable: The original function, annotated with internal step metadata.

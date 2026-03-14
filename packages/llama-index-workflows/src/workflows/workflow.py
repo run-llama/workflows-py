@@ -98,6 +98,8 @@ class Workflow(metaclass=WorkflowMeta):
         - [RetryPolicy][workflows.retry_policy.RetryPolicy]
     """
 
+    VALID_GRAPH_CHECKS: set[str] = {"reachability", "terminal_event"}
+
     # Populated by the metaclass; declared here for type checkers.
     _step_functions: dict[str, StepFunction]
 
@@ -155,8 +157,14 @@ class Workflow(metaclass=WorkflowMeta):
         self._runtime_locked = False
         # Validation cache: set after first successful _validate(); skip re-validation on run() until invalidated
         self._validation_result: bool | None = None
-        # Graph validation checks to skip for this workflow (e.g. "reachability", "terminal_event")
-        self._skip_graph_checks: set[str] = skip_graph_checks or set()
+        checks = skip_graph_checks or set()
+        unknown = checks - self.VALID_GRAPH_CHECKS
+        if unknown:
+            raise WorkflowValidationError(
+                f"Unknown graph check names: {', '.join(sorted(unknown))}. "
+                f"Valid names are: {', '.join(sorted(self.VALID_GRAPH_CHECKS))}"
+            )
+        self._skip_graph_checks: set[str] = checks
 
         # Runtime registration: explicit > context-scoped > basic_runtime
         from workflows.plugins._context import get_current_runtime
@@ -470,14 +478,15 @@ class Workflow(metaclass=WorkflowMeta):
         """Check that all steps are reachable from input events and only output events are terminal.
 
         Input events: StartEvent, HumanResponseEvent (via external_step). Output events:
-        StopEvent, InputRequiredEvent. HumanResponseEvent steps that return None (mutation
-        pattern) are allowed as terminal steps.
+        StopEvent, InputRequiredEvent. Steps returning None (e.g. HumanResponseEvent mutation
+        pattern) don't produce event nodes in the graph, so they are naturally allowed as
+        terminal steps without special-case handling.
         """
         from workflows.representation import get_workflow_representation
         from workflows.representation.types import WorkflowEventNode, WorkflowStepNode
 
         graph = get_workflow_representation(self)
-        node_by_id = {n.id: n for n in graph.nodes}
+        node_ids = {n.id for n in graph.nodes}
         outgoing: dict[str, list[str]] = {}
         for edge in graph.edges:
             outgoing.setdefault(edge.source, []).append(edge.target)
@@ -487,10 +496,10 @@ class Workflow(metaclass=WorkflowMeta):
 
         # Seeds: start event node and external_step (HITL entry)
         seeds: list[str] = [self._start_event_class.__name__]
-        if "external_step" in node_by_id:
+        if "external_step" in node_ids:
             seeds.append("external_step")
 
-        # BFS from seeds
+        # DFS from seeds (order doesn't matter for reachability)
         reachable: set[str] = set()
         stack = list(seeds)
         while stack:
@@ -534,6 +543,7 @@ class Workflow(metaclass=WorkflowMeta):
                     "Only StopEvent and InputRequiredEvent may be terminal. "
                     "Ensure some step consumes this event or it is an output event type."
                 )
+
     def _validate_resource_configs(self) -> list[str]:
         """Validate all resource configs (including nested ones) by loading them."""
         errors: list[str] = []
@@ -606,7 +616,7 @@ class Workflow(metaclass=WorkflowMeta):
         - Circular resource dependencies are caught when validate_resources=True
 
         Validation result is cached after the first successful run(); subsequent run() calls
-        skip re-validation unless validate(force=True) is used or validation was disabled.
+        skip re-validation. Calling validate() explicitly always re-runs all checks.
 
         Args:
             validate_resource_configs: If True (default), validate that resource

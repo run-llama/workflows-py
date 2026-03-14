@@ -1027,6 +1027,48 @@ def test_graph_validation_skip_reachability_workflow_level() -> None:
     wf.validate()
 
 
+def test_graph_validation_terminal_non_output_event_raises() -> None:
+    """Non-output event with no consumer raises in graph structure validation."""
+
+    class DanglingEvent(Event):
+        pass
+
+    class TerminalEventWorkflow(Workflow):
+        @step
+        async def entry(self, ev: StartEvent) -> DanglingEvent:
+            return DanglingEvent()
+
+        @step
+        async def finish(self, ev: StartEvent) -> StopEvent:
+            return StopEvent(result="done")
+
+    wf = TerminalEventWorkflow()
+    with pytest.raises(
+        WorkflowValidationError,
+        match="Event 'DanglingEvent' is produced but never consumed",
+    ):
+        wf._validate_graph_structure()
+
+
+def test_graph_validation_skip_terminal_event_workflow_level() -> None:
+    """Workflow skip_graph_checks={'terminal_event'} suppresses terminal event error."""
+
+    class DanglingEvent(Event):
+        pass
+
+    class SkipTerminalWorkflow(Workflow):
+        @step
+        async def entry(self, ev: StartEvent) -> DanglingEvent:
+            return DanglingEvent()
+
+        @step
+        async def finish(self, ev: StartEvent) -> StopEvent:
+            return StopEvent(result="done")
+
+    wf = SkipTerminalWorkflow(skip_graph_checks={"terminal_event"})
+    wf._validate_graph_structure()
+
+
 @pytest.mark.asyncio
 async def test_validation_cached_after_first_run() -> None:
     """Validation result is cached; second run() does not re-run full validation."""
