@@ -495,6 +495,8 @@ class Workflow(metaclass=WorkflowMeta):
         for edge in graph.edges:
             outgoing.setdefault(edge.source, []).append(edge.target)
 
+        output_event_names = (StopEvent.__name__, InputRequiredEvent.__name__)
+
         step_ids = {n.id for n in graph.nodes if isinstance(n, WorkflowStepNode)}
         event_nodes = [n for n in graph.nodes if isinstance(n, WorkflowEventNode)]
 
@@ -540,7 +542,7 @@ class Workflow(metaclass=WorkflowMeta):
                 if consumed_by_step:
                     continue
                 # Event is terminal; must be an output event type
-                if node.is_subclass_of("StopEvent", "InputRequiredEvent"):
+                if node.is_subclass_of(*output_event_names):
                     continue
                 raise WorkflowValidationError(
                     f"Event '{node.id}' is produced but never consumed. "
@@ -557,9 +559,7 @@ class Workflow(metaclass=WorkflowMeta):
                 incoming.setdefault(edge.target, []).append(edge.source)
 
             output_seeds: list[str] = [
-                n.id
-                for n in event_nodes
-                if n.is_subclass_of("StopEvent", "InputRequiredEvent")
+                n.id for n in event_nodes if n.is_subclass_of(*output_event_names)
             ]
             if "external_step" in node_ids:
                 output_seeds.append("external_step")
