@@ -10,11 +10,16 @@ from workflows.events import Event, StartEvent, StopEvent
 from workflows.workflow import Workflow
 
 
-def test_decorated_config(workflow: Workflow) -> None:
+def test_decorated_config() -> None:
+    class LocalWorkflow(Workflow):
+        @step
+        async def entry(self, ev: StartEvent) -> StopEvent:
+            return StopEvent(result="done")
+
     def f(self, ev: Event) -> Event:  # type: ignore  # noqa: ANN001
         return Event()
 
-    res = step(workflow=workflow.__class__)(f)
+    res = step(workflow=LocalWorkflow)(f)
     config = res._step_config
     assert config.accepted_events == [Event]
     assert config.event_name == "ev"
