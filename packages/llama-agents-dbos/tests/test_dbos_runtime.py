@@ -349,3 +349,23 @@ def test_launch_sync_offloads_dbos_launch_from_asyncio_run_loop(
     assert not observed["saw_running_loop"]
 
     runtime.destroy_sync()
+
+
+@pytest.mark.asyncio
+async def test_launch_sync_raises_in_async_context() -> None:
+    """Sync launch should fail loudly when called from an async context."""
+    runtime = DBOSRuntime(run_migrations_on_launch=False)
+
+    with pytest.raises(RuntimeError, match="use 'await runtime.launch\\(\\)' instead"):
+        runtime.launch_sync()
+
+
+def test_launch_sync_raises_with_executor_lease() -> None:
+    """Executor leasing requires async launch because it owns async tasks."""
+    runtime = DBOSRuntime(
+        run_migrations_on_launch=False,
+        _experimental_executor_lease={"pool_size": 1},
+    )
+
+    with pytest.raises(RuntimeError, match="_experimental_executor_lease"):
+        runtime.launch_sync()

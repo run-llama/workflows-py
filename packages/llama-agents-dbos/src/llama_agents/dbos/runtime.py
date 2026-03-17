@@ -713,8 +713,8 @@ class DBOSRuntime(Runtime):
         DBOS.launch()
         self._finalize_launch()
 
-    async def _launch_impl(self, *, offload_dbos_launch: bool) -> None:
-        """Shared launch implementation for async and sync entry points."""
+    async def _prepare_launch(self, *, start_lease_watch: bool) -> None:
+        """Run the async setup required before calling DBOS.launch()."""
         if self._dbos_launched:
             return  # Already launched
 
@@ -770,7 +770,8 @@ class DBOSRuntime(Runtime):
             config["executor_id"] = self._lease_manager.executor_id
             DBOS(config=cast(Any, config))
             logger.info("Acquired executor lease: %s", self._lease_manager.executor_id)
-            self._lease_watch_task = asyncio.create_task(self._watch_lease())
+            if start_lease_watch:
+                self._lease_watch_task = asyncio.create_task(self._watch_lease())
 
         # Register each pending workflow with DBOS
         for workflow in self._tracked_workflows:
@@ -778,16 +779,8 @@ class DBOSRuntime(Runtime):
             registered = self.register(workflow)
             self._registered[id(workflow)] = registered
 
-        if offload_dbos_launch:
-            # Explicit synchronous callers still use the threadpool path so DBOS
-            # does not permanently bind itself to the temporary asyncio.run loop.
-            loop = asyncio.get_running_loop()
-            await loop.run_in_executor(None, self._launch_dbos)
-        else:
-            # Async server startup should keep DBOS on the caller's live loop so
-            # startup recovery and HTTP handlers share the same event loop.
-            self._launch_dbos()
-
+    async def _post_launch(self) -> None:
+        """Run async work after DBOS.launch() has captured its target context."""
         # Run migrations after DBOS is launched (if configured)
         if self.config.get("run_migrations_on_launch", True):
             await self.run_migrations()
@@ -829,11 +822,39 @@ class DBOSRuntime(Runtime):
         If ``_experimental_executor_lease`` is set in the config, acquires a
         lease slot first.
         """
-        await self._launch_impl(offload_dbos_launch=False)
+        await self._prepare_launch(start_lease_watch=True)
+        if self._dbos_launched:
+            return
+        # Async server startup should keep DBOS on the caller's live loop so
+        # startup recovery and later HTTP handlers share the same long-lived
+        # application event loop.
+        self._launch_dbos()
+        await self._post_launch()
 
     def launch_sync(self) -> None:
-        """Launch DBOS from synchronous code without capturing the caller loop."""
-        asyncio.run(self._launch_impl(offload_dbos_launch=True))
+        """Launch DBOS from synchronous code without capturing asyncio.run()'s loop."""
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            pass
+        else:
+            raise RuntimeError(
+                "DBOSRuntime.launch_sync() cannot be called from an async context; "
+                "use 'await runtime.launch()' instead."
+            )
+
+        if self.config.get("_experimental_executor_lease") is not None:
+            raise RuntimeError(
+                "DBOSRuntime.launch_sync() does not support "
+                "'_experimental_executor_lease'; use 'await runtime.launch()' instead."
+            )
+
+        asyncio.run(self._prepare_launch(start_lease_watch=False))
+        if self._dbos_launched:
+            return
+        DBOS.launch()
+        self._finalize_launch()
+        asyncio.run(self._post_launch())
 
     @property
     def is_launched(self) -> bool:
