@@ -695,42 +695,26 @@ class DBOSRuntime(Runtime):
 
         return _factory
 
-    def build_server_runtime(self, *, idle_timeout: float = 600.0) -> Runtime:
-        """Build the decorator chain for use with WorkflowServer.
+    def _finalize_launch(self) -> None:
+        """Resolve DB-backed resources after DBOS.launch() completes."""
+        engine = self._get_sql_engine()
+        self._schema = _resolve_schema(self.config, engine)
+        if engine.dialect.name == "postgresql":
+            self._dsn = _sqlalchemy_url_to_asyncpg_dsn(engine.url)
+        else:
+            self._db_path = (
+                str(engine.url.database) if engine.url.database else ":memory:"
+            )
+        self._dbos_launched = True
+        self._launch_ready.set()
 
-        Wraps the DBOS runtime with:
-        - TickPersistenceDecorator (persists ticks to workflow store)
-        - EventInterceptorDecorator (blocks events from reaching DBOS streams)
-        - DBOSIdleReleaseDecorator (releases idle workflows after timeout)
+    def _launch_dbos(self) -> None:
+        """Run DBOS.launch() in the current execution context."""
+        DBOS.launch()
+        self._finalize_launch()
 
-        Chain order (outermost first):
-        DBOSIdleReleaseDecorator → EventInterceptorDecorator → TickPersistenceDecorator → DBOSRuntime
-
-        Args:
-            idle_timeout: Seconds to wait after a workflow becomes idle before
-                releasing it. Defaults to 10 minutes.
-
-        The returned runtime should be passed as the ``runtime`` argument
-        to ``WorkflowServer``.
-        """
-        store = self.create_workflow_store()
-        tick_persistence = TickPersistenceDecorator(self, store)
-        return DBOSIdleReleaseDecorator(
-            EventInterceptorDecorator(tick_persistence),
-            store=store,
-            idle_timeout=idle_timeout,
-            journal_crud=self._create_journal_crud_factory(),
-            lifecycle_lock=self._create_lifecycle_lock_factory(),
-        )
-
-    async def launch(self) -> None:
-        """
-        Launch DBOS and register all tracked workflows.
-
-        Must be called before running any workflows.
-        Runs database migrations unless run_migrations_on_launch=False.
-        If ``_experimental_executor_lease`` is set in the config, acquires a lease slot first.
-        """
+    async def _launch_impl(self, *, offload_dbos_launch: bool) -> None:
+        """Shared launch implementation for async and sync entry points."""
         if self._dbos_launched:
             return  # Already launched
 
@@ -794,27 +778,62 @@ class DBOSRuntime(Runtime):
             registered = self.register(workflow)
             self._registered[id(workflow)] = registered
 
-        # Launch from a threadpool worker so DBOS doesn't capture the
-        # caller's event loop (which may be temporary, e.g. launch_sync).
-        def _launch_and_configure() -> None:
-            DBOS.launch()
-            engine = self._get_sql_engine()
-            self._schema = _resolve_schema(self.config, engine)
-            if engine.dialect.name == "postgresql":
-                self._dsn = _sqlalchemy_url_to_asyncpg_dsn(engine.url)
-            else:
-                self._db_path = (
-                    str(engine.url.database) if engine.url.database else ":memory:"
-                )
-            self._dbos_launched = True
-            self._launch_ready.set()
-
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, _launch_and_configure)
+        if offload_dbos_launch:
+            # Explicit synchronous callers still use the threadpool path so DBOS
+            # does not permanently bind itself to the temporary asyncio.run loop.
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(None, self._launch_dbos)
+        else:
+            # Async server startup should keep DBOS on the caller's live loop so
+            # startup recovery and HTTP handlers share the same event loop.
+            self._launch_dbos()
 
         # Run migrations after DBOS is launched (if configured)
         if self.config.get("run_migrations_on_launch", True):
             await self.run_migrations()
+
+    def build_server_runtime(self, *, idle_timeout: float = 600.0) -> Runtime:
+        """Build the decorator chain for use with WorkflowServer.
+
+        Wraps the DBOS runtime with:
+        - TickPersistenceDecorator (persists ticks to workflow store)
+        - EventInterceptorDecorator (blocks events from reaching DBOS streams)
+        - DBOSIdleReleaseDecorator (releases idle workflows after timeout)
+
+        Chain order (outermost first):
+        DBOSIdleReleaseDecorator → EventInterceptorDecorator → TickPersistenceDecorator → DBOSRuntime
+
+        Args:
+            idle_timeout: Seconds to wait after a workflow becomes idle before
+                releasing it. Defaults to 10 minutes.
+
+        The returned runtime should be passed as the ``runtime`` argument
+        to ``WorkflowServer``.
+        """
+        store = self.create_workflow_store()
+        tick_persistence = TickPersistenceDecorator(self, store)
+        return DBOSIdleReleaseDecorator(
+            EventInterceptorDecorator(tick_persistence),
+            store=store,
+            idle_timeout=idle_timeout,
+            journal_crud=self._create_journal_crud_factory(),
+            lifecycle_lock=self._create_lifecycle_lock_factory(),
+        )
+
+    async def launch(self) -> None:
+        """
+        Launch DBOS and register all tracked workflows.
+
+        Must be called before running any workflows.
+        Runs database migrations unless run_migrations_on_launch=False.
+        If ``_experimental_executor_lease`` is set in the config, acquires a
+        lease slot first.
+        """
+        await self._launch_impl(offload_dbos_launch=False)
+
+    def launch_sync(self) -> None:
+        """Launch DBOS from synchronous code without capturing the caller loop."""
+        asyncio.run(self._launch_impl(offload_dbos_launch=True))
 
     @property
     def is_launched(self) -> bool:
