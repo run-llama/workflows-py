@@ -10,6 +10,7 @@ from typing import (
     Any,
     Callable,
     Generic,
+    Literal,
     Protocol,
     Type,
     TypeVar,
@@ -22,7 +23,7 @@ if sys.version_info >= (3, 10):
 else:
     from typing_extensions import ParamSpec
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 from .errors import WorkflowValidationError
 from .resource import ResourceDefinition
@@ -36,7 +37,7 @@ if TYPE_CHECKING:  # pragma: no cover
     from .workflow import Workflow
 from .retry_policy import RetryPolicy
 
-_VALID_STEP_GRAPH_CHECKS: set[str] = {"reachability", "dead_end"}
+StepGraphCheck = Literal["reachability", "dead_end"]
 
 
 class StepConfig(BaseModel):
@@ -50,21 +51,10 @@ class StepConfig(BaseModel):
     retry_policy: RetryPolicy | None
     resources: list[ResourceDefinition]
     context_state_type: Type[BaseModel] | None = Field(default=None)
-    skip_graph_checks: list[str] = Field(
+    skip_graph_checks: list[StepGraphCheck] = Field(
         default_factory=list,
         description="Graph validation checks to skip for this step (e.g. 'reachability').",
     )
-
-    @field_validator("skip_graph_checks")
-    @classmethod
-    def _validate_check_names(cls, v: list[str]) -> list[str]:
-        unknown = set(v) - _VALID_STEP_GRAPH_CHECKS
-        if unknown:
-            raise ValueError(
-                f"Unknown step-level graph check names: {', '.join(sorted(unknown))}. "
-                f"Valid names are: {', '.join(sorted(_VALID_STEP_GRAPH_CHECKS))}"
-            )
-        return v
 
 
 P = ParamSpec("P")
@@ -93,7 +83,7 @@ def step(
     workflow: Type["Workflow"] | None = None,
     num_workers: int = 4,
     retry_policy: RetryPolicy | None = None,
-    skip_graph_checks: list[str] | None = None,
+    skip_graph_checks: list[StepGraphCheck] | None = None,
 ) -> Callable[[Callable[P, R]], StepFunction[P, R]]: ...
 
 
@@ -103,7 +93,7 @@ def step(
     workflow: Type["Workflow"] | None = None,
     num_workers: int = 4,
     retry_policy: RetryPolicy | None = None,
-    skip_graph_checks: list[str] | None = None,
+    skip_graph_checks: list[StepGraphCheck] | None = None,
 ) -> Callable[[Callable[P, R]], StepFunction[P, R]] | StepFunction[P, R]:
     """
     Decorate a callable to declare it as a workflow step.
@@ -182,7 +172,7 @@ def make_step_function(
     num_workers: int = 4,
     retry_policy: RetryPolicy | None = None,
     localns: dict[str, Any] | None = None,
-    skip_graph_checks: list[str] | None = None,
+    skip_graph_checks: list[StepGraphCheck] | None = None,
 ) -> StepFunction[P, R]:
     # This will raise providing a message with the specific validation failure
     spec = inspect_signature(func, localns=localns)
@@ -213,7 +203,7 @@ def _apply_step_decorator(
     retry_policy: RetryPolicy | None,
     workflow: Type["Workflow"] | None,
     localns: dict[str, Any] | None,
-    skip_graph_checks: list[str],
+    skip_graph_checks: list[StepGraphCheck],
 ) -> StepFunction[P, R]:
     if not isinstance(num_workers, int) or num_workers <= 0:
         raise WorkflowValidationError("num_workers must be an integer greater than 0")

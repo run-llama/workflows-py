@@ -307,16 +307,6 @@ def get_workflow_representation(workflow: Workflow) -> WorkflowGraph:
                 )
                 added_nodes.add(event_type.__name__)
 
-            # Add external_step node when a step accepts a HumanResponseEvent
-            if (
-                issubclass(event_type, HumanResponseEvent)
-                and "external_step" not in added_nodes
-            ):
-                nodes.append(
-                    WorkflowExternalNode(id="external_step", label="external_step")
-                )
-                added_nodes.add("external_step")
-
         # Add event nodes for return types
         for return_type in step_config.return_types:
             if return_type is type(None):
@@ -384,7 +374,10 @@ def get_workflow_representation(workflow: Workflow) -> WorkflowGraph:
                     WorkflowGraphEdge(source=event_type.__name__, target=step_name)
                 )
 
-            if issubclass(event_type, HumanResponseEvent):
+            if (
+                issubclass(event_type, HumanResponseEvent)
+                and "external_step" in added_nodes
+            ):
                 edges.append(
                     WorkflowGraphEdge(
                         source="external_step", target=event_type.__name__

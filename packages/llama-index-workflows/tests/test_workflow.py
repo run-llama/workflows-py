@@ -961,7 +961,7 @@ def test_graph_validation_human_response_event_mutation_allowed() -> None:
 
         @step
         async def mutate(self, ev: HumanResponseEvent) -> None:
-            return None  # type: ignore[return-value]
+            return None
 
         @step
         async def finish(self, ev: StartEvent) -> StopEvent:
@@ -1054,7 +1054,7 @@ def test_graph_validation_skip_reachability_workflow_level() -> None:
         async def finish(self, ev: _GraphValidationProcessedEvent) -> StopEvent:
             return StopEvent(result="done")
 
-        @step(skip_graph_checks=["dead_end"])
+        @step
         async def island(
             self, ev: _GraphValidationIslandEvent
         ) -> _GraphValidationIslandEvent:

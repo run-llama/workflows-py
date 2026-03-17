@@ -9,7 +9,9 @@ from dataclasses import dataclass, field
 from typing import (
     TYPE_CHECKING,
     Any,
+    Literal,
     Tuple,
+    get_args,
 )
 
 from llama_index_instrumentation import get_dispatcher
@@ -42,6 +44,8 @@ from .utils import get_steps_from_class, get_steps_from_instance
 
 dispatcher = get_dispatcher(__name__)
 logger = logging.getLogger(__name__)
+
+WorkflowGraphCheck = Literal["reachability", "terminal_event", "dead_end"]
 
 
 class WorkflowMeta(type):
@@ -98,8 +102,6 @@ class Workflow(metaclass=WorkflowMeta):
         - [RetryPolicy][workflows.retry_policy.RetryPolicy]
     """
 
-    VALID_GRAPH_CHECKS: set[str] = {"reachability", "terminal_event", "dead_end"}
-
     # Populated by the metaclass; declared here for type checkers.
     _step_functions: dict[str, StepFunction]
     _step_functions_version: int = 0
@@ -116,7 +118,7 @@ class Workflow(metaclass=WorkflowMeta):
         num_concurrent_runs: int | None = None,
         runtime: Runtime | None = None,
         workflow_name: str | None = None,
-        skip_graph_checks: set[str] | None = None,
+        skip_graph_checks: set[WorkflowGraphCheck] | None = None,
     ) -> None:
         """
         Initialize a workflow instance.
@@ -161,13 +163,14 @@ class Workflow(metaclass=WorkflowMeta):
         self._validation_result: bool | None = None
         self._validated_version: int = -1
         checks = skip_graph_checks or set()
-        unknown = checks - self.VALID_GRAPH_CHECKS
+        valid_checks = set(get_args(WorkflowGraphCheck))
+        unknown = checks - valid_checks
         if unknown:
             raise WorkflowValidationError(
                 f"Unknown graph check names: {', '.join(sorted(unknown))}. "
-                f"Valid names are: {', '.join(sorted(self.VALID_GRAPH_CHECKS))}"
+                f"Valid names are: {', '.join(sorted(valid_checks))}"
             )
-        self._skip_graph_checks: set[str] = checks
+        self._skip_graph_checks: set[WorkflowGraphCheck] = checks
 
         # Runtime registration: explicit > context-scoped > basic_runtime
         from workflows.plugins._context import get_current_runtime
@@ -481,31 +484,36 @@ class Workflow(metaclass=WorkflowMeta):
     def _validate_graph_structure(self) -> None:
         """Check that all steps are reachable from input events and only output events are terminal.
 
-        Input events: StartEvent, HumanResponseEvent (via external_step). Output events:
-        StopEvent, InputRequiredEvent. Steps returning None (e.g. HumanResponseEvent mutation
-        pattern) don't produce event nodes in the graph, so they are naturally allowed as
-        terminal steps without special-case handling.
+        Builds a lightweight adjacency list directly from StepConfig data rather than
+        using the heavier get_workflow_representation (which does inspect/source lookups).
+
+        Input events: StartEvent, HumanResponseEvent (subclasses act as external input
+        sources). Output events: StopEvent, InputRequiredEvent. Steps returning only
+        None are exempt from dead-end checks.
         """
-        from workflows.representation import get_workflow_representation
-        from workflows.representation.types import WorkflowEventNode, WorkflowStepNode
-
-        graph = get_workflow_representation(self)
-        node_ids = {n.id for n in graph.nodes}
+        steps = self._get_steps()
         outgoing: dict[str, list[str]] = {}
-        for edge in graph.edges:
-            outgoing.setdefault(edge.source, []).append(edge.target)
+        event_type_map: dict[str, type] = {}
+        step_names: set[str] = set()
 
-        output_event_names = (StopEvent.__name__, InputRequiredEvent.__name__)
+        for name, func in steps.items():
+            step_names.add(name)
+            cfg = func._step_config
+            for ev in cfg.accepted_events:
+                event_type_map[ev.__name__] = ev
+                outgoing.setdefault(ev.__name__, []).append(name)
+            for rt in cfg.return_types:
+                if rt is type(None):
+                    continue
+                event_type_map[rt.__name__] = rt
+                outgoing.setdefault(name, []).append(rt.__name__)
 
-        step_ids = {n.id for n in graph.nodes if isinstance(n, WorkflowStepNode)}
-        event_nodes = [n for n in graph.nodes if isinstance(n, WorkflowEventNode)]
-
-        # Seeds: start event node and external_step (HITL entry)
+        # Forward DFS from StartEvent + HumanResponseEvent subclasses
         seeds: list[str] = [self._start_event_class.__name__]
-        if "external_step" in node_ids:
-            seeds.append("external_step")
+        for ev_name, ev_type in event_type_map.items():
+            if issubclass(ev_type, HumanResponseEvent) and ev_name not in seeds:
+                seeds.append(ev_name)
 
-        # DFS from seeds (order doesn't matter for reachability)
         reachable: set[str] = set()
         stack = list(seeds)
         while stack:
@@ -517,14 +525,13 @@ class Workflow(metaclass=WorkflowMeta):
                 if target not in reachable:
                     stack.append(target)
 
-        # Exclude steps that opted out of reachability check
         if "reachability" not in self._skip_graph_checks:
             step_skip = {
                 name
-                for name, step_func in self._get_steps().items()
+                for name, step_func in steps.items()
                 if "reachability" in step_func._step_config.skip_graph_checks
             }
-            unreachable_steps = (step_ids - reachable) - step_skip
+            unreachable_steps = (step_names - reachable) - step_skip
         else:
             unreachable_steps = set()
         if unreachable_steps:
@@ -534,35 +541,33 @@ class Workflow(metaclass=WorkflowMeta):
                 f"(StartEvent or HumanResponseEvent): {names}"
             )
 
-        # Terminal event nodes: event with no outgoing edge to a step (no consumer)
+        # Terminal event check: events with no step consumer must be output events
         if "terminal_event" not in self._skip_graph_checks:
-            for node in event_nodes:
-                targets = outgoing.get(node.id, [])
-                consumed_by_step = any(t in step_ids for t in targets)
-                if consumed_by_step:
+            for ev_name, ev_type in event_type_map.items():
+                targets = outgoing.get(ev_name, [])
+                if any(t in step_names for t in targets):
                     continue
-                # Event is terminal; must be an output event type
-                if node.is_subclass_of(*output_event_names):
+                if issubclass(ev_type, (StopEvent, InputRequiredEvent)):
                     continue
                 raise WorkflowValidationError(
-                    f"Event '{node.id}' is produced but never consumed. "
+                    f"Event '{ev_name}' is produced but never consumed. "
                     "Only StopEvent and InputRequiredEvent may be terminal. "
                     "Ensure some step consumes this event or it is an output event type."
                 )
 
         # Dead-end detection: every step that produces events must have a forward
-        # path to an output event. Steps returning only None are path terminators
-        # (e.g. mutation pattern, idle steps) and are exempt.
+        # path to an output event. Steps returning only None are exempt.
         if "dead_end" not in self._skip_graph_checks:
             incoming: dict[str, list[str]] = {}
-            for edge in graph.edges:
-                incoming.setdefault(edge.target, []).append(edge.source)
+            for source, targets in outgoing.items():
+                for target in targets:
+                    incoming.setdefault(target, []).append(source)
 
             output_seeds: list[str] = [
-                n.id for n in event_nodes if n.is_subclass_of(*output_event_names)
+                ev_name
+                for ev_name, ev_type in event_type_map.items()
+                if issubclass(ev_type, (StopEvent, InputRequiredEvent))
             ]
-            if "external_step" in node_ids:
-                output_seeds.append("external_step")
 
             reverse_reachable: set[str] = set()
             stack = list(output_seeds)
@@ -575,16 +580,16 @@ class Workflow(metaclass=WorkflowMeta):
                     if source not in reverse_reachable:
                         stack.append(source)
 
-            event_node_ids = {n.id for n in event_nodes}
+            event_names_set = set(event_type_map.keys())
             steps_producing_events = {
                 s
-                for s in step_ids
-                if any(t in event_node_ids for t in outgoing.get(s, []))
+                for s in step_names
+                if any(t in event_names_set for t in outgoing.get(s, []))
             }
 
             step_skip = {
                 name
-                for name, step_func in self._get_steps().items()
+                for name, step_func in steps.items()
                 if "dead_end" in step_func._step_config.skip_graph_checks
             }
             dead_end_steps = (steps_producing_events - reverse_reachable) - step_skip
