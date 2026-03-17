@@ -708,11 +708,6 @@ class DBOSRuntime(Runtime):
         self._dbos_launched = True
         self._launch_ready.set()
 
-    def _launch_dbos(self) -> None:
-        """Run DBOS.launch() in the current execution context."""
-        DBOS.launch()
-        self._finalize_launch()
-
     async def _prepare_launch(self, *, start_lease_watch: bool) -> None:
         """Run the async setup required before calling DBOS.launch()."""
         if self._dbos_launched:
@@ -828,7 +823,8 @@ class DBOSRuntime(Runtime):
         # Async server startup should keep DBOS on the caller's live loop so
         # startup recovery and later HTTP handlers share the same long-lived
         # application event loop.
-        self._launch_dbos()
+        DBOS.launch()
+        self._finalize_launch()
         await self._post_launch()
 
     def launch_sync(self) -> None:
