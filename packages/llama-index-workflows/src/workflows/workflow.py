@@ -9,7 +9,6 @@ from dataclasses import dataclass, field
 from typing import (
     TYPE_CHECKING,
     Any,
-    Tuple,
     get_args,
 )
 
@@ -46,7 +45,7 @@ logger = logging.getLogger(__name__)
 
 
 class WorkflowMeta(type):
-    def __init__(cls, name: str, bases: Tuple[type, ...], dct: dict[str, Any]) -> None:
+    def __init__(cls, name: str, bases: tuple[type, ...], dct: dict[str, Any]) -> None:
         super().__init__(name, bases, dct)
         cls._step_functions: dict[str, StepFunction] = {}
 
@@ -703,12 +702,7 @@ class Workflow(metaclass=WorkflowMeta):
                 )
 
         if validate_resources:
-            # Python 3.9 compat: asyncio.run() closes the loop, must restore it
             errors = asyncio.run(self._validate_resources())
-            try:
-                asyncio.get_running_loop()
-            except RuntimeError:
-                asyncio.set_event_loop(asyncio.new_event_loop())
             if errors:
                 raise WorkflowValidationError(
                     "Resource validation failed:\n"

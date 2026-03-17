@@ -17,7 +17,7 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Generator, List, cast
+from typing import Any, Generator, cast
 
 import click
 import tomlkit
@@ -33,14 +33,14 @@ _SEMVER_PRERELEASE_RE = re.compile(r"^(\d+\.\d+\.\d+)-([a-zA-Z]+)\.(\d+)$")
 
 
 def run_command(
-    cmd: List[str], cwd: Path | None = None, env: dict[str, str] | None = None
+    cmd: list[str], cwd: Path | None = None, env: dict[str, str] | None = None
 ) -> None:
     """Run a command, streaming output to the console, and raise on failure."""
     subprocess.run(cmd, check=True, text=True, cwd=cwd or Path.cwd(), env=env)
 
 
 def run_and_capture(
-    cmd: List[str], cwd: Path | None = None, env: dict[str, str] | None = None
+    cmd: list[str], cwd: Path | None = None, env: dict[str, str] | None = None
 ) -> str:
     """Run a command and return stdout as text, raising on failure."""
     result = subprocess.run(

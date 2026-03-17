@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from _collections_abc import dict_items, dict_keys, dict_values
 from enum import Enum
-from typing import Any, Type
+from typing import Any
 
 from pydantic import (
     BaseModel,
@@ -424,4 +424,4 @@ class StepStateChanged(InternalDispatchEvent):
     )
 
 
-EventType = Type[Event]
+EventType = type[Event]

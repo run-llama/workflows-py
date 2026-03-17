@@ -9,7 +9,7 @@ import functools
 import json
 import logging
 from contextlib import asynccontextmanager
-from typing import Any, AsyncGenerator, Generic, Literal, Type
+from typing import Any, AsyncGenerator, Generic, Literal
 
 from pydantic import BaseModel
 from typing_extensions import TypeVar
@@ -55,14 +55,14 @@ class AgentDataStateStore(Generic[MODEL_T]):
     Uses a single item in a ``workflow_state`` collection, keyed by ``run_id``.
     """
 
-    state_type: Type[MODEL_T]
+    state_type: type[MODEL_T]
 
     def __init__(
         self,
         *,
         client: AgentDataClient,
         run_id: str,
-        state_type: Type[MODEL_T] | None = None,
+        state_type: type[MODEL_T] | None = None,
         collection: str = "workflow_state",
         serializer: BaseSerializer | None = None,
     ) -> None:

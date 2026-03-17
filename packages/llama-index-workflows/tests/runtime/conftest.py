@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from typing import TYPE_CHECKING, Any, AsyncGenerator, Optional
+from typing import TYPE_CHECKING, Any, AsyncGenerator
 
 import pytest
 import time_machine
@@ -88,7 +88,7 @@ class MockRunAdapter(
     """Mock RunAdapter for testing control loops. Supports snapshot/replay."""
 
     def __init__(
-        self, run_id: str, traveller: Optional[time_machine.Coordinates] = None
+        self, run_id: str, traveller: time_machine.Coordinates | None = None
     ) -> None:
         self._run_id = run_id
         # Queue for events sent from external sources (e.g., via send_event)

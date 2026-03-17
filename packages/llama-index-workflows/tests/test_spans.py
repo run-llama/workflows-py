@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
-from typing import Any, Generator, Optional
+from typing import Any, Generator
 
 import pytest
 from llama_index_instrumentation import get_dispatcher
@@ -25,7 +25,7 @@ class SpanTracker(BaseSpanHandler[BaseSpan]):
     """Track span lifecycle events for testing."""
 
     _exited_ids: list[str] = PrivateAttr(default_factory=list)
-    _dropped_ids: list[tuple[str, Optional[BaseException]]] = PrivateAttr(
+    _dropped_ids: list[tuple[str, BaseException | None]] = PrivateAttr(
         default_factory=list
     )
 
@@ -37,21 +37,21 @@ class SpanTracker(BaseSpanHandler[BaseSpan]):
         self,
         id_: str,
         bound_args: inspect.BoundArguments,
-        instance: Optional[Any] = None,
-        parent_span_id: Optional[str] = None,
-        tags: Optional[dict[str, Any]] = None,
+        instance: Any | None = None,
+        parent_span_id: str | None = None,
+        tags: dict[str, Any] | None = None,
         **kwargs: Any,
-    ) -> Optional[BaseSpan]:
+    ) -> BaseSpan | None:
         return BaseSpan(id_=id_, parent_id=parent_span_id, tags=tags or {})
 
     def prepare_to_exit_span(
         self,
         id_: str,
         bound_args: inspect.BoundArguments,
-        instance: Optional[Any] = None,
-        result: Optional[Any] = None,
+        instance: Any | None = None,
+        result: Any | None = None,
         **kwargs: Any,
-    ) -> Optional[BaseSpan]:
+    ) -> BaseSpan | None:
         span = self.open_spans.get(id_)
         self._exited_ids.append(id_)
         return span
@@ -60,10 +60,10 @@ class SpanTracker(BaseSpanHandler[BaseSpan]):
         self,
         id_: str,
         bound_args: inspect.BoundArguments,
-        instance: Optional[Any] = None,
-        err: Optional[BaseException] = None,
+        instance: Any | None = None,
+        err: BaseException | None = None,
         **kwargs: Any,
-    ) -> Optional[BaseSpan]:
+    ) -> BaseSpan | None:
         span = self.open_spans.get(id_)
         self._dropped_ids.append((id_, err))
         return span

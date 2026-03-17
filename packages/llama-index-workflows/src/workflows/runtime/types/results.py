@@ -11,7 +11,6 @@ from typing import (
     Generic,
     Literal,
     TypeVar,
-    Union,
 )
 
 from pydantic import BaseModel, ConfigDict, model_serializer, model_validator
@@ -188,11 +187,11 @@ class AddWaiter(BaseModel, Generic[EventType]):
 
 # A step function result "command" communicates back to the workflow how the step function was resolved
 # e.g. are we collecting events, waiting for an event, or just returning a result?
-StepFunctionResult = Union[
-    StepWorkerResult,
-    StepWorkerFailed,
-    AddCollectedEvent,
-    DeleteCollectedEvent,
-    AddWaiter[Event],
-    DeleteWaiter,
-]
+StepFunctionResult = (
+    StepWorkerResult
+    | StepWorkerFailed
+    | AddCollectedEvent
+    | DeleteCollectedEvent
+    | AddWaiter[Event]
+    | DeleteWaiter
+)

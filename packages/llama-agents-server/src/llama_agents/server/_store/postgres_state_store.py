@@ -10,7 +10,7 @@ import logging
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import Any, AsyncGenerator, Generic, Literal, Type
+from typing import Any, AsyncGenerator, Generic, Literal
 
 import asyncpg
 from pydantic import BaseModel
@@ -51,13 +51,13 @@ class PostgresStateStore(Generic[MODEL_T]):
     No in-memory cache — the database is the source of truth.
     """
 
-    state_type: Type[MODEL_T]
+    state_type: type[MODEL_T]
 
     def __init__(
         self,
         pool: asyncpg.Pool,
         run_id: str,
-        state_type: Type[MODEL_T] | None = None,
+        state_type: type[MODEL_T] | None = None,
         serializer: BaseSerializer | None = None,
         schema: str | None = None,
     ) -> None:

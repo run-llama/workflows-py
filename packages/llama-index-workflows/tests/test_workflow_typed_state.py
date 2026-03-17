@@ -1,6 +1,5 @@
 import asyncio
 import json
-from typing import Optional, Union
 
 import pytest
 from pydantic import BaseModel, Field
@@ -67,7 +66,7 @@ class ParallelWorkflow(Workflow):
     @step
     async def init(
         self, ctx: Context[SomeState], ev: StartEvent
-    ) -> Union[WorkerEvent, GatherEvent]:
+    ) -> WorkerEvent | GatherEvent:
         for _ in range(10):
             ctx.send_event(WorkerEvent())
 
@@ -85,8 +84,8 @@ class ParallelWorkflow(Workflow):
 
     @step
     async def gather(
-        self, ctx: Context[SomeState], ev: Union[GatherEvent, ResultEvent]
-    ) -> Optional[StopEvent]:
+        self, ctx: Context[SomeState], ev: GatherEvent | ResultEvent
+    ) -> StopEvent | None:
         results = ctx.collect_events(ev, [ResultEvent] * 10)
         if not results:
             return None

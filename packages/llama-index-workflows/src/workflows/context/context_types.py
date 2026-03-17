@@ -1,5 +1,5 @@
 import json
-from typing import Any, Optional
+from typing import Any
 
 from pydantic import BaseModel, Field
 from pydantic.functional_validators import model_validator
@@ -68,7 +68,7 @@ class SerializedEventAttempt(BaseModel):
     # Number of times this event has been attempted (0 for first attempt)
     attempts: int = 0
     # Unix timestamp of first attempt, or None if not yet attempted
-    first_attempt_at: Optional[float] = None
+    first_attempt_at: float | None = None
 
 
 class SerializedWaiter(BaseModel):
@@ -83,7 +83,7 @@ class SerializedWaiter(BaseModel):
     # Requirements dict for matching the waited-for event
     has_requirements: bool = Field(default=False)
     # Resolved event if available (serialized), None otherwise
-    resolved_event: Optional[str] = None
+    resolved_event: str | None = None
 
     @model_validator(mode="before")
     @classmethod

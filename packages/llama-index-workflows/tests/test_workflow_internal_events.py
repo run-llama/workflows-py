@@ -1,5 +1,4 @@
 import asyncio
-from typing import Union
 
 import pytest
 from pydantic import BaseModel
@@ -60,7 +59,7 @@ class ExampleWorkflowDictState(Workflow):
 
 class ExampleWorkflowMultiWorkers(Workflow):
     @step
-    async def first_step(self, ev: StartEvent, ctx: Context) -> Union[SomeEvent, None]:
+    async def first_step(self, ev: StartEvent, ctx: Context) -> SomeEvent | None:
         for _ in range(10):
             ctx.send_event(SomeEvent(data=ev.message))
         return None

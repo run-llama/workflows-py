@@ -11,7 +11,6 @@ from typing import (
     AsyncGenerator,
     AsyncIterator,
     Literal,
-    Union,
     overload,
 )
 
@@ -71,7 +70,7 @@ class _QueuedDone:
     pass
 
 
-_QueueItem = Union[_QueuedEvent, _QueuedError, _QueuedDone]
+_QueueItem = _QueuedEvent | _QueuedError | _QueuedDone
 
 
 class EventStream:
