@@ -31,10 +31,7 @@ from workflows.resource import (
     _Resource,
     _ResourceConfig,
 )
-from workflows.utils import (
-    get_steps_from_class,
-    get_steps_from_instance,
-)
+from workflows.utils import get_steps_from_class, get_steps_from_instance
 
 
 def _get_type_name(type_annotation: type | None) -> str | None:

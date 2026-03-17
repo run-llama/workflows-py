@@ -9,7 +9,6 @@ from dataclasses import dataclass, field
 from typing import (
     TYPE_CHECKING,
     Any,
-    Literal,
     Tuple,
     get_args,
 )
@@ -20,7 +19,7 @@ from pydantic import ValidationError
 if TYPE_CHECKING:  # pragma: no cover
     from .context import Context
     from .runtime.types.plugin import Runtime
-from .decorators import StepConfig, StepFunction
+from .decorators import StepConfig, StepFunction, WorkflowGraphCheck
 from .errors import (
     WorkflowConfigurationError,
     WorkflowRuntimeError,
@@ -44,8 +43,6 @@ from .utils import get_steps_from_class, get_steps_from_instance
 
 dispatcher = get_dispatcher(__name__)
 logger = logging.getLogger(__name__)
-
-WorkflowGraphCheck = Literal["reachability", "terminal_event", "dead_end"]
 
 
 class WorkflowMeta(type):
@@ -484,121 +481,23 @@ class Workflow(metaclass=WorkflowMeta):
     def _validate_graph_structure(self) -> None:
         """Check that all steps are reachable from input events and only output events are terminal.
 
-        Builds a lightweight adjacency list directly from StepConfig data rather than
-        using the heavier get_workflow_representation (which does inspect/source lookups).
-
-        Input events: StartEvent, HumanResponseEvent (subclasses act as external input
-        sources). Output events: StopEvent, InputRequiredEvent. Steps returning only
-        None are exempt from dead-end checks.
+        Delegates to the pure ``validate_graph`` function in the representation
+        package and raises a single ``WorkflowValidationError`` listing every
+        problem found.
         """
-        steps = self._get_steps()
-        outgoing: dict[str, list[str]] = {}
-        event_type_map: dict[str, type] = {}
-        step_names: set[str] = set()
+        from .representation.validate import validate_graph
 
-        for name, func in steps.items():
-            step_names.add(name)
-            cfg = func._step_config
-            for ev in cfg.accepted_events:
-                event_type_map[ev.__name__] = ev
-                outgoing.setdefault(ev.__name__, []).append(name)
-            for rt in cfg.return_types:
-                if rt is type(None):
-                    continue
-                event_type_map[rt.__name__] = rt
-                outgoing.setdefault(name, []).append(rt.__name__)
-
-        # Forward DFS from StartEvent + HumanResponseEvent subclasses
-        seeds: list[str] = [self._start_event_class.__name__]
-        for ev_name, ev_type in event_type_map.items():
-            if issubclass(ev_type, HumanResponseEvent) and ev_name not in seeds:
-                seeds.append(ev_name)
-
-        reachable: set[str] = set()
-        stack = list(seeds)
-        while stack:
-            nid = stack.pop()
-            if nid in reachable:
-                continue
-            reachable.add(nid)
-            for target in outgoing.get(nid, []):
-                if target not in reachable:
-                    stack.append(target)
-
-        if "reachability" not in self._skip_graph_checks:
-            step_skip = {
-                name
-                for name, step_func in steps.items()
-                if "reachability" in step_func._step_config.skip_graph_checks
-            }
-            unreachable_steps = (step_names - reachable) - step_skip
-        else:
-            unreachable_steps = set()
-        if unreachable_steps:
-            names = ", ".join(sorted(unreachable_steps))
-            raise WorkflowValidationError(
-                f"The following steps are not reachable from any input event "
-                f"(StartEvent or HumanResponseEvent): {names}"
-            )
-
-        # Terminal event check: events with no step consumer must be output events
-        if "terminal_event" not in self._skip_graph_checks:
-            for ev_name, ev_type in event_type_map.items():
-                targets = outgoing.get(ev_name, [])
-                if any(t in step_names for t in targets):
-                    continue
-                if issubclass(ev_type, (StopEvent, InputRequiredEvent)):
-                    continue
-                raise WorkflowValidationError(
-                    f"Event '{ev_name}' is produced but never consumed. "
-                    "Only StopEvent and InputRequiredEvent may be terminal. "
-                    "Ensure some step consumes this event or it is an output event type."
-                )
-
-        # Dead-end detection: every step that produces events must have a forward
-        # path to an output event. Steps returning only None are exempt.
-        if "dead_end" not in self._skip_graph_checks:
-            incoming: dict[str, list[str]] = {}
-            for source, targets in outgoing.items():
-                for target in targets:
-                    incoming.setdefault(target, []).append(source)
-
-            output_seeds: list[str] = [
-                ev_name
-                for ev_name, ev_type in event_type_map.items()
-                if issubclass(ev_type, (StopEvent, InputRequiredEvent))
-            ]
-
-            reverse_reachable: set[str] = set()
-            stack = list(output_seeds)
-            while stack:
-                nid = stack.pop()
-                if nid in reverse_reachable:
-                    continue
-                reverse_reachable.add(nid)
-                for source in incoming.get(nid, []):
-                    if source not in reverse_reachable:
-                        stack.append(source)
-
-            event_names_set = set(event_type_map.keys())
-            steps_producing_events = {
-                s
-                for s in step_names
-                if any(t in event_names_set for t in outgoing.get(s, []))
-            }
-
-            step_skip = {
-                name
-                for name, step_func in steps.items()
-                if "dead_end" in step_func._step_config.skip_graph_checks
-            }
-            dead_end_steps = (steps_producing_events - reverse_reachable) - step_skip
-            if dead_end_steps:
-                names = ", ".join(sorted(dead_end_steps))
-                raise WorkflowValidationError(
-                    f"The following steps have no path to an output event "
-                    f"(StopEvent or InputRequiredEvent): {names}"
-                )
+        step_configs = {
+            name: func._step_config for name, func in self._get_steps().items()
+        }
+        errors = validate_graph(
+            steps=step_configs,
+            start_event_class=self._start_event_class,
+            skip_checks=self._skip_graph_checks,
+        )
+        if errors:
+            detail = "\n".join(f"  - [{e.check}] {e.message}" for e in errors)
+            raise WorkflowValidationError(f"Graph validation failed:\n{detail}")
 
     def _validate_resource_configs(self) -> list[str]:
         """Validate all resource configs (including nested ones) by loading them."""

@@ -37,6 +37,7 @@ if TYPE_CHECKING:  # pragma: no cover
     from .workflow import Workflow
 from .retry_policy import RetryPolicy
 
+WorkflowGraphCheck = Literal["reachability", "terminal_event", "dead_end"]
 StepGraphCheck = Literal["reachability", "dead_end"]
 
 
