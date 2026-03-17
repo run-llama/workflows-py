@@ -31,6 +31,7 @@ async def main() -> None:
     parser.add_argument("--db-url", required=True)
     parser.add_argument("--port", type=int, required=True)
     parser.add_argument("--idle-timeout", type=float, default=None)
+    parser.add_argument("--executor-id", default=None)
     args = parser.parse_args()
 
     workflow_class, _module = import_workflow(args.workflow)
@@ -39,7 +40,7 @@ async def main() -> None:
         "system_database_url": args.db_url,
         "run_admin_server": False,
         "notification_listener_polling_interval_sec": 0.01,
-        "executor_id": f"test-replica-{args.port}",
+        "executor_id": args.executor_id or f"test-replica-{args.port}",
     }
     DBOS(config=config)
     dbos_runtime = DBOSRuntime(polling_interval_sec=0.01)

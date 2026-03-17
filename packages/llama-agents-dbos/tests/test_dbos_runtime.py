@@ -10,7 +10,8 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import suppress
-from typing import Any, Generator
+from types import SimpleNamespace
+from typing import Any, Generator, cast
 from unittest.mock import patch
 
 import pytest
@@ -27,6 +28,16 @@ from workflows.events import Event, StartEvent, StopEvent
 from workflows.runtime.types.named_task import WorkerTask
 from workflows.testing import WorkflowTestRunner
 from workflows.workflow import Workflow
+
+
+def _fake_sqlite_engine() -> Engine:
+    return cast(
+        Engine,
+        SimpleNamespace(
+            dialect=SimpleNamespace(name="sqlite"),
+            url=SimpleNamespace(database=":memory:"),
+        ),
+    )
 
 
 @pytest.fixture(scope="module")
@@ -282,3 +293,79 @@ async def test_replay_wait_for_next_task_timeout_returns_none(
         task.cancel()
         with suppress(asyncio.CancelledError):
             await task
+
+
+@pytest.mark.asyncio
+async def test_async_launch_runs_dbos_launch_on_caller_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Async launch should preserve the active application loop."""
+    runtime = DBOSRuntime(run_migrations_on_launch=False)
+    observed: dict[str, asyncio.AbstractEventLoop | None] = {"loop": None}
+
+    def fake_launch() -> None:
+        observed["loop"] = asyncio.get_running_loop()
+
+    fake_dbos = SimpleNamespace(launch=fake_launch, destroy=lambda: None)
+    monkeypatch.setattr("llama_agents.dbos.runtime.DBOS", fake_dbos)
+    monkeypatch.setattr(
+        DBOSRuntime,
+        "_get_sql_engine",
+        lambda self: _fake_sqlite_engine(),
+    )
+
+    await runtime.launch()
+
+    assert observed["loop"] is asyncio.get_running_loop()
+
+    await runtime.destroy()
+
+
+def test_launch_sync_offloads_dbos_launch_from_asyncio_run_loop(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Sync launch should not bind DBOS to the temporary asyncio.run loop."""
+    runtime = DBOSRuntime(run_migrations_on_launch=False)
+    observed: dict[str, bool] = {"saw_running_loop": False}
+
+    def fake_launch() -> None:
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            observed["saw_running_loop"] = False
+        else:
+            observed["saw_running_loop"] = True
+
+    fake_dbos = SimpleNamespace(launch=fake_launch, destroy=lambda: None)
+    monkeypatch.setattr("llama_agents.dbos.runtime.DBOS", fake_dbos)
+    monkeypatch.setattr(
+        DBOSRuntime,
+        "_get_sql_engine",
+        lambda self: _fake_sqlite_engine(),
+    )
+
+    runtime.launch_sync()
+
+    assert not observed["saw_running_loop"]
+
+    runtime.destroy_sync()
+
+
+@pytest.mark.asyncio
+async def test_launch_sync_raises_in_async_context() -> None:
+    """Sync launch should fail loudly when called from an async context."""
+    runtime = DBOSRuntime(run_migrations_on_launch=False)
+
+    with pytest.raises(RuntimeError, match="use 'await runtime.launch\\(\\)' instead"):
+        runtime.launch_sync()
+
+
+def test_launch_sync_raises_with_executor_lease() -> None:
+    """Executor leasing requires async launch because it owns async tasks."""
+    runtime = DBOSRuntime(
+        run_migrations_on_launch=False,
+        _experimental_executor_lease={"pool_size": 1},
+    )
+
+    with pytest.raises(RuntimeError, match="_experimental_executor_lease"):
+        runtime.launch_sync()

@@ -695,42 +695,21 @@ class DBOSRuntime(Runtime):
 
         return _factory
 
-    def build_server_runtime(self, *, idle_timeout: float = 600.0) -> Runtime:
-        """Build the decorator chain for use with WorkflowServer.
+    def _finalize_launch(self) -> None:
+        """Resolve DB-backed resources after DBOS.launch() completes."""
+        engine = self._get_sql_engine()
+        self._schema = _resolve_schema(self.config, engine)
+        if engine.dialect.name == "postgresql":
+            self._dsn = _sqlalchemy_url_to_asyncpg_dsn(engine.url)
+        else:
+            self._db_path = (
+                str(engine.url.database) if engine.url.database else ":memory:"
+            )
+        self._dbos_launched = True
+        self._launch_ready.set()
 
-        Wraps the DBOS runtime with:
-        - TickPersistenceDecorator (persists ticks to workflow store)
-        - EventInterceptorDecorator (blocks events from reaching DBOS streams)
-        - DBOSIdleReleaseDecorator (releases idle workflows after timeout)
-
-        Chain order (outermost first):
-        DBOSIdleReleaseDecorator → EventInterceptorDecorator → TickPersistenceDecorator → DBOSRuntime
-
-        Args:
-            idle_timeout: Seconds to wait after a workflow becomes idle before
-                releasing it. Defaults to 10 minutes.
-
-        The returned runtime should be passed as the ``runtime`` argument
-        to ``WorkflowServer``.
-        """
-        store = self.create_workflow_store()
-        tick_persistence = TickPersistenceDecorator(self, store)
-        return DBOSIdleReleaseDecorator(
-            EventInterceptorDecorator(tick_persistence),
-            store=store,
-            idle_timeout=idle_timeout,
-            journal_crud=self._create_journal_crud_factory(),
-            lifecycle_lock=self._create_lifecycle_lock_factory(),
-        )
-
-    async def launch(self) -> None:
-        """
-        Launch DBOS and register all tracked workflows.
-
-        Must be called before running any workflows.
-        Runs database migrations unless run_migrations_on_launch=False.
-        If ``_experimental_executor_lease`` is set in the config, acquires a lease slot first.
-        """
+    async def _prepare_launch(self, *, start_lease_watch: bool) -> None:
+        """Run the async setup required before calling DBOS.launch()."""
         if self._dbos_launched:
             return  # Already launched
 
@@ -786,7 +765,8 @@ class DBOSRuntime(Runtime):
             config["executor_id"] = self._lease_manager.executor_id
             DBOS(config=cast(Any, config))
             logger.info("Acquired executor lease: %s", self._lease_manager.executor_id)
-            self._lease_watch_task = asyncio.create_task(self._watch_lease())
+            if start_lease_watch:
+                self._lease_watch_task = asyncio.create_task(self._watch_lease())
 
         # Register each pending workflow with DBOS
         for workflow in self._tracked_workflows:
@@ -794,27 +774,83 @@ class DBOSRuntime(Runtime):
             registered = self.register(workflow)
             self._registered[id(workflow)] = registered
 
-        # Launch from a threadpool worker so DBOS doesn't capture the
-        # caller's event loop (which may be temporary, e.g. launch_sync).
-        def _launch_and_configure() -> None:
-            DBOS.launch()
-            engine = self._get_sql_engine()
-            self._schema = _resolve_schema(self.config, engine)
-            if engine.dialect.name == "postgresql":
-                self._dsn = _sqlalchemy_url_to_asyncpg_dsn(engine.url)
-            else:
-                self._db_path = (
-                    str(engine.url.database) if engine.url.database else ":memory:"
-                )
-            self._dbos_launched = True
-            self._launch_ready.set()
-
-        loop = asyncio.get_running_loop()
-        await loop.run_in_executor(None, _launch_and_configure)
-
+    async def _post_launch(self) -> None:
+        """Run async work after DBOS.launch() has captured its target context."""
         # Run migrations after DBOS is launched (if configured)
         if self.config.get("run_migrations_on_launch", True):
             await self.run_migrations()
+
+    def build_server_runtime(self, *, idle_timeout: float = 600.0) -> Runtime:
+        """Build the decorator chain for use with WorkflowServer.
+
+        Wraps the DBOS runtime with:
+        - TickPersistenceDecorator (persists ticks to workflow store)
+        - EventInterceptorDecorator (blocks events from reaching DBOS streams)
+        - DBOSIdleReleaseDecorator (releases idle workflows after timeout)
+
+        Chain order (outermost first):
+        DBOSIdleReleaseDecorator → EventInterceptorDecorator → TickPersistenceDecorator → DBOSRuntime
+
+        Args:
+            idle_timeout: Seconds to wait after a workflow becomes idle before
+                releasing it. Defaults to 10 minutes.
+
+        The returned runtime should be passed as the ``runtime`` argument
+        to ``WorkflowServer``.
+        """
+        store = self.create_workflow_store()
+        tick_persistence = TickPersistenceDecorator(self, store)
+        return DBOSIdleReleaseDecorator(
+            EventInterceptorDecorator(tick_persistence),
+            store=store,
+            idle_timeout=idle_timeout,
+            journal_crud=self._create_journal_crud_factory(),
+            lifecycle_lock=self._create_lifecycle_lock_factory(),
+        )
+
+    async def launch(self) -> None:
+        """
+        Launch DBOS and register all tracked workflows.
+
+        Must be called before running any workflows.
+        Runs database migrations unless run_migrations_on_launch=False.
+        If ``_experimental_executor_lease`` is set in the config, acquires a
+        lease slot first.
+        """
+        await self._prepare_launch(start_lease_watch=True)
+        if self._dbos_launched:
+            return
+        # Async server startup should keep DBOS on the caller's live loop so
+        # startup recovery and later HTTP handlers share the same long-lived
+        # application event loop.
+        DBOS.launch()
+        self._finalize_launch()
+        await self._post_launch()
+
+    def launch_sync(self) -> None:
+        """Launch DBOS from synchronous code without capturing asyncio.run()'s loop."""
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            pass
+        else:
+            raise RuntimeError(
+                "DBOSRuntime.launch_sync() cannot be called from an async context; "
+                "use 'await runtime.launch()' instead."
+            )
+
+        if self.config.get("_experimental_executor_lease") is not None:
+            raise RuntimeError(
+                "DBOSRuntime.launch_sync() does not support "
+                "'_experimental_executor_lease'; use 'await runtime.launch()' instead."
+            )
+
+        asyncio.run(self._prepare_launch(start_lease_watch=False))
+        if self._dbos_launched:
+            return
+        DBOS.launch()
+        self._finalize_launch()
+        asyncio.run(self._post_launch())
 
     @property
     def is_launched(self) -> bool:
