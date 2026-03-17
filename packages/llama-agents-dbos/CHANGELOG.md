@@ -1,5 +1,15 @@
 # llama-agents-dbos
 
+## 0.2.0
+
+### Minor Changes
+
+- b32ec53: Drop python 3.9 support
+
+### Patch Changes
+
+- 2535e1f: fix dbos launch running multiple loops
+
 ## 0.1.2
 
 ### Patch Changes

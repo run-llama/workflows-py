@@ -828,7 +828,7 @@ name = "exceptiongroup"
 version = "1.3.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "typing-extensions", marker = "python_full_version < '3.13'" },
+    { name = "typing-extensions", marker = "python_full_version < '3.11'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/0b/9f/a65090624ecf468cdca03533906e7c69ed7588582240cfe7cc9e770b50eb/exceptiongroup-1.3.0.tar.gz", hash = "sha256:b241f5885f560bc56a59ee63ca4c6a8bfa46ae4ad651af316d4e81817bb9fd88", size = 29749, upload-time = "2025-05-10T17:42:51.123Z" }
 wheels = [
@@ -1526,7 +1526,7 @@ wheels = [
 
 [[package]]
 name = "llama-agents-client"
-version = "0.2.3"
+version = "0.3.0"
 source = { editable = "packages/llama-agents-client" }
 dependencies = [
     { name = "httpx" },
@@ -1561,7 +1561,7 @@ dev = [
 
 [[package]]
 name = "llama-agents-dbos"
-version = "0.1.2"
+version = "0.2.0"
 source = { editable = "packages/llama-agents-dbos" }
 dependencies = [
     { name = "dbos" },
@@ -1700,7 +1700,7 @@ dev = [
 
 [[package]]
 name = "llama-agents-server"
-version = "0.2.3"
+version = "0.3.0"
 source = { editable = "packages/llama-agents-server" }
 dependencies = [
     { name = "httpx" },
@@ -1828,7 +1828,7 @@ wheels = [
 
 [[package]]
 name = "llama-index-utils-workflow"
-version = "0.9.5"
+version = "0.10.0"
 source = { editable = "packages/llama-index-utils-workflow" }
 dependencies = [
     { name = "llama-index-core" },
@@ -1865,7 +1865,7 @@ dev = [
 
 [[package]]
 name = "llama-index-workflows"
-version = "2.16.1"
+version = "2.17.0"
 source = { editable = "packages/llama-index-workflows" }
 dependencies = [
     { name = "llama-index-instrumentation" },
