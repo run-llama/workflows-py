@@ -65,6 +65,7 @@ class WorkflowServer:
         persistence_backoff: list[float] = [0.5, 3],
         runtime: Runtime | None = None,
         idle_timeout: float = 60.0,
+        sse_heartbeat_interval: float | None = 25.0,
     ):
         """Create a new workflow server.
 
@@ -90,6 +91,10 @@ class WorkflowServer:
             idle_timeout: Seconds to wait after a workflow becomes idle before
                 releasing it from memory. The workflow is automatically
                 reloaded when new events arrive. Defaults to ``60.0``.
+            sse_heartbeat_interval: Seconds between SSE keep-alive comments
+                (``: heartbeat``) on idle connections. Defaults to ``25.0``.
+                Set to ``None`` to disable heartbeats. Only applies to SSE
+                mode; NDJSON streams are unaffected.
         """
         self._workflow_store = (
             workflow_store if workflow_store is not None else MemoryWorkflowStore()
@@ -116,6 +121,7 @@ class WorkflowServer:
             self._service,
             middleware=middleware,
             exception_handlers=dict(exception_handlers) if exception_handlers else None,
+            sse_heartbeat_interval=sse_heartbeat_interval,
         )
         self.app = self._api.app
 
