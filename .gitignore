@@ -155,3 +155,6 @@ node_modules/
 
 # Cloned reference repositories
 llama_index/
+
+# Docs preview
+.docs-preview/
