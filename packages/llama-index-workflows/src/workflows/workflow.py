@@ -9,7 +9,9 @@ from dataclasses import dataclass, field
 from typing import (
     TYPE_CHECKING,
     Any,
+    Literal,
     Tuple,
+    get_args,
 )
 
 from llama_index_instrumentation import get_dispatcher
@@ -42,6 +44,8 @@ from .utils import get_steps_from_class, get_steps_from_instance
 
 dispatcher = get_dispatcher(__name__)
 logger = logging.getLogger(__name__)
+
+WorkflowGraphCheck = Literal["reachability", "terminal_event", "dead_end"]
 
 
 class WorkflowMeta(type):
@@ -100,6 +104,7 @@ class Workflow(metaclass=WorkflowMeta):
 
     # Populated by the metaclass; declared here for type checkers.
     _step_functions: dict[str, StepFunction]
+    _step_functions_version: int = 0
 
     _runtime: Runtime
     _workflow_name: str | None
@@ -113,6 +118,7 @@ class Workflow(metaclass=WorkflowMeta):
         num_concurrent_runs: int | None = None,
         runtime: Runtime | None = None,
         workflow_name: str | None = None,
+        skip_graph_checks: set[WorkflowGraphCheck] | None = None,
     ) -> None:
         """
         Initialize a workflow instance.
@@ -132,6 +138,9 @@ class Workflow(metaclass=WorkflowMeta):
             workflow_name (str | None): Optional explicit name for this workflow.
                 If not provided, a module-qualified name is computed from
                 the class's `__module__` and `__qualname__` attributes.
+            skip_graph_checks (set[str] | None): Optional set of graph validation
+                checks to skip (e.g. "reachability", "terminal_event"). Use to
+                allow intentional patterns that would otherwise fail validation.
         """
         # Configuration
         self._timeout = timeout
@@ -149,6 +158,19 @@ class Workflow(metaclass=WorkflowMeta):
         # Instrumentation
         self._dispatcher = dispatcher
         self._runtime_locked = False
+        # Validation cache: set after first successful _validate(); skip re-validation on run() until invalidated.
+        # _validated_version tracks which _step_functions_version was validated so add_step() invalidates the cache.
+        self._validation_result: bool | None = None
+        self._validated_version: int = -1
+        checks = skip_graph_checks or set()
+        valid_checks = set(get_args(WorkflowGraphCheck))
+        unknown = checks - valid_checks
+        if unknown:
+            raise WorkflowValidationError(
+                f"Unknown graph check names: {', '.join(sorted(unknown))}. "
+                f"Valid names are: {', '.join(sorted(valid_checks))}"
+            )
+        self._skip_graph_checks: set[WorkflowGraphCheck] = checks
 
         # Runtime registration: explicit > context-scoped > basic_runtime
         from workflows.plugins._context import get_current_runtime
@@ -349,6 +371,7 @@ class Workflow(metaclass=WorkflowMeta):
             raise WorkflowValidationError(msg)
 
         cls._step_functions[func.__name__] = func
+        cls._step_functions_version += 1
 
     def _get_steps(self) -> dict[str, StepFunction]:
         """Returns all the steps, whether defined as methods or free functions."""
@@ -458,6 +481,125 @@ class Workflow(metaclass=WorkflowMeta):
             workflow=self, start_event=start_event_instance, run_id=run_id
         )
 
+    def _validate_graph_structure(self) -> None:
+        """Check that all steps are reachable from input events and only output events are terminal.
+
+        Builds a lightweight adjacency list directly from StepConfig data rather than
+        using the heavier get_workflow_representation (which does inspect/source lookups).
+
+        Input events: StartEvent, HumanResponseEvent (subclasses act as external input
+        sources). Output events: StopEvent, InputRequiredEvent. Steps returning only
+        None are exempt from dead-end checks.
+        """
+        steps = self._get_steps()
+        outgoing: dict[str, list[str]] = {}
+        event_type_map: dict[str, type] = {}
+        step_names: set[str] = set()
+
+        for name, func in steps.items():
+            step_names.add(name)
+            cfg = func._step_config
+            for ev in cfg.accepted_events:
+                event_type_map[ev.__name__] = ev
+                outgoing.setdefault(ev.__name__, []).append(name)
+            for rt in cfg.return_types:
+                if rt is type(None):
+                    continue
+                event_type_map[rt.__name__] = rt
+                outgoing.setdefault(name, []).append(rt.__name__)
+
+        # Forward DFS from StartEvent + HumanResponseEvent subclasses
+        seeds: list[str] = [self._start_event_class.__name__]
+        for ev_name, ev_type in event_type_map.items():
+            if issubclass(ev_type, HumanResponseEvent) and ev_name not in seeds:
+                seeds.append(ev_name)
+
+        reachable: set[str] = set()
+        stack = list(seeds)
+        while stack:
+            nid = stack.pop()
+            if nid in reachable:
+                continue
+            reachable.add(nid)
+            for target in outgoing.get(nid, []):
+                if target not in reachable:
+                    stack.append(target)
+
+        if "reachability" not in self._skip_graph_checks:
+            step_skip = {
+                name
+                for name, step_func in steps.items()
+                if "reachability" in step_func._step_config.skip_graph_checks
+            }
+            unreachable_steps = (step_names - reachable) - step_skip
+        else:
+            unreachable_steps = set()
+        if unreachable_steps:
+            names = ", ".join(sorted(unreachable_steps))
+            raise WorkflowValidationError(
+                f"The following steps are not reachable from any input event "
+                f"(StartEvent or HumanResponseEvent): {names}"
+            )
+
+        # Terminal event check: events with no step consumer must be output events
+        if "terminal_event" not in self._skip_graph_checks:
+            for ev_name, ev_type in event_type_map.items():
+                targets = outgoing.get(ev_name, [])
+                if any(t in step_names for t in targets):
+                    continue
+                if issubclass(ev_type, (StopEvent, InputRequiredEvent)):
+                    continue
+                raise WorkflowValidationError(
+                    f"Event '{ev_name}' is produced but never consumed. "
+                    "Only StopEvent and InputRequiredEvent may be terminal. "
+                    "Ensure some step consumes this event or it is an output event type."
+                )
+
+        # Dead-end detection: every step that produces events must have a forward
+        # path to an output event. Steps returning only None are exempt.
+        if "dead_end" not in self._skip_graph_checks:
+            incoming: dict[str, list[str]] = {}
+            for source, targets in outgoing.items():
+                for target in targets:
+                    incoming.setdefault(target, []).append(source)
+
+            output_seeds: list[str] = [
+                ev_name
+                for ev_name, ev_type in event_type_map.items()
+                if issubclass(ev_type, (StopEvent, InputRequiredEvent))
+            ]
+
+            reverse_reachable: set[str] = set()
+            stack = list(output_seeds)
+            while stack:
+                nid = stack.pop()
+                if nid in reverse_reachable:
+                    continue
+                reverse_reachable.add(nid)
+                for source in incoming.get(nid, []):
+                    if source not in reverse_reachable:
+                        stack.append(source)
+
+            event_names_set = set(event_type_map.keys())
+            steps_producing_events = {
+                s
+                for s in step_names
+                if any(t in event_names_set for t in outgoing.get(s, []))
+            }
+
+            step_skip = {
+                name
+                for name, step_func in steps.items()
+                if "dead_end" in step_func._step_config.skip_graph_checks
+            }
+            dead_end_steps = (steps_producing_events - reverse_reachable) - step_skip
+            if dead_end_steps:
+                names = ", ".join(sorted(dead_end_steps))
+                raise WorkflowValidationError(
+                    f"The following steps have no path to an output event "
+                    f"(StopEvent or InputRequiredEvent): {names}"
+                )
+
     def _validate_resource_configs(self) -> list[str]:
         """Validate all resource configs (including nested ones) by loading them."""
         errors: list[str] = []
@@ -522,9 +664,15 @@ class Workflow(metaclass=WorkflowMeta):
         Validate the workflow to ensure it's well-formed.
 
         This method validates the event graph and optionally validates resources:
+        - Event production/consumption (set-based checks)
+        - Graph structure: all steps reachable from an input event (StartEvent or HumanResponseEvent),
+          and only output events (StopEvent, InputRequiredEvent) may be terminal
         - Resource configs (JSON files with Pydantic validation) are validated by default
         - Resource factories are not validated by default (may require env vars)
         - Circular resource dependencies are caught when validate_resources=True
+
+        Validation result is cached after the first successful run(); subsequent run() calls
+        skip re-validation. Calling validate() explicitly always re-runs all checks.
 
         Args:
             validate_resource_configs: If True (default), validate that resource
@@ -552,6 +700,9 @@ class Workflow(metaclass=WorkflowMeta):
     ) -> bool:
         if self._disable_validation and not force:
             return False
+        stale = self._validated_version != self.__class__._step_functions_version
+        if not force and not stale and self._validation_result is not None:
+            return self._validation_result
 
         # Ensure at least one step is configured before inspecting events
         if not self._get_steps():
@@ -639,6 +790,9 @@ class Workflow(metaclass=WorkflowMeta):
                 f"The following events are produced but never consumed: {names}"
             )
 
+        # Graph structural checks: reachability from input events, terminal events
+        self._validate_graph_structure()
+
         # Resource validation
         if validate_resource_configs:
             if errors := self._validate_resource_configs():
@@ -660,11 +814,13 @@ class Workflow(metaclass=WorkflowMeta):
                     + "\n".join(f"  - {e}" for e in errors)
                 )
 
-        # Check if the workflow uses human-in-the-loop
-        return (
+        # Check if the workflow uses human-in-the-loop; cache result for subsequent run() calls
+        self._validation_result = (
             InputRequiredEvent in produced_events
             or HumanResponseEvent in consumed_events
         )
+        self._validated_version = self.__class__._step_functions_version
+        return self._validation_result
 
 
 @dataclass

@@ -374,7 +374,10 @@ def get_workflow_representation(workflow: Workflow) -> WorkflowGraph:
                     WorkflowGraphEdge(source=event_type.__name__, target=step_name)
                 )
 
-            if issubclass(event_type, HumanResponseEvent):
+            if (
+                issubclass(event_type, HumanResponseEvent)
+                and "external_step" in added_nodes
+            ):
                 edges.append(
                     WorkflowGraphEdge(
                         source="external_step", target=event_type.__name__
