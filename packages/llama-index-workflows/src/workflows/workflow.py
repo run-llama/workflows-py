@@ -496,7 +496,9 @@ class Workflow(metaclass=WorkflowMeta):
             skip_checks=self._skip_graph_checks,
         )
         if errors:
-            detail = "\n".join(f"  - [{e.check}] {e.message}" for e in errors)
+            detail = "\n".join(
+                f"  - [{e.check}] {e.message}\n    {e.hint}" for e in errors
+            )
             raise WorkflowValidationError(f"Graph validation failed:\n{detail}")
 
     def _validate_resource_configs(self) -> list[str]:

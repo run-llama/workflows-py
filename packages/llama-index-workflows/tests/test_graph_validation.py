@@ -36,7 +36,7 @@ def _validate(
 
 
 def _errors_by_check(
-    errors: list[GraphValidationError], check: str
+    errors: list[GraphValidationError], check: WorkflowGraphCheck
 ) -> list[GraphValidationError]:
     return [e for e in errors if e.check == check]
 
@@ -161,8 +161,10 @@ def test_validate_terminal_event_accumulated() -> None:
     errors = _validate(MultiDangling())
     terminal = _errors_by_check(errors, "terminal_event")
     assert len(terminal) == 1
-    assert "DanglingA" in terminal[0].message
-    assert "DanglingB" in terminal[0].message
+    assert (
+        terminal[0].message
+        == "Events produced but never consumed: DanglingA, DanglingB"
+    )
 
 
 def test_validate_dead_end_cycle() -> None:
@@ -303,10 +305,17 @@ def test_validate_multiple_errors_accumulated() -> None:
             return StopEvent(result="done")
 
     errors = _validate(MultiError())
-    checks_found = {e.check for e in errors}
-    assert "reachability" in checks_found
-    assert "dead_end" in checks_found
-    assert len(errors) >= 2
+    detail = "\n".join(f"  - [{e.check}] {e.message}\n    {e.hint}" for e in errors)
+    msg = f"Graph validation failed:\n{detail}"
+    assert (
+        msg
+        == """\
+Graph validation failed:
+  - [reachability] Unreachable steps: island
+    Steps must be reachable from StartEvent or HumanResponseEvent.
+  - [dead_end] Dead-end steps: cycle_b, cycle_c
+    Steps must have a path to StopEvent or InputRequiredEvent."""
+    )
 
 
 # -- Tests: build_step_graph -------------------------------------------------

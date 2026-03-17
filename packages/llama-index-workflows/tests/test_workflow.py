@@ -947,7 +947,7 @@ def test_graph_validation_unreachable_step_raises() -> None:
     wf = UnreachableStepWorkflow()
     with pytest.raises(
         WorkflowValidationError,
-        match="not reachable from any input event",
+        match="Unreachable steps",
     ):
         wf.validate()
 

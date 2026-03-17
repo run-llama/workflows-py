@@ -117,6 +117,7 @@ class GraphValidationError:
 
     check: WorkflowGraphCheck
     message: str
+    hint: str
     step_names: list[str] = field(default_factory=list)
 
 
@@ -162,10 +163,8 @@ def validate_graph(
             errors.append(
                 GraphValidationError(
                     check="reachability",
-                    message=(
-                        f"The following steps are not reachable from any input event "
-                        f"(StartEvent or HumanResponseEvent): {names}"
-                    ),
+                    message=f"Unreachable steps: {names}",
+                    hint="Steps must be reachable from StartEvent or HumanResponseEvent.",
                     step_names=unreachable_steps,
                 )
             )
@@ -185,11 +184,8 @@ def validate_graph(
             errors.append(
                 GraphValidationError(
                     check="terminal_event",
-                    message=(
-                        f"The following events are produced but never consumed: {names}. "
-                        "Only StopEvent and InputRequiredEvent may be terminal. "
-                        "Ensure some step consumes these events or they are output event types."
-                    ),
+                    message=f"Events produced but never consumed: {names}",
+                    hint="Only StopEvent and InputRequiredEvent may be terminal.",
                     step_names=[],
                 )
             )
@@ -215,10 +211,8 @@ def validate_graph(
             errors.append(
                 GraphValidationError(
                     check="dead_end",
-                    message=(
-                        f"The following steps have no path to an output event "
-                        f"(StopEvent or InputRequiredEvent): {names}"
-                    ),
+                    message=f"Dead-end steps: {names}",
+                    hint="Steps must have a path to StopEvent or InputRequiredEvent.",
                     step_names=dead_end_steps,
                 )
             )
