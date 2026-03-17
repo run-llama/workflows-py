@@ -1,5 +1,12 @@
 # llama-index-workflows
 
+## 2.17.0
+
+### Minor Changes
+
+- 7fc1aae: feat: add graph structure validation (reachability, terminal events) with opt-out
+- b32ec53: Drop python 3.9 support
+
 ## 2.16.1
 
 ### Patch Changes
