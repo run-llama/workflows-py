@@ -11,7 +11,7 @@ import sqlite3
 import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import Any, AsyncGenerator, Generic, Literal, Type
+from typing import Any, AsyncGenerator, Generic, Literal
 
 from pydantic import BaseModel
 from typing_extensions import TypeVar
@@ -51,13 +51,13 @@ class SqliteStateStore(Generic[MODEL_T]):
     No in-memory cache — the database is the source of truth.
     """
 
-    state_type: Type[MODEL_T]
+    state_type: type[MODEL_T]
 
     def __init__(
         self,
         db_path: str,
         run_id: str,
-        state_type: Type[MODEL_T] | None = None,
+        state_type: type[MODEL_T] | None = None,
         serializer: BaseSerializer | None = None,
     ) -> None:
         self._db_path = db_path

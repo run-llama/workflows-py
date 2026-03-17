@@ -21,16 +21,8 @@ from typing import (
 if TYPE_CHECKING:
     from workflows.decorators import StepFunction
 
-try:
-    from typing import Union
-except ImportError:  # pragma: no cover
-    from typing_extensions import Union
-
-# handle python version compatibility
-try:
-    from types import UnionType  # type: ignore[attr-defined]
-except ImportError:  # pragma: no cover
-    from typing import Union as UnionType  # type: ignore[assignment]
+from types import UnionType
+from typing import Union
 
 from pydantic import BaseModel
 

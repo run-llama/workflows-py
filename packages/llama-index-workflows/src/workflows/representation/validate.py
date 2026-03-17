@@ -4,13 +4,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Union
 
 from workflows.decorators import StepConfig, WorkflowGraphCheck
 from workflows.events import HumanResponseEvent, InputRequiredEvent, StopEvent
 
 # Graph nodes: step names (str) for steps, event classes (type) for events.
-GraphNode = Union[str, type]
+GraphNode = str | type
 
 
 @dataclass

@@ -36,15 +36,6 @@ class _AliasLoader(Loader):
 class _AliasFinder(MetaPathFinder):
     """Meta-path finder that redirects llama_agents.workflows.* to workflows.*"""
 
-    def find_module(
-        self, fullname: str, path: Sequence[str] | None = None
-    ) -> Loader | None:
-        # Python 3.9 compat - some tools call find_module instead of find_spec
-        spec = self.find_spec(fullname, path)
-        if spec and spec.loader:
-            return spec.loader  # type: ignore[return-value]
-        return None
-
     def find_spec(
         self,
         fullname: str,

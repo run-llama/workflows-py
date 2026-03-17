@@ -10,7 +10,7 @@ Provides custom serializers/validators for:
 
 from __future__ import annotations
 
-from typing import Annotated, Any, Optional
+from typing import Annotated, Any
 
 from pydantic import PlainSerializer, PlainValidator
 from workflows.context.serializers import JsonSerializer
@@ -50,7 +50,7 @@ def _deserialize_optional_event(data: Any) -> Event | None:
 
 
 SerializableOptionalEvent = Annotated[
-    Optional[Event],
+    Event | None,
     PlainSerializer(_serialize_optional_event, return_type=Any),
     PlainValidator(_deserialize_optional_event),
 ]

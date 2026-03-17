@@ -6,10 +6,9 @@ import ast
 import inspect
 import json
 import textwrap
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Tuple, Union, cast
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Tuple, cast
 
-# llama-index-core uses PEP 604 union syntax (`X | Y`) at runtime which
-# crashes on Python 3.9.  Guard imports behind TYPE_CHECKING so the module
+# Guard imports behind TYPE_CHECKING so the module
 # loads without pulling the full llama-index-core import chain.
 if TYPE_CHECKING:
     from llama_index.core.agent.workflow import (
@@ -363,7 +362,7 @@ def _extract_single_agent_structure(agent: BaseWorkflowAgent) -> WorkflowGraph:
     nodes.append(agent_node)
 
     # Add tool nodes and edges
-    tools = cast(Union[List[Union[BaseTool, AsyncBaseTool]], None], agent.tools)
+    tools = cast(List[BaseTool | AsyncBaseTool] | None, agent.tools)
     if tools is not None and len(tools) > 0:
         for i, tool in enumerate(tools):
             tool_id = f"tool_{i}"

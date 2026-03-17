@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections import Counter, defaultdict
-from typing import TYPE_CHECKING, Any, Coroutine, Generic, Type, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Coroutine, Generic, TypeVar, cast
 
 from workflows.context.context_types import MODEL_T
 from workflows.context.state_store import StateStore
@@ -114,7 +114,7 @@ class InternalContext(Generic[MODEL_T]):
     def collect_events(
         self,
         ev: Event,
-        expected: list[Type[Event]],
+        expected: list[type[Event]],
         buffer_id: str | None = None,
     ) -> list[Event] | None:
         """Collect events until all expected types are received."""
@@ -139,7 +139,7 @@ class InternalContext(Generic[MODEL_T]):
             return None
 
         total = []
-        by_type: dict[Type[Event], list[Event]] = defaultdict(list)
+        by_type: dict[type[Event], list[Event]] = defaultdict(list)
         for e in collected_events + [ev]:
             by_type[type(e)].append(e)
         # order by expected type
@@ -162,7 +162,7 @@ class InternalContext(Generic[MODEL_T]):
 
     async def wait_for_event(
         self,
-        event_type: Type[T],
+        event_type: type[T],
         waiter_event: Event | None = None,
         waiter_id: str | None = None,
         requirements: dict[str, Any] | None = None,

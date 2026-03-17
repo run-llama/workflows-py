@@ -12,22 +12,47 @@ from __future__ import annotations
 import asyncio
 import logging
 import sqlite3
-import sys
 import threading
 import time
 from collections.abc import Awaitable, Callable
 from typing import Any, AsyncGenerator, TypedDict, cast
 
 import asyncpg
+from llama_agents.client.protocol.serializable_events import (
+    EventEnvelopeWithMetadata,
+)
 from llama_agents.dbos._store import POSTGRES_MIGRATION_SOURCE, SQLITE_MIGRATION_SOURCE
+from llama_agents.server._runtime.event_interceptor import EventInterceptorDecorator
+from llama_agents.server._runtime.persistence_runtime import TickPersistenceDecorator
 from llama_agents.server._store import (
     POSTGRES_MIGRATION_SOURCE as SERVER_POSTGRES_MIGRATION_SOURCE,
 )
 from llama_agents.server._store import (
     SQLITE_MIGRATION_SOURCE as SERVER_SQLITE_MIGRATION_SOURCE,
 )
+from llama_agents.server._store.abstract_workflow_store import (
+    AbstractWorkflowStore,
+    HandlerQuery,
+    PersistentHandler,
+    StoredEvent,
+    StoredTick,
+)
+from llama_agents.server._store.postgres.migrate import (
+    run_migrations as pg_run_migrations,
+)
+from llama_agents.server._store.postgres_state_store import PostgresStateStore
+from llama_agents.server._store.postgres_workflow_store import (
+    PostgresWorkflowStore,
+)
+from llama_agents.server._store.sqlite.migrate import (
+    run_migrations as sqlite_run_migrations,
+)
+from llama_agents.server._store.sqlite.sqlite_state_store import SqliteStateStore
+from llama_agents.server._store.sqlite.sqlite_workflow_store import SqliteWorkflowStore
 from llama_index_instrumentation import get_dispatcher
 from pydantic import BaseModel
+from sqlalchemy.engine import URL as SaURL
+from sqlalchemy.engine import Engine
 from typing_extensions import Unpack
 from workflows.context.serializers import BaseSerializer, JsonSerializer
 from workflows.context.state_store import (
@@ -62,45 +87,9 @@ from workflows.runtime.types.step_function import (
 from workflows.runtime.types.ticks import WorkflowTick
 from workflows.workflow import Workflow
 
-try:
-    from dbos import DBOS, SetWorkflowID, WorkflowHandleAsync
-    from dbos._dbos import _get_dbos_instance
-    from dbos._error import DBOSNonExistentWorkflowError
-except ImportError as e:
-    # if 3.9, give a detailed error that dbos is not supported on this version of python
-    if sys.version_info.major == 3 and sys.version_info.minor <= 9:
-        raise ImportError(
-            "dbos is not supported on Python 3.9. Please use Python 3.10 or higher."
-            f"Error: {e}"
-        ) from e
-    raise
-
-from llama_agents.client.protocol.serializable_events import (
-    EventEnvelopeWithMetadata,
-)
-from llama_agents.server._runtime.event_interceptor import EventInterceptorDecorator
-from llama_agents.server._runtime.persistence_runtime import TickPersistenceDecorator
-from llama_agents.server._store.abstract_workflow_store import (
-    AbstractWorkflowStore,
-    HandlerQuery,
-    PersistentHandler,
-    StoredEvent,
-    StoredTick,
-)
-from llama_agents.server._store.postgres.migrate import (
-    run_migrations as pg_run_migrations,
-)
-from llama_agents.server._store.postgres_state_store import PostgresStateStore
-from llama_agents.server._store.postgres_workflow_store import (
-    PostgresWorkflowStore,
-)
-from llama_agents.server._store.sqlite.migrate import (
-    run_migrations as sqlite_run_migrations,
-)
-from llama_agents.server._store.sqlite.sqlite_state_store import SqliteStateStore
-from llama_agents.server._store.sqlite.sqlite_workflow_store import SqliteWorkflowStore
-from sqlalchemy.engine import URL as SaURL
-from sqlalchemy.engine import Engine
+from dbos import DBOS, SetWorkflowID, WorkflowHandleAsync
+from dbos._dbos import _get_dbos_instance
+from dbos._error import DBOSNonExistentWorkflowError
 
 from .executor_lease import ExecutorLeaseManager
 from .idle_release import DBOSIdleReleaseDecorator

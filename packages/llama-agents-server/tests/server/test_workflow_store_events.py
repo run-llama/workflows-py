@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from typing import Optional
 
 import pytest
 from llama_agents.client.protocol.serializable_events import EventEnvelopeWithMetadata
@@ -59,7 +58,7 @@ def _cancelled() -> WorkflowCancelledEvent:
 async def _subscribe_and_collect(
     store: AbstractWorkflowStore,
     run_id: str,
-    after_sequence: Optional[int] = None,
+    after_sequence: int | None = None,
 ) -> tuple[list[StoredEvent], asyncio.Task[None]]:
     """Subscribe to events, returning the collected list and the consumer task."""
     collected: list[StoredEvent] = []
@@ -126,8 +125,8 @@ async def test_append_multiple_events_and_query_all(
 async def test_query_events_with_filters(
     store: AbstractWorkflowStore,
     seed_count: int,
-    after_sequence: Optional[int],
-    limit: Optional[int],
+    after_sequence: int | None,
+    limit: int | None,
     expected_sequences: list[int],
 ) -> None:
     for i in range(seed_count):

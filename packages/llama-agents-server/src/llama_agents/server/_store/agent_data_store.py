@@ -8,7 +8,7 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
-from typing import Any, List
+from typing import Any
 
 from llama_agents.client.protocol.serializable_events import EventEnvelopeWithMetadata
 from workflows.context.serializers import BaseSerializer
@@ -236,7 +236,7 @@ class AgentDataStore(AbstractWorkflowStore):
         data = item["data"]
         return PersistentHandler.model_validate(data)
 
-    async def query(self, query: HandlerQuery) -> List[PersistentHandler]:
+    async def query(self, query: HandlerQuery) -> list[PersistentHandler]:
         filters = self._build_handler_filters(query)
         if filters is None:
             return []

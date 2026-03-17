@@ -15,7 +15,7 @@ events that can occur during workflow execution:
 
 from __future__ import annotations
 
-from typing import Annotated, Literal, Union
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Discriminator, TypeAdapter
 from workflows.runtime.types.results import StepFunctionResult
@@ -96,16 +96,14 @@ class TickIdleCheck(BaseModel):
 
 
 WorkflowTick = Annotated[
-    Union[
-        TickStepResult,
-        TickAddEvent,
-        TickCancelRun,
-        TickPublishEvent,
-        TickTimeout,
-        TickWaiterTimeout,
-        TickIdleCheck,
-        TickIdleRelease,
-    ],
+    TickStepResult
+    | TickAddEvent
+    | TickCancelRun
+    | TickPublishEvent
+    | TickTimeout
+    | TickWaiterTimeout
+    | TickIdleCheck
+    | TickIdleRelease,
     Discriminator("type"),
 ]
 

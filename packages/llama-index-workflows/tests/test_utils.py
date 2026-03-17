@@ -2,7 +2,7 @@
 # Copyright (c) 2026 LlamaIndex Inc.
 
 import inspect
-from typing import Any, List, Optional, Union, get_type_hints
+from typing import Any, get_type_hints
 
 import pytest
 from workflows.context import Context
@@ -40,7 +40,7 @@ def test_validate_step_signature_of_free_function() -> None:
 
 
 def test_validate_step_signature_union() -> None:
-    def f(ev: Union[OneTestEvent, AnotherTestEvent]) -> OneTestEvent:
+    def f(ev: OneTestEvent | AnotherTestEvent) -> OneTestEvent:
         return OneTestEvent()
 
     validate_step_signature(inspect_signature(f))
@@ -54,7 +54,7 @@ def test_validate_step_signature_of_free_function_with_context() -> None:
 
 
 def test_validate_step_signature_union_invalid() -> None:
-    def f(ev: Union[OneTestEvent, str]) -> None:
+    def f(ev: OneTestEvent | str) -> None:
         pass
 
     with pytest.raises(
@@ -183,7 +183,7 @@ def test_get_param_types_no_annotations() -> None:
 
 
 def test_get_param_types_union() -> None:
-    def f(foo: Union[str, int]) -> None:
+    def f(foo: str | int) -> None:
         pass
 
     sig = inspect.signature(f)
@@ -201,24 +201,24 @@ def test_get_return_types() -> None:
 
 
 def test_get_return_types_union() -> None:
-    def f(foo: int) -> Union[str, int]:
+    def f(foo: int) -> str | int:
         return ""
 
     assert _get_return_types(f) == [str, int]
 
 
 def test_get_return_types_optional() -> None:
-    def f(foo: int) -> Optional[str]:
+    def f(foo: int) -> str | None:
         return ""
 
     assert _get_return_types(f) == [str]
 
 
 def test_get_return_types_list() -> None:
-    def f(foo: int) -> List[str]:
+    def f(foo: int) -> list[str]:
         return [""]
 
-    assert _get_return_types(f) == [List[str]]
+    assert _get_return_types(f) == [list[str]]
 
 
 def test_is_free_function() -> None:

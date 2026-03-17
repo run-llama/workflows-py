@@ -19,7 +19,7 @@ version = "0.1.0"
 description = "Monorepo workspace for the LlamaIndex Workflows packages."
 readme = "README.md"
 license = "MIT"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 dependencies = [
   "click>=8.1.7",
   "httpx>=0.28.1",
@@ -38,19 +38,19 @@ typeCheckingMode = "standard"
 
 [[tool.basedpyright.executionEnvironments]]
 root = "packages/llama-index-workflows"
-pythonVersion = "3.9"
+pythonVersion = "3.10"
 
 [[tool.basedpyright.executionEnvironments]]
 root = "packages/llama-agents-client"
-pythonVersion = "3.9"
+pythonVersion = "3.10"
 
 [[tool.basedpyright.executionEnvironments]]
 root = "packages/llama-agents-server"
-pythonVersion = "3.9"
+pythonVersion = "3.10"
 
 [[tool.basedpyright.executionEnvironments]]
 root = "packages/llama-index-utils-workflow"
-pythonVersion = "3.9"
+pythonVersion = "3.10"
 
 [[tool.basedpyright.executionEnvironments]]
 root = "src/dev_cli"
@@ -113,15 +113,10 @@ select = [
 # "tests/*" = ["D", "D100", "D101"]
 "examples/**/*" = ["T201"]
 "packages/*/tests/**/*" = [
-  "T201",
-  # remove UP007 and UP045 after removing 3.9 support
-  "UP007",
-  "UP045"
+  "T201"
 ]
 "tests/dev_cli/**/*" = [
-  "T201",
-  "UP007",
-  "UP045"
+  "T201"
 ]
 "*.ipynb" = ["T201", "ANN001", "ANN002", "ANN003"]
 "__main__.py" = ["T201"]

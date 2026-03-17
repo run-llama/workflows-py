@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from typing import AsyncIterator, Union
+from typing import AsyncIterator
 from unittest.mock import AsyncMock
 
 import httpx
@@ -277,9 +277,7 @@ def _envelope(msg: str) -> EventEnvelopeWithMetadata:
 # Each "connection" in a script is a list of SSE events to yield, optionally
 # ending with an exception to simulate a disconnect. A bare exception means
 # the connection fails before yielding any data.
-ConnectionScript = Union[
-    list[Union[tuple[int, EventEnvelopeWithMetadata], Exception]], Exception
-]
+ConnectionScript = list[tuple[int, EventEnvelopeWithMetadata] | Exception] | Exception
 
 
 class FakeStreamClient:

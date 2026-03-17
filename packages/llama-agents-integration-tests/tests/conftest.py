@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable, Generator, List, Protocol, Union
+from typing import Any, Callable, Generator, Protocol
 
 import pytest
 from llama_agents_integration_tests.helpers import (
@@ -30,8 +30,8 @@ class WorkflowFactory(Protocol):
     def __call__(
         self,
         name: str = ...,
-        tools: List[Union[BaseTool, Callable[..., Any]]] | None = ...,
-        responses: List[ChatMessage] | None = ...,
+        tools: list[BaseTool | Callable[..., Any]] | None = ...,
+        responses: list[ChatMessage] | None = ...,
         initial_state: dict[str, Any] | None = ...,
         **kwargs: Any,
     ) -> AgentWorkflow: ...
@@ -43,7 +43,7 @@ class SimpleWorkflowFactory(Protocol):
     def __call__(
         self,
         name: str = ...,
-        responses: List[ChatMessage] | None = ...,
+        responses: list[ChatMessage] | None = ...,
         **kwargs: Any,
     ) -> AgentWorkflow: ...
 
@@ -58,8 +58,8 @@ def create_workflow() -> WorkflowFactory:
 
     def _create(
         name: str = "test_agent",
-        tools: List[Union[BaseTool, Callable[..., Any]]] | None = None,
-        responses: List[ChatMessage] | None = None,
+        tools: list[BaseTool | Callable[..., Any]] | None = None,
+        responses: list[ChatMessage] | None = None,
         initial_state: dict[str, Any] | None = None,
         **kwargs: Any,
     ) -> AgentWorkflow:
@@ -107,7 +107,7 @@ def create_simple_workflow(agent_type: str) -> SimpleWorkflowFactory:
 
     def _create(
         name: str = "test_agent",
-        responses: List[ChatMessage] | None = None,
+        responses: list[ChatMessage] | None = None,
         **kwargs: Any,
     ) -> AgentWorkflow:
         if responses is None:

@@ -3,8 +3,9 @@
 
 from __future__ import annotations
 
+import builtins
 import json
-from typing import Any, Type
+from typing import Any
 
 from pydantic import BaseModel, ValidationError, model_validator
 from workflows.context.utils import import_module_from_qualified_name
@@ -26,7 +27,7 @@ class EventEnvelopeWithMetadata(BaseModel):
     type: str
     types: list[str] | None
 
-    def load_event(self, registry: list[Type[Event]] = []) -> Event:
+    def load_event(self, registry: list[type[Event]] = []) -> Event:
         """
         Attempts to load the event data as a python class based on the envelope metadata.
         Looks up the event from the registry, if provided. Falls back to the qualified_name, attempting to load from the module path.
@@ -97,8 +98,8 @@ class EventEnvelope(BaseModel):
     def parse(
         cls,
         client_data: dict[str, Any] | str,
-        registry: dict[str, Type[Event]] | None = None,
-        explicit_event: Type[Event] | None = None,
+        registry: dict[str, builtins.type[Event]] | None = None,
+        explicit_event: builtins.type[Event] | None = None,
     ) -> Event:
         """
         Parse client data into an Event. Raises an EventValidationError if the client data is invalid.
@@ -163,7 +164,7 @@ class EventEnvelope(BaseModel):
         raise EventValidationError(" ".join(errors))
 
 
-def _get_event_subtypes(cls: Type[Event]) -> list[str] | None:
+def _get_event_subtypes(cls: type[Event]) -> list[str] | None:
     """
     Traverses the MRO (Module Resolution Order) of a class and returns the list of only Event subclasses.
     """
@@ -179,7 +180,7 @@ def _get_event_subtypes(cls: Type[Event]) -> list[str] | None:
     return names
 
 
-def _get_qualified_name(event: Type[Event]) -> str:
+def _get_qualified_name(event: type[Event]) -> str:
     return f"{event.__module__}.{event.__name__}"
 
 

@@ -20,7 +20,6 @@ from typing import (
     Generator,
     Literal,
     Protocol,
-    Union,
 )
 
 from workflows.context.state_store import StateStore
@@ -61,7 +60,7 @@ class WaitResultTimeout:
     type: Literal["timeout"] = "timeout"
 
 
-WaitResult = Union[WaitResultTick, WaitResultTimeout]
+WaitResult = WaitResultTick | WaitResultTimeout
 
 
 @dataclass

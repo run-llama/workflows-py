@@ -11,7 +11,6 @@ from typing import (
     Any,
     AsyncGenerator,
     Generic,
-    Type,
     TypeVar,
     cast,
 )
@@ -395,7 +394,7 @@ class Context(Generic[MODEL_T]):
         return await self._require_external(fn="running_steps").running_steps()
 
     def collect_events(
-        self, ev: Event, expected: list[Type[Event]], buffer_id: str | None = None
+        self, ev: Event, expected: list[type[Event]], buffer_id: str | None = None
     ) -> list[Event] | None:
         """
         Buffer events until all expected types are available, then return them.
@@ -486,7 +485,7 @@ class Context(Generic[MODEL_T]):
 
     async def wait_for_event(
         self,
-        event_type: Type[T],
+        event_type: type[T],
         waiter_event: Event | None = None,
         waiter_id: str | None = None,
         requirements: dict[str, Any] | None = None,

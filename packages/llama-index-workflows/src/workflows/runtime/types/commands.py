@@ -17,7 +17,6 @@ such as starting workers, queuing events, or completing the workflow.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Union
 
 from workflows.events import Event, StopEvent
 
@@ -79,16 +78,16 @@ class CommandScheduleIdleCheck:
     pass
 
 
-WorkflowCommand = Union[
-    CommandRunWorker,
-    CommandQueueEvent,
-    CommandHalt,
-    CommandCompleteRun,
-    CommandFailWorkflow,
-    CommandPublishEvent,
-    CommandScheduleIdleCheck,
-    CommandScheduleWaiterTimeout,
-]
+WorkflowCommand = (
+    CommandRunWorker
+    | CommandQueueEvent
+    | CommandHalt
+    | CommandCompleteRun
+    | CommandFailWorkflow
+    | CommandPublishEvent
+    | CommandScheduleIdleCheck
+    | CommandScheduleWaiterTimeout
+)
 
 
 def indicates_exit(command: WorkflowCommand) -> bool:

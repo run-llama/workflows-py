@@ -8,7 +8,7 @@ from __future__ import annotations
 from asyncio import Task
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any, Coroutine, Union
+from typing import Any, Coroutine
 
 # Key prefix for pull tasks
 PULL_PREFIX = "__pull__"
@@ -39,7 +39,7 @@ class PullTask:
         return f"{PULL_PREFIX}:{self.sequence}"
 
 
-NamedTask = Union[WorkerTask, PullTask]
+NamedTask = WorkerTask | PullTask
 
 
 def all_tasks(named_tasks: Sequence[NamedTask]) -> set[Task[Any]]:
@@ -118,4 +118,4 @@ class PendingPull:
         return PullTask(self.sequence, task)
 
 
-PendingStart = Union[PendingWorker, PendingPull]
+PendingStart = PendingWorker | PendingPull

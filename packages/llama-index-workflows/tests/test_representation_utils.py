@@ -1,7 +1,7 @@
 import json
 from collections.abc import Iterable, Mapping
 from pathlib import Path
-from typing import Annotated, Optional
+from typing import Annotated
 
 import pytest
 from pydantic import BaseModel
@@ -44,16 +44,16 @@ def _resource_config_nodes(graph: WorkflowGraph) -> list[WorkflowResourceConfigN
     ]
 
 
-def _edges_as_tuples(graph: WorkflowGraph) -> set[tuple[str, str, Optional[str]]]:
+def _edges_as_tuples(graph: WorkflowGraph) -> set[tuple[str, str, str | None]]:
     return {(edge.source, edge.target, edge.label) for edge in graph.edges}
 
 
 def _find_edges(
     graph: WorkflowGraph,
     *,
-    source: Optional[str] = None,
-    target_prefix: Optional[str] = None,
-    label: Optional[str] = None,
+    source: str | None = None,
+    target_prefix: str | None = None,
+    label: str | None = None,
 ) -> list[WorkflowGraphEdge]:
     edges: Iterable[WorkflowGraphEdge] = graph.edges
     if source is not None:

@@ -15,9 +15,7 @@ from typing import (
     Callable,
     Generic,
     Iterator,
-    Optional,
     Protocol,
-    Type,
     TypeVar,
     cast,
     get_args,
@@ -183,7 +181,7 @@ def _get_resource_config_data_cached(
         cumulative_path = ""
         for key in keys:
             cumulative_path += key + "."
-            got = cast(Optional[dict[str, Any]], val.get(key))  # noqa: UP045
+            got = cast(dict[str, Any] | None, val.get(key))
             if not isinstance(got, dict):
                 raise ValueError(
                     f"Expected dictionary for configuration from {config_file} at path {cumulative_path.strip('.')}, got: {type(got)}"
@@ -201,7 +199,7 @@ class _ResourceConfig(Generic[B]):
     _original_config_file: str
     _resolved_config_file: str | None
     path_selector: str | None
-    cls_factory: Type[B] | None
+    cls_factory: type[B] | None
     label: str | None
     description: str | None
 
@@ -209,7 +207,7 @@ class _ResourceConfig(Generic[B]):
         self,
         config_file: str,
         path_selector: str | None,
-        cls_factory: Type[B] | None = None,
+        cls_factory: type[B] | None = None,
         label: str | None = None,
         description: str | None = None,
     ) -> None:
@@ -271,7 +269,7 @@ class _ResourceConfig(Generic[B]):
     def set_type_annotation(self, type_annotation: Any) -> None:
         """Assign the annotated class for config-backed resources when missing."""
         if self.cls_factory is None:
-            self.cls_factory = cast(Type[B], type_annotation)
+            self.cls_factory = cast(type[B], type_annotation)
 
     def set_localns(self, localns: dict[str, Any] | None) -> None:
         """No-op for config-backed resources."""

@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import Optional, Union
 
 import pytest
 from pydantic import BaseModel
@@ -84,8 +83,8 @@ async def test_collect_events() -> None:
 
         @step
         async def step3(
-            self, ctx: Context, ev: Union[OneTestEvent, AnotherTestEvent]
-        ) -> Optional[StopEvent]:
+            self, ctx: Context, ev: OneTestEvent | AnotherTestEvent
+        ) -> StopEvent | None:
             events = ctx.collect_events(ev, [OneTestEvent, AnotherTestEvent])
             if events is None:
                 return None
@@ -129,7 +128,7 @@ async def test_collect_events_with_extra_event_type() -> None:
         @step
         async def start_step(
             self, ctx: Context, ev: StartEvent
-        ) -> Union[OneTestEvent, AnotherTestEvent, LastEvent]:
+        ) -> OneTestEvent | AnotherTestEvent | LastEvent:
             await ctx.store.set("num_to_collect", 2)
             await ctx.store.set("calls", 0)
             # Send a LastEvent first (not in the expected collection types)
@@ -141,8 +140,8 @@ async def test_collect_events_with_extra_event_type() -> None:
 
         @step
         async def collector(
-            self, ctx: Context, ev: Union[OneTestEvent, AnotherTestEvent, LastEvent]
-        ) -> Optional[StopEvent]:
+            self, ctx: Context, ev: OneTestEvent | AnotherTestEvent | LastEvent
+        ) -> StopEvent | None:
             # Track how many times this step is called
             calls = await ctx.store.get("calls")
             await ctx.store.set("calls", calls + 1)
@@ -370,9 +369,7 @@ class ResultEvent(Event):
 
 class WaitingWorkflow(Workflow):
     @step
-    async def spawn_waiters(
-        self, ctx: Context, ev: StartEvent
-    ) -> Union[Waiter1, Waiter2]:
+    async def spawn_waiters(self, ctx: Context, ev: StartEvent) -> Waiter1 | Waiter2:
         ctx.send_event(Waiter1(msg="foo"))
         ctx.send_event(Waiter2(msg="bar"))
         return None  # type: ignore
