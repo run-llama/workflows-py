@@ -78,9 +78,11 @@ class _WorkflowAPI:
         middleware: list[Middleware] | None = None,
         exception_handlers: dict[Any, Any] | None = None,
         assets_path: Path = _DEFAULT_ASSETS_PATH,
+        sse_heartbeat_interval: float | None = None,
     ) -> None:
         self._service = service
         self._additional_events: dict[str, list[type[Event]]] = {}
+        self._sse_heartbeat_interval = sse_heartbeat_interval
 
         exception_handlers = exception_handlers or {
             HTTPException: _http_exception_handler,
@@ -923,15 +925,46 @@ class _WorkflowAPI:
             raise HTTPException(detail="Handler is completed", status_code=204)
 
         media_type = "text/event-stream" if sse else "application/x-ndjson"
+        heartbeat_interval = self._sse_heartbeat_interval if sse else None
 
         async def format_stream() -> AsyncGenerator[str, None]:
-            async for sequence, envelope in gen:
-                payload = envelope.model_dump_json()
-                if sse:
-                    yield f"id: {sequence}\ndata: {payload}\n\n"
-                else:
-                    yield f"{payload}\n"
-                await asyncio.sleep(0)
+            # We use a queue + feeder task so we can apply wait_for on
+            # queue.get() without corrupting async-generator state (which
+            # happens when asyncio.wait_for cancels __anext__).
+            _SENTINEL = object()
+            queue: asyncio.Queue[tuple[int, EventEnvelopeWithMetadata] | object] = (
+                asyncio.Queue()
+            )
+
+            async def _feed() -> None:
+                async for item in gen:
+                    await queue.put(item)
+                await queue.put(_SENTINEL)
+
+            feeder = asyncio.ensure_future(_feed())
+            try:
+                while True:
+                    try:
+                        item = await asyncio.wait_for(
+                            queue.get(), timeout=heartbeat_interval
+                        )
+                    except asyncio.TimeoutError:
+                        yield ": heartbeat\n\n"
+                        await asyncio.sleep(0)
+                        continue
+                    if item is _SENTINEL:
+                        break
+                    sequence, envelope = cast(
+                        tuple[int, EventEnvelopeWithMetadata], item
+                    )
+                    payload = envelope.model_dump_json()
+                    if sse:
+                        yield f"id: {sequence}\ndata: {payload}\n\n"
+                    else:
+                        yield f"{payload}\n"
+                    await asyncio.sleep(0)
+            finally:
+                feeder.cancel()
 
         return StreamingResponse(format_stream(), media_type=media_type)
 
