@@ -14,7 +14,7 @@ The control loop is the core event processing engine that:
 import asyncio
 import time
 import uuid
-from typing import Coroutine, Optional, Union
+from typing import Coroutine
 
 import pytest
 import time_machine
@@ -92,9 +92,7 @@ class CollectEv2(Event):
 
 class CollectMultipleEventTypesWorkflow(Workflow):
     @step
-    async def accept_start(
-        self, ev: StartEvent, context: Context
-    ) -> Optional[CollectEv]:
+    async def accept_start(self, ev: StartEvent, context: Context) -> CollectEv | None:
         for i in range(2):
             context.send_event(CollectEv(i=i + 1))
         return None
@@ -105,8 +103,8 @@ class CollectMultipleEventTypesWorkflow(Workflow):
 
     @step
     async def collector(
-        self, ev: Union[CollectEv, CollectEv2], context: Context
-    ) -> Optional[StopEvent]:
+        self, ev: CollectEv | CollectEv2, context: Context
+    ) -> StopEvent | None:
         events = context.collect_events(ev, [CollectEv, CollectEv2] * 2)
         if events is None:
             return None
@@ -129,15 +127,13 @@ class CollectMultipleEventTypesWorkflow(Workflow):
 
 class CollectWorkflow(Workflow):
     @step
-    async def accept_start(
-        self, ev: StartEvent, context: Context
-    ) -> Optional[CollectEv]:
+    async def accept_start(self, ev: StartEvent, context: Context) -> CollectEv | None:
         for i in range(4):
             context.send_event(CollectEv(i=i + 1))
         return None
 
     @step
-    async def collector(self, ev: CollectEv, context: Context) -> Optional[StopEvent]:
+    async def collector(self, ev: CollectEv, context: Context) -> StopEvent | None:
         events = context.collect_events(ev, [CollectEv] * 4)
         if events is None:
             return None
@@ -147,7 +143,7 @@ class CollectWorkflow(Workflow):
 
 def run_control_loop(
     workflow: Workflow,
-    start_event: Optional[StartEvent],
+    start_event: StartEvent | None,
     test_runtime: MockRunAdapter,
 ) -> Coroutine[None, None, StopEvent]:
     step_workers = {}
@@ -184,7 +180,7 @@ def run_control_loop(
 
 async def wait_for_stop_event(
     plugin: MockRunAdapter, timeout: float = 1.0
-) -> Optional[StopEvent]:
+) -> StopEvent | None:
     """
     Helper to wait for a StopEvent in the event stream.
 
@@ -609,7 +605,7 @@ class SomeEvent(HumanResponseEvent):
 async def test_control_loop_per_step_routing(test_plugin: MockRunAdapter) -> None:
     class RouteWorkflow(Workflow):
         @step
-        async def starter(self, ev: StartEvent) -> Optional[StopEvent]:
+        async def starter(self, ev: StartEvent) -> StopEvent | None:
             return None
 
         @step
@@ -815,7 +811,7 @@ async def test_control_loop_retry_exhaustion_respects_total_time(
             elapsed_time: float,
             attempts: int,
             error: BaseException,
-        ) -> Optional[float]:
+        ) -> float | None:
             self.observed_elapsed_times.append(elapsed_time)
             self.observed_attempts.append(attempts)
             return self.retry_delay
@@ -1074,8 +1070,8 @@ async def test_simultaneous_retries_with_same_delay(
 
         @step
         async def collector(
-            self, ev: Union[ResultA, ResultB], ctx: Context
-        ) -> Optional[StopEvent]:
+            self, ev: ResultA | ResultB, ctx: Context
+        ) -> StopEvent | None:
             events = ctx.collect_events(ev, [ResultA, ResultB])
             if events is None:
                 return None

@@ -3,8 +3,6 @@
 
 from __future__ import annotations
 
-from typing import Union
-
 from workflows.decorators import WorkflowGraphCheck, step
 from workflows.events import (
     Event,
@@ -133,7 +131,7 @@ def test_validate_human_response_mutation_allowed() -> None:
 def test_validate_terminal_non_output_event() -> None:
     class Dangling(Workflow):
         @step
-        async def process(self, ev: StartEvent) -> Union[ProcessedEvent, StopEvent]:
+        async def process(self, ev: StartEvent) -> ProcessedEvent | StopEvent:
             return ProcessedEvent()
 
     errors = _validate(Dangling())
@@ -153,9 +151,7 @@ def test_validate_terminal_event_accumulated() -> None:
 
     class MultiDangling(Workflow):
         @step
-        async def process(
-            self, ev: StartEvent
-        ) -> Union[DanglingA, DanglingB, StopEvent]:
+        async def process(self, ev: StartEvent) -> DanglingA | DanglingB | StopEvent:
             return DanglingA()
 
     errors = _validate(MultiDangling())
@@ -172,7 +168,7 @@ def test_validate_dead_end_cycle() -> None:
 
     class DeadEndCycle(Workflow):
         @step
-        async def entry(self, ev: StartEvent) -> Union[CycleA, StopEvent]:
+        async def entry(self, ev: StartEvent) -> CycleA | StopEvent:
             return CycleA()
 
         @step
@@ -196,11 +192,11 @@ def test_validate_dead_end_with_exit_branch_passes() -> None:
 
     class CycleWithExit(Workflow):
         @step
-        async def step_a(self, ev: StartEvent) -> Union[CycleA, StopEvent]:
+        async def step_a(self, ev: StartEvent) -> CycleA | StopEvent:
             return CycleA()
 
         @step
-        async def step_b(self, ev: CycleA) -> Union[CycleB, StopEvent]:
+        async def step_b(self, ev: CycleA) -> CycleB | StopEvent:
             return CycleB()
 
         @step
@@ -241,7 +237,7 @@ def test_validate_skip_reachability_workflow_level() -> None:
 def test_validate_skip_terminal_event_workflow_level() -> None:
     class DanglingWf(Workflow):
         @step
-        async def process(self, ev: StartEvent) -> Union[ProcessedEvent, StopEvent]:
+        async def process(self, ev: StartEvent) -> ProcessedEvent | StopEvent:
             return ProcessedEvent()
 
     errors = _validate(DanglingWf(), skip_checks={"terminal_event"})
@@ -251,7 +247,7 @@ def test_validate_skip_terminal_event_workflow_level() -> None:
 def test_validate_skip_dead_end_per_step() -> None:
     class SkipDeadEnd(Workflow):
         @step
-        async def entry(self, ev: StartEvent) -> Union[CycleA, StopEvent]:
+        async def entry(self, ev: StartEvent) -> CycleA | StopEvent:
             return CycleA()
 
         @step(skip_graph_checks=["dead_end"])
@@ -269,7 +265,7 @@ def test_validate_skip_dead_end_per_step() -> None:
 def test_validate_skip_dead_end_workflow_level() -> None:
     class DeadEndWf(Workflow):
         @step
-        async def entry(self, ev: StartEvent) -> Union[CycleA, StopEvent]:
+        async def entry(self, ev: StartEvent) -> CycleA | StopEvent:
             return CycleA()
 
         @step
@@ -289,7 +285,7 @@ def test_validate_multiple_errors_accumulated() -> None:
 
     class MultiError(Workflow):
         @step
-        async def cycle_a(self, ev: StartEvent) -> Union[CycleA, StopEvent]:
+        async def cycle_a(self, ev: StartEvent) -> CycleA | StopEvent:
             return CycleA()
 
         @step
@@ -353,7 +349,7 @@ def test_build_step_graph_adjacency_list() -> None:
 def test_build_step_graph_event_types() -> None:
     class WithEvents(Workflow):
         @step
-        async def step_a(self, ev: StartEvent) -> Union[CycleA, StopEvent]:
+        async def step_a(self, ev: StartEvent) -> CycleA | StopEvent:
             return CycleA()
 
     wf = WithEvents()

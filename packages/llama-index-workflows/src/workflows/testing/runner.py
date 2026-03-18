@@ -42,7 +42,7 @@ class WorkflowTestRunner:
         start_event: StartEvent = StartEvent(),
         ctx: Optional["Context"] = None,
         expose_internal: bool = True,
-        exclude_events: Optional[list[EventType]] = None,
+        exclude_events: list[EventType] | None = None,
     ) -> WorkflowTestResult:
         """
         Run a workflow end-to-end and collect the events that are streamed during its execution.

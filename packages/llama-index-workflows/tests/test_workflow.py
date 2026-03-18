@@ -10,7 +10,7 @@ import logging
 import pickle
 import threading
 import weakref
-from typing import Any, Callable, Optional, Union, cast
+from typing import Any, Callable, Optional, cast
 from unittest import mock
 
 import pytest
@@ -966,7 +966,7 @@ def test_graph_validation_accumulates_multiple_errors() -> None:
 
     class MultiErrorWorkflow(Workflow):
         @step
-        async def cycle_entry(self, ev: StartEvent) -> Union[_CycleA, StopEvent]:
+        async def cycle_entry(self, ev: StartEvent) -> _CycleA | StopEvent:
             return _CycleA()
 
         @step

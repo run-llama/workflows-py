@@ -4,24 +4,18 @@
 from __future__ import annotations
 
 import inspect
-import sys
 from typing import (
     TYPE_CHECKING,
     Any,
     Callable,
     Generic,
     Literal,
+    ParamSpec,
     Protocol,
-    Type,
     TypeVar,
     cast,
     overload,
 )
-
-if sys.version_info >= (3, 10):
-    from typing import ParamSpec
-else:
-    from typing_extensions import ParamSpec
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -51,7 +45,7 @@ class StepConfig(BaseModel):
     num_workers: int
     retry_policy: RetryPolicy | None
     resources: list[ResourceDefinition]
-    context_state_type: Type[BaseModel] | None = Field(default=None)
+    context_state_type: type[BaseModel] | None = Field(default=None)
     skip_graph_checks: list[StepGraphCheck] = Field(
         default_factory=list,
         description="Graph validation checks to skip for this step (e.g. 'reachability').",
@@ -81,7 +75,7 @@ def step(func: Callable[P, R]) -> StepFunction[P, R]: ...
 @overload
 def step(
     *,
-    workflow: Type["Workflow"] | None = None,
+    workflow: type["Workflow"] | None = None,
     num_workers: int = 4,
     retry_policy: RetryPolicy | None = None,
     skip_graph_checks: list[StepGraphCheck] | None = None,
@@ -91,7 +85,7 @@ def step(
 def step(
     func: Callable[P, R] | None = None,
     *,
-    workflow: Type["Workflow"] | None = None,
+    workflow: type["Workflow"] | None = None,
     num_workers: int = 4,
     retry_policy: RetryPolicy | None = None,
     skip_graph_checks: list[StepGraphCheck] | None = None,
@@ -202,7 +196,7 @@ def _apply_step_decorator(
     *,
     num_workers: int,
     retry_policy: RetryPolicy | None,
-    workflow: Type["Workflow"] | None,
+    workflow: type["Workflow"] | None,
     localns: dict[str, Any] | None,
     skip_graph_checks: list[StepGraphCheck],
 ) -> StepFunction[P, R]:

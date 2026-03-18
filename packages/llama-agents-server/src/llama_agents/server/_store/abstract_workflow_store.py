@@ -9,7 +9,7 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
-from typing import Any, List, Literal, Protocol, runtime_checkable
+from typing import Any, Literal, Protocol, runtime_checkable
 
 from llama_agents.client.protocol.serializable_events import (
     EventEnvelopeWithMetadata,
@@ -45,13 +45,13 @@ _UNSET = _Unset.UNSET
 @dataclass()
 class HandlerQuery:
     # Matches if any of the handler_ids match
-    handler_id_in: List[str] | None = None
+    handler_id_in: list[str] | None = None
     # Matches if any of the run_ids match
-    run_id_in: List[str] | None = None
+    run_id_in: list[str] | None = None
     # Matches if any of the workflow_names match
-    workflow_name_in: List[str] | None = None
+    workflow_name_in: list[str] | None = None
     # Matches if the status flag matches
-    status_in: List[Status] | None = None
+    status_in: list[Status] | None = None
     # True = only idle handlers, False = only non-idle handlers, None = all
     is_idle: bool | None = None
 
@@ -124,7 +124,7 @@ class AbstractWorkflowStore(ABC):
         """
 
     @abstractmethod
-    async def query(self, query: HandlerQuery) -> List[PersistentHandler]: ...
+    async def query(self, query: HandlerQuery) -> list[PersistentHandler]: ...
 
     @abstractmethod
     async def update(self, handler: PersistentHandler) -> None: ...

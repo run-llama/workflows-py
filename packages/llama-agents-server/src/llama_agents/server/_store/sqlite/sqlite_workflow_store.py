@@ -10,7 +10,7 @@ import weakref
 from collections.abc import AsyncIterator
 from contextlib import contextmanager
 from datetime import datetime
-from typing import Any, Iterator, List, Sequence
+from typing import Any, Iterator, Sequence
 
 from llama_agents.client.protocol.serializable_events import EventEnvelopeWithMetadata
 from workflows.context import JsonSerializer
@@ -87,7 +87,7 @@ class SqliteWorkflowStore(AbstractWorkflowStore):
         finally:
             conn.close()
 
-    async def query(self, query: HandlerQuery) -> List[PersistentHandler]:
+    async def query(self, query: HandlerQuery) -> list[PersistentHandler]:
         filter_spec = self._build_filters(query)
         if filter_spec is None:
             return []
@@ -238,7 +238,7 @@ class SqliteWorkflowStore(AbstractWorkflowStore):
             )
             conn.commit()
 
-    async def get_ticks(self, run_id: str) -> List[StoredTick]:
+    async def get_ticks(self, run_id: str) -> list[StoredTick]:
         with self._connect() as conn:
             cursor = conn.cursor()
             cursor.execute(

@@ -1,5 +1,17 @@
 # llama-agents-client
 
+## 0.3.0
+
+### Minor Changes
+
+- b32ec53: Drop python 3.9 support
+
+### Patch Changes
+
+- Updated dependencies [7fc1aae]
+- Updated dependencies [b32ec53]
+  - llama-index-workflows@2.17.0
+
 ## 0.2.3
 
 ### Patch Changes

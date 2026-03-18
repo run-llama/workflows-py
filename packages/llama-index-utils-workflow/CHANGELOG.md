@@ -1,5 +1,11 @@
 # llama-index-utils-workflow
 
+## 0.10.0
+
+### Minor Changes
+
+- b32ec53: Drop python 3.9 support
+
 ## 0.9.5
 
 ### Patch Changes

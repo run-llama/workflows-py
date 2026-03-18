@@ -15,7 +15,6 @@ from typing import (
     Generic,
     Literal,
     Protocol,
-    Type,
     runtime_checkable,
 )
 
@@ -292,7 +291,7 @@ def merge_state(current_state: MODEL_T, incoming: BaseModel) -> MODEL_T:
         )
 
 
-def create_cleared_state(state_type: Type[MODEL_T]) -> MODEL_T:
+def create_cleared_state(state_type: type[MODEL_T]) -> MODEL_T:
     """Create a default instance of the state type, wrapping ValidationError.
 
     Args:
@@ -368,7 +367,7 @@ class StateStore(Protocol[MODEL_T]):
         - [Context.store][workflows.context.context.Context.store]
     """
 
-    state_type: Type[MODEL_T]
+    state_type: type[MODEL_T]
 
     async def get_state(self) -> MODEL_T:
         """Return a copy of the current state model."""
@@ -441,7 +440,7 @@ class InMemoryStateStore(Generic[MODEL_T]):
         - [Context.store][workflows.context.context.Context.store]
     """
 
-    state_type: Type[MODEL_T]
+    state_type: type[MODEL_T]
 
     def __init__(self, initial_state: MODEL_T):
         self._state = initial_state
@@ -680,7 +679,7 @@ def infer_state_type(workflow: "Workflow") -> type[BaseModel]:
         ):
             state_types.add(step_config.context_state_type)
 
-    state_type: Type[BaseModel]
+    state_type: type[BaseModel]
     if state_types:
         state_type = _find_most_derived_state_type(state_types)
     else:
@@ -689,7 +688,7 @@ def infer_state_type(workflow: "Workflow") -> type[BaseModel]:
     return state_type
 
 
-def _find_most_derived_state_type(state_types: set[Type[BaseModel]]) -> Type[BaseModel]:
+def _find_most_derived_state_type(state_types: set[type[BaseModel]]) -> type[BaseModel]:
     """Find the most derived (most specific) state type from a set of types.
 
     All types must be in a single inheritance chain, i.e., one type must be
@@ -710,7 +709,7 @@ def _find_most_derived_state_type(state_types: set[Type[BaseModel]]) -> Type[Bas
         return type_list[0]
 
     # Find the most derived type - it should be a subclass of all others
-    most_derived: Type[BaseModel] | None = None
+    most_derived: type[BaseModel] | None = None
 
     for candidate in type_list:
         is_most_derived = True

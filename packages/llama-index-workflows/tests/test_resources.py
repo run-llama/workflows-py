@@ -6,7 +6,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from typing import Annotated, Optional
+from typing import Annotated
 from unittest import mock
 
 import pytest
@@ -67,7 +67,7 @@ class Memory(mock.MagicMock):
 
 
 class MessageStopEvent(StopEvent):
-    llm_response: Optional[str] = Field(default=None)
+    llm_response: str | None = Field(default=None)
 
 
 class FileData(BaseModel):

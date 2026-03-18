@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any, Literal, Union
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -148,14 +148,14 @@ class WorkflowGenericNode(WorkflowNodeBase):
 
 # Union type for workflow graph nodes
 # Pydantic will try to match against types in order; WorkflowGenericNode is last as catch-all
-WorkflowGraphNode = Union[
-    WorkflowStepNode,
-    WorkflowEventNode,
-    WorkflowExternalNode,
-    WorkflowResourceNode,
-    WorkflowResourceConfigNode,
-    WorkflowGenericNode,
-]
+WorkflowGraphNode = (
+    WorkflowStepNode
+    | WorkflowEventNode
+    | WorkflowExternalNode
+    | WorkflowResourceNode
+    | WorkflowResourceConfigNode
+    | WorkflowGenericNode
+)
 
 
 class WorkflowGraphEdge(BaseModel):

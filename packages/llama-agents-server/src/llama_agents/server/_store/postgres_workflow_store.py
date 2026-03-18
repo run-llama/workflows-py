@@ -10,7 +10,7 @@ import logging
 import weakref
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
-from typing import Any, List, Sequence, cast
+from typing import Any, Sequence, cast
 
 import asyncpg
 from llama_agents.client.protocol.serializable_events import EventEnvelopeWithMetadata
@@ -213,7 +213,7 @@ class PostgresWorkflowStore(AbstractWorkflowStore):
 
     # ── Handlers ────────────────────────────────────────────────────────
 
-    async def query(self, query: HandlerQuery) -> List[PersistentHandler]:
+    async def query(self, query: HandlerQuery) -> list[PersistentHandler]:
         filter_spec = self._build_filters(query)
         if filter_spec is None:
             return []

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Callable, List
+from typing import Callable
 
 from llama_index.core.base.llms.types import (
     ChatMessage,
@@ -12,11 +12,11 @@ from llama_index.core.base.llms.types import (
 )
 
 
-def response_generator_from_list(responses: List[ChatMessage]) -> Callable:
+def response_generator_from_list(responses: list[ChatMessage]) -> Callable:
     """Create a response generator that cycles through a list of responses."""
     index = 0
 
-    def generator(messages: List[ChatMessage]) -> ChatMessage:
+    def generator(messages: list[ChatMessage]) -> ChatMessage:
         nonlocal index
         if not responses:
             return ChatMessage(role=MessageRole.ASSISTANT, content=None)

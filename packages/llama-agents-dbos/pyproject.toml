@@ -17,13 +17,13 @@ dev = [
 
 [project]
 name = "llama-agents-dbos"
-version = "0.1.2"
+version = "0.2.0"
 description = "DBOS durable runtime plugin for LlamaIndex Workflows"
 readme = "README.md"
 license = "MIT"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 dependencies = [
-  "dbos>=2.14.0; python_full_version >= '3.10.0'",
+  "dbos>=2.14.0",
   "llama-agents-server[asyncpg]>=0.2.0",
   "llama-index-workflows>=2.15.0,<3.0.0"
 ]

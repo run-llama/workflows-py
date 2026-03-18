@@ -6,7 +6,7 @@ import weakref
 from collections import deque
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
-from typing import Any, Dict, List
+from typing import Any
 
 from llama_agents.client.protocol.serializable_events import EventEnvelopeWithMetadata
 from workflows.context.serializers import BaseSerializer
@@ -63,10 +63,10 @@ class MemoryWorkflowStore(AbstractWorkflowStore):
         if max_completed is not None and max_completed < 0:
             raise ValueError("max_completed must be >= 0 or None")
 
-        self.handlers: Dict[str, PersistentHandler] = {}
-        self.events: Dict[str, List[StoredEvent]] = {}
-        self.ticks: Dict[str, List[StoredTick]] = {}
-        self.state_stores: Dict[str, InMemoryStateStore[Any]] = {}
+        self.handlers: dict[str, PersistentHandler] = {}
+        self.events: dict[str, list[StoredEvent]] = {}
+        self.ticks: dict[str, list[StoredTick]] = {}
+        self.state_stores: dict[str, InMemoryStateStore[Any]] = {}
         self._conditions: weakref.WeakValueDictionary[str, asyncio.Condition] = (
             weakref.WeakValueDictionary()
         )
@@ -97,7 +97,7 @@ class MemoryWorkflowStore(AbstractWorkflowStore):
                 )
         return self.state_stores[run_id]
 
-    async def query(self, query: HandlerQuery) -> List[PersistentHandler]:
+    async def query(self, query: HandlerQuery) -> list[PersistentHandler]:
         return [
             handler
             for handler in self.handlers.values()
@@ -176,7 +176,7 @@ class MemoryWorkflowStore(AbstractWorkflowStore):
         run_id: str,
         after_sequence: int | None = None,
         limit: int | None = None,
-    ) -> List[StoredEvent]:
+    ) -> list[StoredEvent]:
         events = self.events.get(run_id, [])
         if after_sequence is not None:
             events = [e for e in events if e.sequence > after_sequence]

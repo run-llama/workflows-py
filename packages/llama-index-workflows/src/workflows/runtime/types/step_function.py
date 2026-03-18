@@ -9,7 +9,7 @@ import inspect
 import time
 import uuid
 from contextvars import copy_context
-from typing import TYPE_CHECKING, Any, Awaitable, Callable, Optional, Protocol, TypeVar
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Protocol, TypeVar
 
 from llama_index_instrumentation import get_dispatcher
 from llama_index_instrumentation.base import BaseEvent
@@ -52,7 +52,7 @@ if TYPE_CHECKING:
 
 _dispatcher = get_dispatcher(__name__)
 
-StepReturnT = TypeVar("StepReturnT", bound=Optional[Event])
+StepReturnT = TypeVar("StepReturnT", bound=Event | None)
 
 
 class SpanCancelledEvent(BaseEvent):
