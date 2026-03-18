@@ -351,6 +351,11 @@ class Workflow(metaclass=WorkflowMeta):
         return self._stop_event_class
 
     @classmethod
+    def _get_steps_from_class(cls) -> dict[str, StepFunction]:
+        """Returns all the steps, whether defined as methods or free functions."""
+        return {**get_steps_from_class(cls), **cls._step_functions}
+
+    @classmethod
     def add_step(cls, func: StepFunction) -> None:
         """
         Adds a free function as step for this workflow instance.

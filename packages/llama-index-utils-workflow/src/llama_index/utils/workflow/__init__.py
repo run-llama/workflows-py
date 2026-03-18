@@ -688,7 +688,7 @@ def _get_nested_workflow_representation(
             )
 
     # --- Discovery and Execution Loop ---
-    steps_lookup = workflow._get_steps()
+    steps_lookup = workflow._get_steps_from_class()
 
     for node in list(parent_graph.nodes):
         step_id = getattr(node, "id", str(node))
