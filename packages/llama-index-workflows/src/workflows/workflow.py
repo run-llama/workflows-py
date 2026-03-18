@@ -367,7 +367,7 @@ class Workflow(metaclass=WorkflowMeta):
             msg = f"Step function {func.__name__} is missing the `@step` decorator."
             raise WorkflowValidationError(msg)
 
-        if func.__name__ in {**get_steps_from_class(cls), **cls._step_functions}:
+        if func.__name__ in cls._get_steps_from_class():
             msg = f"A step {func.__name__} is already part of this workflow, please choose another name."
             raise WorkflowValidationError(msg)
 
