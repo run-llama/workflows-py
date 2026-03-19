@@ -3,7 +3,7 @@ title: serve
 sidebar:
   order: 102
 ---
-Serve your app locally for development and testing. Reads configuration from your project (e.g., `pyproject.toml` or `llama_deploy.yaml`) and starts the Python API server, optionally proxying your UI in dev.
+Serve your app locally for development and testing. Reads configuration from your project (e.g., `pyproject.toml` or `llama_agents.yaml`) and starts the Python API server, optionally proxying your UI in dev.
 
 See also: [Deployment Config Reference](/python/llamaagents/llamactl/configuration-reference/) and [UI build and dev integration](/python/llamaagents/llamactl/ui-build/).
 
