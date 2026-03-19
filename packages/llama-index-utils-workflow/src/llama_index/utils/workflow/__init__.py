@@ -591,7 +591,7 @@ def _get_workflow_classes_from_step(method_callable: Callable | Any) -> list[str
 
 
 def _get_nested_workflow_representation(
-    workflow: Workflow, include_child_workflows: bool = False
+    workflow: Workflow | type[Workflow], include_child_workflows: bool = False
 ) -> WorkflowGraph:
     """
     Introspects a workflow and builds a unified WorkflowGraph.
@@ -688,7 +688,8 @@ def _get_nested_workflow_representation(
             )
 
     # --- Discovery and Execution Loop ---
-    steps_lookup = workflow._get_steps()
+    workflow_cls = workflow if isinstance(workflow, type) else type(workflow)
+    steps_lookup = workflow_cls._get_steps_from_class()
 
     for node in list(parent_graph.nodes):
         step_id = getattr(node, "id", str(node))
@@ -723,7 +724,7 @@ def _get_nested_workflow_representation(
 
 
 def draw_all_possible_flows(
-    workflow: Workflow,
+    workflow: Workflow | type[Workflow],
     filename: str = "workflow_all_flows.html",
     notebook: bool = False,
     max_label_length: int | None = None,
@@ -733,7 +734,7 @@ def draw_all_possible_flows(
     Draws all possible flows of the workflow using Pyvis.
 
     Args:
-        workflow: The workflow to visualize
+        workflow: The workflow instance or class to visualize
         filename: Output HTML filename
         notebook: Whether running in notebook environment
         max_label_length: Maximum label length before truncation (None = no limit)
@@ -747,7 +748,7 @@ def draw_all_possible_flows(
 
 
 def draw_all_possible_flows_mermaid(
-    workflow: Workflow,
+    workflow: Workflow | type[Workflow],
     filename: str = "workflow_all_flows.mermaid",
     max_label_length: int | None = None,
     include_child_workflows: bool = True,

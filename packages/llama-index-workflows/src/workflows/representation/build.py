@@ -31,7 +31,6 @@ from workflows.resource import (
     _Resource,
     _ResourceConfig,
 )
-from workflows.utils import get_steps_from_class, get_steps_from_instance
 
 
 def _get_type_name(type_annotation: type | None) -> str | None:
@@ -153,23 +152,22 @@ def _create_resource_node(resource_def: ResourceDefinition) -> WorkflowResourceN
     )
 
 
-def get_workflow_representation(workflow: Workflow) -> WorkflowGraph:
+def get_workflow_representation(workflow: Workflow | type[Workflow]) -> WorkflowGraph:
     """Build a graph representation of a workflow's structure.
 
     Extracts the workflow's steps, events, and resources into a WorkflowGraph
     that can be used for visualization or analysis.
 
     Args:
-        workflow: The workflow instance to build a representation for.
+        workflow: A workflow instance or workflow class to build a representation for.
 
     Returns:
         A WorkflowGraph containing nodes for steps, events, resources,
         and external interactions, with edges showing the data flow.
     """
     # Get workflow steps
-    steps: dict[str, StepFunction] = get_steps_from_class(workflow)
-    if not steps:
-        steps = get_steps_from_instance(workflow)
+    workflow_cls = workflow if isinstance(workflow, type) else type(workflow)
+    steps: dict[str, StepFunction] = workflow_cls._get_steps_from_class()
 
     nodes: list[WorkflowGraphNode] = []
     edges: list[WorkflowGraphEdge] = []
@@ -393,8 +391,8 @@ def get_workflow_representation(workflow: Workflow) -> WorkflowGraph:
                 )
             )
 
-    workflow_name = type(workflow).__name__
-    workflow_description = inspect.getdoc(workflow)
+    workflow_name = workflow_cls.__name__
+    workflow_description = inspect.getdoc(workflow_cls)
     return WorkflowGraph(
         name=workflow_name, nodes=nodes, edges=edges, description=workflow_description
     )
