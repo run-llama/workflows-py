@@ -12,15 +12,15 @@ LlamaAgents reads configuration from your repository to run your app. The config
 ### pyproject.toml
 
 ```toml
-[tool.llamadeploy]
+[tool.llamaagents]
 name = "my-app"
 env_files = [".env"]
 
-[tool.llamadeploy.workflows]
+[tool.llamaagents.workflows]
 workflow-one = "my_app.workflows:some_workflow"
 workflow-two = "my_app.workflows:another_workflow"
 
-[tool.llamadeploy.ui]
+[tool.llamaagents.ui]
 directory = "ui"
 build_output_dir = "ui/static"
 ```
@@ -30,7 +30,7 @@ build_output_dir = "ui/static"
 Deployments can be configured to automatically inject authentication for LlamaCloud.
 
 ```toml
-[tool.llamadeploy]
+[tool.llamaagents]
 llama_cloud = true
 ```
 
@@ -43,7 +43,7 @@ When this is set:
 Most apps need API keys (e.g., OpenAI). You can specify them via a `.env` file and reference it in your config:
 
 ```toml
-[tool.llamadeploy]
+[tool.llamaagents]
 env_files = [".env"]
 ```
 
@@ -56,7 +56,7 @@ OPENAI_API_KEY=sk-xxxx
 
 ### Alternative file formats (YAML/TOML)
 
-If you prefer to keep your `pyproject.toml` simple, you can write the same configuration in a `llama_deploy.yaml` or `llama_deploy.toml` file. All fields use the same structure and types; omit the `tool.llamadeploy` prefix.
+If you prefer to keep your `pyproject.toml` simple, you can write the same configuration in a `llama_agents.yaml` or `llama_agents.toml` file. All fields use the same structure and types; omit the `tool.llamaagents` prefix.
 
 ## Schema
 
@@ -77,7 +77,7 @@ If you prefer to keep your `pyproject.toml` simple, you can write the same confi
 Use `required_env_vars` to ensure critical secrets are present before the app starts:
 
 ```toml
-[tool.llamadeploy]
+[tool.llamaagents]
 # Force the app to start only when these are set
 required_env_vars = ["OPENAI_API_KEY", "ANTHROPIC_API_KEY"]
 ```
@@ -89,7 +89,7 @@ Tip: Combine with `env_files` for local development or supply values via your de
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `directory` | string | — | Path to UI source, relative to the config directory. Required when `ui` is set. |
-| `build_output_dir` | string | ``${directory}/dist`` | Built UI output directory. If set in TOML/`pyproject.toml`, the path is relative to the config file. If set via `package.json` (`llamadeploy.build_output_dir`), it is resolved as `${directory}/${build_output_dir}`. |
+| `build_output_dir` | string | ``${directory}/dist`` | Built UI output directory. If set in TOML/`pyproject.toml`, the path is relative to the config file. If set via `package.json` (`llamaagents.build_output_dir`), it is resolved as `${directory}/${build_output_dir}`. |
 | `package_manager` | string | `"npm"` (or inferred) | Package manager used to build the UI. If not set, inferred from `package.json` `packageManager` (e.g., `pnpm@9.0.0` → `pnpm`). |
 | `build_command` | string | `"build"` | NPM script name used to build. |
 | `serve_command` | string | `"dev"` | NPM script name used to serve in development. |
@@ -106,7 +106,7 @@ For example:
   "name": "my-ui",
   "packageManager": "pnpm@9.7.0",
   "scripts": { "build": "vite build", "dev": "vite" },
-  "llamadeploy": {
+  "llamaagents": {
     "build_output_dir": "dist",
     "package_manager": "pnpm",
     "build_command": "build",

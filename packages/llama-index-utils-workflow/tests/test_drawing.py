@@ -4,6 +4,7 @@ from typing import Annotated
 from unittest.mock import MagicMock, mock_open, patch
 
 import pytest
+from conftest import DummyWorkflow, ParentWorkflow, ResourceWorkflow
 from llama_index.utils.workflow import (
     draw_all_possible_flows,
     draw_all_possible_flows_mermaid,
@@ -654,3 +655,56 @@ def test_draw_all_possible_flows_with_child_workflow_pyvis(
             "parent_start_ChildWorkflowA_returns",
         ) in edge_pairs
         assert ("parent_start_ChildWorkflowA_returns", "parent_start") in edge_pairs
+
+
+# --- Tests using workflow classes (not instances) ---
+
+
+def test_draw_all_possible_flows_mermaid_with_class() -> None:
+    """Test that draw_all_possible_flows_mermaid accepts a workflow class."""
+    result = draw_all_possible_flows_mermaid(DummyWorkflow)
+
+    assert isinstance(result, str)
+    assert result.startswith("flowchart TD")
+    assert "start_step" in result
+    assert "middle_step" in result
+    assert "end_step" in result
+
+
+def test_draw_all_possible_flows_with_class() -> None:
+    """Test that draw_all_possible_flows accepts a workflow class."""
+    with patch("llama_index.utils.workflow.Network") as mock_network:
+        draw_all_possible_flows(DummyWorkflow, filename="test_class.html")
+        mock_network.assert_called_once()
+        mock_network.return_value.show.assert_called_once_with(
+            "test_class.html", notebook=False
+        )
+
+
+def test_class_and_instance_produce_same_mermaid() -> None:
+    """Test that passing a class or an instance produces the same diagram."""
+    result_class = draw_all_possible_flows_mermaid(DummyWorkflow)
+    result_instance = draw_all_possible_flows_mermaid(DummyWorkflow())
+
+    assert result_class == result_instance
+
+
+def test_draw_all_possible_flows_mermaid_with_resource_class() -> None:
+    """Test that draw_all_possible_flows_mermaid accepts a workflow class with resources."""
+    result = draw_all_possible_flows_mermaid(ResourceWorkflow)
+
+    assert "classDef resourceStyle fill:#DDA0DD" in result
+    lines = result.split("\n")
+    resource_lines = [line for line in lines if "resource_" in line and ":::" in line]
+    assert len(resource_lines) > 0
+
+
+def test_draw_all_possible_flows_with_child_workflow_class_mermaid() -> None:
+    """Test Mermaid diagram generation for nested workflows using class."""
+    result = draw_all_possible_flows_mermaid(
+        ParentWorkflow, include_child_workflows=True
+    )
+
+    assert isinstance(result, str)
+    assert "step_parent_start" in result
+    assert "step_parent_end" in result
