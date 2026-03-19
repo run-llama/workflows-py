@@ -38,7 +38,7 @@ Define workflow instances in your code, then reference them in your config.
 [project]
 name = "app"
 # ...
-[tool.llamadeploy.workflows]
+[tool.llamaagents.workflows]
 answer-question = "app.workflows:qa_workflow"
 ```
 

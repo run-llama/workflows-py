@@ -79,10 +79,10 @@ For example, with the following configuration, the app will be served at `http:/
 [project]
 name = "my-package"
 # ...
-[tool.llamadeploy.workflows]
+[tool.llamaagents.workflows]
 my-workflow = "my_package.my_workflow:workflow"
 
-[tool.llamadeploy.ui]
+[tool.llamaagents.ui]
 directory = "ui"
 ```
 
