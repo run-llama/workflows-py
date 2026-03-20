@@ -5,7 +5,7 @@ Verbose runtime decorator that logs tick-level workflow activity in real time.
 
 Intercepts both ``write_to_event_stream`` (for step state changes) and
 ``on_tick`` (for all other tick types: events added, publishes, timeouts,
-cancellation, idle checks/releases).
+cancellation, idle releases).
 
 Output destination is auto-detected: if the ``"workflows.verbose"`` logger is
 configured to emit DEBUG or INFO messages, those levels are used (in that
@@ -17,24 +17,37 @@ from __future__ import annotations
 import logging
 from typing import Callable
 
-from workflows.events import Event, StepState, StepStateChanged
+from workflows._event_summary import summarize_event
+from workflows.events import Event, StepState, StepStateChanged, StopEvent
 from workflows.runtime.runtime_decorators import (
     BaseInternalRunAdapterDecorator,
     BaseRuntimeDecorator,
 )
 from workflows.runtime.types.plugin import InternalRunAdapter, Runtime, WorkflowTick
+from workflows.runtime.types.results import StepWorkerResult
 from workflows.runtime.types.ticks import (
     TickAddEvent,
     TickCancelRun,
-    TickIdleCheck,
     TickIdleRelease,
     TickPublishEvent,
+    TickStepResult,
     TickTimeout,
     TickWaiterTimeout,
 )
 from workflows.workflow import Workflow
 
 verbose_logger = logging.getLogger("workflows.verbose")
+
+
+def _clean_event_name(raw: str) -> str:
+    """Extract a short class name from ``str(type(...))`` format.
+
+    Handles both ``"<class 'pkg.module.Cls'>"`` and plain ``"Cls"`` strings.
+    Returns ``None`` when the underlying type is ``NoneType``.
+    """
+    if raw.startswith("<class '") and raw.endswith("'>"):
+        raw = raw[8:-2].rsplit(".", 1)[-1]
+    return raw
 
 
 def _resolve_output() -> Callable[[str], None]:
@@ -59,43 +72,46 @@ class _VerboseInternalRunAdapter(BaseInternalRunAdapterDecorator):
 
     async def write_to_event_stream(self, event: Event) -> None:
         if isinstance(event, StepStateChanged):
+            prefix = f"[{event.name}:{event.worker_id}]"
             if event.step_state == StepState.RUNNING:
-                self._output(f"Running step {event.name} (worker {event.worker_id})")
+                self._output(f"{prefix} started from {event.input_event_name}")
             elif event.step_state == StepState.NOT_RUNNING:
-                if event.output_event_name:
-                    self._output(
-                        f"Step {event.name} produced event "
-                        f"{event.output_event_name} (worker {event.worker_id})"
-                    )
+                name = (
+                    _clean_event_name(event.output_event_name)
+                    if event.output_event_name
+                    else None
+                )
+                if name and name != "NoneType":
+                    self._output(f"{prefix} complete with {name}")
                 else:
-                    self._output(
-                        f"Step {event.name} produced no event "
-                        f"(worker {event.worker_id})"
-                    )
+                    self._output(f"{prefix} complete with no result")
             elif event.step_state == StepState.PREPARING:
-                self._output(f"Step {event.name} enqueued (waiting for capacity)")
+                self._output(f"[{event.name}] enqueued (waiting for capacity)")
         await super().write_to_event_stream(event)
 
     async def on_tick(self, tick: WorkflowTick) -> None:
         if isinstance(tick, TickAddEvent):
-            event_name = type(tick.event).__name__
+            summary = summarize_event(tick.event)
             target = f" -> {tick.step_name}" if tick.step_name else ""
-            self._output(f"Event added: {event_name}{target}")
+            self._output(f"[tick] add: {summary}{target}")
         elif isinstance(tick, TickPublishEvent):
-            event_name = type(tick.event).__name__
-            self._output(f"Publish: {event_name}")
+            self._output(f"[tick] publish: {summarize_event(tick.event)}")
         elif isinstance(tick, TickTimeout):
-            self._output(f"Timeout: {tick.timeout}s elapsed")
+            self._output(f"[tick] timeout: {tick.timeout}s")
         elif isinstance(tick, TickWaiterTimeout):
             self._output(
-                f"Waiter timeout: step {tick.step_name} waiter {tick.waiter_id}"
+                f"[tick] waiter timeout: step {tick.step_name} waiter {tick.waiter_id}"
             )
         elif isinstance(tick, TickCancelRun):
-            self._output("Cancelled")
-        elif isinstance(tick, TickIdleCheck):
-            self._output("Idle check")
+            self._output("[tick] cancelled")
         elif isinstance(tick, TickIdleRelease):
-            self._output("Idle release")
+            self._output("[tick] idle release")
+        elif isinstance(tick, TickStepResult):
+            for result in tick.result:
+                if isinstance(result, StepWorkerResult) and isinstance(
+                    result.result, StopEvent
+                ):
+                    self._output(f"[result] {summarize_event(result.result)}")
         await super().on_tick(tick)
 
 
