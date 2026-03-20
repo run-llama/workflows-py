@@ -1,5 +1,12 @@
 # llama-index-workflows
 
+## 2.17.1
+
+### Patch Changes
+
+- 979d68b: Fix draw_all_possible_flows to accept workflow classes
+- 983f6f6: feat: Enhance VerboseDecorator with tick-level logging
+
 ## 2.17.0
 
 ### Minor Changes
