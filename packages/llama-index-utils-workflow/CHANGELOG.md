@@ -1,5 +1,11 @@
 # llama-index-utils-workflow
 
+## 0.10.1
+
+### Patch Changes
+
+- 979d68b: Fix draw_all_possible_flows to accept workflow classes
+
 ## 0.10.0
 
 ### Minor Changes
