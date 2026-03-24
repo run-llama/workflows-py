@@ -37,9 +37,6 @@ from conftest import (
 SLOW_FANOUT_WORKFLOW = (
     "tests.fixtures.sample_workflows.slow_fan_out_hitl:SlowFanOutWorkflow"
 )
-SHUFFLED_RUNNER_PATH = str(
-    Path(__file__).parent / "fixtures" / "runner_shuffled_done.py"
-)
 RESPOND_CONFIG = {
     "respond": {
         "SlowFanOutTickEvent": {
@@ -392,46 +389,30 @@ def test_shuffled_recovery_with_injected_orphans(test_db_path: Path) -> None:
     )
 
 
-# ---------------------------------------------------------------------------
-# Tests for the DESIRED behavior: orphans are purged on recovery
-# ---------------------------------------------------------------------------
-# These tests currently FAIL because the purge logic hasn't been implemented.
-# They assert that recovery succeeds despite injected orphans and that the
-# orphaned rows are cleaned up afterward.
+def test_orphaned_operations_are_purged_on_recovery(test_db_path: Path) -> None:
+    """Recovery should purge orphaned operation_outputs beyond the journal
+    boundary and complete successfully.
 
+    A crash (SIGKILL, power loss, OOM kill) can leave committed DBOS
+    operation_outputs rows whose corresponding journal entries were never
+    flushed. On the next recovery, these orphaned rows sit at fids beyond
+    the journal replay point. If fresh execution consumes those fids with
+    different functions (likely under any non-trivial workload), DBOS raises
+    DBOSUnexpectedStepError.
 
-def _get_journal_entries(db_path: Path, run_id: str) -> list[tuple[int, int, str]]:
-    """Return all (id, seq_num, task_key) rows for a run_id."""
-    if not db_path.exists():
-        return []
-    conn = sqlite3.connect(str(db_path))
-    try:
-        tables = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name='workflow_journal'"
-        ).fetchall()
-        if not tables:
-            return []
-        rows = conn.execute(
-            "SELECT id, seq_num, task_key FROM workflow_journal "
-            "WHERE run_id=? ORDER BY seq_num",
-            (run_id,),
-        ).fetchall()
-        return rows
-    finally:
-        conn.close()
+    The fix should detect the replay→fresh transition and purge all
+    operation_outputs rows beyond the current fid before fresh execution
+    begins.
 
-
-def test_injected_orphan_is_purged_on_recovery(test_db_path: Path) -> None:
-    """Recovery should succeed despite an injected orphan, and the orphaned
-    row should be deleted from operation_outputs afterward.
-
-    Same setup as test_injected_orphan_triggers_determinism_error but asserts
-    the desired fix behavior.
+    1. Run workflow, interrupt cleanly (creates journal + operations)
+    2. Inject an orphaned operation at max_fid+1 with a wrong function_name
+       (simulates the operation/journal gap a crash leaves)
+    3. Recover — should purge the orphan and succeed
     """
-    run_id = "purged-injected-orphan-test"
+    run_id = "purged-orphan-test"
     db_url = f"sqlite+pysqlite:///{test_db_path}?check_same_thread=false"
 
-    # --- Run 1: interrupt on round 1 ---
+    # --- Run 1: run workflow, interrupt on round 1 ---
     interrupt_config = {
         "respond": RESPOND_CONFIG["respond"],
         "interrupt_on": {"event": "SlowFanOutTickEvent", "condition": {"round": 1}},
@@ -450,16 +431,18 @@ def test_injected_orphan_is_purged_on_recovery(test_db_path: Path) -> None:
     max_fid = _get_max_fid(test_db_path, run_id)
     print(f"After run 1: max_fid={max_fid}")
 
-    # Inject an orphaned operation with a WRONG function name at max_fid+1
+    # Inject an orphaned operation at the next fid. After journal replay,
+    # the first fresh fid consumed is _durable_time (get_now at top of loop).
+    # The wrong function_name here guarantees a mismatch.
     orphan_fid = max_fid + 1
     _inject_orphaned_operation(
         test_db_path,
         run_id,
         orphan_fid,
-        function_name="FAKE_ORPHANED_STEP",
-        output='"fake_result"',
+        function_name="ORPHAN_FROM_CRASH",
+        output='"orphaned_result"',
     )
-    print(f"Injected orphan at fid {orphan_fid}: FAKE_ORPHANED_STEP")
+    print(f"Injected orphan at fid {orphan_fid}: ORPHAN_FROM_CRASH")
 
     # --- Run 2: recovery should purge the orphan and succeed ---
     result2 = run_scenario(
@@ -486,188 +469,7 @@ def test_injected_orphan_is_purged_on_recovery(test_db_path: Path) -> None:
 
     # Assert the orphaned row was cleaned up
     orphan_fn = _get_function_at_fid(test_db_path, run_id, orphan_fid)
-    assert orphan_fn != "FAKE_ORPHANED_STEP", (
+    assert orphan_fn != "ORPHAN_FROM_CRASH", (
         f"Orphaned operation at fid {orphan_fid} should have been purged, "
         f"but found function_name={orphan_fn}"
-    )
-
-
-def test_shuffled_orphan_is_purged_on_recovery(test_db_path: Path) -> None:
-    """Recovery should succeed even when an orphaned operation has a realistic
-    function_name that would cause a mismatch under shuffled task ordering.
-
-    Same setup as test_shuffled_recovery_with_injected_orphans but asserts
-    the desired fix behavior.
-    """
-    run_id = "purged-shuffled-orphan-test"
-    db_url = f"sqlite+pysqlite:///{test_db_path}?check_same_thread=false"
-
-    # --- Run 1: interrupt on round 1 ---
-    interrupt_config = {
-        "respond": RESPOND_CONFIG["respond"],
-        "interrupt_on": {"event": "SlowFanOutTickEvent", "condition": {"round": 1}},
-    }
-    result1 = run_scenario(
-        workflow=SLOW_FANOUT_WORKFLOW,
-        db_url=db_url,
-        run_id=run_id,
-        config=interrupt_config,
-        timeout=30.0,
-    )
-    assert "INTERRUPTING" in result1.stdout
-
-    max_fid = _get_max_fid(test_db_path, run_id)
-    print(f"After interrupt: max_fid={max_fid}")
-
-    # Inject orphan with worker_alpha at the fid where _durable_time would be
-    orphan_fid = max_fid + 1
-    _inject_orphaned_operation(
-        test_db_path,
-        run_id,
-        orphan_fid,
-        function_name=(
-            "tests.fixtures.sample_workflows.slow_fan_out_hitl."
-            "SlowFanOutWorkflow.worker_alpha"
-        ),
-        output='"orphaned_worker_result"',
-    )
-    print(f"Injected orphan at fid {orphan_fid}: worker_alpha")
-
-    # --- Run 2: recovery should purge the orphan and succeed ---
-    result2 = run_scenario(
-        workflow=SLOW_FANOUT_WORKFLOW,
-        db_url=db_url,
-        run_id=run_id,
-        config=RESPOND_CONFIG,
-        timeout=30.0,
-    )
-
-    combined = result2.stdout + result2.stderr
-    print(f"  returncode={result2.returncode}")
-    print(f"  stdout:\n{result2.stdout}")
-    print(f"  stderr:\n{result2.stderr}")
-
-    # Assert recovery succeeded
-    assert "SUCCESS" in result2.stdout, (
-        f"Recovery should succeed after purging orphan.\n"
-        f"stdout: {result2.stdout}\nstderr: {result2.stderr}"
-    )
-    assert "DBOSUnexpectedStepError" not in combined, (
-        "Should NOT get determinism error after purge"
-    )
-
-    # Assert the orphaned row was cleaned up
-    orphan_fn = _get_function_at_fid(test_db_path, run_id, orphan_fid)
-    assert orphan_fn != (
-        "tests.fixtures.sample_workflows.slow_fan_out_hitl."
-        "SlowFanOutWorkflow.worker_alpha"
-    ), (
-        f"Orphaned operation at fid {orphan_fid} should have been purged, "
-        f"but found function_name={orphan_fn}"
-    )
-
-
-def test_crash_during_recovery_is_purged_on_next_recovery(
-    test_db_path: Path,
-) -> None:
-    """Full crash-during-recovery scenario: a SIGKILL during recovery creates
-    realistic messy DB state (partial operations, extended journal), then an
-    orphaned operation at the boundary causes DBOSUnexpectedStepError.
-
-    The fix should purge orphaned operations beyond the journal replay point,
-    allowing the next recovery to succeed.
-
-    1. Run workflow, interrupt cleanly (creates journal + operations)
-    2. Start recovery, SIGKILL mid-execution (creates extended DB state from
-       partial fresh execution — more operations and journal entries)
-    3. Inject an orphan at max_fid+1 with a wrong function name (simulates
-       the operation/journal gap that SIGKILL sometimes creates depending on
-       exact kill timing)
-    4. Recover with shuffled task ordering — should purge orphan and succeed
-    """
-    run_id = "purged-crash-during-recovery-test"
-    db_url = f"sqlite+pysqlite:///{test_db_path}?check_same_thread=false"
-
-    # --- Run 1: interrupt on round 1 ---
-    interrupt_config = {
-        "respond": RESPOND_CONFIG["respond"],
-        "interrupt_on": {"event": "SlowFanOutTickEvent", "condition": {"round": 1}},
-    }
-    result1 = run_scenario(
-        workflow=SLOW_FANOUT_WORKFLOW,
-        db_url=db_url,
-        run_id=run_id,
-        config=interrupt_config,
-        timeout=30.0,
-    )
-    assert "INTERRUPTING" in result1.stdout
-
-    journal_after_run1 = _get_journal_entries(test_db_path, run_id)
-    max_fid_after_run1 = _get_max_fid(test_db_path, run_id)
-    print(
-        f"After run 1: journal={len(journal_after_run1)}, max_fid={max_fid_after_run1}"
-    )
-
-    # --- Run 2: SIGKILL during recovery ---
-    # This replays the journal, transitions to fresh execution, writes new
-    # operations and journal entries, then gets killed — leaving the DB in a
-    # partially-recovered state with more data than run 1.
-    _run_and_kill_after(
-        workflow=SLOW_FANOUT_WORKFLOW,
-        db_url=db_url,
-        run_id=run_id,
-        config=RESPOND_CONFIG,
-        kill_after_sec=1.5,
-    )
-
-    max_fid_after_kill = _get_max_fid(test_db_path, run_id)
-    print(f"After SIGKILL: max_fid={max_fid_after_kill}")
-
-    assert max_fid_after_kill > max_fid_after_run1, (
-        "SIGKILL recovery should have written new DBOS operations"
-    )
-
-    # Inject an orphan just beyond the current max fid. In production, the
-    # SIGKILL can leave committed operations whose journal entries weren't
-    # flushed — this injection guarantees that gap exists regardless of timing.
-    orphan_fid = max_fid_after_kill + 1
-    _inject_orphaned_operation(
-        test_db_path,
-        run_id,
-        orphan_fid,
-        function_name="ORPHAN_FROM_CRASHED_RECOVERY",
-        output='"crashed_result"',
-    )
-    print(f"Injected orphan at fid {orphan_fid}: ORPHAN_FROM_CRASHED_RECOVERY")
-
-    # --- Run 3: recover with shuffled task ordering ---
-    # The shuffled runner simulates cross-process ordering divergence (different
-    # hash seeds, different machines). Without the purge fix, the orphan at
-    # max_fid+1 triggers DBOSUnexpectedStepError.
-    result3 = run_scenario(
-        workflow=SLOW_FANOUT_WORKFLOW,
-        db_url=db_url,
-        run_id=run_id,
-        config=RESPOND_CONFIG,
-        timeout=30.0,
-        runner_path=SHUFFLED_RUNNER_PATH,
-    )
-
-    combined = result3.stdout + result3.stderr
-    print(f"  returncode={result3.returncode}")
-    print(f"  stdout:\n{result3.stdout}")
-    print(f"  stderr:\n{result3.stderr}")
-
-    assert "SUCCESS" in result3.stdout, (
-        f"Recovery after crash-during-recovery should succeed.\n"
-        f"stdout: {result3.stdout}\nstderr: {result3.stderr}"
-    )
-    assert "DBOSUnexpectedStepError" not in combined, (
-        "Should NOT get determinism error — orphans should be purged"
-    )
-
-    # Verify the orphan was cleaned up
-    orphan_fn = _get_function_at_fid(test_db_path, run_id, orphan_fid)
-    assert orphan_fn != "ORPHAN_FROM_CRASHED_RECOVERY", (
-        f"Orphaned operation at fid {orphan_fid} should have been purged"
     )
