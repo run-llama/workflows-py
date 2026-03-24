@@ -68,6 +68,7 @@ from workflows.runtime.types.named_task import (
     all_tasks,
     find_by_key,
     get_key,
+    pick_highest_priority,
 )
 from workflows.runtime.types.plugin import (
     ExternalRunAdapter,
@@ -1177,7 +1178,8 @@ class InternalDBOSAdapter(InternalRunAdapter):
         if not done:
             return WaitForNextTaskResult(None, started)
 
-        completed = done.pop()
+        completed = pick_highest_priority(all_named, done)
+        assert completed is not None
         key = get_key(all_named, completed)
         await journal.record(key)
 
