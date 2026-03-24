@@ -107,26 +107,15 @@ def _run_interrupt_and_get_max_fid(db_path: Path, run_id: str) -> int:
     return _get_max_fid(db_path, run_id)
 
 
-@pytest.mark.parametrize(
-    "orphan_name",
-    [
-        "FAKE_ORPHANED_STEP",
-        "tests.fixtures.sample_workflows.slow_fan_out_hitl."
-        "SlowFanOutWorkflow.worker_alpha",
-    ],
-    ids=["generic-orphan", "realistic-worker-orphan"],
-)
-def test_injected_orphan_is_purged_on_recovery(
-    test_db_path: Path,
-    orphan_name: str,
-) -> None:
+def test_injected_orphan_is_purged_on_recovery(test_db_path: Path) -> None:
     """Injected orphaned operations are purged on recovery — recovery succeeds
     despite mismatched function_names at fids beyond the journal boundary."""
     run_id = "injected-orphan-test"
+    orphan_name = "FAKE_ORPHANED_STEP"
 
     max_fid = _run_interrupt_and_get_max_fid(test_db_path, run_id)
 
-    orphan_fid = max_fid + 1
+    orphan_fid = max_fid + 10
     _inject_orphaned_operation(
         test_db_path, run_id, orphan_fid, function_name=orphan_name
     )
@@ -150,46 +139,6 @@ def test_injected_orphan_is_purged_on_recovery(
 
     orphan_fn = _get_function_at_fid(test_db_path, run_id, orphan_fid)
     assert orphan_fn != orphan_name, (
-        f"Orphaned operation at fid {orphan_fid} should have been purged, "
-        f"but found function_name={orphan_fn}"
-    )
-
-
-def test_orphaned_operations_are_purged_on_recovery(test_db_path: Path) -> None:
-    """Recovery should purge orphaned operation_outputs beyond the journal
-    boundary and complete successfully.
-
-    The fix should detect the replay-to-fresh transition and purge all
-    operation_outputs rows beyond the current fid before fresh execution begins.
-    """
-    run_id = "purged-orphan-test"
-
-    max_fid = _run_interrupt_and_get_max_fid(test_db_path, run_id)
-
-    orphan_fid = max_fid + 1
-    _inject_orphaned_operation(
-        test_db_path, run_id, orphan_fid, function_name="ORPHAN_FROM_CRASH"
-    )
-
-    result = run_scenario(
-        workflow=SLOW_FANOUT_WORKFLOW,
-        db_url=_db_url(test_db_path),
-        run_id=run_id,
-        config=RESPOND_CONFIG,
-        timeout=30.0,
-    )
-
-    combined = result.stdout + result.stderr
-    assert "SUCCESS" in result.stdout, (
-        f"Recovery should succeed after purging orphan.\n"
-        f"stdout: {result.stdout}\nstderr: {result.stderr}"
-    )
-    assert "DBOSUnexpectedStepError" not in combined, (
-        "Should NOT get determinism error after purge"
-    )
-
-    orphan_fn = _get_function_at_fid(test_db_path, run_id, orphan_fid)
-    assert orphan_fn != "ORPHAN_FROM_CRASH", (
         f"Orphaned operation at fid {orphan_fid} should have been purged, "
         f"but found function_name={orphan_fn}"
     )

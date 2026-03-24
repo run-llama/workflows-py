@@ -1,15 +1,14 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 LlamaIndex Inc.
-"""Fan-out HITL workflow for determinism bug reproduction.
+"""Fan-out HITL workflow for orphan-purge tests.
 
-Fans out to 5 concurrent workers per round with slow sleeps (0.1-0.3s) and
-20 rounds so that SIGKILL at ~1s reliably catches it mid-execution.
+Fans out to 5 concurrent workers per round. Used to verify that orphaned
+DBOS operation_outputs rows are purged on recovery.
 """
 
 from __future__ import annotations
 
 import asyncio
-import random
 from typing import Any
 
 from pydantic import Field
@@ -48,9 +47,9 @@ class SlowWorkResultEvent(Event):
 
 
 class SlowFanOutWorkflow(Workflow):
-    """Fan-out workflow with slow workers for reliable SIGKILL testing."""
+    """Fan-out workflow with concurrent workers for orphan-purge testing."""
 
-    def __init__(self, num_rounds: int = 20, **kwargs: Any) -> None:
+    def __init__(self, num_rounds: int = 4, **kwargs: Any) -> None:
         super().__init__(timeout=None, **kwargs)
         self._num_rounds = num_rounds
 
@@ -67,7 +66,7 @@ class SlowFanOutWorkflow(Workflow):
     ) -> SlowWorkResultEvent | None:
         if ev.worker_name != "alpha":
             return None
-        await asyncio.sleep(random.uniform(0.1, 0.3))
+        await asyncio.sleep(0.01)
         print(f"STEP:worker_alpha:round={ev.round}", flush=True)
         return SlowWorkResultEvent(
             worker_name="alpha", round=ev.round, value=f"alpha-r{ev.round}"
@@ -79,7 +78,7 @@ class SlowFanOutWorkflow(Workflow):
     ) -> SlowWorkResultEvent | None:
         if ev.worker_name != "beta":
             return None
-        await asyncio.sleep(random.uniform(0.1, 0.3))
+        await asyncio.sleep(0.01)
         print(f"STEP:worker_beta:round={ev.round}", flush=True)
         return SlowWorkResultEvent(
             worker_name="beta", round=ev.round, value=f"beta-r{ev.round}"
@@ -91,7 +90,7 @@ class SlowFanOutWorkflow(Workflow):
     ) -> SlowWorkResultEvent | None:
         if ev.worker_name != "gamma":
             return None
-        await asyncio.sleep(random.uniform(0.1, 0.3))
+        await asyncio.sleep(0.01)
         print(f"STEP:worker_gamma:round={ev.round}", flush=True)
         return SlowWorkResultEvent(
             worker_name="gamma", round=ev.round, value=f"gamma-r{ev.round}"
@@ -103,7 +102,7 @@ class SlowFanOutWorkflow(Workflow):
     ) -> SlowWorkResultEvent | None:
         if ev.worker_name != "delta":
             return None
-        await asyncio.sleep(random.uniform(0.1, 0.3))
+        await asyncio.sleep(0.01)
         print(f"STEP:worker_delta:round={ev.round}", flush=True)
         return SlowWorkResultEvent(
             worker_name="delta", round=ev.round, value=f"delta-r{ev.round}"
@@ -115,7 +114,7 @@ class SlowFanOutWorkflow(Workflow):
     ) -> SlowWorkResultEvent | None:
         if ev.worker_name != "epsilon":
             return None
-        await asyncio.sleep(random.uniform(0.1, 0.3))
+        await asyncio.sleep(0.01)
         print(f"STEP:worker_epsilon:round={ev.round}", flush=True)
         return SlowWorkResultEvent(
             worker_name="epsilon", round=ev.round, value=f"epsilon-r{ev.round}"
