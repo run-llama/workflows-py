@@ -88,6 +88,7 @@ from workflows.runtime.types.ticks import WorkflowTick
 from workflows.workflow import Workflow
 
 from dbos import DBOS, SetWorkflowID, WorkflowHandleAsync
+from dbos._context import get_local_dbos_context
 from dbos._dbos import _get_dbos_instance
 from dbos._error import DBOSNonExistentWorkflowError
 
@@ -977,6 +978,7 @@ class InternalDBOSAdapter(InternalRunAdapter):
         self._state_store: StateStore[Any] | None = None
         # Journal for deterministic task ordering - lazily initialized
         self._journal: TaskJournal | None = None
+        self._orphan_purge_done = False
 
     @property
     def run_id(self) -> str:
@@ -1109,6 +1111,35 @@ class InternalDBOSAdapter(InternalRunAdapter):
             self._journal = TaskJournal(self._run_id, crud)
         return self._journal
 
+    async def _purge_orphaned_operations(self, journal: TaskJournal) -> None:
+        """Purge orphaned operation_outputs beyond the current fid.
+
+        Called once at the replay→fresh transition to remove stale rows left by
+        a previous crashed recovery. Also truncates stale journal entries.
+        """
+        if self._orphan_purge_done:
+            return
+        self._orphan_purge_done = True
+
+        # Only purge if journal had entries (i.e., this is a recovery)
+        if journal._entries is None or len(journal._entries) == 0:
+            return
+        if journal._crud is None:
+            return
+
+        ctx = get_local_dbos_context()
+        assert ctx is not None, "Expected DBOS context during workflow execution"
+        current_fid = ctx.function_id
+
+        await journal._crud.purge_operations_from(self._run_id, current_fid)
+        await journal._crud.truncate_from(self._run_id, len(journal._entries))
+
+        logger.debug(
+            "Purged orphaned operation_outputs for %s beyond fid %d",
+            self._run_id,
+            current_fid,
+        )
+
     async def wait_for_next_task(
         self,
         running: list[NamedTask],
@@ -1132,6 +1163,20 @@ class InternalDBOSAdapter(InternalRunAdapter):
         Returns:
             WaitForNextTaskResult with completed task and newly started NamedTasks.
         """
+        # Ensure pool is resolved before journal creation (needed for postgres)
+        if self._ensure_pool is not None and self._resolved_pool is None:
+            await self._resolve_pool()
+
+        # Load journal and check replay state BEFORE starting pending coroutines.
+        # This ensures the orphan purge happens before new fids are consumed.
+        journal = self._get_or_create_journal()
+        await journal.load()
+        expected_key = journal.next_expected_key()
+
+        # Detect replay→fresh transition and purge orphans
+        if expected_key is None and not self._orphan_purge_done:
+            await self._purge_orphaned_operations(journal)
+
         # Start each pending coroutine with a yield between each to ensure
         # deterministic function_id ordering for DBOS replay.
         started: list[NamedTask] = []
@@ -1144,14 +1189,6 @@ class InternalDBOSAdapter(InternalRunAdapter):
         if not tasks:
             return WaitForNextTaskResult(None, started)
 
-        # Ensure pool is resolved before journal creation (needed for postgres)
-        if self._ensure_pool is not None and self._resolved_pool is None:
-            await self._resolve_pool()
-
-        journal = self._get_or_create_journal()
-        await journal.load()
-
-        expected_key = journal.next_expected_key()
         if expected_key is not None:
             # Replay mode: wait for specific task
             target_task = find_by_key(all_named, expected_key)

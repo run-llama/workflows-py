@@ -45,6 +45,14 @@ class JournalCrud(ABC):
     @abstractmethod
     async def delete(self, run_id: str) -> None: ...
 
+    @abstractmethod
+    async def truncate_from(self, run_id: str, seq_num: int) -> None: ...
+
+    @abstractmethod
+    async def purge_operations_from(self, run_id: str, function_id: int) -> None:
+        """Delete DBOS operation_outputs rows beyond the given function_id."""
+        ...
+
 
 class PostgresJournalCrud(JournalCrud):
     """Journal CRUD using asyncpg."""
@@ -57,6 +65,7 @@ class PostgresJournalCrud(JournalCrud):
     ) -> None:
         self._pool = pool
         self._table_ref = _qualified_table_ref(table_name, schema)
+        self._ops_table_ref = _qualified_table_ref("operation_outputs", schema)
 
     async def insert(self, run_id: str, seq_num: int, task_key: str) -> None:
         await self._pool.execute(
@@ -77,6 +86,21 @@ class PostgresJournalCrud(JournalCrud):
         await self._pool.execute(
             f"DELETE FROM {self._table_ref} WHERE run_id = $1",
             run_id,
+        )
+
+    async def truncate_from(self, run_id: str, seq_num: int) -> None:
+        await self._pool.execute(
+            f"DELETE FROM {self._table_ref} WHERE run_id = $1 AND seq_num >= $2",
+            run_id,
+            seq_num,
+        )
+
+    async def purge_operations_from(self, run_id: str, function_id: int) -> None:
+        await self._pool.execute(
+            f"DELETE FROM {self._ops_table_ref} "
+            f"WHERE workflow_uuid = $1 AND function_id > $2",
+            run_id,
+            function_id,
         )
 
 
@@ -120,5 +144,22 @@ class SqliteJournalCrud(JournalCrud):
             conn.execute(
                 f"DELETE FROM {self._table_ref} WHERE run_id = ?",
                 (run_id,),
+            )
+            conn.commit()
+
+    async def truncate_from(self, run_id: str, seq_num: int) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                f"DELETE FROM {self._table_ref} WHERE run_id = ? AND seq_num >= ?",
+                (run_id, seq_num),
+            )
+            conn.commit()
+
+    async def purge_operations_from(self, run_id: str, function_id: int) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                'DELETE FROM "operation_outputs" '
+                "WHERE workflow_uuid = ? AND function_id > ?",
+                (run_id, function_id),
             )
             conn.commit()

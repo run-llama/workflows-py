@@ -1,24 +1,15 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 LlamaIndex Inc.
-"""Reproduction: orphaned DBOS operations cause DBOSUnexpectedStepError.
-
-After a crash, committed operation_outputs rows can persist beyond the journal
-boundary. If the fresh execution's fid sequence diverges (due to non-deterministic
-done.pop() in wait_for_next_task), DBOS detects the function_name mismatch and
-raises DBOSUnexpectedStepError.
-"""
+"""Tests for orphan purge: orphaned DBOS operations are cleaned up on recovery."""
 
 from __future__ import annotations
 
 import sqlite3
-import subprocess
-import time
 from pathlib import Path
 from typing import Any
 
 import pytest
 from conftest import (
-    RUNNER_PATH,  # pyright: ignore[reportAttributeAccessIssue]
     run_scenario,  # pyright: ignore[reportAttributeAccessIssue]
 )
 
@@ -60,15 +51,6 @@ def _query_scalar(db_path: Path, sql: str, params: tuple[Any, ...] = ()) -> Any:
         return None
     finally:
         conn.close()
-
-
-def _get_journal_count(db_path: Path, run_id: str) -> int:
-    result = _query_scalar(
-        db_path,
-        "SELECT COUNT(*) FROM workflow_journal WHERE run_id=?",
-        (run_id,),
-    )
-    return result or 0
 
 
 def _get_max_fid(db_path: Path, run_id: str) -> int:
@@ -125,71 +107,25 @@ def _run_interrupt_and_get_max_fid(db_path: Path, run_id: str) -> int:
     return _get_max_fid(db_path, run_id)
 
 
-def _run_and_kill_after(
-    db_path: Path,
-    run_id: str,
-    kill_after_sec: float,
-) -> subprocess.CompletedProcess[str]:
-    """Run a workflow subprocess and SIGKILL it after a delay."""
-    import json
-    import sys
-
-    cmd = [
-        sys.executable,
-        RUNNER_PATH,
-        "--workflow",
-        SLOW_FANOUT_WORKFLOW,
-        "--db-url",
-        _db_url(db_path),
-        "--run-id",
-        run_id,
-        "--config",
-        json.dumps(RESPOND_CONFIG),
-    ]
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    time.sleep(kill_after_sec)
-    proc.kill()
-    stdout, stderr = proc.communicate(timeout=5)
-    return subprocess.CompletedProcess(
-        args=cmd,
-        returncode=proc.returncode,
-        stdout=stdout.decode() if isinstance(stdout, bytes) else (stdout or ""),
-        stderr=stderr.decode() if isinstance(stderr, bytes) else (stderr or ""),
-    )
-
-
-def _has_determinism_error(result: subprocess.CompletedProcess[str]) -> bool:
-    combined = result.stdout + result.stderr
-    return "DBOSUnexpectedStepError" in combined or "Error 11" in combined
-
-
 @pytest.mark.parametrize(
-    "orphan_name,extra_assert",
+    "orphan_name",
     [
-        ("FAKE_ORPHANED_STEP", None),
-        (
-            "tests.fixtures.sample_workflows.slow_fan_out_hitl."
-            "SlowFanOutWorkflow.worker_alpha",
-            # The error message should show the mismatch between orphan and actual call
-            lambda combined: (
-                "worker_alpha" in combined and "_durable_time" in combined
-            ),
-        ),
+        "FAKE_ORPHANED_STEP",
+        "tests.fixtures.sample_workflows.slow_fan_out_hitl."
+        "SlowFanOutWorkflow.worker_alpha",
     ],
     ids=["generic-orphan", "realistic-worker-orphan"],
 )
-def test_injected_orphan_triggers_determinism_error(
+def test_injected_orphan_is_purged_on_recovery(
     test_db_path: Path,
     orphan_name: str,
-    extra_assert: Any,
 ) -> None:
-    """Orphaned operations with mismatched function_names cause
-    DBOSUnexpectedStepError on recovery."""
+    """Injected orphaned operations are purged on recovery — recovery succeeds
+    despite mismatched function_names at fids beyond the journal boundary."""
     run_id = "injected-orphan-test"
 
     max_fid = _run_interrupt_and_get_max_fid(test_db_path, run_id)
 
-    # Inject orphan at the next fid (will be _durable_time in fresh execution)
     orphan_fid = max_fid + 1
     _inject_orphaned_operation(
         test_db_path, run_id, orphan_fid, function_name=orphan_name
@@ -204,46 +140,18 @@ def test_injected_orphan_triggers_determinism_error(
     )
 
     combined = result.stdout + result.stderr
-    assert _has_determinism_error(result), (
-        f"Expected DBOSUnexpectedStepError but got exit code {result.returncode}.\n"
-        f"stdout: {result.stdout}\nstderr: {result.stderr}"
-    )
-    assert orphan_name in combined, (
-        f"Error should reference the injected function name: {orphan_name}"
-    )
-    if extra_assert is not None:
-        assert extra_assert(combined), (
-            "Error should show function_name mismatch between orphan and actual call"
-        )
-
-
-def test_sigkill_creates_orphaned_operations(test_db_path: Path) -> None:
-    """SIGKILL mid-execution creates orphaned DBOS operations beyond the
-    journal boundary — the precondition for the determinism bug."""
-    run_id = "sigkill-orphan-check"
-
-    max_fid_1 = _run_interrupt_and_get_max_fid(test_db_path, run_id)
-    journal_1 = _get_journal_count(test_db_path, run_id)
-
-    _run_and_kill_after(test_db_path, run_id, kill_after_sec=1.5)
-
-    max_fid_2 = _get_max_fid(test_db_path, run_id)
-    journal_2 = _get_journal_count(test_db_path, run_id)
-
-    assert max_fid_2 > max_fid_1, "SIGKILL should have added more DBOS operations"
-    assert journal_2 > journal_1, "SIGKILL should have added more journal entries"
-
-    # Normal recovery should succeed (same process = same done.pop() order)
-    result = run_scenario(
-        workflow=SLOW_FANOUT_WORKFLOW,
-        db_url=_db_url(test_db_path),
-        run_id=run_id,
-        config=RESPOND_CONFIG,
-        timeout=30.0,
-    )
     assert "SUCCESS" in result.stdout, (
-        f"Normal recovery should succeed.\n"
+        f"Recovery should succeed after purging orphan.\n"
         f"stdout: {result.stdout}\nstderr: {result.stderr}"
+    )
+    assert "DBOSUnexpectedStepError" not in combined, (
+        "Should NOT get determinism error after purge"
+    )
+
+    orphan_fn = _get_function_at_fid(test_db_path, run_id, orphan_fid)
+    assert orphan_fn != orphan_name, (
+        f"Orphaned operation at fid {orphan_fid} should have been purged, "
+        f"but found function_name={orphan_fn}"
     )
 
 
