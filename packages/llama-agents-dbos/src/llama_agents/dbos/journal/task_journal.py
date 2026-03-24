@@ -73,3 +73,19 @@ class TaskJournal:
     def advance(self) -> None:
         """Advance replay index after processing a replayed task."""
         self._replay_index += 1
+
+    @property
+    def has_entries(self) -> bool:
+        """True if the journal has been loaded and contains at least one entry."""
+        return self._entries is not None and len(self._entries) > 0
+
+    async def purge_stale(self, current_fid: int) -> None:
+        """Purge stale journal rows and orphaned operation_outputs beyond current_fid.
+
+        Called at the replay-to-fresh transition to clean up rows left by a
+        previous crashed recovery.
+        """
+        if not self.has_entries or self._crud is None or self._entries is None:
+            return
+        await self._crud.purge_operations_from(self._run_id, current_fid)
+        await self._crud.truncate_from(self._run_id, len(self._entries))
