@@ -114,6 +114,7 @@ class SqliteJournalCrud(JournalCrud):
     ) -> None:
         self._db_path = db_path
         self._table_ref = _quote_identifier(table_name)
+        self._ops_table_ref = _quote_identifier("operation_outputs")
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
@@ -158,7 +159,7 @@ class SqliteJournalCrud(JournalCrud):
     async def purge_operations_from(self, run_id: str, function_id: int) -> None:
         with self._connect() as conn:
             conn.execute(
-                'DELETE FROM "operation_outputs" '
+                f"DELETE FROM {self._ops_table_ref} "
                 "WHERE workflow_uuid = ? AND function_id > ?",
                 (run_id, function_id),
             )

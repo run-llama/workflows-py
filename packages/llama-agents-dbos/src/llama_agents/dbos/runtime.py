@@ -1121,18 +1121,14 @@ class InternalDBOSAdapter(InternalRunAdapter):
             return
         self._orphan_purge_done = True
 
-        # Only purge if journal had entries (i.e., this is a recovery)
-        if journal._entries is None or len(journal._entries) == 0:
-            return
-        if journal._crud is None:
+        if not journal.has_entries:
             return
 
         ctx = get_local_dbos_context()
         assert ctx is not None, "Expected DBOS context during workflow execution"
         current_fid = ctx.function_id
 
-        await journal._crud.purge_operations_from(self._run_id, current_fid)
-        await journal._crud.truncate_from(self._run_id, len(journal._entries))
+        await journal.purge_stale(current_fid)
 
         logger.debug(
             "Purged orphaned operation_outputs for %s beyond fid %d",
@@ -1163,17 +1159,16 @@ class InternalDBOSAdapter(InternalRunAdapter):
         Returns:
             WaitForNextTaskResult with completed task and newly started NamedTasks.
         """
-        # Ensure pool is resolved before journal creation (needed for postgres)
+        # Resolve pool before journal creation (needed for postgres)
         if self._ensure_pool is not None and self._resolved_pool is None:
             await self._resolve_pool()
 
-        # Load journal and check replay state BEFORE starting pending coroutines.
-        # This ensures the orphan purge happens before new fids are consumed.
+        # Load journal before starting pending coroutines so the orphan purge
+        # runs before new fids are consumed.
         journal = self._get_or_create_journal()
         await journal.load()
         expected_key = journal.next_expected_key()
 
-        # Detect replay→fresh transition and purge orphans
         if expected_key is None and not self._orphan_purge_done:
             await self._purge_orphaned_operations(journal)
 
