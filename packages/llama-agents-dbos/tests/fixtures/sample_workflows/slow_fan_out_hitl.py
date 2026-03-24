@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 LlamaIndex Inc.
-"""Slow fan-out HITL workflow for determinism bug reproduction.
+"""Fan-out HITL workflow for determinism bug reproduction.
 
-Same as fan_out_hitl but with longer worker sleeps (0.2s) and more rounds (20)
-so that SIGKILL at ~1s reliably catches it mid-execution.
+Fans out to 5 concurrent workers per round with slow sleeps (0.1-0.3s) and
+20 rounds so that SIGKILL at ~1s reliably catches it mid-execution.
 """
 
 from __future__ import annotations
