@@ -83,11 +83,12 @@ def run_scenario(
     config: dict[str, Any] | None = None,
     call_close: bool = False,
     timeout: float = 45.0,
+    runner_path: str = RUNNER_PATH,
 ) -> subprocess.CompletedProcess[str]:
     """Run a workflow scenario in a subprocess via runner.py."""
     cmd = [
         sys.executable,
-        RUNNER_PATH,
+        runner_path,
         "--workflow",
         workflow,
         "--db-url",
