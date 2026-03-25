@@ -6,6 +6,14 @@ title: Python Client
 
 The `WorkflowClient` class provides a Python interface for interacting with a running `WorkflowServer`. It supports listing workflows, running them synchronously or asynchronously, streaming events, and sending events for human-in-the-loop workflows.
 
+## Installation
+
+The client is a separate package from the core `llama-index-workflows` library:
+
+```bash
+pip install llama-agents-client
+```
+
 ## Setup
 
 ```python

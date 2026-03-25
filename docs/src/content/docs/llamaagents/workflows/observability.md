@@ -10,7 +10,13 @@ Furthermore, you can leverage this instrumentation system to add observability t
 
 ## OpenTelemetry Integration
 
-Workflows integrate with OpenTelemetry for exporting traces. You can use the `llama-index-observability-otel` package:
+Workflows integrate with OpenTelemetry for exporting traces. Install the `llama-index-observability-otel` package:
+
+```bash
+pip install llama-index-observability-otel
+```
+
+Then configure it in your application:
 
 ```python
 from llama_index.observability.otel import LlamaIndexOpenTelemetry
