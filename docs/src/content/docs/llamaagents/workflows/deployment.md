@@ -8,6 +8,14 @@ The `workflows` library includes a `WorkflowServer` class that allows you to eas
 
 Additionally, the `WorkflowServer` is deployed with a static debugging application that allows you to visualize, run, and debug workflows. This is automatically mounted at the root `/` path of the running server.
 
+## Installation
+
+The workflow server is a separate package from the core `llama-index-workflows` library:
+
+```bash
+pip install llama-agents-server
+```
+
 ## Programmatic Usage
 
 You can create a server, add your workflows, and run it programmatically. This is useful when you want to embed the
