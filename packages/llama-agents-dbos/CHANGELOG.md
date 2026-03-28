@@ -1,5 +1,11 @@
 # llama-agents-dbos
 
+## 0.2.1
+
+### Patch Changes
+
+- 85c78a2: Fix crash recovery determinism errors by trimming DBOS operation rows that ran ahead of the workflow journal
+
 ## 0.2.0
 
 ### Minor Changes
