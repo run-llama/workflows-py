@@ -143,7 +143,7 @@ The `StartEvent` is a bit of a special object since it can hold arbitrary attrib
 `ev.topic`, which would raise an error if it wasn't there. You could also do `ev.get("topic")` to handle the case where
 the attribute might not be there without raising an error.
 
-Fur further type safety, you can also subclass the `StartEvent`.
+For further type safety, you can also subclass the `StartEvent`.
 
 At this point, you may have noticed that we haven't explicitly told the workflow what events are handled by which steps.
 Instead, the `@step` decorator is used to infer the input and output types of each step. Furthermore, these inferred
