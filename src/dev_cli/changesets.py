@@ -178,31 +178,34 @@ def cli() -> None:
 
 
 def maybe_publish_pypi(dry_run: bool) -> None:
-    """Publish the py packages if they need to be published."""
-    any = False
+    """Publish the py packages if they need to be published.
+
+    Falls back to PyPI trusted publishing when UV_PUBLISH_TOKEN is not set.
+    """
+    token = os.environ.get("UV_PUBLISH_TOKEN")
+    auth_method = "token" if token else "trusted publishing"
+    click.echo(f"PyPI auth: {auth_method}")
+
+    any_to_publish = False
     for package in _publishable_packages():
         name, version = current_version(package)
         if is_published(name, version):
             click.echo(f"PyPI package {name}@{version} already published, skipping")
             continue
-        any = True
+        any_to_publish = True
         click.echo(f"Publishing PyPI package {name}@{version}")
 
-        token = os.environ["UV_PUBLISH_TOKEN"]
         if dry_run:
-            summary = (token[:3] + "***") if len(token) <= 6 else token[:6] + "****"
-            click.echo(
-                f"Dry run, skipping publish. Would run with publish token {summary}:"
-            )
-            click.echo("  uv publish")
+            click.echo("  uv build (dry run, skipping)")
         else:
             run_command(["uv", "build"], cwd=package.parent)
-    if any:
+    if any_to_publish:
         if dry_run:
             click.echo("Dry run, skipping publish. Would run:")
             click.echo("  uv publish")
         else:
-            run_command(["uv", "publish"])
+            publish_env = {**os.environ, "UV_PUBLISH_TOKEN": token} if token else None
+            run_command(["uv", "publish"], env=publish_env)
 
 
 def current_version(pyproject: Path) -> tuple[str, str]:
