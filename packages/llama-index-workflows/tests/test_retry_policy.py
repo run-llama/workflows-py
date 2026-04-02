@@ -116,9 +116,7 @@ def test_ExponentialBackoffRetryPolicy_jitter_deterministic() -> None:
     for attempt in range(5):
         seed = (
             int(
-                hashlib.sha256(
-                    f"run-abc:my_step:{attempt + 1}".encode()
-                ).hexdigest(),
+                hashlib.sha256(f"run-abc:my_step:{attempt + 1}".encode()).hexdigest(),
                 16,
             )
             & 0xFFFF_FFFF

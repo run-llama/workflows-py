@@ -738,9 +738,7 @@ def test_step_worker_failed_exponential_jitter_deterministic(
     failures = 1
     jitter_seed = (
         int(
-            hashlib.sha256(
-                f"{run_id}:test_step:{failures}".encode()
-            ).hexdigest(),
+            hashlib.sha256(f"{run_id}:test_step:{failures}".encode()).hexdigest(),
             16,
         )
         & 0xFFFF_FFFF
