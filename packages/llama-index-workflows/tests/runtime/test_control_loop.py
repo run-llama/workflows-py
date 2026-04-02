@@ -811,6 +811,8 @@ async def test_control_loop_retry_exhaustion_respects_total_time(
             elapsed_time: float,
             attempts: int,
             error: BaseException,
+            *,
+            seed: int | None = None,
         ) -> float | None:
             self.observed_elapsed_times.append(elapsed_time)
             self.observed_attempts.append(attempts)

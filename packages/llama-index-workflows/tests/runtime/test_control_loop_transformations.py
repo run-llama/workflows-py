@@ -25,7 +25,10 @@ from workflows.events import (
     UnhandledEvent,
     WorkflowIdleEvent,
 )
-from workflows.retry_policy import ConstantDelayRetryPolicy
+from workflows.retry_policy import (
+    ConstantDelayRetryPolicy,
+    ExponentialBackoffRetryPolicy,
+)
 from workflows.runtime.control_loop import (
     _add_or_enqueue_event,
     _check_idle_state,
@@ -706,6 +709,43 @@ def test_step_worker_failed_retry_preserves_first_attempt_at(
     assert len(queue_cmds) == 1
     assert queue_cmds[0].attempts == 3  # incremented from 2
     assert queue_cmds[0].first_attempt_at == original_first_attempt_at  # preserved!
+
+
+def test_step_worker_failed_exponential_jitter_deterministic(
+    base_state: BrokerState,
+) -> None:
+    """Retry delay must be identical on two calls with the same run_id (DBOS replay determinism)."""
+    base_state.workers["test_step"].config.retry_policy = ExponentialBackoffRetryPolicy(
+        initial_delay=1.0,
+        multiplier=2.0,
+        max_delay=60.0,
+        maximum_attempts=5,
+        jitter=True,
+    )
+    event = MyTestEvent(value=42)
+    add_worker(base_state, event)
+
+    tick: TickStepResult = TickStepResult(
+        step_name="test_step",
+        worker_id=0,
+        event=event,
+        result=[StepWorkerFailed(exception=ValueError("test"), failed_at=110.0)],
+    )
+
+    _, commands_first = _process_step_result_tick(
+        tick, base_state, now_seconds=110.0, run_id="run-determinism-test"
+    )
+    _, commands_second = _process_step_result_tick(
+        tick, base_state, now_seconds=110.0, run_id="run-determinism-test"
+    )
+
+    first_delay = next(
+        c for c in commands_first if isinstance(c, CommandQueueEvent)
+    ).delay
+    second_delay = next(
+        c for c in commands_second if isinstance(c, CommandQueueEvent)
+    ).delay
+    assert first_delay == second_delay
 
 
 # =============================================================================

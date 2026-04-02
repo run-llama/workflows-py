@@ -22,7 +22,12 @@ class RetryPolicy(Protocol):
     """
 
     def next(
-        self, elapsed_time: float, attempts: int, error: Exception
+        self,
+        elapsed_time: float,
+        attempts: int,
+        error: Exception,
+        *,
+        seed: int | None = None,
     ) -> float | None:
         """
         Decide if another retry should occur and the delay before it.
@@ -31,6 +36,11 @@ class RetryPolicy(Protocol):
             elapsed_time (float): Seconds since the first failure.
             attempts (int): Number of attempts made so far.
             error (Exception): The last exception encountered.
+            seed (int | None): Optional RNG seed for deterministic jitter. When
+                provided, implementations that use randomness should seed an
+                isolated ``random.Random`` instance so that the same
+                ``(run_id, step_name, attempt)``-derived seed always produces
+                the same delay (required for DBOS workflow replay determinism).
 
         Returns:
             float | None: Seconds to wait before retrying, or `None` to stop.
@@ -60,7 +70,12 @@ class ConstantDelayRetryPolicy:
         self.delay = delay
 
     def next(
-        self, elapsed_time: float, attempts: int, error: Exception
+        self,
+        elapsed_time: float,
+        attempts: int,
+        error: Exception,
+        *,
+        seed: int | None = None,
     ) -> float | None:
         """Return the fixed delay while attempts remain; otherwise `None`."""
         if attempts >= self.maximum_attempts:
@@ -116,7 +131,12 @@ class ExponentialBackoffRetryPolicy:
         self.jitter = jitter
 
     def next(
-        self, elapsed_time: float, attempts: int, error: Exception
+        self,
+        elapsed_time: float,
+        attempts: int,
+        error: Exception,
+        *,
+        seed: int | None = None,
     ) -> float | None:
         """Return an exponentially growing delay while attempts remain; otherwise ``None``."""
         if attempts >= self.maximum_attempts:
@@ -124,5 +144,6 @@ class ExponentialBackoffRetryPolicy:
 
         delay = min(self.initial_delay * self.multiplier**attempts, self.max_delay)
         if self.jitter:
-            delay = random.uniform(0, delay)
+            rng = random.Random(seed) if seed is not None else random
+            delay = rng.uniform(0, delay)
         return delay

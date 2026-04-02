@@ -3,8 +3,6 @@
 
 from __future__ import annotations
 
-import random
-
 import pytest
 from workflows.context import Context
 from workflows.decorators import step
@@ -99,18 +97,25 @@ def test_ExponentialBackoffRetryPolicy_jitter() -> None:
     p = ExponentialBackoffRetryPolicy(
         initial_delay=1.0, multiplier=2.0, max_delay=100.0, jitter=True
     )
-    rng = random.Random(42)
-    original_uniform = random.uniform
-    random.uniform = rng.uniform  # type: ignore[assignment]
-    try:
-        err = Exception()
-        for attempt in range(5):
-            computed = min(1.0 * 2.0**attempt, 100.0)
-            delay = p.next(elapsed_time=0.0, attempts=attempt, error=err)
-            assert delay is not None
-            assert 0 <= delay <= computed
-    finally:
-        random.uniform = original_uniform  # type: ignore[assignment]
+    err = Exception()
+    for attempt in range(5):
+        computed = min(1.0 * 2.0**attempt, 100.0)
+        delay = p.next(elapsed_time=0.0, attempts=attempt, error=err, seed=attempt)
+        assert delay is not None
+        assert 0 <= delay <= computed
+
+
+def test_ExponentialBackoffRetryPolicy_jitter_deterministic() -> None:
+    """Same seed must produce the same delay on every call (DBOS replay determinism)."""
+    p = ExponentialBackoffRetryPolicy(
+        initial_delay=1.0, multiplier=2.0, max_delay=100.0, jitter=True
+    )
+    err = Exception()
+    for attempt in range(5):
+        seed = hash(("run-abc", "my_step", attempt + 1)) & 0xFFFF_FFFF
+        first = p.next(elapsed_time=0.0, attempts=attempt, error=err, seed=seed)
+        second = p.next(elapsed_time=0.0, attempts=attempt, error=err, seed=seed)
+        assert first == second
 
 
 def test_ExponentialBackoffRetryPolicy_no_jitter() -> None:
