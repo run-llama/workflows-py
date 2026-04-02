@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import hashlib
+
 import pytest
 from workflows.context import Context
 from workflows.decorators import step
@@ -112,7 +114,15 @@ def test_ExponentialBackoffRetryPolicy_jitter_deterministic() -> None:
     )
     err = Exception()
     for attempt in range(5):
-        seed = hash(("run-abc", "my_step", attempt + 1)) & 0xFFFF_FFFF
+        seed = (
+            int(
+                hashlib.sha256(
+                    f"run-abc:my_step:{attempt + 1}".encode()
+                ).hexdigest(),
+                16,
+            )
+            & 0xFFFF_FFFF
+        )
         first = p.next(elapsed_time=0.0, attempts=attempt, error=err, seed=seed)
         second = p.next(elapsed_time=0.0, attempts=attempt, error=err, seed=seed)
         assert first == second

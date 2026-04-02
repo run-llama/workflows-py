@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import heapq
 import inspect
 import logging
@@ -707,7 +708,13 @@ def _process_step_result_tick(
             failures = this_execution.attempts + 1
             elapsed_time = result.failed_at - this_execution.first_attempt_at
             jitter_seed = (
-                hash((run_id, tick.step_name, failures)) & 0xFFFF_FFFF
+                int(
+                    hashlib.sha256(
+                        f"{run_id}:{tick.step_name}:{failures}".encode()
+                    ).hexdigest(),
+                    16,
+                )
+                & 0xFFFF_FFFF
                 if run_id is not None
                 else None
             )
