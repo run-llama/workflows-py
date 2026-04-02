@@ -385,6 +385,38 @@ async def test_run_nowait_step_crash_still_returns_200(
     assert result.json()["error"] == "something went wrong internally"
 
 
+_RUNTIME_LOGGER = "llama_agents.server._runtime.server_runtime"
+
+
+@pytest.mark.asyncio
+async def test_run_nowait_step_crash_logs_error(
+    crashing_store_and_client: tuple[CrashingStore, AsyncClient],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Async workflow failure is logged by the server runtime adapter."""
+    _, client = crashing_store_and_client
+    with caplog.at_level(logging.ERROR, logger=_RUNTIME_LOGGER):
+        response = await client.post(
+            "/workflows/broken/run-nowait", json={"start_event": "{}"}
+        )
+        assert response.status_code == 200
+        handler_id = response.json()["handler_id"]
+
+        # Wait for the workflow to fail
+        for _ in range(50):
+            result = await client.get(f"/handlers/{handler_id}")
+            if result.json().get("status") == "failed":
+                break
+            await asyncio.sleep(0.1)
+        else:
+            pytest.fail("handler never reached 'failed' status")
+
+    runtime_records = [r for r in caplog.records if r.name == _RUNTIME_LOGGER]
+    assert any(
+        "something went wrong internally" in r.message for r in runtime_records
+    ), f"Expected runtime error log, got: {[r.message for r in runtime_records]}"
+
+
 @pytest.mark.asyncio
 async def test_get_handler_store_crash_returns_500(
     crashing_store_and_client: tuple[CrashingStore, AsyncClient],
