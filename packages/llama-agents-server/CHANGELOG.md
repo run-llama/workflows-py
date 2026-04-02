@@ -1,5 +1,11 @@
 # llama-agents-server
 
+## 0.3.2
+
+### Patch Changes
+
+- e7da58b: Log workflow failures and timeouts
+
 ## 0.3.1
 
 ### Patch Changes
