@@ -1700,7 +1700,7 @@ dev = [
 
 [[package]]
 name = "llama-agents-server"
-version = "0.3.1"
+version = "0.3.2"
 source = { editable = "packages/llama-agents-server" }
 dependencies = [
     { name = "httpx" },
