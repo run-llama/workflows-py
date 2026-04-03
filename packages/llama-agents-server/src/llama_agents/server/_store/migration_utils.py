@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 try:
-    from importlib.resources.abc import Traversable  # type: ignore[ty:unresolved-import]
+    from importlib.resources.abc import (
+        Traversable,  # type: ignore[ty:unresolved-import]
+    )
 except ImportError:  # pre 3.11
     from importlib.abc import Traversable  # type: ignore[ty:unresolved-import]
 import re
