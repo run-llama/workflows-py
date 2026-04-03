@@ -40,7 +40,7 @@ def test_deployment_create_valid() -> None:
 
 def test_deployment_create_accepts_deprecated_name() -> None:
     """Old callers passing 'name' should still work."""
-    deployment = DeploymentCreate(name="Legacy Name", repo_url="https://example.com")  # type: ignore[call-arg]
+    deployment = DeploymentCreate(name="Legacy Name", repo_url="https://example.com")  # type: ignore[call-arg]  # ty: ignore[missing-argument, unknown-argument]
     assert deployment.display_name == "Legacy Name"
 
 
@@ -54,7 +54,7 @@ def test_deployment_create_serializes_name_for_old_servers() -> None:
 
 def test_deployment_update_accepts_deprecated_name() -> None:
     """Old callers passing 'name' should still work."""
-    update = DeploymentUpdate(name="Legacy Name")  # type: ignore[call-arg]
+    update = DeploymentUpdate(name="Legacy Name")  # type: ignore[call-arg]  # ty: ignore[unknown-argument]
     assert update.display_name == "Legacy Name"
 
 

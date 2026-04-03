@@ -118,8 +118,9 @@ async def _serve_wsgi_git(
         # Dulwich's WSGI handler tries to de-chunk the body when it sees
         # this header, causing a ValueError on already-de-chunked data.
         # Set the real content length and remove the stale header.
-        environ["CONTENT_LENGTH"] = str(content_length)
-        environ.pop("HTTP_TRANSFER_ENCODING", None)
+        env = cast(dict[str, Any], environ)
+        env["CONTENT_LENGTH"] = str(content_length)
+        env.pop("HTTP_TRANSFER_ENCODING", None)
 
         status_code, response_headers, response_body = await run_in_threadpool(
             _call_wsgi, wsgi_app, environ

@@ -78,7 +78,7 @@ def test_get_event_stream() -> None:
 
         ctx = Ctx()
 
-    d._handlers = {"hid": H()}  # type: ignore[attr-defined]
+    d._handlers = {"hid": H()}  # type: ignore[attr-defined]  # ty: ignore[invalid-assignment]
 
     client = build_app("dep", d)
     r = client.get("/deployments/dep/tasks/hid/events", params={"session_id": "s"})

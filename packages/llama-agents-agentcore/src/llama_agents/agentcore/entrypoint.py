@@ -268,7 +268,8 @@ async def _action_run(
         ).model_dump()
 
     workflow_name = str(parsed[0])
-    start_event: StartEvent = parsed[1]  # type: ignore[assignment]
+    assert isinstance(parsed[1], StartEvent)
+    start_event: StartEvent = parsed[1]
     handler_id = _resolve_handler_id(payload, session_id)
     service = get_agentcore_service()
 

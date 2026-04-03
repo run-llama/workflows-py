@@ -150,14 +150,6 @@ select = [
 
 [tool.ty.rules]
 unresolved-import = "error"
-# Downgraded to warn: these fire on cross-package type mismatches between
-# cloud packages and workflows packages that were invisible when the repos
-# were separate.  Fixing them is tracked separately.
-invalid-assignment = "warn"
-invalid-method-override = "warn"
-invalid-key = "warn"
-missing-argument = "warn"
-unknown-argument = "warn"
 
 [tool.ty.src]
 # Exclude llama_agents.workflows alias (dynamic import aliasing not understood by static analyzers)

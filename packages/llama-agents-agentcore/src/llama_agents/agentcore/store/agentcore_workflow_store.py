@@ -262,7 +262,7 @@ class AgentCoreWorkflowStore(AbstractWorkflowStore):
     async def _regroup_ticks(self, run_id: str) -> None:
         await self._regroup(self._ticks_tracker, run_id)
 
-    async def after_tick(self, run_id: str) -> None:  # pyright: ignore[reportIncompatibleMethodOverride]
+    async def after_tick(self, run_id: str, tick_data: dict[str, Any]) -> None:
         """Gather all in-flight tick and event writes for a run."""
         await self._regroup_ticks(run_id)
         await self._regroup_events(run_id)
