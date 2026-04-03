@@ -37,7 +37,7 @@ The reference covers all available operations:
 - **Delete by query** for bulk deletion using the filter DSL
 
 SDK packages:
-- **Python**: [`llama-cloud`](https://pypi.org/project/llama-cloud/) (`pip install 'llama-cloud>=1'`) — `llama_cloud.resources.beta.agent_data.AsyncAgentDataResource`
+- **Python**: [`llama-cloud`](https://pypi.org/project/llama-cloud/) (`pip install 'llama-cloud>=1'`)
 - **JavaScript**: [`@llamaindex/llama-cloud`](https://www.npmjs.com/package/@llamaindex/llama-cloud) (`npm install @llamaindex/llama-cloud`)
 
 ### ExtractedData wrapper
