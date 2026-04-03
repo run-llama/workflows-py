@@ -112,7 +112,7 @@ class _WorkflowAPI:
             routes=self._routes(),
             middleware=middleware,
             lifespan=lifespan,
-            exception_handlers=exception_handlers,  # type: ignore[arg-type, ty:invalid-argument-type]
+            exception_handlers=exception_handlers,  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
         )
         self.app.mount(
             "/", app=StaticFiles(directory=assets_path, html=True), name="ui"

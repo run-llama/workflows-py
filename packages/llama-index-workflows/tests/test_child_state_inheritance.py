@@ -13,7 +13,6 @@ Key behavior:
   are preserved through merging (not obliterated)
 """
 
-
 import pytest
 from pydantic import BaseModel, Field
 from workflows import Context, Workflow

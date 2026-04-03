@@ -132,7 +132,7 @@ class PostgresWorkflowStore(AbstractWorkflowStore):
             except Exception:
                 logger.debug("Failed to remove listener during close", exc_info=True)
             try:
-                await self._pool.release(self._listen_conn)  # type: ignore[union-attr, ty:unresolved-attribute]
+                await self._pool.release(self._listen_conn)  # type: ignore[union-attr]  # ty: ignore[unresolved-attribute]
             except Exception:
                 logger.debug(
                     "Failed to release listen connection during close", exc_info=True

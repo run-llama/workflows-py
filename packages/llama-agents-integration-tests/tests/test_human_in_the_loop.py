@@ -5,7 +5,6 @@ These tests verify that wait_for_event works correctly inside tool
 functions, and that workflows can be paused, serialized, and resumed.
 """
 
-
 from conftest import WorkflowFactory
 from llama_agents_integration_tests.helpers import (
     make_text_response,

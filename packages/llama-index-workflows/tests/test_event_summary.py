@@ -4,7 +4,6 @@
 
 from __future__ import annotations
 
-
 import pytest
 from workflows._event_summary import summarize_event
 from workflows.events import Event, StartEvent, StopEvent
