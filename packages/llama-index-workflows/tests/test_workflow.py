@@ -1,7 +1,9 @@
+# ty: ignore[invalid-argument-type, invalid-assignment, unknown-argument]
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 LlamaIndex Inc.
 
 from __future__ import annotations
+
 
 import asyncio
 import gc

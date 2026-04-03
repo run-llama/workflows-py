@@ -1,3 +1,4 @@
+# ty: ignore[invalid-argument-type]
 """
 Tests for workflow state inheritance behavior.
 
@@ -11,6 +12,7 @@ Key behavior:
 - When a base class step calls set_state with a BaseState, the child fields
   are preserved through merging (not obliterated)
 """
+
 
 import pytest
 from pydantic import BaseModel, Field

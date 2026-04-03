@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 try:
-    from importlib.resources.abc import Traversable  # type: ignore
+    from importlib.resources.abc import Traversable  # type: ignore[ty:unresolved-import]
 except ImportError:  # pre 3.11
-    from importlib.abc import Traversable  # type: ignore
+    from importlib.abc import Traversable  # type: ignore[ty:unresolved-import]
 import re
 from importlib import import_module, resources
 
@@ -17,7 +17,7 @@ def iter_migration_files(source_pkg: str) -> list[Traversable]:
     pkg = import_module(source_pkg)
     root = resources.files(pkg)
     files = (p for p in root.iterdir() if p.name.endswith(".sql"))
-    return sorted(files, key=lambda p: p.name)  # type: ignore
+    return sorted(files, key=lambda p: p.name)  # type: ignore[ty:invalid-return-type]
 
 
 def parse_target_version(sql_text: str) -> int | None:

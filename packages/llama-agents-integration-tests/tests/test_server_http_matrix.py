@@ -1,8 +1,10 @@
+# ty: ignore[unknown-argument]
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 LlamaIndex Inc.
 """Parameterized live HTTP server integration tests across storage backends."""
 
 from __future__ import annotations
+
 
 import asyncio
 import socket

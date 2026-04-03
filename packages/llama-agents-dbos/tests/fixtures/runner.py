@@ -1,3 +1,4 @@
+# ty: ignore[invalid-argument-type]
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 LlamaIndex Inc.
 """Subprocess runner for workflow tests with DBOS isolation.
@@ -24,6 +25,7 @@ Config modes:
 """
 
 from __future__ import annotations
+
 
 import argparse
 import asyncio

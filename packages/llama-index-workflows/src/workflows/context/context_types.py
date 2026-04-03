@@ -7,7 +7,7 @@ from typing_extensions import TypeVar
 
 from workflows.context.state_store import DictState
 
-MODEL_T = TypeVar("MODEL_T", bound=BaseModel, default=DictState)  # type: ignore
+MODEL_T = TypeVar("MODEL_T", bound=BaseModel, default=DictState)  # type: ignore[ty:invalid-return-type]
 
 
 class SerializedContextV0(BaseModel):

@@ -1,8 +1,10 @@
+# ty: ignore[invalid-argument-type, invalid-assignment]
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 LlamaIndex Inc.
 """Tests for idle workflow release and reload functionality."""
 
 from __future__ import annotations
+
 
 import asyncio
 import json

@@ -1,4 +1,6 @@
+# ty: ignore[invalid-argument-type, unknown-argument]
 from __future__ import annotations
+
 
 from typing import Any, cast
 

@@ -156,7 +156,7 @@ class Context(Generic[MODEL_T]):
     def _require_pre(self, fn: str) -> PreContext[MODEL_T]:
         """Require context to be in pre-run state. Raises ContextStateError if not."""
         if isinstance(self._face, PreContext):
-            return self._face  # type: ignore[invalid-return-type]
+            return self._face  # type: ignore[ty:invalid-return-type]
         raise ContextStateError(
             f"{fn} requires a pre-run context. The workflow has already started."
         )
@@ -176,7 +176,7 @@ class Context(Generic[MODEL_T]):
     def _require_internal(self, fn: str) -> InternalContext[MODEL_T]:
         """Require context to be in internal state. Raises ContextStateError if not."""
         if isinstance(self._face, InternalContext):
-            return self._face  # type: ignore[invalid-return-type]
+            return self._face  # type: ignore[ty:invalid-return-type]
         if isinstance(self._face, PreContext):
             raise ContextStateError(
                 f"{fn} requires a running workflow. Call workflow.run() first."

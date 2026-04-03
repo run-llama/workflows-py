@@ -1,8 +1,10 @@
+# ty: ignore[invalid-assignment]
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 LlamaIndex Inc.
 """Unit tests for DBOSIdleReleaseDecorator."""
 
 from __future__ import annotations
+
 
 import asyncio
 from datetime import datetime, timedelta, timezone

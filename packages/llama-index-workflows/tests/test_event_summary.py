@@ -1,7 +1,9 @@
+# ty: ignore[unknown-argument]
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 LlamaIndex Inc.
 
 from __future__ import annotations
+
 
 import pytest
 from workflows._event_summary import summarize_event
