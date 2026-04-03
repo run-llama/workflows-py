@@ -23,59 +23,98 @@ Important behavior and constraints:
 - **Deployment required**: The `deployment_name` must correspond to an existing deployment. Data is associated with that deployment and its project.
 - **Local development**: When running locally, omit `deployment_name` to use the shared `_public` Agent Data store. Use distinct `collection` names to separate apps during local development.
 - **Access control**: You can only read/write data for agents in projects you can access. `_public` data is visible across agents within the same project.
-- **Filtering/Sorting**: You can filter on any `data` fields and on the top‑level `created_at` and `updated_at`. Sorting accepts a comma‑separated list; prefix fields inside `data` with `data.` (for example, `data.name desc, created_at`).
-- **Aggregation**: Group by one or more data fields and optionally return per‑group counts and/or the first item.
-- **Deletion**: Delete by ID or delete in bulk by query. Bulk delete accepts the same filter DSL as search.
 
-Project scoping:
-- You can scope requests to a specific project by providing the `Project-Id` header (UUID). This is especially important if your API key has access to multiple projects. Read more in the [Configuration Reference](/python/llamaagents/llamactl/configuration-reference#authorization).
+### SDK Reference
 
-### Filter DSL
+For CRUD operations, search, filtering, sorting, aggregation, and deletion, see the generated SDK reference:
 
-When searching or aggregating, you can filter on fields inside `data` and on the top‑level `created_at` and `updated_at` fields.
+**[Agent Data API Reference](https://developers.llamaindex.ai/reference/resources/beta/subresources/agent_data/)**
 
-Example:
+The reference covers all available operations:
+- **Create / Get / Update / Delete** individual records
+- **Search** with filtering, sorting, and pagination
+- **Aggregate** by grouping fields with counts and first-item retrieval
+- **Delete by query** for bulk deletion using the filter DSL
 
-```json
-{
-  "age": {"gte": 21, "lt": 65},
-  "status": {"eq": "active"},
-  "tag": {"includes": ["python", "ml"]},
-  "created_at": {"gte": "2024-01-01T00:00:00Z"}
-}
-```
-
-Supported operators:
-
-Filter operators are specified using a simple JSON DSL and support the following per‑field operators:
-- `eq` - Filters based on equality. For example, `{"age": {"eq": 30}}` matches age exactly 30.
-- `gt` - Filters based on greater than. For example, `{"age": {"gt": 30}}` matches age greater than 30.
-- `gte` - Filters based on greater than or equal to. For example, `{"age": {"gte": 30}}` matches age 30 or greater.
-- `lt` - Filters based on less than. For example, `{"age": {"lt": 30}}` matches age less than 30.
-- `lte` - Filters based on less than or equal to. For example, `{"age": {"lte": 30}}` matches age less than or equal to 30.
-- `includes` - Filters based on inclusion. For example, `{"age": {"includes": [30, 31]}}` matches age containing 30 or 31. An empty array matches nothing.
-
-All provided filters must match (logical AND).
-
-Nested fields are addressed using dot notation. For example, `{"data.age": {"gt": 30}}` matches an age greater than 30 in the `data` object. Note: array index access is not supported.
-
-SDKs and environments:
-- The **JavaScript SDK** can be used in the browser. When your UI is deployed on LlamaCloud alongside your agent, it is automatically authenticated. In other environments, provide an API key. You can also set `Project-Id` on the underlying HTTP client to pin all requests to a project.
-- The **Python SDK** runs server‑side and uses your API key and an optional base URL.
+SDK packages:
+- **Python**: [`llama-cloud`](https://pypi.org/project/llama-cloud/) (`pip install 'llama-cloud>=1'`)
+- **JavaScript**: [`@llamaindex/llama-cloud`](https://www.npmjs.com/package/@llamaindex/llama-cloud) (`npm install @llamaindex/llama-cloud`)
 
 ### ExtractedData wrapper
 
-For extraction workflows, the SDKs provide a specialized `ExtractedData<T>` wrapper type. This wrapper is designed for workflows where extracted data goes through review and approval stages. It maintains:
+`ExtractedData` is a specialized wrapper type available in the Python SDK (`llama-cloud`) and the JavaScript UI library (`@llamaindex/ui`). It is not part of the generated API reference, so it is documented here.
 
-- **original_data**: The data as originally extracted (immutable reference)
-- **data**: The current state after any human corrections
-- **status**: Workflow status (`pending_review`, `accepted`, `rejected`, `error`, or custom)
-- **overall_confidence**: Aggregated confidence score across all fields
-- **field_metadata**: Per-field metadata including confidence scores and citations
-- **file_id / file_name / file_hash**: Source file references for linking back to documents
+`ExtractedData[T]` is designed for extraction workflows where data goes through review and approval stages. Use it as the type parameter when storing extraction results in Agent Data.
 
-Using `ExtractedData` enables human-in-the-loop review workflows and provides traceability from extracted fields back to source documents.
+**Fields:**
 
-Next steps:
-- Python usage: see [Agent Data (Python)](/python/llamaagents/cloud/agent-data-python)
-- JavaScript usage: see [Agent Data (JavaScript)](/python/llamaagents/cloud/agent-data-javascript)
+| Field | Description |
+|-------|-------------|
+| `original_data` | The data as originally extracted (preserved for change tracking) |
+| `data` | The current state of the data (updated by human review) |
+| `status` | Workflow status: `pending_review`, `accepted`, `rejected`, `error`, or custom string |
+| `overall_confidence` | Aggregated confidence score (auto-calculated from field_metadata) |
+| `field_metadata` | Dict mapping field paths to metadata including confidence scores and citations |
+| `file_id` | LlamaCloud file ID of the source document |
+| `file_name` | Name of the source file |
+| `file_hash` | Content hash for deduplication |
+| `metadata` | Additional application-specific metadata |
+
+**Python usage:**
+
+```python
+from pydantic import BaseModel
+from llama_cloud.types.beta.extracted_data import ExtractedData
+
+class Invoice(BaseModel):
+    vendor: str | None = None
+    total: float | None = None
+    date: str | None = None
+```
+
+Use the `client.beta.agent_data` resource to store `ExtractedData` records. The data is serialized as a JSON dict matching the `ExtractedData` shape.
+
+**Creating from an extraction job:**
+
+The `from_extract_job` factory method creates an `ExtractedData` instance directly from a completed `ExtractV2Job`, automatically capturing field metadata (confidence scores, citations):
+
+```python
+from llama_cloud.types.beta.extracted_data import ExtractedData
+
+extracted = ExtractedData.from_extract_job(
+    job=extract_job,
+    schema=Invoice,
+)
+
+await client.beta.agent_data.agent_data(
+    data=extracted.model_dump(),
+    deployment_name=deployment_name,
+    collection="invoices",
+)
+```
+
+**Creating manually:**
+
+Use `ExtractedData.create` when constructing extracted data from other sources or transforming to a different schema:
+
+```python
+from llama_cloud.types.beta.extracted_data import ExtractedData
+
+invoice = Invoice(vendor="Acme Corp", total=1500.00, date="2024-01-15")
+
+extracted = ExtractedData.create(
+    data=invoice,
+    status="pending_review",
+    file_id="file-abc123",
+    file_name="invoice.pdf",
+    file_hash="sha256:...",
+    field_metadata={
+        "vendor": {"confidence": 0.95, "citation": [{"page": 1, "matching_text": "Acme Corp"}]},
+        "total": {"confidence": 0.92},
+    },
+)
+```
+
+**JavaScript / TypeScript usage:**
+
+In `@llamaindex/ui`, `ExtractedData` is available as a TypeScript type for use in UI components that display extraction results with review workflows.
