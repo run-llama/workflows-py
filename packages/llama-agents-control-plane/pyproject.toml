@@ -1,0 +1,59 @@
+[build-system]
+requires = ["uv_build>=0.7.20,<0.8.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+  "kubernetes-stubs>=22.6.0.post1",
+  "pytest>=8.4.1",
+  "pytest-asyncio>=0.25.3",
+  "respx>=0.22.0",
+  "pytest-xdist>=3.8.0",
+  "ty>=0.0.15",
+  "ruff>=0.12.9",
+  "moto[s3]>=5.0.0",
+  "aiomoto>=0.3.0",
+  "types-aioboto3>=15.5.0",
+  "types-aiobotocore-s3>=3.2.0",
+  "boto3-stubs[s3]>=1.42.61"
+]
+
+[project]
+name = "llama-agents-control-plane"
+version = "0.10.3"
+description = "API to manage LlamaDeployment resources"
+readme = "README.md"
+authors = [
+  {name = "Adrian Lyjak", email = "adrianlyjak@gmail.com"}
+]
+requires-python = ">=3.10, <4"
+dependencies = [
+  "fastapi[standard]>=0.115.6,<0.116",
+  "llama-agents-core[server]>=0.5.0",
+  "prometheus-client>=0.21.1,<0.22",
+  "prometheus-fastapi-instrumentator>=7.1.0",
+  "kubernetes>=33.1.0",
+  "gitpython>=3.1.40,<4",
+  "pyjwt[crypto]>=2.10.1",
+  "python-dotenv>=1.1.1",
+  "aiocache>=0.12.3",
+  "pydantic-settings>=2.10.1",
+  "python-json-logger>=3.3.0",
+  "typing-extensions>=4.15.0 ; python_full_version < '3.11'",
+  "cryptography>=44.0.0",
+  "aioboto3>=13.0.0",
+  "pyyaml>=6.0",
+  "dulwich>=0.22.0",
+  "a2wsgi>=1.10.0"
+]
+
+[project.scripts]
+llama-agents-control-plane = "llama_agents.control_plane:main"
+llama-deploy-control-plane = "llama_agents.control_plane:main"
+
+[tool.uv.build-backend]
+module-name = ["llama_agents.control_plane", "llama_deploy.control_plane"]
+namespace = true
+
+[tool.uv.sources]
+llama-agents-core = {workspace = true}

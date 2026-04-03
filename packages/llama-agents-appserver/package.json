@@ -1,0 +1,17 @@
+{
+  "name": "llama-agents-appserver",
+  "version": "0.10.2",
+  "private": false,
+  "dependencies": {
+    "llama-agents-core": "workspace:*"
+  },
+  "docker": {
+    "dockerfile": "docker/Dockerfile",
+    "target": "appserver",
+    "imageName": "llamaindex/llama-agents-appserver",
+    "platforms": [
+      "linux/amd64",
+      "linux/arm64"
+    ]
+  }
+}

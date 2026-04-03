@@ -25,7 +25,12 @@ jobs:
             llama-agents-dev,
             llama-agents-client,
             llama-agents-server,
-            "llama-agents-dbos"
+            llama-agents-dbos,
+            llama-agents-core,
+            llama-agents-agentcore,
+            llama-agents-appserver,
+            llama-agents-control-plane,
+            llamactl,
           ]
         exclude:
           # Dev CLI only needs to run on 3.14
@@ -52,6 +57,16 @@ jobs:
             package_dir: packages/llama-agents-server
           - package: llama-agents-dbos
             package_dir: packages/llama-agents-dbos
+          - package: llama-agents-core
+            package_dir: packages/llama-agents-core
+          - package: llama-agents-agentcore
+            package_dir: packages/llama-agents-agentcore
+          - package: llama-agents-appserver
+            package_dir: packages/llama-agents-appserver
+          - package: llama-agents-control-plane
+            package_dir: packages/llama-agents-control-plane
+          - package: llamactl
+            package_dir: packages/llamactl
 
     steps:
       - uses: actions/checkout@v4

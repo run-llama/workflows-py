@@ -1,0 +1,7 @@
+{
+  "mcpServers": {
+    "llama-index-docs": {
+      "url": "https://developers.llamaindex.ai/mcp"
+    }
+  }
+}

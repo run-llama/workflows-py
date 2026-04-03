@@ -1,0 +1,6 @@
+apiVersion: v2
+name: llama-agents-crds
+description: CRDs for llama-agents (LlamaDeployment, LlamaDeploymentTemplate)
+type: application
+version: "0.7.2"
+appVersion: "0.7.1"
