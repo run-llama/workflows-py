@@ -37,14 +37,14 @@ The reference covers all available operations:
 - **Delete by query** for bulk deletion using the filter DSL
 
 SDK packages:
-- **Python**: `llama-cloud-services` (`llama_cloud_services.beta.agent_data.AsyncAgentDataClient`)
-- **JavaScript**: `llama-cloud-services` (`@llama-cloud-services/beta/agent`)
+- **Python**: [`llama-cloud`](https://pypi.org/project/llama-cloud/) (`pip install 'llama-cloud>=1'`) — `llama_cloud.resources.beta.agent_data.AsyncAgentDataResource`
+- **JavaScript**: [`@llamaindex/llama-cloud`](https://www.npmjs.com/package/@llamaindex/llama-cloud) (`npm install @llamaindex/llama-cloud`)
 
 ### ExtractedData wrapper
 
-`ExtractedData` is a specialized wrapper type available in the Python SDK (`llama-cloud-services`) and the JavaScript UI library (`@llamaindex/ui`). It is not part of the generated API reference, so it is documented here.
+`ExtractedData` is a specialized wrapper type available in the Python SDK (`llama-cloud`) and the JavaScript UI library (`@llamaindex/ui`). It is not part of the generated API reference, so it is documented here.
 
-`ExtractedData[T]` is designed for extraction workflows where data goes through review and approval stages. Use it as the type parameter for your Agent Data client.
+`ExtractedData[T]` is designed for extraction workflows where data goes through review and approval stages. Use it as the type parameter when storing extraction results in Agent Data.
 
 **Fields:**
 
@@ -64,40 +64,33 @@ SDK packages:
 
 ```python
 from pydantic import BaseModel
-from llama_cloud_services.beta.agent_data import AsyncAgentDataClient, ExtractedData
+from llama_cloud.types.beta.extracted_data import ExtractedData
 
 class Invoice(BaseModel):
     vendor: str | None = None
     total: float | None = None
     date: str | None = None
-
-# Client stores ExtractedData[Invoice] records
-client = AsyncAgentDataClient(
-    type=ExtractedData[Invoice],
-    collection="invoices",
-    deployment_name=deployment_name,
-    client=base_client,
-)
 ```
 
-**Creating from LlamaExtract results:**
+Use the `client.beta.agent_data` resource to store `ExtractedData` records. The data is serialized as a JSON dict matching the `ExtractedData` shape.
 
-The `from_extraction_result` factory method creates an `ExtractedData` instance directly from a LlamaExtract result, automatically capturing field metadata (confidence scores, citations):
+**Creating from an extraction job:**
+
+The `from_extract_job` factory method creates an `ExtractedData` instance directly from a completed `ExtractV2Job`, automatically capturing field metadata (confidence scores, citations):
 
 ```python
-from llama_cloud_services import LlamaExtract
-from llama_cloud_services.beta.agent_data import ExtractedData
+from llama_cloud.types.beta.extracted_data import ExtractedData
 
-extractor = LlamaExtract()
-result = await extractor.aextract(data_schema=Invoice, files="invoice.pdf")
-
-extracted = ExtractedData.from_extraction_result(
-    result=result,
+extracted = ExtractedData.from_extract_job(
+    job=extract_job,
     schema=Invoice,
-    status="pending_review",  # optional, defaults to "pending_review"
 )
 
-await client.create_item(extracted)
+await client.beta.agent_data.agent_data(
+    data=extracted.model_dump(),
+    deployment_name=deployment_name,
+    collection="invoices",
+)
 ```
 
 **Creating manually:**
@@ -105,7 +98,7 @@ await client.create_item(extracted)
 Use `ExtractedData.create` when constructing extracted data from other sources or transforming to a different schema:
 
 ```python
-from llama_cloud_services.beta.agent_data import ExtractedData
+from llama_cloud.types.beta.extracted_data import ExtractedData
 
 invoice = Invoice(vendor="Acme Corp", total=1500.00, date="2024-01-15")
 
@@ -122,12 +115,6 @@ extracted = ExtractedData.create(
 )
 ```
 
-**JavaScript usage:**
+**JavaScript / TypeScript usage:**
 
-In `@llamaindex/ui`, `ExtractedData` is available as a TypeScript type:
-
-```ts
-import { type ExtractedData, StatusType } from "@llama-cloud-services/beta/agent";
-```
-
-Use it as the type parameter when creating an Agent Data client to get full type safety for extraction workflows.
+In `@llamaindex/ui`, `ExtractedData` is available as a TypeScript type for use in UI components that display extraction results with review workflows.
