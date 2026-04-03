@@ -170,10 +170,10 @@ class DBOSIdleReleaseDecorator(BaseRuntimeDecorator):
         if self._lifecycle_lock_instance is None:
             result = self._lifecycle_lock_factory()
             if isinstance(result, Awaitable):
-                self._lifecycle_lock_instance = await result
+                self._lifecycle_lock_instance = await result  # type: ignore[ty:invalid-assignment]
             else:
                 self._lifecycle_lock_instance = result
-        return self._lifecycle_lock_instance
+        return self._lifecycle_lock_instance  # type: ignore[ty:invalid-return-type]
 
     @override
     def track_workflow(self, workflow: Workflow) -> None:

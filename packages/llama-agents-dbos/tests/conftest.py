@@ -104,11 +104,8 @@ def run_scenario(
     except subprocess.TimeoutExpired as e:
         stdout = e.stdout.decode() if isinstance(e.stdout, bytes) else (e.stdout or "")
         stderr = e.stderr.decode() if isinstance(e.stderr, bytes) else (e.stderr or "")
-        pytest.fail(
-            f"Subprocess timed out after {timeout}s\n"
-            f"stdout:\n{stdout}\n"
-            f"stderr:\n{stderr}"
-        )
+        msg = f"Subprocess timed out after {timeout}s\nstdout:\n{stdout}\nstderr:\n{stderr}"
+        pytest.fail(msg)
         raise AssertionError("unreachable")  # noqa: B904
 
 
@@ -117,23 +114,16 @@ def assert_no_determinism_errors(result: subprocess.CompletedProcess[str]) -> No
     combined = result.stdout + result.stderr
 
     if result.returncode != 0:
-        pytest.fail(
-            f"Subprocess exited with code {result.returncode}\n"
-            f"stdout: {result.stdout}\n"
-            f"stderr: {result.stderr}"
-        )
+        msg = f"Subprocess exited with code {result.returncode}\nstdout: {result.stdout}\nstderr: {result.stderr}"
+        pytest.fail(msg)
 
     if "Traceback (most recent call last)" in result.stdout:
-        pytest.fail(
-            f"Subprocess exception!\nstdout: {result.stdout}\nstderr: {result.stderr}"
-        )
+        msg = f"Subprocess exception!\nstdout: {result.stdout}\nstderr: {result.stderr}"
+        pytest.fail(msg)
 
     if "DBOSUnexpectedStepError" in combined or "Error 11" in combined:
-        pytest.fail(
-            f"DBOS determinism error on resume!\n"
-            f"stdout: {result.stdout}\n"
-            f"stderr: {result.stderr}"
-        )
+        msg = f"DBOS determinism error on resume!\nstdout: {result.stdout}\nstderr: {result.stderr}"
+        pytest.fail(msg)
 
 
 def log_on_failure(result: subprocess.CompletedProcess[str], label: str) -> None:

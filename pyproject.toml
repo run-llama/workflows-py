@@ -10,7 +10,7 @@ dev = [
   "pytest-timeout>=2.4.0",
   "pytest-xdist>=3.8.0",
   "ruff>=0.14.5",
-  "ty>=0.0.1,<0.0.9"
+  "ty>=0.0.15"
 ]
 
 [project]
@@ -120,6 +120,18 @@ select = [
 ]
 "*.ipynb" = ["T201", "ANN001", "ANN002", "ANN003"]
 "__main__.py" = ["T201"]
+
+# Relax ty rules in test files: dynamic Pydantic event constructors
+# (StartEvent(field=...)), mock assignments, and pytest.fail stubs are
+# pervasive false positives that aren't worth annotating individually.
+[[tool.ty.overrides]]
+include = ["**/tests/**", "**/fixtures/**"]
+[tool.ty.overrides.rules]
+unknown-argument = "warn"
+invalid-argument-type = "warn"
+invalid-assignment = "warn"
+invalid-return-type = "warn"
+not-iterable = "warn"
 
 [tool.ty.src]
 # Exclude llama_agents.workflows alias (dynamic import aliasing not understood by static analyzers)
