@@ -92,6 +92,7 @@ asyncio_default_fixture_loop_scope = "module"
 asyncio_default_test_loop_scope = "module"
 testpaths = ["tests/dev_cli"]
 addopts = "-nauto --timeout=10"
+[tool.ruff]
 
 [tool.ruff.lint]
 select = [
@@ -126,6 +127,7 @@ select = [
 # pervasive false positives that aren't worth annotating individually.
 [[tool.ty.overrides]]
 include = ["**/tests/**", "**/fixtures/**"]
+
 [tool.ty.overrides.rules]
 unknown-argument = "warn"
 invalid-argument-type = "warn"
