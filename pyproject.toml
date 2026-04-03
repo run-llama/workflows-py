@@ -92,6 +92,7 @@ asyncio_default_fixture_loop_scope = "module"
 asyncio_default_test_loop_scope = "module"
 testpaths = ["tests/dev_cli"]
 addopts = "-nauto --timeout=10"
+
 [tool.ruff]
 
 [tool.ruff.lint]
