@@ -1,0 +1,69 @@
+{{ template "chart.header" . }}
+
+{{ template "chart.description" . }}
+
+## Architecture
+
+This chart deploys two components:
+
+- **Control plane** — API server for managing deployments, builds, and backups
+- **Operator** — Kubernetes controller that reconciles `LlamaDeployment` custom resources into running pods
+
+CRDs (`LlamaDeployment`, `LlamaDeploymentTemplate`) are included in the chart's `crds/` directory and installed automatically on first `helm install`. They are **not** modified on upgrade or removed on uninstall (standard Helm CRD behavior).
+
+For managed CRD upgrades, use the companion [`llama-agents-crds`](../llama-agents-crds/) chart.
+
+## Prerequisites
+
+- Kubernetes 1.26+
+- Helm 3.x
+- S3-compatible object storage (for build artifacts and backups)
+
+## Installation
+
+### Fresh install
+
+```bash
+helm install llama-agents oci://docker.io/llamaindex/llama-agents \
+  --set controlPlane.objectStorage.s3.bucket=my-bucket \
+  --set controlPlane.objectStorage.s3.region=us-east-1
+```
+
+CRDs are installed automatically from the `crds/` directory.
+
+### With separate CRD management
+
+If you prefer explicit CRD lifecycle management (recommended for production):
+
+```bash
+# Install CRD chart first
+helm install llama-agents-crds oci://docker.io/llamaindex/llama-agents-crds
+
+# Install main chart, skipping bundled CRDs
+helm install llama-agents oci://docker.io/llamaindex/llama-agents --skip-crds \
+  --set controlPlane.objectStorage.s3.bucket=my-bucket
+```
+
+## Upgrading
+
+```bash
+# If CRD schema has changed, upgrade CRDs first
+helm upgrade --install llama-agents-crds oci://docker.io/llamaindex/llama-agents-crds
+
+# Then upgrade the main chart
+helm upgrade llama-agents oci://docker.io/llamaindex/llama-agents
+```
+
+{{ template "chart.valuesSection" . }}
+
+## Uninstalling
+
+```bash
+helm uninstall llama-agents
+```
+
+CRDs are **not** removed on uninstall. To remove them (this deletes all LlamaDeployment resources):
+
+```bash
+kubectl delete crd llamadeployments.deploy.llamaindex.ai llamadeploymenttemplates.deploy.llamaindex.ai
+```

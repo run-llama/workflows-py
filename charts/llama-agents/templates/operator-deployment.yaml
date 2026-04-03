@@ -1,0 +1,119 @@
+{{- if .Values.operator.enabled }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "llama-agents.operator.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ include "llama-agents.operator.name" . }}
+    component: operator
+  {{- with .Values.operator.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  replicas: {{ .Values.operator.replicas }}
+  selector:
+    matchLabels:
+      app: {{ include "llama-agents.operator.name" . }}
+  template:
+    metadata:
+      labels:
+        app: {{ include "llama-agents.operator.name" . }}
+        component: operator
+      {{- with .Values.operator.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- if .Values.serviceAccount.create }}
+      serviceAccountName: {{ include "llama-agents.serviceAccountName" . }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+      containers:
+      - name: manager
+        image: {{ .Values.images.operator.repository }}:{{ .Values.images.operator.tag }}
+        imagePullPolicy: {{ .Values.images.operator.pullPolicy }}
+        command:
+        - /manager
+        args:
+        - --leader-elect
+        {{- if .Values.metrics.enabled }}
+        - --metrics-bind-address=:8080
+        - --metrics-secure=false
+        {{- else }}
+        - --metrics-bind-address=0
+        {{- end }}
+        env:
+        - name: WATCH_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        # Configure the default appserver image that operator will use for LlamaDeployments
+        - name: LLAMA_DEPLOY_IMAGE
+          value: {{ .Values.images.appserver.repository }}
+        - name: LLAMA_DEPLOY_IMAGE_TAG
+          value: {{ .Values.images.appserver.tag | quote }}
+        - name: LLAMA_DEPLOY_IMAGE_PULL_POLICY
+          value: {{ .Values.images.appserver.pullPolicy }}
+        # Configure nginx sidecar image used in per-deployment pods
+        - name: LLAMA_DEPLOY_NGINX_IMAGE
+          value: {{ .Values.images.nginx.repository }}
+        - name: LLAMA_DEPLOY_NGINX_IMAGE_TAG
+          value: {{ .Values.images.nginx.tag }}
+        - name: LLAMA_DEPLOY_NGINX_IMAGE_PULL_POLICY
+          value: {{ .Values.images.nginx.pullPolicy }}
+        # Default resource request overrides for app containers managed by operator
+        - name: LLAMA_DEPLOY_DEFAULT_CPU_REQUEST
+          value: {{ .Values.operator.defaultAppRequests.cpu | default "750m" | quote }}
+        - name: LLAMA_DEPLOY_DEFAULT_MEMORY_REQUEST
+          value: {{ .Values.operator.defaultAppRequests.memory | default "2Gi" | quote }}
+        # Default resource limit overrides for app containers managed by operator
+        - name: LLAMA_DEPLOY_DEFAULT_CPU_LIMIT
+          value: {{ .Values.operator.defaultAppLimits.cpu | default "" | quote }}
+        - name: LLAMA_DEPLOY_DEFAULT_MEMORY_LIMIT
+          value: {{ .Values.operator.defaultAppLimits.memory | default "4096Mi" | quote }}
+        # Rollout timeout for managed deployments
+        - name: LLAMA_DEPLOY_ROLLOUT_TIMEOUT_SECONDS
+          value: {{ .Values.operator.rolloutTimeoutSeconds | default "1800" | quote }}
+        # Max concurrent rollouts (0 = unlimited, default: 10)
+        - name: LLAMA_DEPLOY_MAX_CONCURRENT_ROLLOUTS
+          value: {{ .Values.operator.maxConcurrentRollouts | default "10" | quote }}
+        # Max total active deployments per namespace (0 = unlimited)
+        - name: LLAMA_DEPLOY_MAX_DEPLOYMENTS
+          value: {{ .Values.operator.maxDeployments | default "0" | quote }}
+        # Build API service address for git proxy
+        - name: LLAMA_DEPLOY_BUILD_API_HOST
+          value: "{{ include "llama-agents.build.name" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.controlPlane.buildApi.port | default 8001 }}"
+        {{- if .Values.operator.env }}
+        # Additional custom environment variables
+          {{- toYaml .Values.operator.env | nindent 8 }}
+        {{- end }}
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8081
+          initialDelaySeconds: 15
+          periodSeconds: 20
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: 8081
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        ports:
+        - name: metrics
+          containerPort: 8080
+          protocol: TCP
+        resources:
+          {{- toYaml .Values.operator.resources | nindent 10 }}
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - "ALL"
+{{- end }}

@@ -1,0 +1,44 @@
+{{- if .Values.controlPlane.hpa.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "llama-agents.controlplane.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ include "llama-agents.controlplane.name" . }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "llama-agents.controlplane.name" . }}
+  minReplicas: {{ .Values.controlPlane.hpa.minReplicas }}
+  maxReplicas: {{ .Values.controlPlane.hpa.maxReplicas }}
+  metrics:
+  {{- $hasMetric := false }}
+  {{- if .Values.controlPlane.hpa.targetCPUUtilizationPercentage }}
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: {{ .Values.controlPlane.hpa.targetCPUUtilizationPercentage }}
+  {{- $hasMetric = true }}
+  {{- end }}
+  {{- if .Values.controlPlane.hpa.targetMemoryUtilizationPercentage }}
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: {{ .Values.controlPlane.hpa.targetMemoryUtilizationPercentage }}
+  {{- $hasMetric = true }}
+  {{- end }}
+  {{- if not $hasMetric }}
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 80
+  {{- end }}
+{{- end }}

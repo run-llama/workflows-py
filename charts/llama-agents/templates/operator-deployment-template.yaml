@@ -1,0 +1,14 @@
+{{- if and .Values.operator.enabled .Values.operator.llamaDeploymentTemplate.enabled }}
+apiVersion: deploy.llamaindex.ai/v1
+kind: LlamaDeploymentTemplate
+metadata:
+  {{- with .Values.operator.llamaDeploymentTemplate.metadata }}
+  {{- toYaml . | nindent 2 }}
+  {{- end }}
+  name: {{ .Values.operator.llamaDeploymentTemplate.name | default "default" }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  {{- with .Values.operator.llamaDeploymentTemplate.spec }}
+  {{- toYaml . | nindent 2 }}
+  {{- end }}
+{{- end }}

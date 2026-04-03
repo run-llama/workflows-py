@@ -1,0 +1,53 @@
+{{- if .Values.networkPolicy.enabled }}
+# Network policy for deployment pods - restrict egress to only necessary services
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: llama-deployment-pods
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ include "llama-agents.controlplane.name" . }}
+    component: deployment-pods
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/managed-by: llama-deploy-operator
+    {{- with .Values.networkPolicy.extraMatchExpressions }}
+    matchExpressions:
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  policyTypes:
+  - Egress
+  egress:
+  # Allow access to control plane build API
+  - to:
+    - podSelector:
+        matchLabels:
+          app: {{ include "llama-agents.controlplane.name" . }}
+    ports:
+    - protocol: TCP
+      port: {{ .Values.controlPlane.buildApi.port }}
+  # Allow DNS resolution
+  - to:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: kube-system
+      podSelector:
+        matchLabels:
+          k8s-app: kube-dns
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+  # Allow Internet access but block private ranges and IMDS
+  - to:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+        except:
+        - 169.254.169.254/32  # AWS IMDS
+        - 10.0.0.0/8          # Private ranges
+        - 172.16.0.0/12
+        - 192.168.0.0/16
+        - 100.64.0.0/10       # Carrier-grade NAT
+{{- end }}

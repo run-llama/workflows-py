@@ -1,0 +1,75 @@
+# Development values for llama-agents
+# Two containers: main app (API) + dev server (hot reload only)
+
+# Container configuration for development
+controlPlane:
+  # Defer image tag selection to the operator's LLAMA_DEPLOY_IMAGE_TAG
+  # env var (set by tilt) so rebuilds automatically apply to
+  # existing deployments without baking tags into CRDs.
+  defaultAppserverImageTag: "operator-default"
+  container:
+    env:
+      - name: FASTAPI_ENV
+        value: "development"
+      - name: LOG_LEVEL
+        value: "debug"
+      - name: LOCAL_DEV_INGRESS
+        value: "true"
+    envFrom:
+      - secretRef:
+          name: control-plane-secrets
+          optional: true
+    resources:
+      requests:
+        memory: "1Gi"
+        cpu: "1000m"
+      limits:
+        memory: "2Gi"
+        cpu: "2000m"
+    startupProbe:
+      httpGet:
+        path: /health
+        port: 8000
+      periodSeconds: 1
+      timeoutSeconds: 2
+      failureThreshold: 60
+    livenessProbe:
+      httpGet:
+        path: /health
+        port: 8000
+      periodSeconds: 10
+  hpa:
+    enabled: false
+  objectStorage:
+    s3:
+      endpointUrl: "http://seaweedfs.llama-agents.svc:8333"
+      bucket: "backups"
+      region: "us-east-1"
+    secretRef: "object-storage-secrets"
+    backupEncryptionSecretRef: "backup-encryption-secrets"
+
+# Tilt rewrites managed-by labels to "tilt" on all pods it deploys,
+# which causes the deployment-pods network policy to match infra pods too.
+# Exclude them so the control plane and operator are not blocked.
+networkPolicy:
+  extraMatchExpressions:
+    - key: app
+      operator: NotIn
+      values:
+        - llama-agents-control-plane
+        - llama-agents-operator
+
+operator:
+  rolloutTimeoutSeconds: "300"
+  maxConcurrentRollouts: 1
+  maxDeployments: 10
+  hpa:
+    enabled: false
+
+metrics:
+  enabled: true
+
+# Enable local development features
+localDev:
+  enabled: true
+  ingressDomain: "127.0.0.1.nip.io"

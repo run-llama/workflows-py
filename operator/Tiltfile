@@ -1,0 +1,147 @@
+# Tiltfile for llama-agents local development
+# Requires a kind cluster named "kind" (context: kind-kind)
+
+allow_k8s_contexts('kind-kind')
+
+# ---------------------------------------------------------------------------
+# Docker images
+# ---------------------------------------------------------------------------
+
+# Control plane (Python) — Tilt auto-injects into the deployment's image: field
+docker_build(
+    'llama-agents-control-plane',
+    context='..',
+    dockerfile='../docker/Dockerfile',
+    target='controlplane',
+    only=[
+        './packages/',
+        './docker/Dockerfile',
+        './pyproject.toml',
+        './uv.lock',
+        './README.md',
+    ],
+)
+
+# Operator (Go) — Tilt auto-injects into the deployment's image: field
+docker_build(
+    'llama-agents-operator',
+    context='..',
+    dockerfile='../docker/operator.Dockerfile',
+    only=[
+        './operator/',
+        './docker/operator.Dockerfile',
+    ],
+)
+
+# App server — used by the operator at runtime (not in helm-rendered YAML).
+# The operator reads repo/tag from separate env vars, so Tilt can't auto-inject.
+# We build with a fixed tag and load into kind manually.
+APPSERVER_TAG = 'tilt-dev'
+APPSERVER_IMG = 'llama-agents-appserver:%s' % APPSERVER_TAG
+
+local_resource(
+    'appserver-image',
+    cmd='docker build -t %s -f ../docker/Dockerfile --target appserver .. && kind load docker-image %s --name kind' % (APPSERVER_IMG, APPSERVER_IMG),
+    deps=[
+        '../packages/',
+        '../docker/Dockerfile',
+        '../pyproject.toml',
+        '../uv.lock',
+    ],
+)
+
+# ---------------------------------------------------------------------------
+# Dev infrastructure
+# ---------------------------------------------------------------------------
+
+# Prometheus Operator + Prometheus instance for ServiceMonitor-based scraping.
+# Installed outside Tilt's resource management to avoid label conflicts.
+local(
+    'tilt/scripts/install-prometheus.sh',
+    quiet=True,
+)
+
+# SeaweedFS for S3-compatible backup storage
+k8s_yaml('tilt/k8s-manifests/seaweedfs.yaml')
+
+k8s_yaml('tilt/k8s-manifests/object-storage-secrets.yaml')
+k8s_yaml('tilt/k8s-manifests/backup-encryption-secrets.yaml')
+
+# Optional control plane secrets from .env (GITHUB_APP_PRIVATE_KEY, GITHUB_APP_CLIENT_ID, GITHUB_APP_NAME, GITHUB_APP_SECRET)
+if os.path.exists('../.env'):
+    k8s_yaml(local('python3 tilt/env-to-secret.py', quiet=True))
+
+
+# ---------------------------------------------------------------------------
+# CRDs — installed via the llama-agents-crds chart so the chart is exercised
+# in the dev loop. The keep annotation (default) ensures CRDs survive
+# `tilt down` / `helm uninstall` and CRs are not garbage-collected.
+# ---------------------------------------------------------------------------
+
+local(
+    'helm upgrade --install llama-agents-crds ../charts/llama-agents-crds -n llama-agents --create-namespace',
+    quiet=True,
+)
+
+# ---------------------------------------------------------------------------
+# Helm deployment
+# ---------------------------------------------------------------------------
+
+k8s_yaml(
+    helm(
+        '../charts/llama-agents',
+        name='llama-agents',
+        namespace='llama-agents',
+        values=['tilt/helm/values-dev.yaml'],
+        set=[
+            # Controlplane + operator: repos match docker_build names so Tilt
+            # auto-replaces the image: field with its content-addressed ref.
+            'images.controlPlane.repository=llama-agents-control-plane',
+            'images.controlPlane.tag=unused-tilt-will-replace',
+            'images.operator.repository=llama-agents-operator',
+            'images.operator.tag=unused-tilt-will-replace',
+            # Appserver: operator reads these as env vars at runtime.
+            # Fixed tag matches what local_resource loads into kind.
+            'images.appserver.repository=llama-agents-appserver',
+            'images.appserver.tag=%s' % APPSERVER_TAG,
+            'images.appserver.pullPolicy=Never',
+        ],
+    ),
+)
+
+# ---------------------------------------------------------------------------
+# Resource configuration and port forwards
+# ---------------------------------------------------------------------------
+
+# Control plane deployment — forward the service port to localhost:8011
+k8s_resource(
+    'llama-agents-control-plane',
+    port_forwards='8011:8000',
+)
+
+# SeaweedFS — S3-compatible storage for backup testing
+k8s_resource('seaweedfs')
+
+# Create the S3 bucket inside SeaweedFS once it's running
+local_resource(
+    'seaweedfs-init',
+    cmd="for i in 1 2 3 4 5; do kubectl exec -n llama-agents deploy/seaweedfs -- sh -c \"echo 's3.bucket.create -name backups' | weed shell -master=localhost:9333\" && exit 0; echo \"seaweedfs-init attempt $i failed, retrying...\"; sleep 3; done; echo 'seaweedfs-init failed after 5 attempts'; exit 1",
+    resource_deps=['seaweedfs'],
+)
+
+# Operator deployment — depends on appserver image being built first
+k8s_resource(
+    'llama-agents-operator',
+    resource_deps=['appserver-image'],
+    port_forwards='8080:8080',
+)
+
+# ---------------------------------------------------------------------------
+# Maintenance
+# ---------------------------------------------------------------------------
+
+# Prune orphaned containerd snapshots inside the kind node every 6 hours.
+# Tilt and `kind load` create new content-addressed image layers on every
+# rebuild but never remove old ones, so overlayfs grows unbounded.
+k8s_yaml('tilt/k8s-manifests/kind-gc-cronjob.yaml')
+k8s_resource('kind-gc', labels=['infra'])
