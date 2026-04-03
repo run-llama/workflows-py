@@ -1,3 +1,4 @@
+# ty: ignore[invalid-argument-type]
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 LlamaIndex Inc.
 """End-to-end DBOS + WorkflowServer + PostgresWorkflowStore integration tests.
@@ -58,10 +59,8 @@ def run_server_scenario(
 def assert_no_errors(result: subprocess.CompletedProcess[str]) -> None:
     """Check subprocess result for crashes and errors."""
     if result.returncode != 0:
-        pytest.fail(
-            f"Subprocess exited with code {result.returncode}\n"
-            f"stdout: {result.stdout}\nstderr: {result.stderr}"
-        )
+        msg = f"Subprocess exited with code {result.returncode}\nstdout: {result.stdout}\nstderr: {result.stderr}"
+        pytest.fail(msg)
     # Only fail on tracebacks in stdout — stderr tracebacks during DBOS
     # shutdown are noisy but harmless when exit code is 0.
     if "Traceback (most recent call last)" in result.stdout:

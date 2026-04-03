@@ -1,3 +1,4 @@
+# ty: ignore[unknown-argument]
 """Tests for human-in-the-loop (HITL) workflow patterns.
 
 These tests verify that wait_for_event works correctly inside tool

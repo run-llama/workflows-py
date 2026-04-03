@@ -1,3 +1,4 @@
+# ty: ignore[invalid-argument-type, not-iterable]
 from __future__ import annotations
 
 from contextlib import asynccontextmanager

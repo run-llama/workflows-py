@@ -1,3 +1,4 @@
+# ty: ignore[invalid-argument-type]
 """
 Tests for workflow state inheritance behavior.
 

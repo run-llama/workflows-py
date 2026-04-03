@@ -816,7 +816,7 @@ def _process_step_result_tick(
             new_waiter = StepWorkerWaiter(
                 waiter_id=result.waiter_id,
                 event=this_execution.event,
-                waiting_for_event=result.event_type,  # ty: ignore[invalid-argument-type] - ty choking here, with result.event_type resolved as "object"
+                waiting_for_event=result.event_type,  # type: ignore[ty:invalid-argument-type]
                 requirements=result.requirements,
                 has_requirements=bool(len(result.requirements)),
                 resolved_event=None,

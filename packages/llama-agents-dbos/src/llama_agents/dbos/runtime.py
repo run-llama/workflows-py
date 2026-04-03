@@ -290,7 +290,7 @@ class DBOSRuntime(Runtime):
                       replica reclaims the slot.
         """
         super().__init__()
-        self.config: DBOSRuntimeConfig = dict(kwargs)  # type: ignore[assignment]
+        self.config: DBOSRuntimeConfig = dict(kwargs)  # type: ignore[assignment]  # ty: ignore[invalid-assignment]
 
         # Workflow tracking state
         self._tracked_workflows: list[Workflow] = []

@@ -1,3 +1,4 @@
+# ty: ignore[invalid-assignment]
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 LlamaIndex Inc.
 """Unit tests for DBOSIdleReleaseDecorator."""

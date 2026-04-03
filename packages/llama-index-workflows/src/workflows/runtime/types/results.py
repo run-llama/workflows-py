@@ -175,7 +175,7 @@ class AddWaiter(BaseModel, Generic[EventType]):
         data["requirements"] = {}
         return data
 
-    @model_validator(mode="wrap")
+    @model_validator(mode="wrap")  # type: ignore[ty:invalid-argument-type]
     @classmethod
     def _validate(cls, data: Any, handler: Any) -> AddWaiter:
         if isinstance(data, dict):

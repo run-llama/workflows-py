@@ -251,7 +251,7 @@ def as_step_worker_function(
                             None,
                             lambda: copy.run(
                                 lambda: _run_with_tags(merged_tags, partial_func)
-                            ),  # type: ignore
+                            ),  # type: ignore[ty:invalid-return-type]
                         )
                     )
                 else:

@@ -342,7 +342,7 @@ class DictState(DictLikeModel):
 
 
 # Default state type is DictState for the generic type
-MODEL_T = TypeVar("MODEL_T", bound=BaseModel, default=DictState)  # type: ignore
+MODEL_T = TypeVar("MODEL_T", bound=BaseModel, default=DictState)  # type: ignore  # ty: ignore[invalid-return-type]
 
 
 @runtime_checkable
@@ -520,13 +520,13 @@ class InMemoryStateStore(Generic[MODEL_T]):
             ValueError: If the payload is not in_memory format.
         """
         if not serialized_state:
-            return cls(DictState())  # type: ignore
+            return cls(DictState())  # type: ignore[arg-type]  # ty: ignore[invalid-assignment]
 
         # Validate it's in_memory format (raises ValueError if not)
         parse_in_memory_state(serialized_state)
 
         state_instance = deserialize_state_from_dict(serialized_state, serializer)
-        return cls(state_instance)  # type: ignore
+        return cls(state_instance)  # type: ignore[arg-type]  # ty: ignore[invalid-assignment]
 
     @asynccontextmanager
     async def edit_state(self) -> AsyncGenerator[MODEL_T, None]:

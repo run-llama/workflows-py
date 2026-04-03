@@ -62,7 +62,7 @@ class SqliteStateStore(Generic[MODEL_T]):
     ) -> None:
         self._db_path = db_path
         self._run_id = run_id
-        self.state_type = state_type or DictState  # type: ignore[assignment]
+        self.state_type = state_type or DictState  # type: ignore[assignment]  # ty: ignore[invalid-assignment]
         self._serializer = serializer or JsonSerializer()
 
     @property
@@ -124,8 +124,8 @@ class SqliteStateStore(Generic[MODEL_T]):
         """Deserialize state from JSON string."""
         if issubclass(self.state_type, DictState):
             data = json.loads(state_json)
-            return deserialize_dict_state_data(data, self._serializer)  # type: ignore[return-value]
-        return self._serializer.deserialize(state_json)
+            return deserialize_dict_state_data(data, self._serializer)  # type: ignore[return-value]  # ty: ignore[invalid-return-type]
+        return self._serializer.deserialize(state_json)  # type: ignore[ty:invalid-return-type]
 
     def _create_default_state(self) -> MODEL_T:
         return self.state_type()
@@ -269,7 +269,7 @@ class SqliteStateStore(Generic[MODEL_T]):
             return cls(
                 db_path=db_path,
                 run_id=effective_run_id,
-                state_type=state_type,  # type: ignore[arg-type]
+                state_type=state_type,  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
                 serializer=serializer,
             )
 
@@ -282,7 +282,7 @@ class SqliteStateStore(Generic[MODEL_T]):
         store = cls(
             db_path=db_path,
             run_id=effective_run_id,
-            state_type=state_type,  # type: ignore[arg-type]
+            state_type=state_type,  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
             serializer=serializer,
         )
         store._write_in_memory_state(serialized_state)

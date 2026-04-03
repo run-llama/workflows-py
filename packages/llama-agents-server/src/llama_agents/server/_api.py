@@ -112,7 +112,7 @@ class _WorkflowAPI:
             routes=self._routes(),
             middleware=middleware,
             lifespan=lifespan,
-            exception_handlers=exception_handlers,  # type: ignore[arg-type]
+            exception_handlers=exception_handlers,  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
         )
         self.app.mount(
             "/", app=StaticFiles(directory=assets_path, html=True), name="ui"
@@ -1030,7 +1030,7 @@ class _WorkflowAPI:
         }
 
         status_in: list[Status] | None = (
-            cast(
+            cast(  # type: ignore[ty:invalid-argument-type]
                 list[Status],
                 list(set(allowed_status_values).intersection(status_values)),
             )

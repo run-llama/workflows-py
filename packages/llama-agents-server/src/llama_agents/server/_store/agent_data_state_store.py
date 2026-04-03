@@ -68,7 +68,7 @@ class AgentDataStateStore(Generic[MODEL_T]):
     ) -> None:
         self._client = client
         self._run_id = run_id
-        self.state_type = state_type or DictState  # type: ignore[assignment]
+        self.state_type = state_type or DictState  # type: ignore[assignment]  # ty: ignore[invalid-assignment]
         self._collection = collection
         self._serializer = serializer or JsonSerializer()
         # Cache the agent data item ID once found
@@ -97,8 +97,8 @@ class AgentDataStateStore(Generic[MODEL_T]):
     def _deserialize_state(self, state_json: str) -> MODEL_T:
         if issubclass(self.state_type, DictState):
             data = json.loads(state_json)
-            return deserialize_dict_state_data(data, self._serializer)  # type: ignore[return-value]
-        return self._serializer.deserialize(state_json)
+            return deserialize_dict_state_data(data, self._serializer)  # type: ignore[return-value]  # ty: ignore[invalid-return-type]
+        return self._serializer.deserialize(state_json)  # type: ignore[ty:invalid-return-type]
 
     def _create_default_state(self) -> MODEL_T:
         return self.state_type()
@@ -161,7 +161,7 @@ class AgentDataStateStore(Generic[MODEL_T]):
             else:
                 result = await self._client.create(self._collection, payload)
                 self._item_id = result["id"]
-        self._cached_state = state.model_copy()  # type: ignore[assignment]
+        self._cached_state = state.model_copy()  # type: ignore[assignment]  # ty: ignore[invalid-assignment]
 
     # ------------------------------------------------------------------
     # StateStore protocol
@@ -220,7 +220,7 @@ class AgentDataStateStore(Generic[MODEL_T]):
         return cls(
             client=client,
             run_id=effective_run_id,
-            state_type=state_type,  # type: ignore[arg-type]
+            state_type=state_type,  # type: ignore[arg-type]  # ty: ignore[invalid-argument-type]
             collection=parsed.collection,
             serializer=serializer,
         )
