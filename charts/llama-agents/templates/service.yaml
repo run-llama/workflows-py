@@ -1,0 +1,57 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "llama-agents.service.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ include "llama-agents.controlplane.name" . }}
+  {{- with .Values.controlPlane.service.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.controlPlane.service.type }}
+  ports:
+  - port: {{ .Values.controlPlane.service.port }}
+    targetPort: {{ .Values.controlPlane.container.port }}
+    protocol: TCP
+    name: http
+  selector:
+    app: {{ include "llama-agents.controlplane.name" . }}
+---
+# Build API service for git proxy - accessible only within cluster
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "llama-agents.build.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ include "llama-agents.controlplane.name" . }}
+    component: build-api
+spec:
+  type: ClusterIP
+  ports:
+  - port: {{ .Values.controlPlane.buildApi.port | default 8001 }}
+    targetPort: {{ .Values.controlPlane.buildApi.port | default 8001 }}
+    protocol: TCP
+    name: build-api
+  selector:
+    app: {{ include "llama-agents.controlplane.name" . }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "llama-agents.operator.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ include "llama-agents.operator.name" . }}
+    component: operator
+spec:
+  type: ClusterIP
+  selector:
+    app: {{ include "llama-agents.operator.name" . }}
+  ports:
+  - name: metrics
+    port: 8080
+    targetPort: 8080
+    protocol: TCP

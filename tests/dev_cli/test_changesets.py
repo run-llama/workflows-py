@@ -10,13 +10,24 @@ from urllib.error import HTTPError
 import pytest
 
 from dev_cli.changesets import (
+    DockerConfig,
+    HelmConfig,
     PackageJson,
     PyProjectContainer,
+    _resolve_template,
+    _write_toml_values,
+    _write_yaml_values,
+    apply_sync_values,
     current_version,
+    docker_image_tags,
+    is_docker_image_published,
+    is_helm_chart_published,
     is_published,
+    is_rc_version,
+    maybe_publish_docker,
+    maybe_publish_helm,
     pep440_to_semver,
     semver_to_pep440,
-    sync_package_version_with_pyproject,
 )
 
 
@@ -113,16 +124,14 @@ dependencies = []
 """.strip()
     )
 
-    packages = {
-        "test-js-package": PackageJson(
-            name="test-js-package",
-            version="2.0.0",
-            path=package_dir,
-            private=False,
-        )
-    }
+    pkg = PackageJson(
+        name="test-js-package",
+        version="2.0.0",
+        path=package_dir,
+        private=False,
+    )
 
-    sync_package_version_with_pyproject(package_dir, packages, "test-js-package")
+    apply_sync_values(pkg, {"test-js-package": pkg})
 
     _, py_doc = PyProjectContainer.parse(pyproject.read_text())
     assert py_doc.project.version == "2.0.0"
@@ -132,17 +141,15 @@ def test_sync_package_version_skips_when_no_pyproject(tmp_path: Path) -> None:
     package_dir = tmp_path / "package"
     package_dir.mkdir()
 
-    packages = {
-        "test-js-package": PackageJson(
-            name="test-js-package",
-            version="2.0.0",
-            path=package_dir,
-            private=False,
-        )
-    }
+    pkg = PackageJson(
+        name="test-js-package",
+        version="2.0.0",
+        path=package_dir,
+        private=False,
+    )
 
-    # Should not raise an error
-    sync_package_version_with_pyproject(package_dir, packages, "test-js-package")
+    changed = apply_sync_values(pkg, {"test-js-package": pkg})
+    assert changed is False
 
 
 def test_sync_package_version_skips_when_versions_match(tmp_path: Path) -> None:
@@ -157,16 +164,14 @@ dependencies = []
 """.strip()
     pyproject.write_text(original_content)
 
-    packages = {
-        "test-js-package": PackageJson(
-            name="test-js-package",
-            version="2.0.0",
-            path=package_dir,
-            private=False,
-        )
-    }
+    pkg = PackageJson(
+        name="test-js-package",
+        version="2.0.0",
+        path=package_dir,
+        private=False,
+    )
 
-    sync_package_version_with_pyproject(package_dir, packages, "test-js-package")
+    apply_sync_values(pkg, {"test-js-package": pkg})
 
     # Content should be unchanged
     assert pyproject.read_text() == original_content
@@ -185,16 +190,14 @@ dependencies = []
 """.strip()
     )
 
-    packages = {
-        "test-js-package": PackageJson(
-            name="test-js-package",
-            version="1.2.3-a.4",
-            path=package_dir,
-            private=False,
-        )
-    }
+    pkg = PackageJson(
+        name="test-js-package",
+        version="1.2.3-a.4",
+        path=package_dir,
+        private=False,
+    )
 
-    sync_package_version_with_pyproject(package_dir, packages, "test-js-package")
+    apply_sync_values(pkg, {"test-js-package": pkg})
 
     _, py_doc = PyProjectContainer.parse(pyproject.read_text())
     assert py_doc.project.version == "1.2.3a4"
@@ -290,3 +293,806 @@ def test_roundtrip_semver_to_pep440_and_back(semver: str) -> None:
 def test_roundtrip_pep440_to_semver_and_back(pep440: str) -> None:
     semver = pep440_to_semver(pep440)
     assert semver_to_pep440(semver) == pep440
+
+
+# -- chart version sync tests --
+
+
+def _make_helm_package(
+    path: Path, version: str = "0.4.14", name: str = "llama-agents"
+) -> PackageJson:
+    return PackageJson(
+        name=name,
+        version=version,
+        path=path,
+        private=True,
+        helm=HelmConfig(registry="oci://docker.io/llamaindex"),
+    )
+
+
+def test_sync_chart_version_updates_chart_yaml(tmp_path: Path) -> None:
+    chart_yaml = tmp_path / "Chart.yaml"
+    chart_yaml.write_text('apiVersion: v2\nname: llama-agents\nversion: "0.4.13"\n')
+
+    pkg = _make_helm_package(tmp_path, version="0.4.14")
+    changed = apply_sync_values(pkg, {pkg.name: pkg})
+    assert changed is True
+    content = chart_yaml.read_text()
+    assert "0.4.14" in content
+
+
+def test_sync_chart_version_no_change_when_already_matching(tmp_path: Path) -> None:
+    chart_yaml = tmp_path / "Chart.yaml"
+    chart_yaml.write_text('apiVersion: v2\nname: llama-agents\nversion: "0.4.14"\n')
+
+    pkg = _make_helm_package(tmp_path, version="0.4.14")
+    changed = apply_sync_values(pkg, {pkg.name: pkg})
+    assert changed is False
+
+
+def test_sync_chart_version_returns_false_when_no_chart(tmp_path: Path) -> None:
+    pkg = _make_helm_package(tmp_path, version="0.4.14")
+    changed = apply_sync_values(pkg, {pkg.name: pkg})
+    assert changed is False
+
+
+def test_apply_sync_values_bakes_image_tags(tmp_path: Path) -> None:
+    """syncValues on the chart resolves dependency docker tags into values.yaml."""
+    chart_yaml = tmp_path / "Chart.yaml"
+    chart_yaml.write_text('apiVersion: v2\nname: llama-agents\nversion: "0.4.13"\n')
+    values_yaml = tmp_path / "values.yaml"
+    values_yaml.write_text(
+        """images:
+  controlPlane:
+    repository: llamaindex/llama-agents-control-plane
+    tag: "0.4.13"
+    pullPolicy: IfNotPresent
+  operator:
+    repository: llamaindex/llama-agents-operator
+    tag: "operator-0.4.13"
+    pullPolicy: IfNotPresent
+  appserver:
+    repository: llamaindex/llama-agents-appserver
+    tag: "appserver-0.4.13"
+    pullPolicy: IfNotPresent
+"""
+    )
+
+    chart_pkg = PackageJson(
+        name="llama-agents",
+        version="0.4.14",
+        path=tmp_path,
+        private=True,
+        helm=HelmConfig(registry="oci://docker.io/llamaindex"),
+        syncValues={
+            "values.yaml": {
+                "images.controlPlane.tag": "{llama-agents-control-plane:dockerTag}",
+                "images.operator.tag": "{llama-agents-operator:dockerTag}",
+                "images.appserver.tag": "{llama-agents-appserver:dockerTag}",
+            }
+        },
+    )
+    workspace = {
+        "llama-agents": chart_pkg,
+        "llama-agents-control-plane": PackageJson(
+            name="llama-agents-control-plane",
+            version="0.4.14",
+            path=Path("/fake/cp"),
+            private=False,
+            docker=DockerConfig(
+                dockerfile="docker/Dockerfile",
+                target="controlplane",
+                imageName="llamaindex/llama-agents-control-plane",
+                platforms=["linux/amd64"],
+            ),
+        ),
+        "llama-agents-operator": PackageJson(
+            name="llama-agents-operator",
+            version="0.4.15",
+            path=Path("/fake/op"),
+            private=False,
+            docker=DockerConfig(
+                dockerfile="docker/operator.Dockerfile",
+                imageName="llamaindex/llama-agents-operator",
+                platforms=["linux/amd64"],
+            ),
+        ),
+        "llama-agents-appserver": PackageJson(
+            name="llama-agents-appserver",
+            version="0.4.16",
+            path=Path("/fake/as"),
+            private=False,
+            docker=DockerConfig(
+                dockerfile="docker/Dockerfile",
+                target="appserver",
+                imageName="llamaindex/llama-agents-appserver",
+                platforms=["linux/amd64"],
+            ),
+        ),
+    }
+
+    changed = apply_sync_values(chart_pkg, workspace)
+    assert changed is True
+    content = values_yaml.read_text()
+    assert "0.4.14" in content  # controlPlane
+    assert "0.4.15" in content
+    assert "0.4.16" in content
+    # Chart.yaml version also updated via implicit helm sync
+    assert "0.4.14" in chart_yaml.read_text()
+
+
+# -- is_rc_version tests --
+
+
+@pytest.mark.parametrize(
+    ("version", "expected"),
+    [
+        ("0.4.14", False),
+        ("1.0.0", False),
+        ("0.4.14-rc.1", True),
+        ("0.4.14-a.1", True),
+        ("0.4.14-b.1", True),
+        ("1.0.0rc1", True),
+        ("1.0.0a1", True),
+        ("1.0.0b1", True),
+    ],
+)
+def test_is_rc_version(version: str, expected: bool) -> None:
+    assert is_rc_version(version) == expected
+
+
+# -- is_docker_image_published tests --
+
+
+def test_is_docker_image_published_returns_true() -> None:
+    with patch("urllib.request.urlopen"):
+        result = is_docker_image_published(
+            "llamaindex/llama-agents-appserver", "0.4.14"
+        )
+        assert result is True
+
+
+def test_is_docker_image_published_returns_false_on_404() -> None:
+    mock_error = HTTPError("url", 404, "Not Found", {}, None)  # type: ignore[arg-type]
+    with patch("urllib.request.urlopen", side_effect=mock_error):
+        result = is_docker_image_published(
+            "llamaindex/llama-agents-appserver", "0.4.14"
+        )
+        assert result is False
+
+
+def test_is_docker_image_published_raises_on_500() -> None:
+    mock_error = HTTPError("url", 500, "Server Error", {}, None)  # type: ignore[arg-type]
+    with patch("urllib.request.urlopen", side_effect=mock_error):
+        with pytest.raises(HTTPError) as exc_info:
+            is_docker_image_published("llamaindex/llama-agents-appserver", "0.4.14")
+        assert exc_info.value.code == 500
+
+
+# -- docker_image_tags tests --
+
+
+def test_docker_image_tags_non_rc() -> None:
+    image = DockerConfig(
+        dockerfile="docker/Dockerfile",
+        target="controlplane",
+        platforms=["linux/amd64", "linux/arm64"],
+        imageName="llamaindex/llama-agents-control-plane",
+    )
+    tags = docker_image_tags(image, "0.4.14", is_rc=False)
+    assert tags == [
+        "docker.io/llamaindex/llama-agents-control-plane:0.4.14",
+        "docker.io/llamaindex/llama-agents-control-plane:latest",
+        "docker.io/llamaindex/llama-agents-control-plane:0.4",
+    ]
+
+
+def test_docker_image_tags_rc() -> None:
+    image = DockerConfig(
+        dockerfile="docker/Dockerfile",
+        target="controlplane",
+        platforms=["linux/amd64", "linux/arm64"],
+        imageName="llamaindex/llama-agents-control-plane",
+    )
+    tags = docker_image_tags(image, "0.4.14-rc.1", is_rc=True)
+    assert tags == ["docker.io/llamaindex/llama-agents-control-plane:0.4.14-rc.1"]
+
+
+def test_docker_image_tags_appserver() -> None:
+    image = DockerConfig(
+        dockerfile="docker/Dockerfile",
+        target="appserver",
+        platforms=["linux/amd64", "linux/arm64"],
+        imageName="llamaindex/llama-agents-appserver",
+    )
+    tags = docker_image_tags(image, "0.4.14", is_rc=False)
+    assert tags == [
+        "docker.io/llamaindex/llama-agents-appserver:0.4.14",
+        "docker.io/llamaindex/llama-agents-appserver:latest",
+        "docker.io/llamaindex/llama-agents-appserver:0.4",
+    ]
+
+
+# -- _read_package_json_config tests --
+
+
+def test_read_package_json_config_docker(tmp_path: Path) -> None:
+    from dev_cli.changesets import _read_package_json_config
+
+    pkg_json = tmp_path / "package.json"
+    pkg_json.write_text(
+        json.dumps(
+            {
+                "name": "test-pkg",
+                "docker": {
+                    "dockerfile": "docker/Dockerfile",
+                    "target": "myapp",
+                    "imageName": "llamaindex/test-myapp",
+                    "platforms": ["linux/amd64"],
+                },
+            }
+        )
+    )
+    config = _read_package_json_config(tmp_path)
+    assert config is not None
+    assert config.docker is not None
+    assert config.docker.dockerfile == "docker/Dockerfile"
+    assert config.docker.target == "myapp"
+    assert config.docker.imageName == "llamaindex/test-myapp"
+    assert config.docker.platforms == ["linux/amd64"]
+
+
+def test_read_package_json_config_helm(tmp_path: Path) -> None:
+    from dev_cli.changesets import _read_package_json_config
+
+    pkg_json = tmp_path / "package.json"
+    pkg_json.write_text(
+        json.dumps(
+            {"name": "my-chart", "helm": {"registry": "oci://docker.io/llamaindex"}}
+        )
+    )
+    config = _read_package_json_config(tmp_path)
+    assert config is not None
+    assert config.helm is not None
+    assert config.helm.registry == "oci://docker.io/llamaindex"
+
+
+def test_read_package_json_config_defaults(tmp_path: Path) -> None:
+    from dev_cli.changesets import _read_package_json_config
+
+    pkg_json = tmp_path / "package.json"
+    pkg_json.write_text(json.dumps({"name": "test-pkg"}))
+    config = _read_package_json_config(tmp_path)
+    assert config is not None
+    assert config.docker is None
+    assert config.helm is None
+
+
+def test_read_package_json_config_returns_none_when_no_file(tmp_path: Path) -> None:
+    from dev_cli.changesets import _read_package_json_config
+
+    assert _read_package_json_config(tmp_path) is None
+
+
+def test_read_package_json_config_docker_missing_dockerfile(tmp_path: Path) -> None:
+    from pydantic import ValidationError
+
+    from dev_cli.changesets import _read_package_json_config
+
+    pkg_json = tmp_path / "package.json"
+    pkg_json.write_text(json.dumps({"name": "test-pkg", "docker": {"target": "app"}}))
+    with pytest.raises(ValidationError):
+        _read_package_json_config(tmp_path)
+
+
+def test_read_package_json_config_helm_missing_registry(tmp_path: Path) -> None:
+    from pydantic import ValidationError
+
+    from dev_cli.changesets import _read_package_json_config
+
+    pkg_json = tmp_path / "package.json"
+    pkg_json.write_text(json.dumps({"name": "my-chart", "helm": {}}))
+    with pytest.raises(ValidationError):
+        _read_package_json_config(tmp_path)
+
+
+# -- maybe_publish_docker tests --
+
+
+def _make_docker_packages() -> list[PackageJson]:
+    """Create test PackageJson instances with Docker configs."""
+    return [
+        PackageJson(
+            name="llama-agents-control-plane",
+            version="0.4.14",
+            path=Path("/fake/controlplane"),
+            private=False,
+            docker=DockerConfig(
+                dockerfile="docker/Dockerfile",
+                target="controlplane",
+                platforms=["linux/amd64", "linux/arm64"],
+                imageName="llamaindex/llama-agents-control-plane",
+            ),
+        ),
+        PackageJson(
+            name="llama-agents-operator",
+            version="0.4.14",
+            path=Path("/fake/operator"),
+            private=False,
+            docker=DockerConfig(
+                dockerfile="docker/operator.Dockerfile",
+                platforms=["linux/amd64"],
+                imageName="llamaindex/llama-agents-operator",
+            ),
+        ),
+        PackageJson(
+            name="llama-agents-appserver",
+            version="0.4.14",
+            path=Path("/fake/appserver"),
+            private=False,
+            docker=DockerConfig(
+                dockerfile="docker/Dockerfile",
+                target="appserver",
+                platforms=["linux/amd64", "linux/arm64"],
+                imageName="llamaindex/llama-agents-appserver",
+            ),
+        ),
+    ]
+
+
+def test_maybe_publish_docker_skips_when_already_published() -> None:
+    with (
+        patch("dev_cli.changesets.shutil.which", return_value="/usr/bin/docker"),
+        patch("dev_cli.changesets.is_docker_image_published", return_value=True),
+        patch("dev_cli.changesets.build_and_push_docker_image") as mock_build,
+    ):
+        maybe_publish_docker(dry_run=False, packages=_make_docker_packages())
+        mock_build.assert_not_called()
+
+
+def test_maybe_publish_docker_builds_when_not_published() -> None:
+    packages = _make_docker_packages()
+    with (
+        patch("dev_cli.changesets.shutil.which", return_value="/usr/bin/docker"),
+        patch("dev_cli.changesets.is_docker_image_published", return_value=False),
+        patch("dev_cli.changesets.build_and_push_docker_image") as mock_build,
+    ):
+        maybe_publish_docker(dry_run=False, packages=packages)
+        assert mock_build.call_count == len(packages)
+
+
+def test_maybe_publish_docker_dry_run_does_not_build() -> None:
+    with (
+        patch("dev_cli.changesets.shutil.which", return_value="/usr/bin/docker"),
+        patch("dev_cli.changesets.is_docker_image_published", return_value=False),
+        patch("dev_cli.changesets.build_and_push_docker_image") as mock_build,
+    ):
+        maybe_publish_docker(dry_run=True, packages=_make_docker_packages())
+        mock_build.assert_not_called()
+
+
+def test_maybe_publish_docker_skips_when_docker_not_found() -> None:
+    with (
+        patch("dev_cli.changesets.shutil.which", return_value=None),
+        patch("dev_cli.changesets.is_docker_image_published") as mock_check,
+    ):
+        maybe_publish_docker(dry_run=False, packages=_make_docker_packages())
+        mock_check.assert_not_called()
+
+
+def test_maybe_publish_docker_skips_packages_without_docker() -> None:
+    """Packages without docker config should be silently skipped."""
+    packages = [
+        PackageJson(
+            name="no-docker-pkg",
+            version="1.0.0",
+            path=Path("/fake/no-docker"),
+            private=True,
+            docker=None,
+        ),
+    ]
+    with (
+        patch("dev_cli.changesets.shutil.which", return_value="/usr/bin/docker"),
+        patch("dev_cli.changesets.is_docker_image_published") as mock_check,
+        patch("dev_cli.changesets.build_and_push_docker_image") as mock_build,
+    ):
+        maybe_publish_docker(dry_run=False, packages=packages)
+        mock_check.assert_not_called()
+        mock_build.assert_not_called()
+
+
+def test_maybe_publish_docker_uses_per_package_version() -> None:
+    """Each Docker image uses its own package version, not a shared one."""
+    packages = [
+        PackageJson(
+            name="pkg-a",
+            version="1.0.0",
+            path=Path("/fake/a"),
+            private=False,
+            docker=DockerConfig(
+                dockerfile="docker/Dockerfile",
+                target="a",
+                platforms=["linux/amd64"],
+                imageName="llamaindex/test-a",
+            ),
+        ),
+        PackageJson(
+            name="pkg-b",
+            version="2.0.0",
+            path=Path("/fake/b"),
+            private=False,
+            docker=DockerConfig(
+                dockerfile="docker/Dockerfile",
+                target="b",
+                platforms=["linux/amd64"],
+                imageName="llamaindex/test-b",
+            ),
+        ),
+    ]
+    with (
+        patch("dev_cli.changesets.shutil.which", return_value="/usr/bin/docker"),
+        patch("dev_cli.changesets.is_docker_image_published", return_value=False),
+        patch("dev_cli.changesets.build_and_push_docker_image") as mock_build,
+    ):
+        maybe_publish_docker(dry_run=False, packages=packages)
+        assert mock_build.call_count == 2
+        # First call uses pkg-a's version 1.0.0
+        first_tags = mock_build.call_args_list[0][0][1]
+        assert any("1.0.0" in t for t in first_tags)
+        # Second call uses pkg-b's version 2.0.0
+        second_tags = mock_build.call_args_list[1][0][1]
+        assert any("2.0.0" in t for t in second_tags)
+
+
+# -- maybe_publish_helm tests --
+
+
+def _make_helm_packages() -> list[PackageJson]:
+    """Create test PackageJson instances with Helm configs."""
+    return [
+        PackageJson(
+            name="llama-agents",
+            version="0.4.14",
+            path=Path("/fake/charts/llama-agents"),
+            private=False,
+            helm=HelmConfig(registry="oci://docker.io/llamaindex"),
+        ),
+        PackageJson(
+            name="llama-agents-crds",
+            version="0.4.14",
+            path=Path("/fake/charts/llama-agents-crds"),
+            private=False,
+            helm=HelmConfig(registry="oci://docker.io/llamaindex"),
+        ),
+    ]
+
+
+def test_maybe_publish_helm_already_published() -> None:
+    with (
+        patch("dev_cli.changesets.shutil.which", return_value="/usr/bin/helm"),
+        patch("dev_cli.changesets.is_helm_chart_published", return_value=True),
+        patch("dev_cli.changesets.run_command") as mock_run,
+    ):
+        maybe_publish_helm(dry_run=False, packages=_make_helm_packages())
+        mock_run.assert_not_called()
+
+
+def test_maybe_publish_helm_dry_run() -> None:
+    with (
+        patch("dev_cli.changesets.shutil.which", return_value="/usr/bin/helm"),
+        patch("dev_cli.changesets.is_helm_chart_published", return_value=False),
+        patch("dev_cli.changesets.run_command") as mock_run,
+    ):
+        maybe_publish_helm(dry_run=True, packages=_make_helm_packages())
+        mock_run.assert_not_called()
+
+
+def test_maybe_publish_helm_runs_commands() -> None:
+    with (
+        patch("dev_cli.changesets.shutil.which", return_value="/usr/bin/helm"),
+        patch("dev_cli.changesets.is_helm_chart_published", return_value=False),
+        patch("dev_cli.changesets.run_command") as mock_run,
+    ):
+        maybe_publish_helm(dry_run=False, packages=_make_helm_packages())
+        # 2 charts × 2 commands each = 4
+        assert mock_run.call_count == 4
+        mock_run.assert_any_call(["helm", "package", "/fake/charts/llama-agents"])
+        mock_run.assert_any_call(
+            [
+                "helm",
+                "push",
+                "llama-agents-0.4.14.tgz",
+                "oci://docker.io/llamaindex",
+            ]
+        )
+        mock_run.assert_any_call(["helm", "package", "/fake/charts/llama-agents-crds"])
+        mock_run.assert_any_call(
+            [
+                "helm",
+                "push",
+                "llama-agents-crds-0.4.14.tgz",
+                "oci://docker.io/llamaindex",
+            ]
+        )
+
+
+def test_maybe_publish_helm_skips_when_helm_not_found() -> None:
+    with (
+        patch("dev_cli.changesets.shutil.which", return_value=None),
+        patch("dev_cli.changesets.is_helm_chart_published") as mock_check,
+    ):
+        maybe_publish_helm(dry_run=False, packages=_make_helm_packages())
+        mock_check.assert_not_called()
+
+
+def test_maybe_publish_helm_skips_packages_without_helm() -> None:
+    packages = [
+        PackageJson(
+            name="no-helm-pkg",
+            version="1.0.0",
+            path=Path("/fake"),
+            private=True,
+            helm=None,
+        ),
+    ]
+    with (
+        patch("dev_cli.changesets.shutil.which", return_value="/usr/bin/helm"),
+        patch("dev_cli.changesets.is_helm_chart_published") as mock_check,
+    ):
+        maybe_publish_helm(dry_run=False, packages=packages)
+        mock_check.assert_not_called()
+
+
+def test_is_helm_chart_published_uses_chart_name() -> None:
+    with patch("urllib.request.urlopen") as mock_urlopen:
+        result = is_helm_chart_published("llama-agents-crds", "0.7.1")
+        assert result is True
+        called_url = mock_urlopen.call_args[0][0]
+        assert "llamaindex/llama-agents-crds" in called_url
+        assert "0.7.1" in called_url
+
+
+# -- template resolution tests --
+
+
+def _make_workspace() -> tuple[PackageJson, dict[str, PackageJson]]:
+    """Create a self_pkg and workspace for template tests."""
+    self_pkg = PackageJson(
+        name="my-chart",
+        version="1.2.3",
+        path=Path("/fake/chart"),
+        private=True,
+        helm=HelmConfig(registry="oci://docker.io/llamaindex"),
+    )
+    workspace = {
+        "my-chart": self_pkg,
+        "my-app": PackageJson(
+            name="my-app",
+            version="2.0.0",
+            path=Path("/fake/app"),
+            private=False,
+            docker=DockerConfig(
+                dockerfile="docker/Dockerfile",
+                imageName="llamaindex/test-app",
+                platforms=["linux/amd64"],
+            ),
+        ),
+        "no-docker": PackageJson(
+            name="no-docker",
+            version="3.0.0",
+            path=Path("/fake/nodock"),
+            private=True,
+        ),
+    }
+    return self_pkg, workspace
+
+
+def test_resolve_template_version() -> None:
+    self_pkg, workspace = _make_workspace()
+    assert _resolve_template("{my-app:version}", self_pkg, workspace) == "2.0.0"
+
+
+def test_resolve_template_self_version() -> None:
+    self_pkg, workspace = _make_workspace()
+    assert _resolve_template("{self:version}", self_pkg, workspace) == "1.2.3"
+
+
+def test_resolve_template_docker_tag() -> None:
+    self_pkg, workspace = _make_workspace()
+    assert _resolve_template("{my-app:dockerTag}", self_pkg, workspace) == "2.0.0"
+
+
+def test_resolve_template_pep440_version() -> None:
+    self_pkg, workspace = _make_workspace()
+    self_pkg.version = "1.2.3-a.4"
+    assert _resolve_template("{self:pep440Version}", self_pkg, workspace) == "1.2.3a4"
+
+
+def test_resolve_template_unknown_package() -> None:
+    self_pkg, workspace = _make_workspace()
+    with pytest.raises(ValueError, match="unknown package 'nonexistent'"):
+        _resolve_template("{nonexistent:version}", self_pkg, workspace)
+
+
+def test_resolve_template_docker_tag_no_docker() -> None:
+    self_pkg, workspace = _make_workspace()
+    with pytest.raises(ValueError, match="has no docker config"):
+        _resolve_template("{no-docker:dockerTag}", self_pkg, workspace)
+
+
+def test_resolve_template_unknown_property() -> None:
+    self_pkg, workspace = _make_workspace()
+    with pytest.raises(ValueError, match="unknown property 'badProp'"):
+        _resolve_template("{my-app:badProp}", self_pkg, workspace)
+
+
+# -- YAML writer tests --
+
+
+def test_write_yaml_values_sets_dot_path(tmp_path: Path) -> None:
+    yaml_file = tmp_path / "values.yaml"
+    yaml_file.write_text(
+        """# A comment
+images:
+  controlPlane:
+    repository: llamaindex/llama-agents-control-plane
+    tag: "0.4.13"
+    pullPolicy: IfNotPresent
+"""
+    )
+    changed = _write_yaml_values(yaml_file, {"images.controlPlane.tag": "0.4.14"})
+    assert changed is True
+    content = yaml_file.read_text()
+    assert "0.4.14" in content
+    assert "# A comment" in content  # comments preserved
+
+
+def test_write_yaml_values_preserves_comments(tmp_path: Path) -> None:
+    yaml_file = tmp_path / "values.yaml"
+    original = """# Top comment
+images:
+  controlPlane: # the control plane
+    repository: llamaindex/llama-agents-control-plane
+    tag: "0.8.0"
+    pullPolicy: IfNotPresent
+  operator: # the operator
+    repository: llamaindex/llama-agents-operator
+    tag: "operator-0.8.0"
+    pullPolicy: IfNotPresent
+"""
+    yaml_file.write_text(original)
+    changed = _write_yaml_values(yaml_file, {"images.controlPlane.tag": "0.9.0"})
+    assert changed is True
+    content = yaml_file.read_text()
+    assert "0.9.0" in content
+    assert "# Top comment" in content
+    assert "# the control plane" in content
+    assert "# the operator" in content
+
+
+def test_write_yaml_values_no_change(tmp_path: Path) -> None:
+    yaml_file = tmp_path / "values.yaml"
+    yaml_file.write_text('version: "0.8.0"\n')
+    changed = _write_yaml_values(yaml_file, {"version": "0.8.0"})
+    assert changed is False
+
+
+def test_write_yaml_values_missing_file(tmp_path: Path) -> None:
+    yaml_file = tmp_path / "nonexistent.yaml"
+    changed = _write_yaml_values(yaml_file, {"key": "val"})
+    assert changed is False
+
+
+def test_write_yaml_values_creates_intermediate_keys(tmp_path: Path) -> None:
+    yaml_file = tmp_path / "test.yaml"
+    yaml_file.write_text("existing: value\n")
+    changed = _write_yaml_values(yaml_file, {"new.nested.key": "hello"})
+    assert changed is True
+    content = yaml_file.read_text()
+    assert "hello" in content
+
+
+# -- TOML writer tests --
+
+
+def test_write_toml_values_sets_dot_path(tmp_path: Path) -> None:
+    toml_file = tmp_path / "pyproject.toml"
+    toml_file.write_text(
+        """[project]
+name = "test"
+version = "1.0.0"
+"""
+    )
+    changed = _write_toml_values(toml_file, {"project.version": "2.0.0"})
+    assert changed is True
+    content = toml_file.read_text()
+    assert '"2.0.0"' in content
+
+
+def test_write_toml_values_no_change(tmp_path: Path) -> None:
+    toml_file = tmp_path / "pyproject.toml"
+    toml_file.write_text(
+        """[project]
+name = "test"
+version = "1.0.0"
+"""
+    )
+    changed = _write_toml_values(toml_file, {"project.version": "1.0.0"})
+    assert changed is False
+
+
+def test_write_toml_values_missing_file(tmp_path: Path) -> None:
+    toml_file = tmp_path / "nonexistent.toml"
+    changed = _write_toml_values(toml_file, {"key": "val"})
+    assert changed is False
+
+
+# -- apply_sync_values tests --
+
+
+def test_apply_sync_values_explicit_yaml(tmp_path: Path) -> None:
+    values_yaml = tmp_path / "values.yaml"
+    values_yaml.write_text(
+        """images:
+  app:
+    tag: "old"
+"""
+    )
+    pkg = PackageJson(
+        name="my-chart",
+        version="1.0.0",
+        path=tmp_path,
+        private=True,
+        syncValues={
+            "values.yaml": {
+                "images.app.tag": "{dep-app:dockerTag}",
+            }
+        },
+    )
+    workspace = {
+        "my-chart": pkg,
+        "dep-app": PackageJson(
+            name="dep-app",
+            version="2.0.0",
+            path=Path("/fake"),
+            private=False,
+            docker=DockerConfig(
+                dockerfile="Dockerfile",
+                imageName="llamaindex/test-dep-app",
+                platforms=["linux/amd64"],
+            ),
+        ),
+    }
+    changed = apply_sync_values(pkg, workspace)
+    assert changed is True
+    assert "2.0.0" in values_yaml.read_text()
+
+
+def test_apply_sync_values_implicit_helm(tmp_path: Path) -> None:
+    chart_yaml = tmp_path / "Chart.yaml"
+    chart_yaml.write_text('apiVersion: v2\nversion: "0.1.0"\n')
+    pkg = PackageJson(
+        name="my-chart",
+        version="0.2.0",
+        path=tmp_path,
+        private=True,
+        helm=HelmConfig(registry="oci://docker.io/llamaindex"),
+    )
+    changed = apply_sync_values(pkg, {"my-chart": pkg})
+    assert changed is True
+    assert "0.2.0" in chart_yaml.read_text()
+
+
+def test_apply_sync_values_implicit_pyproject(tmp_path: Path) -> None:
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text('[project]\nname = "test"\nversion = "1.0.0"\n')
+    pkg = PackageJson(
+        name="test-pkg",
+        version="2.0.0",
+        path=tmp_path,
+        private=False,
+    )
+    changed = apply_sync_values(pkg, {"test-pkg": pkg})
+    assert changed is True
+    content = pyproject.read_text()
+    assert '"2.0.0"' in content

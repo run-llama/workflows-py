@@ -4,8 +4,9 @@ build-backend = "hatchling.build"
 
 [dependency-groups]
 dev = [
-  "pre-commit>=4.3.0",
-  "pytest>=8.4.2",
+  "pre-commit>=4.4.0",
+  "pytest>=8.3.4,<9",
+  "pytest-asyncio>=1.0.0",
   "pytest-cov>=7.0.0",
   "pytest-timeout>=2.4.0",
   "pytest-xdist>=3.8.0",
@@ -21,13 +22,15 @@ readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
 dependencies = [
+  "types-pyyaml>=6.0.12.20250822",
   "click>=8.1.7",
   "httpx>=0.28.1",
   "packaging>=24.1",
   "pydantic>=2.12.3",
   "rich>=14.0.0",
   "tomlkit>=0.13.3",
-  "tomli>=2.3.0"
+  "tomli>=2.3.0",
+  "ruamel.yaml>=0.18.0"
 ]
 
 [project.scripts]
@@ -53,6 +56,26 @@ root = "packages/llama-index-utils-workflow"
 pythonVersion = "3.10"
 
 [[tool.basedpyright.executionEnvironments]]
+root = "packages/llama-agents-core"
+pythonVersion = "3.10"
+
+[[tool.basedpyright.executionEnvironments]]
+root = "packages/llama-agents-control-plane"
+pythonVersion = "3.10"
+
+[[tool.basedpyright.executionEnvironments]]
+root = "packages/llama-agents-appserver"
+pythonVersion = "3.10"
+
+[[tool.basedpyright.executionEnvironments]]
+root = "packages/llamactl"
+pythonVersion = "3.10"
+
+[[tool.basedpyright.executionEnvironments]]
+root = "packages/llama-agents-agentcore"
+pythonVersion = "3.10"
+
+[[tool.basedpyright.executionEnvironments]]
 root = "src/dev_cli"
 pythonVersion = "3.14"
 
@@ -68,6 +91,9 @@ pythonVersion = "3.10"
 root = "examples"
 pythonVersion = "3.14"
 reportMissingImports = false
+
+[tool.codespell]
+ignore-words-list = "NotIn"
 
 [tool.coverage.run]
 omit = ["**/tests/*"]
@@ -110,7 +136,8 @@ select = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-# "tests/*" = ["D", "D100", "D101"]
+"scripts/*" = ["T201"]
+"operator/dev.py" = ["T201"]
 "examples/**/*" = ["T201"]
 "packages/*/tests/**/*" = [
   "T201"
@@ -120,6 +147,9 @@ select = [
 ]
 "*.ipynb" = ["T201", "ANN001", "ANN002", "ANN003"]
 "__main__.py" = ["T201"]
+
+[tool.ty.rules]
+unresolved-import = "error"
 
 [tool.ty.src]
 # Exclude llama_agents.workflows alias (dynamic import aliasing not understood by static analyzers)
@@ -132,6 +162,11 @@ llama-index-workflows = {workspace = true}
 llama-agents-client = {workspace = true}
 llama-agents-server = {workspace = true}
 llama-agents-dbos = {workspace = true}
+llama-agents-core = {workspace = true}
+llama-agents-control-plane = {workspace = true}
+llama-agents-appserver = {workspace = true}
+llamactl = {workspace = true}
+llama-agents-agentcore = {workspace = true}
 
 [tool.uv.workspace]
 exclude = [
@@ -143,6 +178,12 @@ members = [
   "packages/llama-agents-client",
   "packages/llama-agents-server",
   "packages/llama-index-utils-workflow",
+  # cloud
+  "packages/llama-agents-core",
+  "packages/llama-agents-control-plane",
+  "packages/llama-agents-appserver",
+  "packages/llamactl",
+  "packages/llama-agents-agentcore",
   # integrations
   "packages/llama-agents-dbos",
   # internal

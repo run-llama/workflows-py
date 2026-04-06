@@ -1,0 +1,27 @@
+suite: ServiceMonitor metadata labels
+templates:
+  - templates/servicemonitor.yaml
+tests:
+  - it: puts additionalMonitorLabels under metadata.labels across all ServiceMonitors
+    set:
+      metrics:
+        enabled: true
+        additionalMonitorLabels:
+          release: prometheus
+    asserts:
+      - equal:
+          path: metadata.labels.release
+          value: prometheus
+        documentIndex: 0
+      - equal:
+          path: metadata.labels.release
+          value: prometheus
+        documentIndex: 1
+      - equal:
+          path: metadata.labels.release
+          value: prometheus
+        documentIndex: 2
+      - equal:
+          path: metadata.labels.release
+          value: prometheus
+        documentIndex: 3

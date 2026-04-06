@@ -1,0 +1,45 @@
+{{- if and .Values.operator.enabled .Values.operator.hpa.enabled }}
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ include "llama-agents.operator.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ include "llama-agents.operator.name" . }}
+    component: operator
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ include "llama-agents.operator.name" . }}
+  minReplicas: {{ .Values.operator.hpa.minReplicas }}
+  maxReplicas: {{ .Values.operator.hpa.maxReplicas }}
+  metrics:
+  {{- $hasMetric := false }}
+  {{- if .Values.operator.hpa.targetCPUUtilizationPercentage }}
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: {{ .Values.operator.hpa.targetCPUUtilizationPercentage }}
+  {{- $hasMetric = true }}
+  {{- end }}
+  {{- if .Values.operator.hpa.targetMemoryUtilizationPercentage }}
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: {{ .Values.operator.hpa.targetMemoryUtilizationPercentage }}
+  {{- $hasMetric = true }}
+  {{- end }}
+  {{- if not $hasMetric }}
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 80
+  {{- end }}
+{{- end }}

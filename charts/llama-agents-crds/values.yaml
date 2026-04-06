@@ -1,0 +1,3 @@
+# When true, adds helm.sh/resource-policy: keep annotation to CRDs
+# so that helm uninstall does not delete them (and cascade-delete all CRs).
+keep: true

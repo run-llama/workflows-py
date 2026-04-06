@@ -1,0 +1,54 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: seaweedfs
+  namespace: llama-agents
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: seaweedfs
+  template:
+    metadata:
+      labels:
+        app: seaweedfs
+    spec:
+      containers:
+        - name: seaweedfs
+          image: chrislusf/seaweedfs:latest
+          command: ["weed"]
+          args:
+            - "server"
+            - "-dir=/data"
+            - "-s3"
+            - "-s3.port=8333"
+            - "-s3.iam=false"
+          ports:
+            - containerPort: 8333
+              name: s3
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 8333
+            initialDelaySeconds: 2
+            periodSeconds: 3
+            failureThreshold: 10
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: seaweedfs
+  namespace: llama-agents
+spec:
+  selector:
+    app: seaweedfs
+  ports:
+    - name: s3
+      port: 8333
+      targetPort: 8333

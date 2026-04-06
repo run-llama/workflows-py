@@ -1,0 +1,22 @@
+{
+  "name": "llama-agents",
+  "version": "0.10.7",
+  "dependencies": {
+    "llama-agents-appserver": "workspace:*",
+    "llama-agents-control-plane": "workspace:*",
+    "llama-agents-operator": "workspace:*"
+  },
+  "helm": {
+    "registry": "oci://docker.io/llamaindex"
+  },
+  "syncValues": {
+    "values.yaml": {
+      "images.controlPlane.tag": "{llama-agents-control-plane:dockerTag}",
+      "images.operator.tag": "{llama-agents-operator:dockerTag}",
+      "images.appserver.tag": "{llama-agents-appserver:dockerTag}"
+    }
+  },
+  "postVersion": [
+    "helm-docs --chart-search-root . --sort-values-order file"
+  ]
+}

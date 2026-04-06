@@ -1,0 +1,116 @@
+suite: Control plane object storage configuration
+templates:
+  - templates/deployment.yaml
+tests:
+  - it: fails when objectStorage bucket is not set (default)
+    asserts:
+      - failedTemplate:
+          errorMessage: "controlPlane.objectStorage.s3.bucket is required"
+
+  - it: sets S3 env vars when objectStorage bucket is configured
+    set:
+      controlPlane:
+        objectStorage:
+          s3:
+            endpointUrl: "https://s3.example.com"
+            bucket: "my-bucket"
+            region: "us-west-2"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: S3_ENDPOINT_URL
+            value: "https://s3.example.com"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: S3_BUCKET
+            value: "my-bucket"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: S3_REGION
+            value: "us-west-2"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: BACKUP_S3_KEY_PREFIX
+            value: "backups"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: CODE_REPO_S3_KEY_PREFIX
+            value: "git"
+
+  - it: sets envFrom with objectStorage secretRef
+    set:
+      controlPlane:
+        objectStorage:
+          s3:
+            endpointUrl: "https://s3.example.com"
+            bucket: "my-bucket"
+            region: "us-west-2"
+          secretRef: "s3-credentials"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].envFrom
+          content:
+            secretRef:
+              name: "s3-credentials"
+
+  - it: sets envFrom with backup encryptionSecretRef
+    set:
+      controlPlane:
+        objectStorage:
+          s3:
+            bucket: "my-bucket"
+          backupEncryptionSecretRef: "backup-encryption"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].envFrom
+          content:
+            secretRef:
+              name: "backup-encryption"
+
+  - it: does not set envFrom when no secretRefs configured
+    set:
+      controlPlane:
+        objectStorage:
+          s3:
+            endpointUrl: "https://s3.example.com"
+            bucket: "my-bucket"
+            region: "us-west-2"
+    asserts:
+      - notExists:
+          path: spec.template.spec.containers[0].envFrom
+
+  - it: merges all envFrom sources
+    set:
+      controlPlane:
+        objectStorage:
+          s3:
+            endpointUrl: "https://s3.example.com"
+            bucket: "my-bucket"
+            region: "us-west-2"
+          secretRef: "s3-credentials"
+          backupEncryptionSecretRef: "backup-encryption"
+        container:
+          envFrom:
+            - configMapRef:
+                name: "my-config"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].envFrom
+          content:
+            configMapRef:
+              name: "my-config"
+      - contains:
+          path: spec.template.spec.containers[0].envFrom
+          content:
+            secretRef:
+              name: "s3-credentials"
+      - contains:
+          path: spec.template.spec.containers[0].envFrom
+          content:
+            secretRef:
+              name: "backup-encryption"
