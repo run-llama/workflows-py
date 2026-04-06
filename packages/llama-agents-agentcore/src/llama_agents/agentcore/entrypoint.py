@@ -34,7 +34,11 @@ from pathlib import Path
 from typing import Any, Literal
 
 from bedrock_agentcore import BedrockAgentCoreApp
-from llama_agents.appserver.workflow_loader import load_workflows
+from llama_agents.appserver.workflow_loader import (
+    load_environment_variables,
+    load_workflows,
+    validate_required_env_vars,
+)
 from llama_agents.client import HandlerData
 from llama_agents.core.deployment_config import (
     read_deployment_config_from_git_root_or_cwd,
@@ -106,6 +110,12 @@ def _load_workflows() -> tuple[dict[str, Workflow], str, str | None]:
     config = read_deployment_config_from_git_root_or_cwd(
         Path.cwd(), config_dir
     )  # let errors bubble up if misconfigured
+
+    # Load env vars from the deployment config (env, env_files) before
+    # importing workflow modules — mirrors appserver behaviour.
+    load_environment_variables(config, config_dir)
+    validate_required_env_vars(config)
+
     workflows = load_workflows(config)
     has_default = any(key == "default" for key in list(workflows.keys()))
     default_workflow = "default" if has_default else next(iter(workflows))
@@ -268,8 +278,7 @@ async def _action_run(
         ).model_dump()
 
     workflow_name = str(parsed[0])
-    assert isinstance(parsed[1], StartEvent)
-    start_event: StartEvent = parsed[1]
+    start_event: StartEvent = parsed[1]  # type: ignore[assignment]
     handler_id = _resolve_handler_id(payload, session_id)
     service = get_agentcore_service()
 

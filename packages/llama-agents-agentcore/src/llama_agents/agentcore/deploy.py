@@ -178,8 +178,14 @@ class AgentCoreDeployer:
             build_compute_type=config.build_compute_type,
         )
 
-        # Step 2: Create or update AgentCore Runtime
-        env_vars = {"AWS_DEFAULT_REGION": self._region, **config.env_vars}
+        # Step 2: Merge env vars from DeploymentConfig (pyproject.toml) with
+        # explicit overrides from DeployConfig so they're set at container level.
+        deployment_env = _parse_deployment_env_vars(project_dir)
+        env_vars = {
+            "AWS_DEFAULT_REGION": self._region,
+            **deployment_env,
+            **config.env_vars,
+        }
         runtime_id, runtime_arn = self._deploy_runtime(
             runtime_name=runtime_name,
             ecr_uri=ecr_image,
@@ -602,6 +608,20 @@ def _generate_requirements(project_dir: Path) -> str:
         lines.append("llama-agents-agentcore>=0.7.0")
 
     return "\n".join(lines) + "\n"
+
+
+def _parse_deployment_env_vars(project_dir: Path) -> dict[str, str]:
+    """Read env / env_files from the project's DeploymentConfig (pyproject.toml)."""
+    try:
+        from llama_agents.appserver.workflow_loader import parse_environment_variables
+        from llama_agents.core.deployment_config import (
+            read_deployment_config_from_git_root_or_cwd,
+        )
+
+        config = read_deployment_config_from_git_root_or_cwd(project_dir, project_dir)
+        return parse_environment_variables(config, project_dir)
+    except Exception:
+        return {}
 
 
 def _generate_buildspec(

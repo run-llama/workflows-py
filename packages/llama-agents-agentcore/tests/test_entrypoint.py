@@ -36,29 +36,33 @@ def test_load_workflows_with_meta(
     monkeypatch: pytest.MonkeyPatch,
     loaded_workflows: dict[str, Workflow],
 ) -> None:
-    with patch(
-        "llama_agents.agentcore.entrypoint.read_deployment_config_from_git_root_or_cwd",
-        new_callable=Mock,
-    ) as mock_read:
-        with patch(
+    with (
+        patch(
+            "llama_agents.agentcore.entrypoint.read_deployment_config_from_git_root_or_cwd",
+            new_callable=Mock,
+        ) as mock_read,
+        patch(
             "llama_agents.agentcore.entrypoint.load_workflows", new_callable=Mock
-        ) as mock_load:
-            monkeypatch.chdir(tmp_path)
+        ) as mock_load,
+        patch("llama_agents.agentcore.entrypoint.load_environment_variables"),
+        patch("llama_agents.agentcore.entrypoint.validate_required_env_vars"),
+    ):
+        monkeypatch.chdir(tmp_path)
 
-            (tmp_path / "pyproject.toml").touch()
+        (tmp_path / "pyproject.toml").touch()
 
-            mock_read.return_value = {"config": {}}
-            mock_load.return_value = loaded_workflows
+        mock_read.return_value = {"config": {}}
+        mock_load.return_value = loaded_workflows
 
-            workflows, default_workflow, file_workflow = _load_workflows()
-            _load_workflows.cache_clear()
-            for key in workflows:
-                assert key in loaded_workflows
-                assert isinstance(workflows[key], type(loaded_workflows[key]))
-            assert default_workflow == "default"
-            assert file_workflow == "process-file"
-            mock_read.assert_has_calls([call(Path.cwd(), Path.cwd())])
-            mock_load.assert_called_once_with({"config": {}})
+        workflows, default_workflow, file_workflow = _load_workflows()
+        _load_workflows.cache_clear()
+        for key in workflows:
+            assert key in loaded_workflows
+            assert isinstance(workflows[key], type(loaded_workflows[key]))
+        assert default_workflow == "default"
+        assert file_workflow == "process-file"
+        mock_read.assert_has_calls([call(Path.cwd(), Path.cwd())])
+        mock_load.assert_called_once_with({"config": {}})
 
 
 def test_load_workflows_without_meta(
@@ -66,33 +70,37 @@ def test_load_workflows_without_meta(
     monkeypatch: pytest.MonkeyPatch,
     loaded_workflows: dict[str, Workflow],
 ) -> None:
-    with patch(
-        "llama_agents.agentcore.entrypoint.read_deployment_config_from_git_root_or_cwd",
-        new_callable=Mock,
-    ) as mock_read:
-        with patch(
+    with (
+        patch(
+            "llama_agents.agentcore.entrypoint.read_deployment_config_from_git_root_or_cwd",
+            new_callable=Mock,
+        ) as mock_read,
+        patch(
             "llama_agents.agentcore.entrypoint.load_workflows", new_callable=Mock
-        ) as mock_load:
-            loaded_workflows_cp = loaded_workflows.copy()
+        ) as mock_load,
+        patch("llama_agents.agentcore.entrypoint.load_environment_variables"),
+        patch("llama_agents.agentcore.entrypoint.validate_required_env_vars"),
+    ):
+        loaded_workflows_cp = loaded_workflows.copy()
 
-            loaded_workflows_cp.pop("default")
+        loaded_workflows_cp.pop("default")
 
-            monkeypatch.chdir(tmp_path)
+        monkeypatch.chdir(tmp_path)
 
-            (tmp_path / "pyproject.toml").touch()
+        (tmp_path / "pyproject.toml").touch()
 
-            mock_read.return_value = {"config": {}}
-            mock_load.return_value = loaded_workflows_cp
+        mock_read.return_value = {"config": {}}
+        mock_load.return_value = loaded_workflows_cp
 
-            workflows, default_workflow, file_workflow = _load_workflows()
-            _load_workflows.cache_clear()
-            for key in workflows:
-                assert key in loaded_workflows_cp
-                assert isinstance(workflows[key], type(loaded_workflows_cp[key]))
-            assert default_workflow == "metadata"
-            assert file_workflow == "process-file"
-            mock_read.assert_has_calls([call(Path.cwd(), Path.cwd())])
-            mock_load.assert_called_once_with({"config": {}})
+        workflows, default_workflow, file_workflow = _load_workflows()
+        _load_workflows.cache_clear()
+        for key in workflows:
+            assert key in loaded_workflows_cp
+            assert isinstance(workflows[key], type(loaded_workflows_cp[key]))
+        assert default_workflow == "metadata"
+        assert file_workflow == "process-file"
+        mock_read.assert_has_calls([call(Path.cwd(), Path.cwd())])
+        mock_load.assert_called_once_with({"config": {}})
 
 
 def test_load_workflows_without_file(
@@ -100,33 +108,37 @@ def test_load_workflows_without_file(
     monkeypatch: pytest.MonkeyPatch,
     loaded_workflows: dict[str, Workflow],
 ) -> None:
-    with patch(
-        "llama_agents.agentcore.entrypoint.read_deployment_config_from_git_root_or_cwd",
-        new_callable=Mock,
-    ) as mock_read:
-        with patch(
+    with (
+        patch(
+            "llama_agents.agentcore.entrypoint.read_deployment_config_from_git_root_or_cwd",
+            new_callable=Mock,
+        ) as mock_read,
+        patch(
             "llama_agents.agentcore.entrypoint.load_workflows", new_callable=Mock
-        ) as mock_load:
-            loaded_workflows_cp = loaded_workflows.copy()
+        ) as mock_load,
+        patch("llama_agents.agentcore.entrypoint.load_environment_variables"),
+        patch("llama_agents.agentcore.entrypoint.validate_required_env_vars"),
+    ):
+        loaded_workflows_cp = loaded_workflows.copy()
 
-            loaded_workflows_cp.pop("process-file")
+        loaded_workflows_cp.pop("process-file")
 
-            monkeypatch.chdir(tmp_path)
+        monkeypatch.chdir(tmp_path)
 
-            (tmp_path / "pyproject.toml").touch()
+        (tmp_path / "pyproject.toml").touch()
 
-            mock_read.return_value = {"config": {}}
-            mock_load.return_value = loaded_workflows_cp
+        mock_read.return_value = {"config": {}}
+        mock_load.return_value = loaded_workflows_cp
 
-            workflows, default_workflow, file_workflow = _load_workflows()
-            _load_workflows.cache_clear()
-            for key in workflows:
-                assert key in loaded_workflows_cp
-                assert isinstance(workflows[key], type(loaded_workflows_cp[key]))
-            assert default_workflow == "default"
-            assert file_workflow is None
-            mock_read.assert_has_calls([call(Path.cwd(), Path.cwd())])
-            mock_load.assert_called_once_with({"config": {}})
+        workflows, default_workflow, file_workflow = _load_workflows()
+        _load_workflows.cache_clear()
+        for key in workflows:
+            assert key in loaded_workflows_cp
+            assert isinstance(workflows[key], type(loaded_workflows_cp[key]))
+        assert default_workflow == "default"
+        assert file_workflow is None
+        mock_read.assert_has_calls([call(Path.cwd(), Path.cwd())])
+        mock_load.assert_called_once_with({"config": {}})
 
 
 def test_parse_and_validate_payload_success(

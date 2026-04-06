@@ -30,5 +30,5 @@ async def test_check_for_memory_activity_retries() -> None:
     end = time.time()
     assert is_active
     assert (
-        end - start == pytest.approx(3, abs=0.1)
+        end - start == pytest.approx(3, abs=1e-2)
     )  # linear backoff: (0.5*1) + (0.5*2) + (0.5*3) = 3 (delay is 0.5s every time, for 3 times)
