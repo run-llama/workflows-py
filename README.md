@@ -12,11 +12,17 @@
 
 An open-source framework for building and shipping document-centric agents in Python.
 
-Real document workflows are messy. You're stitching together OCR, LLMs, structured extraction, classification, custom validation, and human review into pipelines that have to run reliably in production. The steps are slow, the payloads are heavy, and a lot of the work is in-process Python: embedding models, image analysis, vision calls, custom heuristics that don't want to be a microservice. Standing up a real durable orchestration layer for that kind of workload is a project on its own, so most teams end up shoving the pipeline into a side process that nobody else wants to integrate with.
+Document workflows are messy. You're stitching together OCR, LLMs, structured extraction, classification, custom validation, and human review into pipelines that have to run reliably in production. The steps are slow and the payloads are heavy. A lot of the work is in-process Python: embedding models, image analysis, vision calls, custom heuristics that don't want to be a microservice. Standing up durable orchestration for that kind of workload is a project on its own, so most teams end up shoving the pipeline into a side process nobody else wants to integrate with.
 
-LlamaAgents is built around that reality. The core is [**Agent Workflows**](./packages/llama-index-workflows/), an event-driven orchestration library where steps are async Python functions that emit and consume events. Branch, loop, parallelize, persist state, recover from failures, all in plain Python with no DSL.
+The core is [**Agent Workflows**](./packages/llama-index-workflows/), an event-driven orchestration library where steps are async Python functions that emit and consume events. Branch, loop, parallelize, persist state, recover from failures, all in plain Python with no DSL.
 
-Then there are a few ways to actually run it.
+## How it compares
+
+Heavy workflow orchestrators want to be a platform: workers in a separate process, your code marshalled over the network, language-agnostic SDKs. That's the right shape if your steps are stateless RPC calls, and a poor fit when half your work is in-process Python.
+
+Lightweight agent frameworks go the other way: a graph DSL you wire up in a notebook, with no real story for durability, persistence, or putting the thing behind an API.
+
+Agent Workflows sit in the middle. A plain Python library you import and call, with optional servers, persistence, and durable execution when you need them. Heavy in-process work stays in-process. You get production primitives without standing up a platform.
 
 ## Use it as a library
 
@@ -45,7 +51,7 @@ server.add_workflow("greet", HelloWorkflow())
 
 ## Or ship it as a deployable agent
 
-[**`llamactl`**](./packages/llamactl/) is the CLI for building and deploying agent apps end-to-end. Init from a starter, develop locally with hot reload, then deploy to LlamaParse, AWS Bedrock AgentCore, or your own infra. Agents can be headless workflow services, MCP servers, or full-stack apps with a UI, whatever your agent needs to be.
+[**`llamactl`**](./packages/llamactl/) is the CLI for building and deploying agent apps end-to-end. Init from a starter, develop locally with hot reload, then deploy to LlamaParse, AWS Bedrock AgentCore, or your own infra. Agents can be headless workflow services, MCP servers, or full-stack apps with a UI.
 
 ```bash
 uv tool install llamactl
