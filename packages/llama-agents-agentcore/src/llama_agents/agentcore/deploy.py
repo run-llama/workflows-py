@@ -462,6 +462,9 @@ class AgentCoreDeployer:
             "networkConfiguration": {"networkMode": "PUBLIC"},
             "environmentVariables": env_vars,
             "lifecycleConfiguration": {"maxLifetime": max_lifetime},
+            "filesystemConfigurations": [
+                {"mountPoint": "/mnt/workspace", "filesystemType": "WORKSPACE"}
+            ],
         }
 
         existing = self._find_runtime(client, runtime_name)
