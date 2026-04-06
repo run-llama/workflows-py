@@ -18,7 +18,7 @@ jobs:
     name: Release
     runs-on: ubuntu-latest
     environment: release
-    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev'
+    if: github.repository == 'run-llama/workflows-py' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev')
     steps:
       - name: Checkout Repo
         uses: actions/checkout@v5
