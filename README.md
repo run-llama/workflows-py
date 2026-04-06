@@ -18,11 +18,13 @@ LlamaAgents is built on [**Agent Workflows**](https://developers.llamaindex.ai/p
 
 ## Grows with you
 
-Document workloads have a wide range of shapes. Sometimes you're parsing five contracts in a notebook to prove a point. Sometimes you're running a million invoices a month behind a customer's firewall. Sometimes you're iterating on extraction quality and shipping a new version every day. Agent Workflows is built to follow you across all of that without a rewrite.
+Document workloads have a wide range of shapes. Sometimes you're parsing five contracts in a notebook to prove a point. Others you're running a million invoices a month behind a customer's firewall, or you're iterating on extraction quality and shipping a new version every day. Agent Workflows is built to follow you across all of that without a rewrite.
 
 Start as a function you call from a script. Wrap it in a server when you need an API. Connect a coordination backend when you need durability. Turn on replication when you need to scale.
 
 And because it's a library at its core, the same workflow code drops into wherever the work has to actually run: a notebook for prototyping, a FastAPI app for your product, or a customer's locked-down environment when their documents can't leave it.
+
+For more ideas of what it can do, take a look at [the examples](https://github.com/run-llama/workflows-py/tree/main/examples).
 
 ## Use it as a library
 
@@ -38,9 +40,11 @@ class HelloWorkflow(Workflow):
         return StopEvent(result=f"Hello, {ev.name}")
 ```
 
+See the [`llama-index-workflows` package](https://github.com/run-llama/workflows-py/tree/main/packages/llama-index-workflows) for more details.
+
 ## Mount it inside an app you already have
 
-[**`llama-agents-server`**](https://developers.llamaindex.ai/python/llamaagents/workflows/deployment/) wraps any workflow as a REST API with streaming, persistence, and human-in-the-loop support. Drop it into an existing Starlette/FastAPI app, or run it standalone. [**`llama-agents-client`**](./packages/llama-agents-client/) is the matching async client for calling workflows from other services.
+[`llama-agents-server`](https://developers.llamaindex.ai/python/llamaagents/workflows/deployment/) wraps any workflow as a REST API with streaming, persistence, and human-in-the-loop support. Drop it into an existing Starlette/FastAPI app, or run it standalone. [`llama-agents-client`](https://developers.llamaindex.ai/python/llamaagents/workflows/client/) is the matching async client for calling workflows from other services.
 
 ```python
 from llama_agents.server import WorkflowServer
@@ -49,9 +53,11 @@ server = WorkflowServer()
 server.add_workflow("greet", HelloWorkflow())
 ```
 
+See the [`llama-agents-server` package](https://github.com/run-llama/workflows-py/tree/main/packages/llama-agents-server) and the [`llama-agents-client` package](https://github.com/run-llama/workflows-py/tree/main/packages/llama-agents-client) for more details.
+
 ## Or ship it as a deployable agent
 
-[**`llamactl`**](https://developers.llamaindex.ai/python/llamaagents/llamactl/getting-started/) is the CLI for building and deploying agent apps end-to-end. Init from a starter, develop locally with hot reload, then deploy to LlamaParse, AWS Bedrock AgentCore, or your own infra. Agents can be headless workflow services, MCP servers, or full-stack apps with a UI.
+[`llamactl`](https://developers.llamaindex.ai/python/llamaagents/llamactl/getting-started/) is the CLI for building and deploying agent apps end-to-end. Init from a starter, develop locally with hot reload, then deploy to LlamaParse, AWS Bedrock AgentCore, or your own infra. Agents can be headless workflow services, MCP servers, or full-stack apps with a UI.
 
 ```bash
 uv tool install llamactl
@@ -60,6 +66,10 @@ llamactl serve
 llamactl deployments create
 ```
 
-## Works with LlamaParse
+See the [`llamactl` package](https://github.com/run-llama/workflows-py/tree/main/packages/llamactl) for more details.
 
-The heavy document primitives (OCR, structured extraction, classification, splitting) are what [LlamaParse](https://cloud.llamaindex.ai) is for. Plug them into your workflow as steps, let LlamaParse handle the document understanding, and keep your agent code focused on orchestration, business logic, and review.
+## Works with [LlamaParse](https://developers.llamaindex.ai/python/cloud/)
+
+The heavy document primitives (OCR, structured extraction, classification, splitting) are what LlamaParse is for. Plug them into your workflow as steps, let LlamaParse handle the document understanding, and keep your agent code focused on orchestration, business logic, and review.
+
+Check out our [prebuilt templates with llamactl](https://developers.llamaindex.ai/python/llamaagents/llamactl/agent-templates/) to get started.
