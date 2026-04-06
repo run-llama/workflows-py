@@ -10,6 +10,10 @@ This is the LlamaIndex Workflows library - an event-driven, async-first framewor
 - Starlette for web server
 - Uvicorn for ASGI serving
 
+## Setup
+- Install uv: `curl -LsSf https://astral.sh/uv/install.sh | sh`
+- Install deps (dev): `uv sync --all-packages --all-extras`
+
 ## Development Commands
 
 ### Testing
@@ -41,6 +45,8 @@ cd packages/<package> && uv run pytest -m docker -s -n0
 ```bash
 uv run pre-commit run -a
 ```
+
+If type checkers (ty, basedpyright) fail with unresolved imports, you likely need all packages installed: `uv sync --all-packages --all-extras`
 
 ## Project Structure
 - `packages/llama-index-workflows/src/workflows/` - Main library code
