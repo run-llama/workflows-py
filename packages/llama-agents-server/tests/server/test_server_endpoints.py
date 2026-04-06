@@ -69,12 +69,36 @@ def server(
     return server
 
 
+@pytest.fixture
+def context_server(
+    simple_test_workflow: Workflow,
+) -> WorkflowServer:
+    server = WorkflowServer(
+        workflow_store=MemoryWorkflowStore(),
+        idle_timeout=0.01,
+        accept_context_api=True,
+    )
+    server.add_workflow("test", simple_test_workflow)
+    return server
+
+
 @pytest_asyncio.fixture
 async def client(
     server: WorkflowServer,
 ) -> AsyncGenerator:
     async with server.contextmanager():
         transport = ASGITransport(app=server.app)
+
+        async with AsyncClient(transport=transport, base_url="http://test") as client:
+            yield client
+
+
+@pytest_asyncio.fixture
+async def context_client(
+    context_server: WorkflowServer,
+) -> AsyncGenerator:
+    async with context_server.contextmanager():
+        transport = ASGITransport(app=context_server.app)
 
         async with AsyncClient(transport=transport, base_url="http://test") as client:
             yield client
@@ -220,16 +244,26 @@ async def test_run_workflow_no_kwargs(client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
-async def test_run_workflow_with_context(
-    client: AsyncClient, server: WorkflowServer
-) -> None:
+async def test_run_workflow_with_context(context_client: AsyncClient) -> None:
+    ctx_dict = (
+        await serialize_context({"test_param": "message from context"})
+    ).model_dump(mode="python")
+    response = await context_client.post(
+        "/workflows/test/run", json={"context": ctx_dict}
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["result"]["value"]["result"] == "processed: message from context"
+
+
+@pytest.mark.asyncio
+async def test_run_workflow_context_rejected_by_default(client: AsyncClient) -> None:
     ctx_dict = (
         await serialize_context({"test_param": "message from context"})
     ).model_dump(mode="python")
     response = await client.post("/workflows/test/run", json={"context": ctx_dict})
-    assert response.status_code == 200
-    data = response.json()
-    assert data["result"]["value"]["result"] == "processed: message from context"
+    assert response.status_code == 400
+    assert "Context API is disabled" in response.json()["detail"]
 
 
 @pytest.mark.asyncio
@@ -381,13 +415,13 @@ async def test_run_workflow_nowait_not_found(client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
-async def test_get_workflow_result(client: AsyncClient, server: WorkflowServer) -> None:
+async def test_get_workflow_result(context_client: AsyncClient) -> None:
     # Setup a context to test all the code paths
     ctx_dict = (
         await serialize_context({"test_param": "message from context"})
     ).model_dump(mode="python")
     # run no-wait
-    response = await client.post(
+    response = await context_client.post(
         "/workflows/test/run-nowait", json={"context": ctx_dict}
     )
     assert response.status_code == 200
@@ -398,7 +432,7 @@ async def test_get_workflow_result(client: AsyncClient, server: WorkflowServer) 
     await asyncio.sleep(0.1)
 
     # get result
-    response = await client.get(f"/handlers/{handler_id}")
+    response = await context_client.get(f"/handlers/{handler_id}")
     assert response.status_code == 200
 
     # Verify the result content
