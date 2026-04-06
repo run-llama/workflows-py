@@ -14,7 +14,7 @@ An open-source framework for building and shipping document-centric agents in Py
 
 Document workflows are messy. You're stitching together OCR, LLMs, structured extraction, classification, custom validation, and human review into pipelines that have to run reliably in production. The steps are slow and the payloads are heavy. A lot of the work is in-process Python: embedding models, image analysis, vision calls, custom heuristics that don't want to be a microservice. Standing up durable orchestration for that kind of workload is a project on its own, so most teams end up shoving the pipeline into a side process nobody else wants to integrate with.
 
-The core is [**Agent Workflows**](./packages/llama-index-workflows/), an event-driven orchestration library where steps are async Python functions that emit and consume events. Branch, loop, parallelize, persist state, recover from failures, all in plain Python with no DSL.
+LlamaAgents is built on [**Agent Workflows**](https://developers.llamaindex.ai/python/llamaagents/workflows/), an event-driven orchestration library where steps are async Python functions that emit and consume events. Branch, loop, parallelize, persist state, recover from failures, all in plain Python with no DSL.
 
 ## Grows with you
 
@@ -26,7 +26,7 @@ And because it's a library at its core, the same workflow code drops into wherev
 
 ## Use it as a library
 
-The simplest path. `pip install llama-index-workflows`, define your workflow, and `await workflow.run(...)` from anywhere: async scripts, FastAPI, notebooks. No server, no infra, just a Python library you call.
+The simplest path. `pip install llama-index-workflows`, define your workflow, and `await workflow.run(...)`. It has minimal dependencies and embeds anywhere: scripts, notebooks, servers. Durability is pluggable too: save and resume runs from a file, or connect to a database.
 
 ```python
 from workflows import Workflow, step
@@ -40,7 +40,7 @@ class HelloWorkflow(Workflow):
 
 ## Mount it inside an app you already have
 
-[**`llama-agents-server`**](./packages/llama-agents-server/) wraps any workflow as a REST API with streaming, persistence, and human-in-the-loop support. Drop it into an existing Starlette/FastAPI app, or run it standalone. [**`llama-agents-client`**](./packages/llama-agents-client/) is the matching async client for calling workflows from other services.
+[**`llama-agents-server`**](https://developers.llamaindex.ai/python/llamaagents/workflows/deployment/) wraps any workflow as a REST API with streaming, persistence, and human-in-the-loop support. Drop it into an existing Starlette/FastAPI app, or run it standalone. [**`llama-agents-client`**](./packages/llama-agents-client/) is the matching async client for calling workflows from other services.
 
 ```python
 from llama_agents.server import WorkflowServer
@@ -51,7 +51,7 @@ server.add_workflow("greet", HelloWorkflow())
 
 ## Or ship it as a deployable agent
 
-[**`llamactl`**](./packages/llamactl/) is the CLI for building and deploying agent apps end-to-end. Init from a starter, develop locally with hot reload, then deploy to LlamaParse, AWS Bedrock AgentCore, or your own infra. Agents can be headless workflow services, MCP servers, or full-stack apps with a UI.
+[**`llamactl`**](https://developers.llamaindex.ai/python/llamaagents/llamactl/getting-started/) is the CLI for building and deploying agent apps end-to-end. Init from a starter, develop locally with hot reload, then deploy to LlamaParse, AWS Bedrock AgentCore, or your own infra. Agents can be headless workflow services, MCP servers, or full-stack apps with a UI.
 
 ```bash
 uv tool install llamactl
