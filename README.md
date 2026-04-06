@@ -16,13 +16,13 @@ Document workflows are messy. You're stitching together OCR, LLMs, structured ex
 
 The core is [**Agent Workflows**](./packages/llama-index-workflows/), an event-driven orchestration library where steps are async Python functions that emit and consume events. Branch, loop, parallelize, persist state, recover from failures, all in plain Python with no DSL.
 
-## How it compares
+## Grows with you
 
-Heavy workflow orchestrators want to be a platform: workers in a separate process, your code marshalled over the network, language-agnostic SDKs. That's the right shape if your steps are stateless RPC calls, and a poor fit when half your work is in-process Python.
+Document workloads have a wide range of shapes. Sometimes you're parsing five contracts in a notebook to prove a point. Sometimes you're running a million invoices a month behind a customer's firewall. Sometimes you're iterating on extraction quality and shipping a new version every day. Agent Workflows is built to follow you across all of that without a rewrite.
 
-Lightweight agent frameworks go the other way: a graph DSL you wire up in a notebook, with no real story for durability, persistence, or putting the thing behind an API.
+Start as a function you call from a script. Wrap it in a server when you need an API. Connect a coordination backend when you need durability. Turn on replication when you need to scale.
 
-Agent Workflows sit in the middle. A plain Python library you import and call, with optional servers, persistence, and durable execution when you need them. Heavy in-process work stays in-process. You get production primitives without standing up a platform.
+And because it's a library at its core, the same workflow code drops into wherever the work has to actually run: a notebook for prototyping, a FastAPI app for your product, or a customer's locked-down environment when their documents can't leave it.
 
 ## Use it as a library
 
