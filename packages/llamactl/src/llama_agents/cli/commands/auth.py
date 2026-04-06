@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import click
+from llama_agents.cli.param_types import ProfileType, ProjectType
 from llama_agents.cli.styles import (
     ACTIVE_INDICATOR,
     HEADER_COLOR,
@@ -207,7 +208,7 @@ def config_database() -> None:
 
 @auth.command("switch")
 @global_options
-@click.argument("name", required=False)
+@click.argument("name", required=False, type=ProfileType())
 @interactive_option
 def switch_profile(name: str | None, interactive: bool) -> None:
     """Switch to a different profile"""
@@ -228,7 +229,7 @@ def switch_profile(name: str | None, interactive: bool) -> None:
 
 @auth.command("logout")
 @global_options
-@click.argument("name", required=False)
+@click.argument("name", required=False, type=ProfileType())
 @interactive_option
 def delete_profile(name: str | None, interactive: bool) -> None:
     """Logout from a profile and wipe all associated data"""
@@ -282,7 +283,7 @@ def me() -> None:
 
 # Projects commands
 @auth.command("project")
-@click.argument("project_id", required=False)
+@click.argument("project_id", required=False, type=ProjectType())
 @interactive_option
 @global_options
 def change_project(project_id: str | None, interactive: bool) -> None:

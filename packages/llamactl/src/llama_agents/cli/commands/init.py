@@ -13,6 +13,7 @@ from llama_agents.cli.options import (
     global_options,
     interactive_option,
 )
+from llama_agents.cli.param_types import TemplateType
 from llama_agents.cli.styles import HEADER_COLOR_HEX
 from rich import print as rprint
 from rich.text import Text
@@ -28,6 +29,7 @@ _ClickPath = getattr(click, "Path")
 )
 @click.option(
     "--template",
+    type=TemplateType(),
     help="The template to use for the new app",
 )
 @click.option(
