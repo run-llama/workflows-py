@@ -684,9 +684,7 @@ async def test_workflow_not_pinned_by_periodic_timer_context() -> None:
     try:
         for _ in range(5):
             wf = TinyWorkflow()
-            refs.append(
-                cast(weakref.ReferenceType[Workflow], weakref.ref(wf))
-            )
+            refs.append(cast(weakref.ReferenceType[Workflow], weakref.ref(wf)))
             await WorkflowTestRunner(wf).run()
             del wf
 
