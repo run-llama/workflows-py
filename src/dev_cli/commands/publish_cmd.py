@@ -14,7 +14,6 @@ through this command.
 
 from __future__ import annotations
 
-import json
 import os
 from pathlib import Path
 
@@ -46,8 +45,7 @@ def changeset_plan(output: Path) -> None:
     os.chdir(_repo_root())
     plan = changesets.build_publish_plan(changesets.get_pnpm_workspace_packages())
 
-    payload = plan.model_dump(mode="json")
-    output.write_text(json.dumps(payload, indent=2))
+    output.write_text(plan.model_dump_json(indent=2))
     click.echo(f"Wrote publish plan to {output}\n")
     click.echo("=== Publish plan ===")
     click.echo(f"  pypi:             {len(plan.pypi)}")
@@ -64,15 +62,7 @@ def changeset_plan(output: Path) -> None:
         click.echo(f"    - {h.package}@{h.version}")
     click.echo("====================")
 
-    gha.write_outputs(
-        {
-            "pypi": json.dumps(payload["pypi"]),
-            "docker_builds": json.dumps(payload["docker_builds"]),
-            "docker_manifests": json.dumps(payload["docker_manifests"]),
-            "helm": json.dumps(payload["helm"]),
-            "has_work": "true" if plan.has_work else "false",
-        }
-    )
+    gha.write_outputs(plan.model_dump(mode="json"))
 
 
 @click.command("publish-action")

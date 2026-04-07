@@ -532,6 +532,7 @@ class PublishPlan(BaseModel):
                 return action
         raise KeyError(f"No action with id {action_id!r} in plan")
 
+    @computed_field  # type: ignore[prop-decorator]
     @property
     def has_work(self) -> bool:
         return bool(
