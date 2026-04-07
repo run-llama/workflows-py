@@ -346,7 +346,9 @@ class ExternalRunAdapter(ABC):
 
 @dataclass
 class RunContext:
-    """Context for an active workflow run, available via get_current_run()."""
+    """Payload handed from `create_workflow_run_function` to the control loop
+    across the narrow `ControlLoopFunction` boundary.
+    """
 
     workflow: Workflow
     run_adapter: InternalRunAdapter
@@ -354,25 +356,54 @@ class RunContext:
     steps: dict[str, StepWorkerFunction]
 
 
-_current_run: ContextVar[RunContext | None] = ContextVar("current_run", default=None)
+@dataclass
+class RunContextContainer:
+    """Mutable one-shot holder for a `RunContext`.
+
+    The control loop calls `consume()` at entry, which drops the container's
+    reference to the payload. Because `asyncio` snapshots the current `Context`
+    when scheduling handles (e.g. `loop.call_later` for periodic timers like
+    aiohttp's `TCPConnector._cleanup_closed`), any such snapshot would otherwise
+    keep the workflow object graph alive via this container until the timer
+    fires. Clearing the single shared instance breaks that reference chain.
+    """
+
+    payload: RunContext | None
+
+    def consume(self) -> RunContext:
+        payload, self.payload = self.payload, None
+        if payload is None:
+            raise RuntimeError("RunContext has already been consumed")
+        return payload
+
+
+_current_run: ContextVar[RunContextContainer | None] = ContextVar(
+    "current_run", default=None
+)
 
 
 @contextmanager
-def run_context(ctx: RunContext) -> Generator[RunContext, None, None]:
+def run_context(ctx: RunContext) -> Generator[RunContextContainer, None, None]:
     """Set the current run context for the duration of a workflow run."""
-    token = _current_run.set(ctx)
+    container = RunContextContainer(payload=ctx)
+    token = _current_run.set(container)
     try:
-        yield ctx
+        yield container
     finally:
         _current_run.reset(token)
 
 
-def get_current_run() -> RunContext:
-    """Get the current run context. Raises if not in a workflow run."""
-    ctx = _current_run.get()
-    if ctx is None:
+def consume_current_run() -> RunContext:
+    """Consume the current `RunContext` payload exactly once.
+
+    Drops the container's strong reference to the payload so that any `Context`
+    snapshot taken by `asyncio` (e.g. via `loop.call_later`) cannot pin the
+    workflow graph through it.
+    """
+    container = _current_run.get()
+    if container is None:
         raise RuntimeError("Not in a workflow run context")
-    return ctx
+    return container.consume()
 
 
 class WorkflowSet:
