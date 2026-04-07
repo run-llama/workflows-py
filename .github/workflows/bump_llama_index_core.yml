@@ -7,6 +7,7 @@ on:
 
 jobs:
   bump-dependency:
+    if: github.repository == 'run-llama/workflows-py'
     runs-on: ubuntu-latest
 
     steps:

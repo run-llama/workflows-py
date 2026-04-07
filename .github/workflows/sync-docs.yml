@@ -9,6 +9,7 @@ on:
 
 jobs:
   sync-docs:
+    if: github.repository == 'run-llama/workflows-py'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout source repo
