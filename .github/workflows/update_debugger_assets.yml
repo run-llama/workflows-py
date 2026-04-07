@@ -14,6 +14,7 @@ on:
 
 jobs:
   update-assets:
+    if: github.repository == 'run-llama/workflows-py'
     runs-on: ubuntu-latest
     permissions:
       contents: write
