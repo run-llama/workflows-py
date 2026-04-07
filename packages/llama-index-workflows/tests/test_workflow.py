@@ -659,49 +659,34 @@ async def test_workflow_instances_garbage_collected_after_completion() -> None:
 
 
 @pytest.mark.asyncio
-async def test_workflow_not_pinned_by_periodic_timer_context() -> None:
-    # Regression test: a periodic asyncio timer started during workflow
-    # execution must not permanently pin the Workflow via the ContextVar
-    # snapshot in TimerHandle._context. See bug report on ContextVar +
-    # periodic timer context propagation leak.
+async def test_workflow_not_pinned_by_timer_handle_context() -> None:
+    # Regression: TimerHandle._context snapshots the ContextVar holding
+    # RunContext -> Workflow, pinning the workflow until the handle runs
+    # (or forever if it re-registers itself, like aiohttp's _cleanup_closed).
+    handles: list[asyncio.TimerHandle] = []
+
     class TinyWorkflow(Workflow):
         @step
         async def only(self, ev: StartEvent) -> StopEvent:
-            loop = asyncio.get_running_loop()
-
-            def _periodic() -> None:
-                # Re-register self, mimicking aiohttp TCPConnector._cleanup_closed.
-                h = loop.call_later(0.05, _periodic)
-                periodic_handles.append(h)
-
-            h = loop.call_later(0.05, _periodic)
-            periodic_handles.append(h)
+            handles.append(asyncio.get_running_loop().call_later(3600, lambda: None))
             return StopEvent(result="done")
 
-    periodic_handles: list[asyncio.TimerHandle] = []
     refs: list[weakref.ReferenceType[Workflow]] = []
-
     try:
         for _ in range(5):
             wf = TinyWorkflow()
-            refs.append(
-                cast(weakref.ReferenceType[Workflow], weakref.ref(wf))
-            )
+            refs.append(cast(weakref.ReferenceType[Workflow], weakref.ref(wf)))
             await WorkflowTestRunner(wf).run()
             del wf
 
-        # Let the periodic timer fire and re-register several times.
-        await asyncio.sleep(0.5)
-
         for _ in range(3):
             gc.collect()
-            await asyncio.sleep(0)
 
         assert all(r() is None for r in refs), (
-            f"{sum(r() is not None for r in refs)} workflows pinned by periodic timer Context"
+            f"{sum(r() is not None for r in refs)} workflows pinned by TimerHandle context"
         )
     finally:
-        for h in periodic_handles:
+        for h in handles:
             h.cancel()
 
 
