@@ -351,8 +351,7 @@ class RunContext:
 
     Consumed exactly once via `consume_current_run()` at the top of the control
     loop. Fields are cleared on consumption so any `asyncio` `TimerHandle` that
-    snapshots the current `Context` (e.g. periodic timers like aiohttp's
-    `TCPConnector._cleanup_closed`) cannot keep the workflow object graph alive
+    snapshots the current `Context` cannot keep the workflow object graph alive
     through this dataclass.
     """
 

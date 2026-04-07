@@ -662,7 +662,7 @@ async def test_workflow_instances_garbage_collected_after_completion() -> None:
 async def test_workflow_not_pinned_by_timer_handle_context() -> None:
     # Regression: TimerHandle._context snapshots the ContextVar holding
     # RunContext -> Workflow, pinning the workflow until the handle runs
-    # (or forever if it re-registers itself, like aiohttp's _cleanup_closed).
+    # (or forever if the handle re-registers itself).
     handles: list[asyncio.TimerHandle] = []
 
     class TinyWorkflow(Workflow):
