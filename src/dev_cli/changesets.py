@@ -664,17 +664,29 @@ def execute_action(action: PublishAction, dry_run: bool = False) -> None:
 
 
 def _execute_pypi(action: PypiAction, dry_run: bool) -> None:
-    """Build and publish a single PyPI package."""
+    """Build and publish a single PyPI package.
+
+    In a uv workspace ``uv build`` always writes artifacts to the
+    workspace-root ``dist/`` regardless of which directory it was
+    invoked from, so we build with ``--package`` and then publish the
+    specific files by glob from the repo root. ``uv publish`` picks up
+    ``UV_PUBLISH_TOKEN`` from the environment; without it, it falls
+    back to PyPI trusted publishing.
+    """
     click.echo(f"Publishing PyPI package {action.package}@{action.version}")
     if dry_run:
         click.echo("  dry run, skipping uv build / uv publish")
         return
-    pkg_dir = Path(action.path)
-    run_command(["uv", "build"], cwd=pkg_dir)
-    # ``uv publish`` uploads everything in ./dist relative to cwd, and
-    # picks up UV_PUBLISH_TOKEN from the inherited environment. When the
-    # token is unset it falls back to PyPI trusted publishing.
-    run_command(["uv", "publish"], cwd=pkg_dir)
+    run_command(["uv", "build", "--package", action.package])
+    dist_prefix = action.package.replace("-", "_")
+    pattern = f"dist/{dist_prefix}-{action.version}*"
+    files = sorted(Path.cwd().glob(pattern))
+    if not files:
+        raise RuntimeError(
+            f"uv build produced no artifacts matching {pattern} for "
+            f"{action.package}@{action.version}"
+        )
+    run_command(["uv", "publish", *[str(f) for f in files]])
 
 
 def _execute_docker_build(action: DockerBuildAction, dry_run: bool) -> None:
