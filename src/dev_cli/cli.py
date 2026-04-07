@@ -11,6 +11,7 @@ import click
 
 from . import gha, git_utils, index_html, versioning
 from .commands.changesets_cmd import changeset_publish, changeset_version
+from .commands.publish_cmd import changeset_plan, publish_action
 from .commands.pytest_cmd import pytest_cmd
 
 # Known subcommands for argument injection
@@ -18,6 +19,8 @@ _KNOWN_SUBCOMMANDS = {
     "pytest",
     "changeset-version",
     "changeset-publish",
+    "changeset-plan",
+    "publish-action",
     "compute-tag-metadata",
     "update-index-html",
 }
@@ -110,4 +113,6 @@ def update_index_html_cmd(js_url: str, css_url: str, index_path: str | None) -> 
 
 cli.add_command(changeset_version)
 cli.add_command(changeset_publish)
+cli.add_command(changeset_plan)
+cli.add_command(publish_action)
 cli.add_command(pytest_cmd)
