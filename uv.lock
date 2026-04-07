@@ -2160,7 +2160,7 @@ wheels = [
 
 [[package]]
 name = "llama-agents-agentcore"
-version = "0.8.7"
+version = "0.8.8"
 source = { editable = "packages/llama-agents-agentcore" }
 dependencies = [
     { name = "bedrock-agentcore" },
@@ -2268,7 +2268,7 @@ dev = [
 
 [[package]]
 name = "llama-agents-client"
-version = "0.3.2"
+version = "0.3.3"
 source = { editable = "packages/llama-agents-client" }
 dependencies = [
     { name = "httpx" },
@@ -2589,7 +2589,7 @@ dev = [
 
 [[package]]
 name = "llama-agents-server"
-version = "0.3.3"
+version = "0.4.0"
 source = { editable = "packages/llama-agents-server" }
 dependencies = [
     { name = "httpx" },
@@ -2754,7 +2754,7 @@ dev = [
 
 [[package]]
 name = "llama-index-workflows"
-version = "2.17.2"
+version = "2.17.3"
 source = { editable = "packages/llama-index-workflows" }
 dependencies = [
     { name = "llama-index-instrumentation" },

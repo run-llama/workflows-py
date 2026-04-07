@@ -1,5 +1,11 @@
 # llama-index-workflows
 
+## 2.17.3
+
+### Patch Changes
+
+- b8c7c7e: fix memory leak where asyncio timers could capture a Workflow reference via RunContext
+
 ## 2.17.2
 
 ### Patch Changes

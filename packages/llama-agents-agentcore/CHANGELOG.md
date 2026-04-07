@@ -1,5 +1,11 @@
 # llama-agents-agentcore
 
+## 0.8.8
+
+### Patch Changes
+
+- dde4030: feat: enable agentcore env var reading
+
 ## 0.8.7
 
 ### Patch Changes
