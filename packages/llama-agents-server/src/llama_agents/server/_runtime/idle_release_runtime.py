@@ -180,9 +180,7 @@ class IdleReleaseDecorator(BaseRuntimeDecorator):
                     datetime.now(timezone.utc) - handlers[0].idle_since
                 ).total_seconds()
                 if elapsed < self._idle_timeout:
-                    await asyncio.sleep(
-                        max(0.0, self._idle_timeout - elapsed)
-                    )
+                    await asyncio.sleep(max(0.0, self._idle_timeout - elapsed))
                     continue
                 if run_id not in self._active_run_ids:
                     return
