@@ -224,15 +224,17 @@ jobs:
         with:
           fetch-depth: 0
           token: ${{ steps.app-token.outputs.token }}
-      # setup-node@v5 defaults to ``package-manager-cache: true`` which
-      # shells out to the package manager listed in the root
-      # ``package.json`` (pnpm here). The finalize job only needs
-      # ``npx @changesets/cli tag`` — no pnpm — so disable the cache and
-      # skip installing pnpm just for this step.
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: "22"
-          package-manager-cache: false
+          cache: "pnpm"
+      # Install the workspace so ``pnpm exec changeset tag`` uses the
+      # @changesets/cli version pinned by pnpm-lock.yaml, with every
+      # transitive dep locked — ``npx``/``pnpm dlx`` would ignore the
+      # lockfile and resolve fresh, which we don't want in the release
+      # path.
+      - run: pnpm install --frozen-lockfile
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: publish-plan
@@ -240,7 +242,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
-          npx -y @changesets/cli@2.29.7 tag
+          pnpm exec changeset tag
           git push --tags
 
       - name: Extract published llama-agents-server version
