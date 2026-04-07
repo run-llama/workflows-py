@@ -5,7 +5,8 @@
     "dockerfile": "docker/operator.Dockerfile",
     "imageName": "llamaindex/llama-agents-operator",
     "platforms": [
-      "linux/amd64"
+      "linux/amd64",
+      "linux/arm64"
     ]
   }
 }

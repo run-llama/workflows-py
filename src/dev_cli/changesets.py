@@ -574,6 +574,7 @@ class DockerBuildAction:
     platform: str  # single platform, e.g. "linux/amd64"
     version: str
     build_tag: str  # full registry/repo:version-<arch>
+    cache_scope: str  # GHA buildx cache scope (per package + arch)
 
 
 @dataclass
@@ -684,6 +685,7 @@ def plan_docker(
                     platform=platform,
                     version=version,
                     build_tag=build_tag,
+                    cache_scope=f"{pkg.name}-{suffix}",
                 )
             )
         manifests.append(
@@ -767,6 +769,20 @@ def execute_docker_build_action(
     ]
     if action.target:
         cmd.extend(["--target", action.target])
+    # GHA buildx cache. Only emits cache directives when running under
+    # GitHub Actions with the runtime token exposed (see the
+    # ``crazy-max/ghaction-github-runtime`` step in the workflow). Outside
+    # CI these env vars are absent and the flags are silently omitted so
+    # local ``dev changeset-publish`` still works.
+    if os.environ.get("ACTIONS_RUNTIME_TOKEN") and os.environ.get("ACTIONS_CACHE_URL"):
+        cmd.extend(
+            [
+                "--cache-from",
+                f"type=gha,scope={action.cache_scope}",
+                "--cache-to",
+                f"type=gha,mode=max,scope={action.cache_scope}",
+            ]
+        )
     cmd.append(".")
     if dry_run:
         click.echo(f"  dry run: {' '.join(cmd)}")

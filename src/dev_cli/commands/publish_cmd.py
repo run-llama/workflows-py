@@ -124,16 +124,12 @@ def publish_pypi(plan_path: Path, package: str, dry_run: bool) -> None:
 @click.option("--image", required=True, help="Full image name (e.g. llamaindex/foo).")
 @click.option("--platform", required=True, help="Docker platform, e.g. linux/amd64.")
 @_DRY_RUN_OPTION
-def publish_docker(
-    plan_path: Path, image: str, platform: str, dry_run: bool
-) -> None:
+def publish_docker(plan_path: Path, image: str, platform: str, dry_run: bool) -> None:
     """Build and push a single-arch docker image described in the plan."""
     os.chdir(_repo_root())
     plan = _load_plan(plan_path)
     matches = [
-        a
-        for a in plan.docker_builds
-        if a.image == image and a.platform == platform
+        a for a in plan.docker_builds if a.image == image and a.platform == platform
     ]
     if not matches:
         raise click.ClickException(
@@ -153,9 +149,7 @@ def publish_docker_manifest(plan_path: Path, image: str, dry_run: bool) -> None:
     plan = _load_plan(plan_path)
     matches = [a for a in plan.docker_manifests if a.image == image]
     if not matches:
-        raise click.ClickException(
-            f"No docker manifest for image={image} in plan."
-        )
+        raise click.ClickException(f"No docker manifest for image={image} in plan.")
     for action in matches:
         changesets.execute_docker_manifest_action(action, dry_run=dry_run)
 
@@ -170,9 +164,7 @@ def publish_helm(plan_path: Path, package: str, dry_run: bool) -> None:
     plan = _load_plan(plan_path)
     matches = [a for a in plan.helm if a.package == package]
     if not matches:
-        raise click.ClickException(
-            f"Helm chart {package!r} not found in plan."
-        )
+        raise click.ClickException(f"Helm chart {package!r} not found in plan.")
     for action in matches:
         changesets.execute_helm_action(action, dry_run=dry_run)
 
@@ -193,5 +185,3 @@ def publish_git_tags(dry_run: bool) -> None:
         return
     changesets.run_command(["npx", "@changesets/cli", "tag"])
     changesets.run_command(["git", "push", "--tags"])
-
-

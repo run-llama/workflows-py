@@ -160,6 +160,9 @@ jobs:
       - uses: astral-sh/setup-uv@v7
       - run: pnpm install
       - uses: docker/setup-buildx-action@v3
+      # Expose ACTIONS_RUNTIME_TOKEN / ACTIONS_CACHE_URL so buildx can
+      # read/write the GitHub Actions cache (type=gha).
+      - uses: crazy-max/ghaction-github-runtime@v3
       - uses: docker/login-action@v3
         with:
           registry: docker.io
