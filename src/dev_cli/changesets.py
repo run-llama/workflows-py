@@ -549,6 +549,260 @@ def maybe_publish_helm(dry_run: bool, packages: list[PackageJson]) -> None:
             run_command(["helm", "push", tgz, pkg.helm.registry])
 
 
+# ---------------------------------------------------------------------------
+# Publish plan: a declarative description of the work to be done by
+# ``changeset-publish``. The plan is emitted by ``changeset-plan`` and
+# consumed by the per-action ``publish-*`` commands. The CI workflow
+# fans these actions out into a GitHub Actions matrix so docker builds
+# run natively (amd64 / arm64) in parallel.
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class PypiAction:
+    package: str
+    version: str
+    path: str  # package dir (absolute string)
+
+
+@dataclass
+class DockerBuildAction:
+    package: str
+    image: str  # imageName without registry
+    dockerfile: str
+    target: str | None
+    platform: str  # single platform, e.g. "linux/amd64"
+    version: str
+    build_tag: str  # full registry/repo:version-<arch>
+
+
+@dataclass
+class DockerManifestAction:
+    package: str
+    image: str
+    version: str
+    final_tags: list[str]  # full tags that should resolve to the manifest
+    source_tags: list[str]  # per-arch tags produced by docker-build jobs
+
+
+@dataclass
+class HelmAction:
+    package: str
+    chart_path: str
+    version: str
+    registry: str
+
+
+@dataclass
+class PublishPlan:
+    pypi: list[PypiAction] = dataclasses_field(default_factory=list)
+    docker_builds: list[DockerBuildAction] = dataclasses_field(default_factory=list)
+    docker_manifests: list[DockerManifestAction] = dataclasses_field(
+        default_factory=list
+    )
+    helm: list[HelmAction] = dataclasses_field(default_factory=list)
+
+    def to_dict(self) -> dict[str, list[dict[str, Any]]]:
+        from dataclasses import asdict
+
+        return {
+            "pypi": [asdict(a) for a in self.pypi],
+            "docker_builds": [asdict(a) for a in self.docker_builds],
+            "docker_manifests": [asdict(a) for a in self.docker_manifests],
+            "helm": [asdict(a) for a in self.helm],
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> PublishPlan:
+        return cls(
+            pypi=[PypiAction(**a) for a in data.get("pypi", [])],
+            docker_builds=[
+                DockerBuildAction(**a) for a in data.get("docker_builds", [])
+            ],
+            docker_manifests=[
+                DockerManifestAction(**a) for a in data.get("docker_manifests", [])
+            ],
+            helm=[HelmAction(**a) for a in data.get("helm", [])],
+        )
+
+
+def _platform_suffix(platform: str) -> str:
+    """Map a docker platform string to a short tag suffix."""
+    # "linux/amd64" -> "amd64", "linux/arm64/v8" -> "arm64"
+    parts = platform.split("/")
+    if len(parts) >= 2:
+        return parts[1]
+    return platform.replace("/", "-")
+
+
+def plan_pypi(packages: list[PackageJson]) -> list[PypiAction]:
+    """Return PyPI actions for packages whose version is not yet published."""
+    actions: list[PypiAction] = []
+    repo_root = Path.cwd()
+    for pyproject in _pypi_packages(packages):
+        name, version = current_version(pyproject)
+        if is_published(name, version):
+            continue
+        try:
+            rel = pyproject.parent.relative_to(repo_root)
+            path_str = str(rel)
+        except ValueError:
+            path_str = str(pyproject.parent)
+        actions.append(PypiAction(package=name, version=version, path=path_str))
+    return actions
+
+
+def plan_docker(
+    packages: list[PackageJson],
+) -> tuple[list[DockerBuildAction], list[DockerManifestAction]]:
+    """Return (per-arch build actions, manifest-merge actions) for unpublished images."""
+    builds: list[DockerBuildAction] = []
+    manifests: list[DockerManifestAction] = []
+
+    for pkg in packages:
+        image = pkg.docker
+        if image is None or not pkg.should_publish_docker():
+            continue
+        version = pkg.version
+        if is_docker_image_published(image.imageName, version):
+            continue
+
+        rc = is_rc_version(version)
+        final_tags = docker_image_tags(image, version, rc)
+        repo = f"{DOCKER_REGISTRY}/{image.imageName}"
+        source_tags: list[str] = []
+        for platform in image.platforms:
+            suffix = _platform_suffix(platform)
+            build_tag = f"{repo}:{version}-{suffix}"
+            source_tags.append(build_tag)
+            builds.append(
+                DockerBuildAction(
+                    package=pkg.name,
+                    image=image.imageName,
+                    dockerfile=image.dockerfile,
+                    target=image.target,
+                    platform=platform,
+                    version=version,
+                    build_tag=build_tag,
+                )
+            )
+        manifests.append(
+            DockerManifestAction(
+                package=pkg.name,
+                image=image.imageName,
+                version=version,
+                final_tags=final_tags,
+                source_tags=source_tags,
+            )
+        )
+
+    return builds, manifests
+
+
+def plan_helm(packages: list[PackageJson]) -> list[HelmAction]:
+    """Return Helm chart actions for charts not yet pushed to the registry."""
+    actions: list[HelmAction] = []
+    repo_root = Path.cwd()
+    for pkg in packages:
+        if pkg.helm is None or not pkg.should_publish_helm():
+            continue
+        if is_helm_chart_published(pkg.name, pkg.version):
+            continue
+        try:
+            chart_path = str(pkg.path.relative_to(repo_root))
+        except ValueError:
+            chart_path = str(pkg.path)
+        actions.append(
+            HelmAction(
+                package=pkg.name,
+                chart_path=chart_path,
+                version=pkg.version,
+                registry=pkg.helm.registry,
+            )
+        )
+    return actions
+
+
+def build_publish_plan(packages: list[PackageJson]) -> PublishPlan:
+    """Scan workspace packages and produce a complete PublishPlan."""
+    builds, manifests = plan_docker(packages)
+    return PublishPlan(
+        pypi=plan_pypi(packages),
+        docker_builds=builds,
+        docker_manifests=manifests,
+        helm=plan_helm(packages),
+    )
+
+
+def execute_pypi_action(action: PypiAction, dry_run: bool = False) -> None:
+    """Build and publish a single PyPI package."""
+    click.echo(f"Publishing PyPI package {action.package}@{action.version}")
+    if dry_run:
+        click.echo("  dry run, skipping uv build / uv publish")
+        return
+    pkg_dir = Path(action.path)
+    run_command(["uv", "build"], cwd=pkg_dir)
+    token = os.environ.get("UV_PUBLISH_TOKEN")
+    publish_env = {**os.environ, "UV_PUBLISH_TOKEN": token} if token else None
+    # ``uv publish`` uploads everything in ./dist relative to cwd.
+    run_command(["uv", "publish"], cwd=pkg_dir, env=publish_env)
+
+
+def execute_docker_build_action(
+    action: DockerBuildAction, dry_run: bool = False
+) -> None:
+    """Build and push a single-arch docker image for one platform."""
+    click.echo(f"Building {action.image} ({action.platform}) -> {action.build_tag}")
+    cmd = [
+        "docker",
+        "buildx",
+        "build",
+        "--push",
+        "--file",
+        action.dockerfile,
+        "--platform",
+        action.platform,
+        "--tag",
+        action.build_tag,
+    ]
+    if action.target:
+        cmd.extend(["--target", action.target])
+    cmd.append(".")
+    if dry_run:
+        click.echo(f"  dry run: {' '.join(cmd)}")
+        return
+    run_command(cmd)
+
+
+def execute_docker_manifest_action(
+    action: DockerManifestAction, dry_run: bool = False
+) -> None:
+    """Combine per-arch tags into a multi-arch manifest under each final tag."""
+    click.echo(
+        f"Creating manifest for {action.image}:{action.version} -> {action.final_tags}"
+    )
+    cmd = ["docker", "buildx", "imagetools", "create"]
+    for tag in action.final_tags:
+        cmd.extend(["--tag", tag])
+    cmd.extend(action.source_tags)
+    if dry_run:
+        click.echo(f"  dry run: {' '.join(cmd)}")
+        return
+    run_command(cmd)
+
+
+def execute_helm_action(action: HelmAction, dry_run: bool = False) -> None:
+    """Package and push a single Helm chart."""
+    tgz = f"{action.package}-{action.version}.tgz"
+    click.echo(f"Publishing Helm chart {tgz} -> {action.registry}")
+    if dry_run:
+        click.echo(f"  dry run: helm package {action.chart_path}")
+        click.echo(f"  dry run: helm push {tgz} {action.registry}")
+        return
+    run_command(["helm", "package", action.chart_path])
+    run_command(["helm", "push", tgz, action.registry])
+
+
 if __name__ == "__main__":
     cli()
 
