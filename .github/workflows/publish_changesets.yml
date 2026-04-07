@@ -240,7 +240,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
-          npx -y @changesets/cli tag
+          npx -y @changesets/cli@2.29.7 tag
           git push --tags
 
       - name: Extract published llama-agents-server version
