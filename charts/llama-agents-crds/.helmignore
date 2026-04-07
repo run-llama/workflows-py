@@ -1,0 +1,11 @@
+# Patterns to ignore when building packages.
+.DS_Store
+*.swp
+*.bak
+*.tmp
+*~
+.git
+.gitignore
+
+# Node modules symlink pulls in operator binaries which exceed Helm's 5MB file limit
+node_modules

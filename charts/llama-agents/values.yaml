@@ -1,0 +1,277 @@
+metrics:
+  # -- Enable Prometheus ServiceMonitors
+  # @section -- Metrics
+  enabled: false
+  # -- Scrape interval for ServiceMonitors
+  # @section -- Metrics
+  scrapeInterval: 30s
+  # -- Scrape timeout for ServiceMonitors
+  # @section -- Metrics
+  scrapeTimeout: 10s
+  # -- Extra labels added to ServiceMonitors for Prometheus discovery (e.g., `release: prometheus`)
+  # @section -- Metrics
+  additionalMonitorLabels: {}
+
+images:
+  controlPlane:
+    # -- Control plane image repository
+    # @section -- Images
+    repository: llamaindex/llama-agents-control-plane
+    # -- Control plane image tag
+    # @section -- Images
+    tag: "0.10.3"
+    # -- Control plane image pull policy
+    # @section -- Images
+    pullPolicy: IfNotPresent
+  operator:
+    # -- Operator image repository
+    # @section -- Images
+    repository: llamaindex/llama-agents-operator
+    # -- Operator image tag
+    # @section -- Images
+    tag: "0.11.0"
+    # -- Operator image pull policy
+    # @section -- Images
+    pullPolicy: IfNotPresent
+  appserver:
+    # -- Appserver image repository (used by operator for managed pods)
+    # @section -- Images
+    repository: llamaindex/llama-agents-appserver
+    # -- Appserver image tag
+    # @section -- Images
+    tag: "0.10.2"
+    # -- Appserver image pull policy
+    # @section -- Images
+    pullPolicy: IfNotPresent
+  nginx:
+    # -- Nginx sidecar image repository
+    # @section -- Images
+    repository: nginxinc/nginx-unprivileged
+    # -- Nginx sidecar image tag
+    # @section -- Images
+    tag: "1.27-alpine"
+    # -- Nginx sidecar image pull policy
+    # @section -- Images
+    pullPolicy: IfNotPresent
+
+controlPlane:
+  # -- Number of control plane replicas
+  # @section -- Control Plane
+  replicas: 1
+  container:
+    # -- Control plane API port
+    # @section -- Control Plane
+    port: 8000
+    # -- Extra environment variables for the control plane container
+    # @section -- Control Plane
+    env: []
+    # -- Extra envFrom sources (secretRef, configMapRef) for the control plane container
+    # @section -- Control Plane
+    envFrom: []
+    # -- Resource requests/limits for the control plane container
+    # @default -- `{requests: {cpu: 100m, memory: 256Mi, ephemeral-storage: 500Mi}}`
+    # @section -- Control Plane
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+        ephemeral-storage: 500Mi
+    # -- Startup probe configuration
+    # @section -- Control Plane
+    startupProbe: {}
+    # -- Liveness probe configuration
+    # @section -- Control Plane
+    livenessProbe: {}
+  deployment:
+    # -- Annotations for the control plane Deployment
+    # @section -- Control Plane
+    annotations: {}
+    # -- Annotations for the control plane pod template
+    # @section -- Control Plane
+    podAnnotations: {}
+
+  service:
+    # -- Control plane Service type
+    # @section -- Control Plane
+    type: ClusterIP
+    # -- Control plane Service port
+    # @section -- Control Plane
+    port: 80
+    # -- Annotations for the control plane Service
+    # @section -- Control Plane
+    annotations: {}
+    # -- Metrics path for the control plane Service
+    # @section -- Control Plane
+    metricsPath: /metrics
+
+  buildApi:
+    # -- Build API port (git proxy and token validation)
+    # @section -- Control Plane
+    port: 8001
+    # -- Metrics path for the build API
+    # @section -- Control Plane
+    metricsPath: /metrics
+
+  objectStorage:
+    s3:
+      # -- S3 endpoint URL (leave empty for AWS)
+      # @section -- Object Storage
+      endpointUrl: ""
+      # -- S3 bucket name (**required**)
+      # @section -- Object Storage
+      bucket: ""
+      # -- S3 region
+      # @section -- Object Storage
+      region: ""
+    # -- K8s Secret name containing `S3_ACCESS_KEY` and `S3_SECRET_KEY`
+    # @section -- Object Storage
+    secretRef: ""
+    # -- Key prefix for build artifacts in the bucket
+    # @section -- Object Storage
+    buildKeyPrefix: "builds"
+    # -- Key prefix for backup archives in the bucket
+    # @section -- Object Storage
+    backupKeyPrefix: "backups"
+    # -- Key prefix for code repositories in the bucket
+    # @section -- Object Storage
+    codeRepoKeyPrefix: "git"
+    # -- K8s Secret name containing `BACKUP_ENCRYPTION_PASSWORD`
+    # @section -- Object Storage
+    backupEncryptionSecretRef: ""
+
+  hpa:
+    # -- Enable HPA for the control plane
+    # @section -- Control Plane
+    enabled: false
+    # -- Minimum replicas
+    # @section -- Control Plane
+    minReplicas: 1
+    # -- Maximum replicas
+    # @section -- Control Plane
+    maxReplicas: 3
+    # -- Target average CPU utilization percentage
+    # @section -- Control Plane
+    targetCPUUtilizationPercentage: 80
+    # -- Target average memory utilization percentage
+    # @section -- Control Plane
+    # targetMemoryUtilizationPercentage: 80
+
+operator:
+  # -- Deploy the operator
+  # @section -- Operator
+  enabled: true
+  # -- Number of operator replicas
+  # @section -- Operator
+  replicas: 1
+  # -- Annotations for the operator Deployment
+  # @section -- Operator
+  annotations: {}
+  # -- Annotations for the operator pod template
+  # @section -- Operator
+  podAnnotations: {}
+  defaultAppRequests:
+    # -- Default CPU request for managed app containers
+    # @section -- Operator
+    cpu: "750m"
+    # -- Default memory request for managed app containers
+    # @section -- Operator
+    memory: "2Gi"
+  defaultAppLimits:
+    # -- Default CPU limit for managed app containers (empty = no limit)
+    # @section -- Operator
+    cpu: ""
+    # -- Default memory limit for managed app containers
+    # @section -- Operator
+    memory: "4096Mi"
+  # -- Resource requests/limits for the operator container
+  # @default -- `{limits: {cpu: 500m, memory: 128Mi}, requests: {cpu: 10m, memory: 64Mi}}`
+  # @section -- Operator
+  resources:
+    limits:
+      cpu: 500m
+      memory: 128Mi
+    requests:
+      cpu: 10m
+      memory: 64Mi
+  # -- Max simultaneous LlamaDeployment rollouts (0 = unlimited)
+  # @section -- Operator
+  maxConcurrentRollouts: 10
+  # -- Max active LlamaDeployments per namespace (0 = unlimited)
+  # @section -- Operator
+  maxDeployments: 0
+  # -- Extra environment variables for the operator container
+  # @section -- Operator
+  env: []
+  # -- Rollout timeout in seconds for managed deployments
+  # @section -- Operator
+  rolloutTimeoutSeconds: 1800
+
+  llamaDeploymentTemplate:
+    # -- Create a default LlamaDeploymentTemplate in the namespace
+    # @section -- Operator
+    enabled: false
+    # -- Template resource name
+    # @section -- Operator
+    name: "default"
+    # -- Metadata for the template (labels, annotations)
+    # @section -- Operator
+    metadata: {}
+    # -- Template spec (podSpec with nodeSelector, tolerations, affinity, container overrides)
+    # @section -- Operator
+    spec:
+      podSpec: {}
+
+  hpa:
+    # -- Enable HPA for the operator
+    # @section -- Operator
+    enabled: false
+    # -- Minimum replicas
+    # @section -- Operator
+    minReplicas: 1
+    # -- Maximum replicas
+    # @section -- Operator
+    maxReplicas: 3
+    # -- Target average CPU utilization percentage
+    # @section -- Operator
+    targetCPUUtilizationPercentage: 80
+    # -- Target average memory utilization percentage
+    # @section -- Operator
+    # targetMemoryUtilizationPercentage: 80
+
+localDev:
+  # -- Enable local dev ingress for deployed apps
+  # @section -- Local Development
+  enabled: false
+  # -- Ingress domain for local dev
+  # @section -- Local Development
+  ingressDomain: "127.0.0.1.nip.io"
+
+rbac:
+  # -- Create Role and RoleBinding
+  # @section -- RBAC
+  create: true
+  # -- Annotations for the Role
+  # @section -- RBAC
+  roleAnnotations: {}
+  # -- Annotations for the RoleBinding
+  # @section -- RBAC
+  roleBindingAnnotations: {}
+
+serviceAccount:
+  # -- Create a ServiceAccount
+  # @section -- Service Account
+  create: true
+  # -- ServiceAccount name
+  # @section -- Service Account
+  name: llama-agents
+  # -- Annotations for the ServiceAccount
+  # @section -- Service Account
+  annotations: {}
+
+networkPolicy:
+  # -- Enable egress NetworkPolicy for operator-managed pods
+  # @section -- Network Policy
+  enabled: true
+  # -- Additional pod selector matchExpressions
+  # @section -- Network Policy
+  extraMatchExpressions: []

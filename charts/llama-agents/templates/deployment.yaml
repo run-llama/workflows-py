@@ -1,0 +1,94 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "llama-agents.controlplane.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ include "llama-agents.controlplane.name" . }}
+  {{- with .Values.controlPlane.deployment.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  replicas: {{ .Values.controlPlane.replicas }}
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: {{ include "llama-agents.controlplane.name" . }}
+  template:
+    metadata:
+      labels:
+        app: {{ include "llama-agents.controlplane.name" . }}
+      {{- with .Values.controlPlane.deployment.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- if .Values.serviceAccount.create }}
+      serviceAccountName: {{ include "llama-agents.serviceAccountName" . }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+      containers:
+      - name: app
+        image: {{ .Values.images.controlPlane.repository }}:{{ .Values.images.controlPlane.tag }}
+        imagePullPolicy: {{ .Values.images.controlPlane.pullPolicy }}
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - "ALL"
+        ports:
+        - containerPort: {{ .Values.controlPlane.container.port }}
+          name: http
+        - containerPort: {{ .Values.controlPlane.buildApi.port }}
+          name: build-api
+        env:
+        - name: DEFAULT_APPSERVER_IMAGE_TAG
+          value: {{ .Values.controlPlane.defaultAppserverImageTag | default .Values.images.appserver.tag | quote }}
+        - name: S3_ENDPOINT_URL
+          value: {{ .Values.controlPlane.objectStorage.s3.endpointUrl | quote }}
+        - name: S3_BUCKET
+          value: {{ required "controlPlane.objectStorage.s3.bucket is required" .Values.controlPlane.objectStorage.s3.bucket | quote }}
+        - name: S3_REGION
+          value: {{ .Values.controlPlane.objectStorage.s3.region | quote }}
+        - name: BUILD_S3_KEY_PREFIX
+          value: {{ .Values.controlPlane.objectStorage.buildKeyPrefix | quote }}
+        - name: BACKUP_S3_KEY_PREFIX
+          value: {{ .Values.controlPlane.objectStorage.backupKeyPrefix | quote }}
+        - name: CODE_REPO_S3_KEY_PREFIX
+          value: {{ .Values.controlPlane.objectStorage.codeRepoKeyPrefix | quote }}
+        {{- if .Values.controlPlane.container.env }}
+          {{- toYaml .Values.controlPlane.container.env | nindent 8 }}
+        {{- end }}
+        {{- if or .Values.controlPlane.container.envFrom .Values.controlPlane.objectStorage.secretRef .Values.controlPlane.objectStorage.backupEncryptionSecretRef }}
+        envFrom:
+        {{- if .Values.controlPlane.container.envFrom }}
+        {{- toYaml .Values.controlPlane.container.envFrom | nindent 8 }}
+        {{- end }}
+        {{- if .Values.controlPlane.objectStorage.secretRef }}
+        - secretRef:
+            name: {{ .Values.controlPlane.objectStorage.secretRef }}
+        {{- end }}
+        {{- if .Values.controlPlane.objectStorage.backupEncryptionSecretRef }}
+        - secretRef:
+            name: {{ .Values.controlPlane.objectStorage.backupEncryptionSecretRef }}
+        {{- end }}
+        {{- end }}
+
+        {{- if .Values.controlPlane.container.startupProbe }}
+        startupProbe:
+          {{- toYaml .Values.controlPlane.container.startupProbe | nindent 10 }}
+        {{- end }}
+        {{- if .Values.controlPlane.container.livenessProbe }}
+        livenessProbe:
+          {{- toYaml .Values.controlPlane.container.livenessProbe | nindent 10 }}
+        {{- end }}
+        {{- if .Values.controlPlane.container.resources }}
+        resources:
+          {{- toYaml .Values.controlPlane.container.resources | nindent 10 }}
+        {{- end }}

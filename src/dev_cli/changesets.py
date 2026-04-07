@@ -12,17 +12,21 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
+from dataclasses import field as dataclasses_field
+from io import StringIO
 from pathlib import Path
-from typing import Any, Generator, cast
+from typing import Any, Generator, List, cast
 
 import click
 import tomlkit
 from packaging.version import Version
 from pydantic import BaseModel, Field
+from ruamel.yaml import YAML
 
 # Valid PEP 440 pre-release labels. Semver pre-release identifiers must use
 # these same labels (e.g. 1.2.3-a.4, not 1.2.3-alpha.4) so that the
@@ -33,14 +37,14 @@ _SEMVER_PRERELEASE_RE = re.compile(r"^(\d+\.\d+\.\d+)-([a-zA-Z]+)\.(\d+)$")
 
 
 def run_command(
-    cmd: list[str], cwd: Path | None = None, env: dict[str, str] | None = None
+    cmd: List[str], cwd: Path | None = None, env: dict[str, str] | None = None
 ) -> None:
     """Run a command, streaming output to the console, and raise on failure."""
     subprocess.run(cmd, check=True, text=True, cwd=cwd or Path.cwd(), env=env)
 
 
 def run_and_capture(
-    cmd: list[str], cwd: Path | None = None, env: dict[str, str] | None = None
+    cmd: List[str], cwd: Path | None = None, env: dict[str, str] | None = None
 ) -> str:
     """Run a command and return stdout as text, raising on failure."""
     result = subprocess.run(
@@ -96,12 +100,223 @@ def pep440_to_semver(version: str) -> str:
     return f"{base}-{label}.{num}"
 
 
+class DockerConfig(BaseModel):
+    dockerfile: str
+    imageName: str
+    target: str | None = None
+    platforms: list[str] = Field(default_factory=list)
+
+
+class HelmConfig(BaseModel):
+    registry: str
+
+
+# syncValues type: filename -> {dot_path -> template_string}
+SyncValues = dict[str, dict[str, str]]
+
+
+class PublishConfig(BaseModel):
+    """Per-type publish toggles.  All default to ``True``; set to ``False``
+    to suppress a specific publish channel even when the corresponding
+    config (docker/helm/pyproject.toml) exists."""
+
+    pypi: bool = True
+    docker: bool = True
+    helm: bool = True
+
+
+class PackageJsonFile(BaseModel):
+    """Schema for a package.json file on disk."""
+
+    name: str
+    docker: DockerConfig | None = None
+    helm: HelmConfig | None = None
+    publish: PublishConfig = Field(default_factory=PublishConfig)
+    syncValues: dict[str, dict[str, str]] = Field(default_factory=dict)
+    postVersion: list[str] = Field(default_factory=list)
+
+
 @dataclass
 class PackageJson:
     name: str
     version: str
     path: Path
     private: bool
+    docker: DockerConfig | None = None
+    helm: HelmConfig | None = None
+    publish: PublishConfig = dataclasses_field(default_factory=PublishConfig)
+    syncValues: SyncValues = dataclasses_field(default_factory=dict)
+    postVersion: list[str] = dataclasses_field(default_factory=list)
+
+    def should_publish_pypi(self) -> bool:
+        return not self.private and self.publish.pypi
+
+    def should_publish_docker(self) -> bool:
+        return not self.private and self.publish.docker
+
+    def should_publish_helm(self) -> bool:
+        return not self.private and self.publish.helm
+
+
+# --- syncValues engine ---
+
+# Template pattern: {package-name:property} or {self:property}
+_TEMPLATE_RE = re.compile(r"\{([^}:]+):([^}]+)\}")
+
+
+def _resolve_template(
+    template: str,
+    self_pkg: PackageJson,
+    workspace_packages: dict[str, PackageJson],
+) -> str:
+    """Resolve a syncValues template string like ``{pkg:dockerTag}``."""
+
+    def _replace(match: re.Match[str]) -> str:
+        pkg_ref, prop = match.group(1), match.group(2)
+        template_str = f"{{{pkg_ref}:{prop}}}"
+        if pkg_ref == "self":
+            pkg = self_pkg
+        else:
+            pkg = workspace_packages.get(pkg_ref)
+            if pkg is None:
+                raise ValueError(
+                    f"syncValues template '{template_str}' references "
+                    f"unknown package '{pkg_ref}'"
+                )
+        if prop == "version":
+            return pkg.version
+        if prop == "pep440Version":
+            return semver_to_pep440(pkg.version)
+        if prop == "dockerTag":
+            if pkg.docker is None:
+                raise ValueError(
+                    f"syncValues template '{template_str}' references "
+                    f"dockerTag but package '{pkg.name}' has no docker config"
+                )
+            return pkg.version
+        raise ValueError(
+            f"syncValues template '{template_str}' uses unknown property '{prop}'"
+        )
+
+    return _TEMPLATE_RE.sub(_replace, template)
+
+
+def _apply_dot_path_updates(data: Any, updates: dict[str, str]) -> bool:
+    """Walk dot-paths and set values in a nested dict-like structure.
+
+    Returns True if any value changed.
+    """
+    changed = False
+    for dot_path, value in updates.items():
+        keys = dot_path.split(".")
+        obj = data
+        for key in keys[:-1]:
+            if key not in obj:
+                obj[key] = {}
+            obj = obj[key]
+        last_key = keys[-1]
+        old = obj.get(last_key)
+        if old is None or str(old) != value:
+            obj[last_key] = value
+            changed = True
+    return changed
+
+
+def _write_yaml_values(file_path: Path, updates: dict[str, str]) -> bool:
+    """Set dot-path values in a YAML file using ruamel.yaml (comment-preserving).
+
+    Returns True if the file was changed.
+    """
+    if not file_path.exists():
+        return False
+
+    yaml = YAML()
+    yaml.preserve_quotes = True  # type: ignore[assignment]
+    data = yaml.load(file_path.read_text())
+
+    if not _apply_dot_path_updates(data, updates):
+        return False
+
+    stream = StringIO()
+    yaml.dump(data, stream)
+    file_path.write_text(stream.getvalue())
+    return True
+
+
+def _write_toml_values(file_path: Path, updates: dict[str, str]) -> bool:
+    """Set dot-path values in a TOML file using tomlkit (comment-preserving).
+
+    Returns True if the file was changed.
+    """
+    if not file_path.exists():
+        return False
+
+    doc = tomlkit.parse(file_path.read_text())
+
+    if not _apply_dot_path_updates(doc, updates):
+        return False
+
+    file_path.write_text(tomlkit.dumps(doc))
+    return True
+
+
+def _write_file_values(file_path: Path, updates: dict[str, str]) -> bool:
+    """Dispatch to the correct writer based on file extension."""
+    suffix = file_path.suffix
+    if suffix in (".yaml", ".yml"):
+        return _write_yaml_values(file_path, updates)
+    if suffix == ".toml":
+        return _write_toml_values(file_path, updates)
+    raise ValueError(f"Unsupported file type '{suffix}' for syncValues: {file_path}")
+
+
+def apply_sync_values(
+    pkg: PackageJson,
+    workspace_packages: dict[str, PackageJson],
+) -> bool:
+    """Apply all sync entries (explicit + implicit) for a package.
+
+    Explicit entries come from ``syncValues`` in package.json. Implicit
+    entries are added for helm packages (Chart.yaml version) and packages
+    with a pyproject.toml (project.version in PEP 440 form). Writers
+    skip gracefully when the target file doesn't exist.
+
+    Returns True if any file was changed.
+    """
+    all_entries: dict[str, dict[str, str]] = {}
+
+    for filename, paths in pkg.syncValues.items():
+        resolved = {
+            dp: _resolve_template(tpl, pkg, workspace_packages)
+            for dp, tpl in paths.items()
+        }
+        all_entries.setdefault(filename, {}).update(resolved)
+
+    if pkg.helm is not None:
+        all_entries.setdefault("Chart.yaml", {}).setdefault("version", pkg.version)
+
+    if (pkg.path / "pyproject.toml").exists():
+        all_entries.setdefault("pyproject.toml", {}).setdefault(
+            "project.version", semver_to_pep440(pkg.version)
+        )
+
+    changed = False
+    for filename, updates in all_entries.items():
+        file_path = pkg.path / filename
+        if _write_file_values(file_path, updates):
+            click.echo(f"Updated {file_path}")
+            changed = True
+
+    return changed
+
+
+def _read_package_json_config(package_dir: Path) -> PackageJsonFile | None:
+    """Parse custom fields from a package.json file using Pydantic."""
+    package_json_path = package_dir / "package.json"
+    if not package_json_path.exists():
+        return None
+    data = json.loads(package_json_path.read_text())
+    return PackageJsonFile.model_validate(data)
 
 
 def get_pnpm_workspace_packages() -> list[PackageJson]:
@@ -109,57 +324,34 @@ def get_pnpm_workspace_packages() -> list[PackageJson]:
     output = run_and_capture(["pnpm", "list", "-r", "--depth=-1", "--json"])
 
     package_json = cast(list[dict[str, Any]], json.loads(output))
-    packages: list[PackageJson] = [
-        PackageJson(
-            name=data["name"],
-            version=data["version"],
-            path=Path(data["path"]),
-            private=data.get("private", True),
+    packages: list[PackageJson] = []
+    for data in package_json:
+        pkg_path = Path(data["path"])
+        config = _read_package_json_config(pkg_path)
+        packages.append(
+            PackageJson(
+                name=data["name"],
+                version=data["version"],
+                path=pkg_path,
+                private=data.get("private", True),
+                docker=config.docker if config else None,
+                helm=config.helm if config else None,
+                publish=config.publish if config else PublishConfig(),
+                syncValues=config.syncValues if config else {},
+                postVersion=config.postVersion if config else [],
+            )
         )
-        for data in package_json
-    ]
     return packages
 
 
-def sync_package_version_with_pyproject(
-    package_dir: Path, packages: dict[str, PackageJson], js_package_name: str
-) -> bool:
-    """Sync version from package.json to pyproject.toml.
-
-    Returns True if pyproject was changed, else False.
-    """
-    pyproject_path = package_dir / "pyproject.toml"
-    if not pyproject_path.exists():
-        return False
-
-    package_version = semver_to_pep440(packages[js_package_name].version)
-    toml_doc, py_doc = PyProjectContainer.parse(pyproject_path.read_text())
-    current_version = py_doc.project.version
-
-    # update workspace dependency strings by replacing the first version after == or >=
-    # Perhaps sync dependency versions some day
-    changed = False
-    if current_version != package_version:
-        toml_doc["project"]["version"] = package_version
-        changed = True
-
-    if changed:
-        pyproject_path.write_text(tomlkit.dumps(toml_doc))
-        click.echo(
-            f"Updated {pyproject_path} version to {package_version} and synced dependency specs"
-        )
-
-    return changed
-
-
-def _publishable_packages() -> Generator[Path, None, None]:
-    """Finds all paths to pyproject.toml that also have a package.json with private: false."""
-    packages = get_pnpm_workspace_packages()
+def _pypi_packages(packages: list[PackageJson]) -> Generator[Path, None, None]:
+    """Yield pyproject.toml paths for packages that should be published to PyPI."""
     for package in packages:
-        if not package.private:
-            pyproject = package.path / "pyproject.toml"
-            if pyproject.exists():
-                yield pyproject
+        if not package.should_publish_pypi():
+            continue
+        pyproject = package.path / "pyproject.toml"
+        if pyproject.exists():
+            yield pyproject
 
 
 def lock_python_dependencies() -> None:
@@ -177,7 +369,7 @@ def cli() -> None:
     pass
 
 
-def maybe_publish_pypi(dry_run: bool) -> None:
+def maybe_publish_pypi(dry_run: bool, packages: list[PackageJson]) -> None:
     """Publish the py packages if they need to be published.
 
     Falls back to PyPI trusted publishing when UV_PUBLISH_TOKEN is not set.
@@ -187,7 +379,7 @@ def maybe_publish_pypi(dry_run: bool) -> None:
     click.echo(f"PyPI auth: {auth_method}")
 
     any_to_publish = False
-    for package in _publishable_packages():
+    for package in _pypi_packages(packages):
         name, version = current_version(package)
         if is_published(name, version):
             click.echo(f"PyPI package {name}@{version} already published, skipping")
@@ -231,6 +423,130 @@ def is_published(
             return False
         raise  # any other error should surface
     return version in data["releases"]  # keys are version strings
+
+
+DOCKER_REGISTRY = "docker.io"
+
+
+def is_rc_version(version: str) -> bool:
+    """Return True if version is a pre-release (RC, alpha, or beta)."""
+    return bool(re.search(r"(-rc|-a|-b|rc\d|a\d|b\d)", version))
+
+
+def is_docker_image_published(repository: str, tag: str) -> bool:
+    """Check if a Docker image tag exists on Docker Hub.
+
+    Returns True if the tag exists, False if not (404).
+    Raises on unexpected HTTP errors.
+    """
+    url = f"https://hub.docker.com/v2/repositories/{repository}/tags/{tag}"
+    try:
+        urllib.request.urlopen(url)
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return False
+        raise
+    return True
+
+
+def docker_image_tags(image: DockerConfig, version: str, is_rc: bool) -> list[str]:
+    """Generate the full list of Docker tags for an image."""
+    repo = f"{DOCKER_REGISTRY}/{image.imageName}"
+    tags = [f"{repo}:{version}"]
+    if not is_rc:
+        tags.append(f"{repo}:latest")
+        major_minor = ".".join(version.split(".")[:2])
+        tags.append(f"{repo}:{major_minor}")
+    return tags
+
+
+def build_and_push_docker_image(image: DockerConfig, tags: list[str]) -> None:
+    """Build and push a Docker image using docker buildx."""
+    cmd = [
+        "docker",
+        "buildx",
+        "build",
+        "--push",
+        "--file",
+        image.dockerfile,
+        "--platform",
+        ",".join(image.platforms),
+    ]
+    if image.target:
+        cmd.extend(["--target", image.target])
+    for tag in tags:
+        cmd.extend(["--tag", tag])
+    cmd.append(".")
+    run_command(cmd)
+
+
+def maybe_publish_docker(dry_run: bool, packages: list[PackageJson]) -> None:
+    """Build and push Docker images that haven't been published yet."""
+    if not shutil.which("docker"):
+        click.echo("Warning: docker not found in PATH, skipping Docker builds")
+        return
+
+    for pkg in packages:
+        image = pkg.docker
+        if image is None or not pkg.should_publish_docker():
+            continue
+        version = pkg.version
+        rc = is_rc_version(version)
+        primary_tag = version
+        if is_docker_image_published(image.imageName, primary_tag):
+            click.echo(
+                f"Docker image {image.imageName}:{primary_tag} already published, skipping"
+            )
+            continue
+
+        tags = docker_image_tags(image, version, rc)
+        click.echo(f"Building and pushing Docker image {pkg.name}: {tags}")
+        if dry_run:
+            click.echo(f"  Dry run, skipping build for {pkg.name}")
+        else:
+            build_and_push_docker_image(image, tags)
+
+
+def is_helm_chart_published(chart_name: str, version: str) -> bool:
+    """Check if a Helm chart version is already published in the OCI registry."""
+    url = (
+        f"https://hub.docker.com/v2/repositories/llamaindex/{chart_name}/tags/{version}"
+    )
+    try:
+        urllib.request.urlopen(url)
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return False
+        raise
+    return True
+
+
+def maybe_publish_helm(dry_run: bool, packages: list[PackageJson]) -> None:
+    """Package and push Helm charts that haven't been published yet."""
+    if not shutil.which("helm"):
+        click.echo("Warning: helm not found in PATH, skipping Helm chart publish")
+        return
+
+    for pkg in packages:
+        if pkg.helm is None or not pkg.should_publish_helm():
+            continue
+
+        if is_helm_chart_published(pkg.name, pkg.version):
+            click.echo(
+                f"Helm chart {pkg.name}@{pkg.version} already published, skipping"
+            )
+            continue
+
+        chart_dir = str(pkg.path)
+        tgz = f"{pkg.name}-{pkg.version}.tgz"
+
+        click.echo(f"Publishing Helm chart {tgz}")
+        if dry_run:
+            click.echo(f"  Dry run, would run: helm package {chart_dir}")
+            click.echo(f"  Dry run, would run: helm push {tgz} {pkg.helm.registry}")
+        else:
+            run_command(["helm", "package", chart_dir])
+            run_command(["helm", "push", tgz, pkg.helm.registry])
 
 
 if __name__ == "__main__":

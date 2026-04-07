@@ -1,0 +1,19 @@
+{
+  "name": "llama-agents-control-plane",
+  "version": "0.10.3",
+  "publish": {
+    "pypi": false
+  },
+  "dependencies": {
+    "llama-agents-core": "workspace:*"
+  },
+  "docker": {
+    "dockerfile": "docker/Dockerfile",
+    "target": "controlplane",
+    "imageName": "llamaindex/llama-agents-control-plane",
+    "platforms": [
+      "linux/amd64",
+      "linux/arm64"
+    ]
+  }
+}

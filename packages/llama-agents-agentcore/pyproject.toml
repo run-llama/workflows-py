@@ -1,0 +1,35 @@
+[build-system]
+requires = ["uv_build>=0.10.8,<0.11"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+  "pytest>=8.4.2",
+  "pytest-asyncio>=0.25.3",
+  "pytest-cov>=7.0.0",
+  "pytest-timeout>=2.4.0",
+  "pytest-xdist>=3.8.0",
+  "ruff>=0.15.0",
+  "ty>=0.0.15"
+]
+
+[project]
+name = "llama-agents-agentcore"
+version = "0.8.7"
+description = "LlamaAgents x Bedrock AgentCore deployment utilities"
+readme = "README.md"
+requires-python = ">=3.10,<4"
+dependencies = [
+  "bedrock-agentcore>=1.2.0",
+  "llama-agents-core>=0.5.0",
+  "llama-agents-appserver>=0.5.0",
+  "llama-agents-server>=0.2.0",
+  "click>=8.3.1"
+]
+
+[tool.uv.build-backend]
+module-name = "llama_agents.agentcore"
+
+[tool.uv.sources]
+llama-agents-core = {workspace = true}
+llama-agents-appserver = {workspace = true}

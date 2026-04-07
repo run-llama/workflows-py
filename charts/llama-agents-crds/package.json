@@ -1,0 +1,8 @@
+{
+  "name": "llama-agents-crds",
+  "version": "0.7.2",
+  "dependencies": {},
+  "helm": {
+    "registry": "oci://docker.io/llamaindex"
+  }
+}

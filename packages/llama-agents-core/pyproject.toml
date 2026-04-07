@@ -1,0 +1,44 @@
+[build-system]
+requires = ["uv_build>=0.7.20,<0.8.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+  "pytest>=8.4.1",
+  "pytest-asyncio>=0.25.3",
+  "pytest-cov>=7.0.0",
+  "pytest-timeout>=2.4.0",
+  "pytest-xdist>=3.8.0",
+  "respx>=0.22.0",
+  "ruff>=0.12.9",
+  "ty>=0.0.15"
+]
+
+[project]
+name = "llama-agents-core"
+version = "0.8.4"
+description = "Core models and schemas for LlamaDeploy"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.10, <4"
+dependencies = [
+  "fastapi>=0.115.0",
+  "overrides>=7.7.0",
+  "pydantic>=2.12.0",
+  "pyyaml>=6.0.2",
+  "truststore>=0.10.4",
+  "types-pyyaml>=6.0.12.20250822",
+  "tomli>=2.0.1; python_version < \"3.11\""
+]
+
+[project.optional-dependencies]
+server = [
+  "fastapi>=0.115.0"
+]
+client = [
+  "httpx>=0.24.0,<1.0.0"
+]
+
+[tool.uv.build-backend]
+module-name = ["llama_agents.core", "llama_deploy.core"]
+namespace = true

@@ -158,3 +158,8 @@ llama_index/
 
 # Docs preview
 .docs-preview/
+
+# Operator / k8s dev
+operator/bin/
+bin/
+tilt/k8s-manifests/secrets.yaml

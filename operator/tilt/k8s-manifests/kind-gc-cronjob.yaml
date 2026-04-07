@@ -1,0 +1,38 @@
+# Prunes orphaned containerd images/snapshots inside the kind node.
+# Tilt and `kind load` create new content-addressed layers on every rebuild
+# but never clean up old ones, so overlayfs storage grows unbounded.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: kind-gc
+  namespace: llama-agents
+spec:
+  schedule: "0 */6 * * *"  # every 6 hours
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 1
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: gc
+              image: kindest/node:v1.33.1
+              command:
+                - sh
+                - "-c"
+                - |
+                  export CONTAINER_RUNTIME_ENDPOINT=unix:///run/containerd/containerd.sock
+                  for img in $(ctr -n k8s.io images ls -q | grep '^sha256:'); do
+                    ctr -n k8s.io images rm "$img" 2>/dev/null
+                  done
+                  crictl rmi --prune 2>/dev/null
+                  echo "GC complete"
+              volumeMounts:
+                - name: containerd-sock
+                  mountPath: /run/containerd/containerd.sock
+          volumes:
+            - name: containerd-sock
+              hostPath:
+                path: /run/containerd/containerd.sock
+                type: Socket

@@ -97,23 +97,15 @@ def compute_tag_metadata(tag: str, output: Path | None) -> None:
 
 
 @cli.command("update-index-html")
-@click.option("--js-url", required=True, help="URL for the JavaScript bundle.")
+@click.option("--js-url", required=True, help="URL for the JS bundle.")
 @click.option("--css-url", required=True, help="URL for the CSS bundle.")
-@click.option(
-    "--index-path",
-    type=click.Path(),
-    default=None,
-    help="Optional custom index.html path.",
-)
+@click.option("--index-path", default=None, help="Path to the index.html file.")
 def update_index_html_cmd(js_url: str, css_url: str, index_path: str | None) -> None:
-    """Update debugger asset URLs in the server index.html file."""
+    """Update index.html with new JS and CSS URLs."""
     try:
         index_html.update_index_html(js_url, css_url, index_path)
-    except Exception as exc:  # pragma: no cover - Click renders traceback
+    except (FileNotFoundError, index_html.IndexHtmlError) as exc:
         raise click.ClickException(str(exc)) from exc
-    click.echo("✅ Updated index.html")
-    click.echo(f"   JavaScript: {js_url}")
-    click.echo(f"   CSS: {css_url}")
 
 
 cli.add_command(changeset_version)

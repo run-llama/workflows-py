@@ -60,7 +60,7 @@ from workflows.runtime.types.named_task import (
 from workflows.runtime.types.plugin import (
     InternalRunAdapter,
     WaitResultTick,
-    get_current_run,
+    consume_current_run,
 )
 from workflows.runtime.types.results import (
     AddCollectedEvent,
@@ -530,10 +530,13 @@ async def control_loop(
     """
     The main async control loop for a workflow run.
     """
-    current = get_current_run()
-    state = init_state or BrokerState.from_workflow(current.workflow)
+    # Consume the RunContext immediately so the container's strong reference
+    # to the workflow graph is dropped before any step gets a chance to schedule
+    # an asyncio handle whose Context snapshot would otherwise pin it.
+    run = consume_current_run()
+    state = init_state or BrokerState.from_workflow(run.workflow)
     runner = _ControlLoopRunner(
-        current.workflow, current.run_adapter, current.context, current.steps, state
+        run.workflow, run.run_adapter, run.context, run.steps, state
     )
     return await runner.run(start_event=start_event)
 

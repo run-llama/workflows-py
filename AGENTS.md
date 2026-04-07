@@ -10,6 +10,10 @@ This is the LlamaIndex Workflows library - an event-driven, async-first framewor
 - Starlette for web server
 - Uvicorn for ASGI serving
 
+## Setup
+- Install uv: `curl -LsSf https://astral.sh/uv/install.sh | sh`
+- Install deps (dev): `uv sync --all-packages --all-extras`
+
 ## Development Commands
 
 ### Testing
@@ -42,10 +46,21 @@ cd packages/<package> && uv run pytest -m docker -s -n0
 uv run pre-commit run -a
 ```
 
+If type checkers (ty, basedpyright) fail with unresolved imports, you likely need all packages installed: `uv sync --all-packages --all-extras`
+
 ## Project Structure
 - `packages/llama-index-workflows/src/workflows/` - Main library code
 - `packages/llama-index-workflows/src/workflows/server/` - Web server implementation
 - `packages/llama-index-workflows/tests/` - Test suite
+- `packages/llama-agents-core/` - Shared schemas and utilities for cloud components
+- `packages/llama-agents-control-plane/` - Control plane service (K8s management, deployment API)
+- `packages/llama-agents-appserver/` - Application server (runs workflows in pods)
+- `packages/llamactl/` - CLI tool for interacting with deployments
+- `packages/llama-agents-agentcore/` - Agent runtime and deployment logic
+- `operator/` - Go-based Kubernetes operator (see `operator/AGENTS.md`)
+- `charts/` - Helm charts (see `charts/AGENTS.md`)
+- `docker/` - Dockerfiles for container images
+- `operator/tilt/` - Tilt dev environment support files
 - `examples/` - Usage examples
 
 ## Architecture
@@ -54,6 +69,9 @@ See `architecture-docs/` for high-level architectural overviews:
 - [`core-overview.md`](architecture-docs/core-overview.md) — Workflow, Context, Runtime, and event flow
 - [`control-loop.md`](architecture-docs/control-loop.md) — The reducer-based execution engine
 - [`server-architecture.md`](architecture-docs/server-architecture.md) — HTTP server, persistence, and runtime decorators
+- [`overall-architecture.md`](architecture-docs/overall-architecture.md) — Cloud platform architecture (operator, control plane, appserver)
+- [`build-api.md`](architecture-docs/build-api.md) — Build API for deployment creation
+- [`quick-reference.md`](architecture-docs/quick-reference.md) — Code navigation guide and key constants
 
 The DBOS package has its own architecture doc explaining the distributed model (process boundaries, adapter rules, idle release):
 - [`packages/llama-agents-dbos/ARCHITECTURE.md`](packages/llama-agents-dbos/ARCHITECTURE.md)
@@ -63,6 +81,28 @@ The DBOS package has its own architecture doc explaining the distributed model (
 - **Context** - State management across workflow steps
 - **Events** - Event-driven communication between steps
 - **WorkflowServer** - HTTP server for serving workflows as web services
+
+## Versioning with Changesets
+
+```bash
+npx changeset              # Add a changeset
+npx changeset status       # Check pending changes
+```
+
+Changeset descriptions should be a single line. Keep it short and simple.
+
+## Development Environment
+
+```bash
+uv run operator/dev.py up             # Set up kind cluster and start development
+uv run operator/dev.py down           # Clean up deployed resources
+uv run operator/dev.py down --delete  # Delete the kind cluster
+uv run operator/dev.py status         # Show cluster status
+```
+
+## Other Components
+
+For Operator/Helm details, see `operator/AGENTS.md` and `charts/AGENTS.md`.
 
 ## Notes for Claude
 - Always run tests after making changes: `uv run dev`

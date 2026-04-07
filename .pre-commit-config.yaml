@@ -11,6 +11,7 @@ repos:
       - id: check-toml
       - id: check-yaml
         args: [--allow-multiple-documents]
+        exclude: "(^charts|^operator)"
       - id: detect-private-key
       - id: end-of-file-fixer
       - id: mixed-line-ending
@@ -34,6 +35,7 @@ repos:
     rev: 1.31.1
     hooks:
       - id: basedpyright
+        exclude: "scripts/"
 
   - repo: https://github.com/codespell-project/codespell
     rev: v2.3.0
@@ -46,3 +48,4 @@ repos:
     rev: v0.23.1
     hooks:
       - id: toml-sort-fix
+        exclude: ^uv\.lock$

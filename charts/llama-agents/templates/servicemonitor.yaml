@@ -1,0 +1,86 @@
+{{- if .Values.metrics.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "llama-agents.controlplane.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ include "llama-agents.controlplane.name" . }}
+{{- with .Values.metrics.additionalMonitorLabels }}
+{{ toYaml . | indent 4 }}
+{{- end }}
+spec:
+  selector:
+    matchLabels:
+      app: {{ include "llama-agents.controlplane.name" . }}
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: {{ .Values.metrics.scrapeInterval | default "30s" }}
+      scrapeTimeout: {{ .Values.metrics.scrapeTimeout | default "10s" }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "llama-agents.build.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ include "llama-agents.controlplane.name" . }}
+    component: build-api
+{{- with .Values.metrics.additionalMonitorLabels }}
+{{ toYaml . | indent 4 }}
+{{- end }}
+spec:
+  selector:
+    matchLabels:
+      app: {{ include "llama-agents.controlplane.name" . }}
+      component: build-api
+  endpoints:
+    - port: build-api
+      path: /metrics
+      interval: {{ .Values.metrics.scrapeInterval | default "30s" }}
+      scrapeTimeout: {{ .Values.metrics.scrapeTimeout | default "10s" }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: llama-deploy-appservers
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/part-of: {{ include "llama-agents.name" . }}
+{{- with .Values.metrics.additionalMonitorLabels }}
+{{ toYaml . | indent 4 }}
+{{- end }}
+spec:
+  namespaceSelector:
+    any: true
+  selector:
+    matchLabels:
+      app.kubernetes.io/managed-by: llama-deploy-operator
+      component: appserver
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: {{ .Values.metrics.scrapeInterval | default "30s" }}
+      scrapeTimeout: {{ .Values.metrics.scrapeTimeout | default "10s" }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "llama-agents.operator.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ include "llama-agents.operator.name" . }}
+    component: operator
+{{- with .Values.metrics.additionalMonitorLabels }}
+{{ toYaml . | indent 4 }}
+{{- end }}
+spec:
+  selector:
+    matchLabels:
+      app: {{ include "llama-agents.operator.name" . }}
+  endpoints:
+    - port: metrics
+      interval: {{ .Values.metrics.scrapeInterval | default "30s" }}
+      scrapeTimeout: {{ .Values.metrics.scrapeTimeout | default "10s" }}
+{{- end }}

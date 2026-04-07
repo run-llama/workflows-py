@@ -66,6 +66,7 @@ class WorkflowServer:
         runtime: Runtime | None = None,
         idle_timeout: float = 60.0,
         sse_heartbeat_interval: float | None = 25.0,
+        accept_context_api: bool = False,
     ):
         """Create a new workflow server.
 
@@ -95,6 +96,10 @@ class WorkflowServer:
                 (``: heartbeat``) on idle connections. Defaults to ``25.0``.
                 Set to ``None`` to disable heartbeats. Only applies to SSE
                 mode; NDJSON streams are unaffected.
+            accept_context_api: Allow the ``"context"`` field in run request
+                bodies. Defaults to ``False``. Context deserialization can
+                instantiate arbitrary Pydantic objects via ``importlib``, so
+                only enable this on trusted networks.
         """
         self._workflow_store = (
             workflow_store if workflow_store is not None else MemoryWorkflowStore()
@@ -122,6 +127,7 @@ class WorkflowServer:
             middleware=middleware,
             exception_handlers=dict(exception_handlers) if exception_handlers else None,
             sse_heartbeat_interval=sse_heartbeat_interval,
+            accept_context_api=accept_context_api,
         )
         self.app = self._api.app
 

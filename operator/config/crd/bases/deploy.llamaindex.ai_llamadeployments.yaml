@@ -1,0 +1,226 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.18.0
+  name: llamadeployments.deploy.llamaindex.ai
+spec:
+  group: deploy.llamaindex.ai
+  names:
+    kind: LlamaDeployment
+    listKind: LlamaDeploymentList
+    plural: llamadeployments
+    singular: llamadeployment
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.projectId
+      name: Project ID
+      type: string
+    - jsonPath: .spec.displayName
+      name: Name
+      type: string
+    - jsonPath: .spec.repoUrl
+      name: Repo
+      type: string
+    - jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1
+    schema:
+      openAPIV3Schema:
+        description: LlamaDeployment is the Schema for the llamadeployments API.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: LlamaDeploymentSpec defines the desired state of LlamaDeployment.
+            properties:
+              buildGeneration:
+                description: |-
+                  BuildGeneration is a monotonically increasing counter that forces a new
+                  build when incremented, even if all other inputs (gitSha, imageTag, etc.)
+                  are unchanged. This allows retrying a failed build caused by transient
+                  errors (e.g. network failures) without requiring a new git commit.
+                format: int64
+                type: integer
+              deploymentFilePath:
+                default: llama_deployment.yml
+                description: DeploymentFilePath is the path to the deployment file
+                  within the repository
+                type: string
+              displayName:
+                description: DisplayName is the user-facing deployment label
+                type: string
+              gitRef:
+                description: GitRef is the git reference (commit SHA, branch, or tag)
+                  to deploy
+                type: string
+              gitSha:
+                description: A resolved git sha for the git ref
+                type: string
+              image:
+                description: |-
+                  Image is the container image registry and name (e.g., "llamaindex/llama-agents-appserver")
+                  If not specified, defaults to environment variable or "llamaindex/llama-agents-appserver"
+                type: string
+              imageTag:
+                description: |-
+                  ImageTag is the container image tag
+                  If not specified, defaults to environment variable or "latest"
+                type: string
+              name:
+                description: 'Name is the deployment name (DEPRECATED: use DisplayName)'
+                type: string
+              projectId:
+                description: ProjectId is the project ID
+                type: string
+              repoUrl:
+                description: RepoUrl is the URL of the repository to deploy
+                type: string
+              secretName:
+                description: SecretName is the name of the Kubernetes Secret containing
+                  PAT and deployment secrets
+                type: string
+              staticAssetsPath:
+                description: |-
+                  StaticAssetsPath is an optional path (relative to /opt/app) containing
+                  prebuilt UI assets to be served under /deployments/<deployment-id>/ui
+                type: string
+              suspended:
+                description: |-
+                  Suspended scales the underlying Deployment to 0 replicas when true.
+                  Setting suspended to false (or removing the field) restores replicas to 1.
+                type: boolean
+              templateName:
+                description: |-
+                  TemplateName optionally specifies a LlamaDeploymentTemplate to apply.
+                  When empty, the operator will look up a template named "default".
+                type: string
+            required:
+            - projectId
+            - repoUrl
+            type: object
+          status:
+            description: LlamaDeploymentStatus defines the observed state of LlamaDeployment.
+            properties:
+              authToken:
+                description: AuthToken is a cryptographically secure token for this
+                  deployment
+                type: string
+              buildId:
+                description: BuildId is the content-addressed identifier for the current
+                  build artifact
+                type: string
+              buildStatus:
+                description: BuildStatus tracks the state of the current build job
+                enum:
+                - Pending
+                - Running
+                - Succeeded
+                - Failed
+                type: string
+              failedRolloutGeneration:
+                description: |-
+                  FailedRolloutGeneration records the LlamaDeployment generation whose rollout
+                  timed out. This prevents the operator from re-attempting the same failing rollout.
+                format: int64
+                type: integer
+              lastBuiltGeneration:
+                description: |-
+                  LastBuiltGeneration is the spec.buildGeneration value that was last
+                  successfully built. When spec.buildGeneration differs from this value,
+                  a new build is triggered even if the deployment is suspended.
+                format: int64
+                type: integer
+              lastReconciledGeneration:
+                description: LastReconciledGeneration tracks the generation that was
+                  last successfully reconciled
+                format: int64
+                type: integer
+              lastUpdated:
+                description: LastUpdated is the timestamp of the last status update
+                format: date-time
+                type: string
+              message:
+                description: Message is a human-readable message indicating details
+                  about the current status
+                type: string
+              phase:
+                description: Phase represents the current phase of the deployment
+                enum:
+                - Pending
+                - Running
+                - Failed
+                - RollingOut
+                - RolloutFailed
+                - Suspended
+                - Building
+                - BuildFailed
+                - AwaitingCode
+                type: string
+              releaseHistory:
+                description: ReleaseHistory keeps the last 20 released git shas with
+                  timestamps
+                items:
+                  description: ReleaseHistoryEntry represents a single released version
+                    entry
+                  properties:
+                    gitSha:
+                      description: GitSha is the released git commit SHA
+                      type: string
+                    imageTag:
+                      description: ImageTag is the appserver image tag used for this
+                        release
+                      type: string
+                    releasedAt:
+                      description: ReleasedAt is the timestamp when this version was
+                        released
+                      format: date-time
+                      type: string
+                  required:
+                  - gitSha
+                  - releasedAt
+                  type: object
+                type: array
+              rolloutStartedAt:
+                description: |-
+                  RolloutStartedAt is the timestamp when the current rollout began.
+                  Set when the phase transitions to Pending or RollingOut, cleared on Running or failure.
+                format: date-time
+                type: string
+              schemaVersion:
+                description: SchemaVersion is the version of the CRD schema used when
+                  this resource was last reconciled
+                type: string
+              secretCheckRetries:
+                description: |-
+                  SecretCheckRetries tracks how many times we've retried finding the Secret.
+                  This handles informer cache lag when the Secret is created just before the CR.
+                format: int32
+                type: integer
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

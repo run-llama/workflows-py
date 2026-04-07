@@ -1,0 +1,120 @@
+# llama-agents-control-plane
+
+## 0.10.3
+
+### Patch Changes
+
+- Updated dependencies [f27d98f]
+  - llama-agents-core@0.8.4
+
+## 0.10.2
+
+### Patch Changes
+
+- 3f12660: Add SSRF protection to git URL validation, blocking private/internal IP addresses
+- Updated dependencies [3f12660]
+  - llama-agents-core@0.8.3
+
+## 0.10.1
+
+### Patch Changes
+
+- 46f2675: security patches
+- Updated dependencies [46f2675]
+  - llama-agents-core@0.8.2
+
+## 0.10.0
+
+### Minor Changes
+
+- 58e7942: Rename Docker image repos to per-component names (llama-agents-<component>) with plain version tags
+
+### Patch Changes
+
+- Updated dependencies [58e7942]
+  - llama-agents-core@0.8.1
+
+## 0.9.0
+
+### Minor Changes
+
+- e2f3abd: Rename deployment name to display_name, add optional explicit id on create
+
+### Patch Changes
+
+- Updated dependencies [e2f3abd]
+  - llama-agents-core@0.8.0
+
+## 0.8.0
+
+## 0.7.2
+
+### Patch Changes
+
+- e345a9b: Remove chunked encoding header to prevent double decoding
+
+## 0.7.1
+
+### Patch Changes
+
+- Updated dependencies [7bb9a90]
+  - llama-agents-core@0.7.0
+
+## 0.7.0
+
+### Minor Changes
+
+- 9641415: Add dulwich-based git serving for internal repos. Users can push code via `llamactl push` and build pods clone via the build API. Bare repos are stored as tarballs in S3.
+
+## 0.6.5
+
+## 0.6.4
+
+## 0.6.3
+
+## 0.6.2
+
+### Patch Changes
+
+- Updated dependencies [508b5da]
+  - llama-agents-core@0.6.2
+
+## 0.6.1
+
+### Patch Changes
+
+- a064cc6: Fix duplicate uvicorn logs by preventing propagation to root logger
+- Updated dependencies [1b86f90]
+  - llama-agents-core@0.6.1
+
+## 0.6.0
+
+### Minor Changes
+
+- 4ab011f: Rename packages from llama-deploy to llama-agents.
+
+### Patch Changes
+
+- Updated dependencies [4ab011f]
+  - llama-agents-core@0.6.0
+
+## 0.5.3
+
+## 0.5.2
+
+### Patch Changes
+
+- e11ad55: Fix version ranges
+
+## 0.5.1
+
+## 0.5.0
+
+### Minor Changes
+
+- ac74af4: Run build separately as a 1x time process per deployment update. Build stored in s3. Allows for fast unsuspend, and better future support for replication
+
+### Patch Changes
+
+- Updated dependencies [ac74af4]
+  - llama-deploy-core@0.5.0

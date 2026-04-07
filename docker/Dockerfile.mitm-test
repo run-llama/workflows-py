@@ -1,0 +1,49 @@
+# Container to recreate corporate MITM proxy scenario for testing native TLS mode
+# Simulates an environment where:
+# - HTTPS traffic is intercepted by a MITM proxy (common in corporate networks)
+# - The MITM CA is installed in system trust store
+# - Python tools fail because they use certifi instead of system certs
+# - Node tools fail as well
+FROM debian:stable-slim
+
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /uvx /bin/
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    openssl \
+    python3 \
+    python3-dev \
+    build-essential \
+    git \
+    nodejs \
+    npm \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install mitmproxy
+RUN uv tool install mitmproxy
+RUN corepack enable
+
+ENV PATH=/root/.local/bin:$PATH
+
+WORKDIR /app
+
+# Copy workspace configuration files
+COPY pyproject.toml uv.lock README.md ./
+COPY packages/ packages/
+RUN uv sync --all-packages
+
+
+COPY docker/mitm-proxy-test/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+ENV PATH=/app/.venv/bin:$PATH
+
+WORKDIR /workspace
+# RUN llamactl init --no-interactive --template extraction-review --force
+# WORKDIR /workspace/extraction-review
+# RUN uv sync && cd ui && pnpm install
+
+EXPOSE 8080
+
+ENTRYPOINT ["/entrypoint.sh"]

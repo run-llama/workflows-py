@@ -1,0 +1,10 @@
+{{- range $path, $_ := .Files.Glob "files/*.yaml" }}
+{{- $crd := $.Files.Get $path | fromYaml }}
+{{- if $.Values.keep }}
+{{- $annotations := $crd.metadata.annotations | default dict }}
+{{- $_ := set $annotations "helm.sh/resource-policy" "keep" }}
+{{- $_ := set $crd.metadata "annotations" $annotations }}
+{{- end }}
+---
+{{ toYaml $crd }}
+{{- end }}

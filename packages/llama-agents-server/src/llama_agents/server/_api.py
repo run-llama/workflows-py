@@ -79,10 +79,12 @@ class _WorkflowAPI:
         exception_handlers: dict[Any, Any] | None = None,
         assets_path: Path = _DEFAULT_ASSETS_PATH,
         sse_heartbeat_interval: float | None = None,
+        accept_context_api: bool = False,
     ) -> None:
         self._service = service
         self._additional_events: dict[str, list[type[Event]]] = {}
         self._sse_heartbeat_interval = sse_heartbeat_interval
+        self._accept_context_api = accept_context_api
 
         exception_handlers = exception_handlers or {
             HTTPException: _http_exception_handler,
@@ -356,8 +358,8 @@ class _WorkflowAPI:
         summary: Run workflow (wait)
         description: |
           Runs the specified workflow synchronously and returns the final result.
-          The request body may include an optional serialized start event, an optional
-          context object, and optional keyword arguments passed to the workflow run.
+          The request body may include an optional serialized start event and optional
+          keyword arguments passed to the workflow run.
         parameters:
           - in: path
             name: name
@@ -375,9 +377,6 @@ class _WorkflowAPI:
                   start_event:
                     type: object
                     description: 'Plain JSON object representing the start event (e.g., {"message": "..."}).'
-                  context:
-                    type: object
-                    description: Serialized workflow Context.
                   handler_id:
                     type: string
                     description: Workflow handler identifier to continue from a previous completed run.
@@ -562,9 +561,6 @@ class _WorkflowAPI:
                   start_event:
                     type: object
                     description: 'Plain JSON object representing the start event (e.g., {"message": "..."}).'
-                  context:
-                    type: object
-                    description: Serialized workflow Context.
                   handler_id:
                     type: string
                     description: Workflow handler identifier to continue from a previous completed run.
@@ -1260,6 +1256,11 @@ class _WorkflowAPI:
             # Extract custom Context if present
             context = None
             if context_data:
+                if not self._accept_context_api:
+                    raise HTTPException(
+                        detail="Context API is disabled. Set accept_context_api=True on WorkflowServer to enable it.",
+                        status_code=400,
+                    )
                 context = Context.from_dict(workflow=workflow, data=context_data)
 
             handler_id = handler_id or nanoid()

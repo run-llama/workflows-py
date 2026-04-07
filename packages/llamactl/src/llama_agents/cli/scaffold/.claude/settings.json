@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__llama-index-docs"
+    ]
+  },
+  "enableAllProjectMcpServers": true
+}

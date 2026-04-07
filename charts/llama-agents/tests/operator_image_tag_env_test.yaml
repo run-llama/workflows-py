@@ -1,0 +1,23 @@
+suite: Operator env - LLAMA_DEPLOY_IMAGE_TAG
+templates:
+  - templates/operator-deployment.yaml
+tests:
+  - it: defaults LLAMA_DEPLOY_IMAGE_TAG to appVersion
+    asserts:
+      - matchRegex:
+          path: spec.template.spec.containers[0].env[2].value
+          pattern: ^\d+\.\d+\.\d+$
+      - equal:
+          path: spec.template.spec.containers[0].env[2].name
+          value: LLAMA_DEPLOY_IMAGE_TAG
+  - it: sets LLAMA_DEPLOY_IMAGE_TAG when images.appserver.tag is provided
+    set:
+      images:
+        appserver:
+          tag: v9.9.9
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LLAMA_DEPLOY_IMAGE_TAG
+            value: "v9.9.9"

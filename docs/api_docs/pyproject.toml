@@ -19,7 +19,8 @@ dependencies = [
   "mkdocs-click>=0.8.1,<1",
   "mkdocs-render-swagger-plugin>=0.1.2,<1",
   "griffe-fieldz>=0.2.0,<1",
-  "mkdocs-github-admonitions-plugin>=0.0.3,<1"
+  "mkdocs-github-admonitions-plugin>=0.0.3,<1",
+  "pymdown-extensions>=10.21.2"
 ]
 
 [tool.uv]

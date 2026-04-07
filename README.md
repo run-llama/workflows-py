@@ -1,4 +1,4 @@
-# LlamaIndex Workflows
+# LlamaAgents
 
 [![Unit Testing](https://github.com/run-llama/workflows/actions/workflows/test.yml/badge.svg)](https://github.com/run-llama/workflows/actions/workflows/test.yml)
 [![Coverage Status](https://coveralls.io/repos/github/run-llama/workflows/badge.svg?branch=main)](https://coveralls.io/github/run-llama/workflows?branch=main)
@@ -10,101 +10,66 @@
 [![Twitter](https://img.shields.io/twitter/follow/llama_index)](https://x.com/llama_index)
 [![Reddit](https://img.shields.io/reddit/subreddit-subscribers/LlamaIndex?style=plastic&logo=reddit&label=r%2FLlamaIndex&labelColor=white)](https://www.reddit.com/r/LlamaIndex/)
 
-LlamaIndex Workflows are a framework for orchestrating and chaining together complex systems of steps and events.
+An open-source framework for building and shipping document-centric agents in Python.
 
-## What can you build with Workflows?
+Document workflows are messy. You're stitching together OCR, LLMs, structured extraction, classification, custom validation, and human review into pipelines that have to run reliably in production. The steps are slow and the payloads are heavy. A lot of the work is in-process Python: embedding models, image analysis, vision calls, custom heuristics that don't want to be a microservice. Standing up durable orchestration for that kind of workload is a project on its own, so most teams end up shoving the pipeline into a side process nobody else wants to integrate with.
 
-Workflows shine when you need to orchestrate complex, multi-step processes that involve AI models, APIs, and decision-making. Here are some examples of what you can build:
+LlamaAgents is built on [**Agent Workflows**](https://developers.llamaindex.ai/python/llamaagents/workflows/), an event-driven orchestration library where steps are async Python functions that emit and consume events. Branch, loop, parallelize, persist state, recover from failures, all in plain Python with no DSL.
 
-- **AI Agents** - Create intelligent systems that can reason, make decisions, and take actions across multiple steps
-- **Document Processing Pipelines** - Build systems that ingest, analyze, summarize, and route documents through various processing stages
-- **Multi-Model AI Applications** - Coordinate between different AI models (LLMs, vision models, etc.) to solve complex tasks
-- **Research Assistants** - Develop workflows that can search, analyze, synthesize information, and provide comprehensive answers
-- **Content Generation Systems** - Create pipelines that generate, review, edit, and publish content with human-in-the-loop approval
-- **Customer Support Automation** - Build intelligent routing systems that can understand, categorize, and respond to customer inquiries
+## Grows with you
 
-The async-first, event-driven architecture makes it easy to build workflows that can route between different capabilities, implement parallel processing patterns, loop over complex sequences, and maintain state across multiple steps - all the features you need to make your AI applications production-ready.
+Document workloads have a wide range of shapes. Sometimes you're parsing five contracts in a notebook to prove a point. Others you're running a million invoices a month behind a customer's firewall, or you're iterating on extraction quality and shipping a new version every day. Agent Workflows is built to follow you across all of that without a rewrite.
 
-## Key Features
+Start as a function you call from a script. Wrap it in a server when you need an API. Connect a coordination backend when you need durability. Turn on replication when you need to scale.
 
-- **async-first** - workflows are built around python's async functionality - steps are async functions that process incoming events from an asyncio queue and emit new events to other queues. This also means that workflows work best in your async apps like FastAPI, Jupyter Notebooks, etc.
-- **event-driven** - workflows consist of steps and events. Organizing your code around events and steps makes it easier to reason about and test.
-- **state management** - each run of a workflow is self-contained, meaning you can launch a workflow, save information within it, serialize the state of a workflow and resume it later.
-- **observability** - workflows are automatically instrumented for observability, meaning you can use tools like `Arize Phoenix` and `OpenTelemetry` right out of the box.
+And because it's a library at its core, the same workflow code drops into wherever the work has to actually run: a notebook for prototyping, a FastAPI app for your product, or a customer's locked-down environment when their documents can't leave it.
 
-## Quick Start
+For more ideas of what it can do, take a look at [the examples](https://github.com/run-llama/workflows-py/tree/main/examples).
 
-Install the package:
+## Use it as a library
 
-```bash
-pip install llama-index-workflows
-```
-
-And create your first workflow:
+The simplest path. `pip install llama-index-workflows`, define your workflow, and `await workflow.run(...)`. It has minimal dependencies and embeds anywhere: scripts, notebooks, servers. Durability is pluggable too: save and resume runs from a file, or connect to a database.
 
 ```python
-import asyncio
-from pydantic import BaseModel, Field
-from workflows import Context, Workflow, step
-from workflows.events import Event, StartEvent, StopEvent
+from workflows import Workflow, step
+from workflows.events import StartEvent, StopEvent
 
-class MyEvent(Event):
-    msg: list[str]
-
-class RunState(BaseModel):
-    num_runs: int = Field(default=0)
-
-class MyWorkflow(Workflow):
+class HelloWorkflow(Workflow):
     @step
-    async def start(self, ctx: Context[RunState], ev: StartEvent) -> MyEvent:
-        async with ctx.store.edit_state() as state:
-            state.num_runs += 1
-
-            return MyEvent(msg=[ev.input_msg] * state.num_runs)
-
-    @step
-    async def process(self, ctx: Context[RunState], ev: MyEvent) -> StopEvent:
-        data_length = len("".join(ev.msg))
-        new_msg = f"Processed {len(ev.msg)} times, data length: {data_length}"
-        return StopEvent(result=new_msg)
-
-async def main():
-    workflow = MyWorkflow()
-
-    # [optional] provide a context object to the workflow
-    ctx = Context(workflow)
-    result = await workflow.run(input_msg="Hello, world!", ctx=ctx)
-    print("Workflow result:", result)
-
-    # re-running with the same context will retain the state
-    result = await workflow.run(input_msg="Hello, world!", ctx=ctx)
-    print("Workflow result:", result)
-
-
-if __name__ == "__main__":
-    asyncio.run(main())
+    async def greet(self, ev: StartEvent) -> StopEvent:
+        return StopEvent(result=f"Hello, {ev.name}")
 ```
 
-In the example above
-- Steps that accept a `StartEvent` will be run first.
-- Steps that return a `StopEvent` will end the workflow.
-- Intermediate events are user defined and can be used to pass information between steps.
-- The `Context` object is also used to share information between steps.
+See the [`llama-index-workflows` package](https://github.com/run-llama/workflows-py/tree/main/packages/llama-index-workflows) for more details.
 
-Visit the [complete documentation](https://docs.llamaindex.ai/en/stable/understanding/workflows/) for more examples using `llama-index`!
+## Mount it inside an app you already have
 
-## More examples
+[`llama-agents-server`](https://developers.llamaindex.ai/python/llamaagents/workflows/deployment/) wraps any workflow as a REST API with streaming, persistence, and human-in-the-loop support. Drop it into an existing Starlette/FastAPI app, or run it standalone. [`llama-agents-client`](https://developers.llamaindex.ai/python/llamaagents/workflows/client/) is the matching async client for calling workflows from other services.
 
-- [Basic Feature Run-Through](./examples/feature_walkthrough.ipynb)
-- [Building a Function Calling Agent with `llama-index`](./examples/agent.ipynb)
-- [Human-in-the-loop Iterative Document Extraction](./examples/document_processing.ipynb)
-- Observability
-  - [OpenTelemetry + Instrumentation Primer](./examples/observability/workflows_observability_pt1.ipynb)
-  - [OpenTelemetry + LlamaIndex](./examples/observability/workflows_observability_pt2.ipynb)
-  - [Arize Phoenix + LlamaIndex](./examples/observability/workflows_observablitiy_arize_phoenix.ipynb)
-  - [Langfuse + LlamaIndex](./examples/observability/workflows_observablitiy_langfuse.ipynb)
-  - [Opik + LlamaIndex](https://www.comet.com/docs/opik/integrations/opentelemetry-python-sdk)
+```python
+from llama_agents.server import WorkflowServer
 
-## Related Packages
+server = WorkflowServer()
+server.add_workflow("greet", HelloWorkflow())
+```
 
-- [Typescript Workflows](https://github.com/run-llama/workflows-ts)
+See the [`llama-agents-server` package](https://github.com/run-llama/workflows-py/tree/main/packages/llama-agents-server) and the [`llama-agents-client` package](https://github.com/run-llama/workflows-py/tree/main/packages/llama-agents-client) for more details.
+
+## Or ship it as a deployable agent
+
+[`llamactl`](https://developers.llamaindex.ai/python/llamaagents/llamactl/getting-started/) is the CLI for building and deploying agent apps end-to-end. Init from a starter, develop locally with hot reload, then deploy to LlamaParse, AWS Bedrock AgentCore, or your own infra. Agents can be headless workflow services, MCP servers, or full-stack apps with a UI.
+
+```bash
+uv tool install llamactl
+llamactl init
+llamactl serve
+llamactl deployments create
+```
+
+See the [`llamactl` package](https://github.com/run-llama/workflows-py/tree/main/packages/llamactl) for more details.
+
+## Works with [LlamaParse](https://developers.llamaindex.ai/python/cloud/)
+
+The heavy document primitives (OCR, structured extraction, classification, splitting) are what LlamaParse is for. Plug them into your workflow as steps, let LlamaParse handle the document understanding, and keep your agent code focused on orchestration, business logic, and review.
+
+Check out our [prebuilt templates with llamactl](https://developers.llamaindex.ai/python/llamaagents/llamactl/agent-templates/) to get started.

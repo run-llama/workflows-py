@@ -1,5 +1,11 @@
 # llama-index-workflows
 
+## 2.17.2
+
+### Patch Changes
+
+- 7e06f87: Make retry jitter deterministic for journaled replay support
+
 ## 2.17.1
 
 ### Patch Changes

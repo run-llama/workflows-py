@@ -30,7 +30,7 @@ API_DEST_DIR="$DOCS_REPO/api-reference/python/workflows"
 
 echo "=== Building workflows API reference ==="
 cd "$API_DOCS_DIR"
-uv sync
+uv sync --locked
 uv run mkdocs build -d "$API_DEST_DIR"
 
 echo "Docs sync complete."
