@@ -23,9 +23,7 @@ from dev_cli.changesets import (
     apply_sync_values,
     current_version,
     docker_image_tags,
-    execute_docker_build_action,
-    execute_docker_manifest_action,
-    execute_helm_action,
+    execute_action,
     is_docker_image_published,
     is_helm_chart_published,
     is_published,
@@ -738,13 +736,13 @@ def _docker_build_action() -> DockerBuildAction:
 
 def test_execute_docker_build_action_dry_run_skips_run_command() -> None:
     with patch("dev_cli.changesets.run_command") as mock_run:
-        execute_docker_build_action(_docker_build_action(), dry_run=True)
+        execute_action(_docker_build_action(), dry_run=True)
     mock_run.assert_not_called()
 
 
 def test_execute_docker_build_action_invokes_buildx() -> None:
     with patch("dev_cli.changesets.run_command") as mock_run:
-        execute_docker_build_action(_docker_build_action(), dry_run=False)
+        execute_action(_docker_build_action(), dry_run=False)
     cmd = mock_run.call_args[0][0]
     assert cmd[:3] == ["docker", "buildx", "build"]
     assert "--push" in cmd
@@ -767,7 +765,7 @@ def test_execute_docker_manifest_action_combines_source_tags() -> None:
         ],
     )
     with patch("dev_cli.changesets.run_command") as mock_run:
-        execute_docker_manifest_action(action, dry_run=False)
+        execute_action(action, dry_run=False)
     cmd = mock_run.call_args[0][0]
     assert cmd[:4] == ["docker", "buildx", "imagetools", "create"]
     assert cmd.count("--tag") == 2
@@ -833,7 +831,7 @@ def test_execute_helm_action_dry_run_skips_run_command() -> None:
         registry="oci://docker.io/llamaindex",
     )
     with patch("dev_cli.changesets.run_command") as mock_run:
-        execute_helm_action(action, dry_run=True)
+        execute_action(action, dry_run=True)
     mock_run.assert_not_called()
 
 
@@ -845,7 +843,7 @@ def test_execute_helm_action_packages_and_pushes() -> None:
         registry="oci://docker.io/llamaindex",
     )
     with patch("dev_cli.changesets.run_command") as mock_run:
-        execute_helm_action(action, dry_run=False)
+        execute_action(action, dry_run=False)
     assert mock_run.call_args_list[0][0][0] == [
         "helm",
         "package",

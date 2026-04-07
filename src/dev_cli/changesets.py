@@ -15,17 +15,20 @@ import re
 import subprocess
 import urllib.error
 import urllib.request
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from dataclasses import field as dataclasses_field
 from io import StringIO
 from pathlib import Path
-from typing import Any, Generator, List, cast
+from typing import Annotated, Any, Generator, List, Literal, cast
 
 import click
 import tomlkit
 from packaging.version import Version
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 from ruamel.yaml import YAML
+
+Platform = Literal["linux/amd64", "linux/arm64"]
+PLATFORMS: tuple[Platform, ...] = ("linux/amd64", "linux/arm64")
 
 # Valid PEP 440 pre-release labels. Semver pre-release identifiers must use
 # these same labels (e.g. 1.2.3-a.4, not 1.2.3-alpha.4) so that the
@@ -103,7 +106,7 @@ class DockerConfig(BaseModel):
     dockerfile: str
     imageName: str
     target: str | None = None
-    platforms: list[str] = Field(default_factory=list)
+    platforms: list[Platform] = Field(default_factory=list)
 
 
 class HelmConfig(BaseModel):
@@ -452,70 +455,87 @@ def is_helm_chart_published(chart_name: str, version: str) -> bool:
 # ---------------------------------------------------------------------------
 
 
-@dataclass
-class PypiAction:
+class PypiAction(BaseModel):
+    kind: Literal["pypi"] = "pypi"
     package: str
     version: str
-    path: str  # package dir (absolute string)
+    path: str  # package dir relative to repo root
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def id(self) -> str:
+        return f"pypi:{self.package}"
 
 
-@dataclass
-class DockerBuildAction:
+class DockerBuildAction(BaseModel):
+    kind: Literal["docker"] = "docker"
     package: str
     image: str  # imageName without registry
     dockerfile: str
-    target: str | None
-    platform: str  # single platform, e.g. "linux/amd64"
+    target: str | None = None
+    platform: Platform
     version: str
     build_tag: str  # full registry/repo:version-<arch>
     cache_scope: str  # GHA buildx cache scope (per package + arch)
 
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def id(self) -> str:
+        return f"docker:{self.image}|{self.platform}"
 
-@dataclass
-class DockerManifestAction:
+
+class DockerManifestAction(BaseModel):
+    kind: Literal["docker-manifest"] = "docker-manifest"
     package: str
     image: str
     version: str
     final_tags: list[str]  # full tags that should resolve to the manifest
     source_tags: list[str]  # per-arch tags produced by docker-build jobs
 
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def id(self) -> str:
+        return f"docker-manifest:{self.image}"
 
-@dataclass
-class HelmAction:
+
+class HelmAction(BaseModel):
+    kind: Literal["helm"] = "helm"
     package: str
     chart_path: str
     version: str
     registry: str
 
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def id(self) -> str:
+        return f"helm:{self.package}"
 
-@dataclass
-class PublishPlan:
-    pypi: list[PypiAction] = dataclasses_field(default_factory=list)
-    docker_builds: list[DockerBuildAction] = dataclasses_field(default_factory=list)
-    docker_manifests: list[DockerManifestAction] = dataclasses_field(
-        default_factory=list
-    )
-    helm: list[HelmAction] = dataclasses_field(default_factory=list)
 
-    def to_dict(self) -> dict[str, list[dict[str, Any]]]:
-        return {
-            "pypi": [asdict(a) for a in self.pypi],
-            "docker_builds": [asdict(a) for a in self.docker_builds],
-            "docker_manifests": [asdict(a) for a in self.docker_manifests],
-            "helm": [asdict(a) for a in self.helm],
-        }
+PublishAction = Annotated[
+    PypiAction | DockerBuildAction | DockerManifestAction | HelmAction,
+    Field(discriminator="kind"),
+]
 
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> PublishPlan:
-        return cls(
-            pypi=[PypiAction(**a) for a in data.get("pypi", [])],
-            docker_builds=[
-                DockerBuildAction(**a) for a in data.get("docker_builds", [])
-            ],
-            docker_manifests=[
-                DockerManifestAction(**a) for a in data.get("docker_manifests", [])
-            ],
-            helm=[HelmAction(**a) for a in data.get("helm", [])],
+
+class PublishPlan(BaseModel):
+    pypi: list[PypiAction] = Field(default_factory=list)
+    docker_builds: list[DockerBuildAction] = Field(default_factory=list)
+    docker_manifests: list[DockerManifestAction] = Field(default_factory=list)
+    helm: list[HelmAction] = Field(default_factory=list)
+
+    def all_actions(self) -> list[PublishAction]:
+        return [*self.pypi, *self.docker_builds, *self.docker_manifests, *self.helm]
+
+    def find(self, action_id: str) -> PublishAction:
+        for action in self.all_actions():
+            if action.id == action_id:
+                return action
+        raise KeyError(f"No action with id {action_id!r} in plan")
+
+    @property
+    def has_work(self) -> bool:
+        return bool(
+            self.pypi or self.docker_builds or self.docker_manifests or self.helm
         )
 
 
@@ -628,7 +648,21 @@ def build_publish_plan(packages: list[PackageJson]) -> PublishPlan:
     )
 
 
-def execute_pypi_action(action: PypiAction, dry_run: bool = False) -> None:
+def execute_action(action: PublishAction, dry_run: bool = False) -> None:
+    """Execute a single publish action, dispatching on its kind."""
+    if isinstance(action, PypiAction):
+        _execute_pypi(action, dry_run)
+    elif isinstance(action, DockerBuildAction):
+        _execute_docker_build(action, dry_run)
+    elif isinstance(action, DockerManifestAction):
+        _execute_docker_manifest(action, dry_run)
+    elif isinstance(action, HelmAction):
+        _execute_helm(action, dry_run)
+    else:  # pragma: no cover - exhaustive
+        raise TypeError(f"Unknown action: {action!r}")
+
+
+def _execute_pypi(action: PypiAction, dry_run: bool) -> None:
     """Build and publish a single PyPI package."""
     click.echo(f"Publishing PyPI package {action.package}@{action.version}")
     if dry_run:
@@ -642,9 +676,7 @@ def execute_pypi_action(action: PypiAction, dry_run: bool = False) -> None:
     run_command(["uv", "publish"], cwd=pkg_dir)
 
 
-def execute_docker_build_action(
-    action: DockerBuildAction, dry_run: bool = False
-) -> None:
+def _execute_docker_build(action: DockerBuildAction, dry_run: bool) -> None:
     """Build and push a single-arch docker image for one platform."""
     click.echo(f"Building {action.image} ({action.platform}) -> {action.build_tag}")
     cmd = [
@@ -679,9 +711,7 @@ def execute_docker_build_action(
     run_command(cmd)
 
 
-def execute_docker_manifest_action(
-    action: DockerManifestAction, dry_run: bool = False
-) -> None:
+def _execute_docker_manifest(action: DockerManifestAction, dry_run: bool) -> None:
     """Combine per-arch tags into a multi-arch manifest under each final tag."""
     click.echo(
         f"Creating manifest for {action.image}:{action.version} -> {action.final_tags}"
@@ -696,7 +726,7 @@ def execute_docker_manifest_action(
     run_command(cmd)
 
 
-def execute_helm_action(action: HelmAction, dry_run: bool = False) -> None:
+def _execute_helm(action: HelmAction, dry_run: bool) -> None:
     """Package and push a single Helm chart."""
     tgz = f"{action.package}-{action.version}.tgz"
     click.echo(f"Publishing Helm chart {tgz} -> {action.registry}")

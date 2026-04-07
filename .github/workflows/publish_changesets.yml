@@ -115,7 +115,7 @@ jobs:
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
       - uses: ./.github/actions/setup-publish
-      - run: uv run dev publish-action --plan publish-plan.json --kind pypi --package '${{ matrix.item.package }}'
+      - run: uv run dev publish-action --plan publish-plan.json --id '${{ matrix.item.id }}'
 
   # ---------------------------------------------------------------------------
   # Docker builds: one job per (image, platform) so amd64 / arm64 build on
@@ -143,11 +143,7 @@ jobs:
           registry: docker.io
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - run: |
-          uv run dev publish-action \
-            --plan publish-plan.json --kind docker \
-            --image '${{ matrix.item.image }}' \
-            --platform '${{ matrix.item.platform }}'
+      - run: uv run dev publish-action --plan publish-plan.json --id '${{ matrix.item.id }}'
 
   docker-manifest:
     name: "docker-manifest: ${{ matrix.item.package }}"
@@ -168,10 +164,7 @@ jobs:
           registry: docker.io
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - run: |
-          uv run dev publish-action \
-            --plan publish-plan.json --kind docker-manifest \
-            --image '${{ matrix.item.image }}'
+      - run: uv run dev publish-action --plan publish-plan.json --id '${{ matrix.item.id }}'
 
   # ---------------------------------------------------------------------------
   # Helm: one job per chart. Depends on the manifest job because charts
@@ -202,7 +195,7 @@ jobs:
           registry: docker.io
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - run: uv run dev publish-action --plan publish-plan.json --kind helm --package '${{ matrix.item.package }}'
+      - run: uv run dev publish-action --plan publish-plan.json --id '${{ matrix.item.id }}'
 
   # ---------------------------------------------------------------------------
   # Finalize: create git tags for everything we just published and fire

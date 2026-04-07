@@ -56,14 +56,8 @@ def changeset_publish(tag: bool, dry_run: bool) -> None:
     os.chdir(Path(__file__).parents[3])
 
     plan = changesets.build_publish_plan(changesets.get_pnpm_workspace_packages())
-    for action in plan.pypi:
-        changesets.execute_pypi_action(action, dry_run=dry_run)
-    for build in plan.docker_builds:
-        changesets.execute_docker_build_action(build, dry_run=dry_run)
-    for manifest in plan.docker_manifests:
-        changesets.execute_docker_manifest_action(manifest, dry_run=dry_run)
-    for chart in plan.helm:
-        changesets.execute_helm_action(chart, dry_run=dry_run)
+    for action in plan.all_actions():
+        changesets.execute_action(action, dry_run=dry_run)
 
     if tag:
         if dry_run:
