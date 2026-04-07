@@ -224,9 +224,15 @@ jobs:
         with:
           fetch-depth: 0
           token: ${{ steps.app-token.outputs.token }}
+      # setup-node@v5 defaults to ``package-manager-cache: true`` which
+      # shells out to the package manager listed in the root
+      # ``package.json`` (pnpm here). The finalize job only needs
+      # ``npx @changesets/cli tag`` — no pnpm — so disable the cache and
+      # skip installing pnpm just for this step.
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: "22"
+          package-manager-cache: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: publish-plan
