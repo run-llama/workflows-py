@@ -530,12 +530,14 @@ async def control_loop(
     """
     The main async control loop for a workflow run.
     """
-    # Consume the RunContext payload immediately so its strong references to
-    # the workflow graph are dropped before any step gets a chance to schedule
-    # an asyncio handle whose Context snapshot would otherwise pin them.
-    workflow, run_adapter, context, steps = consume_current_run()
-    state = init_state or BrokerState.from_workflow(workflow)
-    runner = _ControlLoopRunner(workflow, run_adapter, context, steps, state)
+    # Consume the RunContext immediately so the container's strong reference
+    # to the workflow graph is dropped before any step gets a chance to schedule
+    # an asyncio handle whose Context snapshot would otherwise pin it.
+    run = consume_current_run()
+    state = init_state or BrokerState.from_workflow(run.workflow)
+    runner = _ControlLoopRunner(
+        run.workflow, run.run_adapter, run.context, run.steps, state
+    )
     return await runner.run(start_event=start_event)
 
 
