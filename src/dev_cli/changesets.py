@@ -12,11 +12,10 @@ from __future__ import annotations
 import json
 import os
 import re
-import shutil
 import subprocess
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from dataclasses import field as dataclasses_field
 from io import StringIO
 from pathlib import Path
@@ -369,37 +368,6 @@ def cli() -> None:
     pass
 
 
-def maybe_publish_pypi(dry_run: bool, packages: list[PackageJson]) -> None:
-    """Publish the py packages if they need to be published.
-
-    Falls back to PyPI trusted publishing when UV_PUBLISH_TOKEN is not set.
-    """
-    token = os.environ.get("UV_PUBLISH_TOKEN")
-    auth_method = "token" if token else "trusted publishing"
-    click.echo(f"PyPI auth: {auth_method}")
-
-    any_to_publish = False
-    for package in _pypi_packages(packages):
-        name, version = current_version(package)
-        if is_published(name, version):
-            click.echo(f"PyPI package {name}@{version} already published, skipping")
-            continue
-        any_to_publish = True
-        click.echo(f"Publishing PyPI package {name}@{version}")
-
-        if dry_run:
-            click.echo("  uv build (dry run, skipping)")
-        else:
-            run_command(["uv", "build"], cwd=package.parent)
-    if any_to_publish:
-        if dry_run:
-            click.echo("Dry run, skipping publish. Would run:")
-            click.echo("  uv publish")
-        else:
-            publish_env = {**os.environ, "UV_PUBLISH_TOKEN": token} if token else None
-            run_command(["uv", "publish"], env=publish_env)
-
-
 def current_version(pyproject: Path) -> tuple[str, str]:
     """Return (package_name, version_str) taken from the given pyproject.toml."""
     toml_doc, py_doc = PyProjectContainer.parse(pyproject.read_text())
@@ -460,53 +428,6 @@ def docker_image_tags(image: DockerConfig, version: str, is_rc: bool) -> list[st
     return tags
 
 
-def build_and_push_docker_image(image: DockerConfig, tags: list[str]) -> None:
-    """Build and push a Docker image using docker buildx."""
-    cmd = [
-        "docker",
-        "buildx",
-        "build",
-        "--push",
-        "--file",
-        image.dockerfile,
-        "--platform",
-        ",".join(image.platforms),
-    ]
-    if image.target:
-        cmd.extend(["--target", image.target])
-    for tag in tags:
-        cmd.extend(["--tag", tag])
-    cmd.append(".")
-    run_command(cmd)
-
-
-def maybe_publish_docker(dry_run: bool, packages: list[PackageJson]) -> None:
-    """Build and push Docker images that haven't been published yet."""
-    if not shutil.which("docker"):
-        click.echo("Warning: docker not found in PATH, skipping Docker builds")
-        return
-
-    for pkg in packages:
-        image = pkg.docker
-        if image is None or not pkg.should_publish_docker():
-            continue
-        version = pkg.version
-        rc = is_rc_version(version)
-        primary_tag = version
-        if is_docker_image_published(image.imageName, primary_tag):
-            click.echo(
-                f"Docker image {image.imageName}:{primary_tag} already published, skipping"
-            )
-            continue
-
-        tags = docker_image_tags(image, version, rc)
-        click.echo(f"Building and pushing Docker image {pkg.name}: {tags}")
-        if dry_run:
-            click.echo(f"  Dry run, skipping build for {pkg.name}")
-        else:
-            build_and_push_docker_image(image, tags)
-
-
 def is_helm_chart_published(chart_name: str, version: str) -> bool:
     """Check if a Helm chart version is already published in the OCI registry."""
     url = (
@@ -521,40 +442,13 @@ def is_helm_chart_published(chart_name: str, version: str) -> bool:
     return True
 
 
-def maybe_publish_helm(dry_run: bool, packages: list[PackageJson]) -> None:
-    """Package and push Helm charts that haven't been published yet."""
-    if not shutil.which("helm"):
-        click.echo("Warning: helm not found in PATH, skipping Helm chart publish")
-        return
-
-    for pkg in packages:
-        if pkg.helm is None or not pkg.should_publish_helm():
-            continue
-
-        if is_helm_chart_published(pkg.name, pkg.version):
-            click.echo(
-                f"Helm chart {pkg.name}@{pkg.version} already published, skipping"
-            )
-            continue
-
-        chart_dir = str(pkg.path)
-        tgz = f"{pkg.name}-{pkg.version}.tgz"
-
-        click.echo(f"Publishing Helm chart {tgz}")
-        if dry_run:
-            click.echo(f"  Dry run, would run: helm package {chart_dir}")
-            click.echo(f"  Dry run, would run: helm push {tgz} {pkg.helm.registry}")
-        else:
-            run_command(["helm", "package", chart_dir])
-            run_command(["helm", "push", tgz, pkg.helm.registry])
-
-
 # ---------------------------------------------------------------------------
-# Publish plan: a declarative description of the work to be done by
-# ``changeset-publish``. The plan is emitted by ``changeset-plan`` and
-# consumed by the per-action ``publish-*`` commands. The CI workflow
-# fans these actions out into a GitHub Actions matrix so docker builds
-# run natively (amd64 / arm64) in parallel.
+# Publish plan: a declarative description of the work needed to release
+# the current workspace. ``build_publish_plan`` emits it; the
+# ``execute_*_action`` helpers consume one entry at a time. ``dev
+# changeset-publish`` runs them all sequentially for local releases; CI
+# fans the same actions out into a GitHub Actions matrix so docker
+# builds run natively (amd64 / arm64) in parallel.
 # ---------------------------------------------------------------------------
 
 
@@ -604,8 +498,6 @@ class PublishPlan:
     helm: list[HelmAction] = dataclasses_field(default_factory=list)
 
     def to_dict(self) -> dict[str, list[dict[str, Any]]]:
-        from dataclasses import asdict
-
         return {
             "pypi": [asdict(a) for a in self.pypi],
             "docker_builds": [asdict(a) for a in self.docker_builds],
@@ -744,10 +636,10 @@ def execute_pypi_action(action: PypiAction, dry_run: bool = False) -> None:
         return
     pkg_dir = Path(action.path)
     run_command(["uv", "build"], cwd=pkg_dir)
-    token = os.environ.get("UV_PUBLISH_TOKEN")
-    publish_env = {**os.environ, "UV_PUBLISH_TOKEN": token} if token else None
-    # ``uv publish`` uploads everything in ./dist relative to cwd.
-    run_command(["uv", "publish"], cwd=pkg_dir, env=publish_env)
+    # ``uv publish`` uploads everything in ./dist relative to cwd, and
+    # picks up UV_PUBLISH_TOKEN from the inherited environment. When the
+    # token is unset it falls back to PyPI trusted publishing.
+    run_command(["uv", "publish"], cwd=pkg_dir)
 
 
 def execute_docker_build_action(
@@ -769,11 +661,8 @@ def execute_docker_build_action(
     ]
     if action.target:
         cmd.extend(["--target", action.target])
-    # GHA buildx cache. Only emits cache directives when running under
-    # GitHub Actions with the runtime token exposed (see the
-    # ``crazy-max/ghaction-github-runtime`` step in the workflow). Outside
-    # CI these env vars are absent and the flags are silently omitted so
-    # local ``dev changeset-publish`` still works.
+    # GHA buildx cache. Only emits cache directives under GitHub Actions
+    # with the runtime token exposed (see ``crazy-max/ghaction-github-runtime``).
     if os.environ.get("ACTIONS_RUNTIME_TOKEN") and os.environ.get("ACTIONS_CACHE_URL"):
         cmd.extend(
             [

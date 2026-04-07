@@ -1,0 +1,12 @@
+name: Setup publish job
+description: Install Python + uv and download the publish plan artifact. Assumes the repo is already checked out.
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v6
+      with:
+        python-version: "3.11"
+    - uses: astral-sh/setup-uv@v7
+    - uses: actions/download-artifact@v4
+      with:
+        name: publish-plan

@@ -10,7 +10,10 @@ from urllib.error import HTTPError
 import pytest
 
 from dev_cli.changesets import (
+    DockerBuildAction,
     DockerConfig,
+    DockerManifestAction,
+    HelmAction,
     HelmConfig,
     PackageJson,
     PyProjectContainer,
@@ -20,13 +23,16 @@ from dev_cli.changesets import (
     apply_sync_values,
     current_version,
     docker_image_tags,
+    execute_docker_build_action,
+    execute_docker_manifest_action,
+    execute_helm_action,
     is_docker_image_published,
     is_helm_chart_published,
     is_published,
     is_rc_version,
-    maybe_publish_docker,
-    maybe_publish_helm,
     pep440_to_semver,
+    plan_docker,
+    plan_helm,
     semver_to_pep440,
 )
 
@@ -596,7 +602,7 @@ def test_read_package_json_config_helm_missing_registry(tmp_path: Path) -> None:
         _read_package_json_config(tmp_path)
 
 
-# -- maybe_publish_docker tests --
+# -- plan_docker / execute_docker_build_action tests --
 
 
 def _make_docker_packages() -> list[PackageJson]:
@@ -640,48 +646,32 @@ def _make_docker_packages() -> list[PackageJson]:
     ]
 
 
-def test_maybe_publish_docker_skips_when_already_published() -> None:
-    with (
-        patch("dev_cli.changesets.shutil.which", return_value="/usr/bin/docker"),
-        patch("dev_cli.changesets.is_docker_image_published", return_value=True),
-        patch("dev_cli.changesets.build_and_push_docker_image") as mock_build,
-    ):
-        maybe_publish_docker(dry_run=False, packages=_make_docker_packages())
-        mock_build.assert_not_called()
+def test_plan_docker_skips_when_already_published() -> None:
+    with patch("dev_cli.changesets.is_docker_image_published", return_value=True):
+        builds, manifests = plan_docker(_make_docker_packages())
+    assert builds == []
+    assert manifests == []
 
 
-def test_maybe_publish_docker_builds_when_not_published() -> None:
-    packages = _make_docker_packages()
-    with (
-        patch("dev_cli.changesets.shutil.which", return_value="/usr/bin/docker"),
-        patch("dev_cli.changesets.is_docker_image_published", return_value=False),
-        patch("dev_cli.changesets.build_and_push_docker_image") as mock_build,
-    ):
-        maybe_publish_docker(dry_run=False, packages=packages)
-        assert mock_build.call_count == len(packages)
+def test_plan_docker_emits_per_platform_builds() -> None:
+    with patch("dev_cli.changesets.is_docker_image_published", return_value=False):
+        builds, manifests = plan_docker(_make_docker_packages())
+    # 2 + 1 + 2 = 5 platform builds, 3 manifests
+    assert len(builds) == 5
+    assert len(manifests) == 3
+    # Each manifest references the matching per-arch build tags
+    cp_manifest = next(
+        m for m in manifests if m.package == "llama-agents-control-plane"
+    )
+    assert sorted(cp_manifest.source_tags) == sorted(
+        [
+            "docker.io/llamaindex/llama-agents-control-plane:0.4.14-amd64",
+            "docker.io/llamaindex/llama-agents-control-plane:0.4.14-arm64",
+        ]
+    )
 
 
-def test_maybe_publish_docker_dry_run_does_not_build() -> None:
-    with (
-        patch("dev_cli.changesets.shutil.which", return_value="/usr/bin/docker"),
-        patch("dev_cli.changesets.is_docker_image_published", return_value=False),
-        patch("dev_cli.changesets.build_and_push_docker_image") as mock_build,
-    ):
-        maybe_publish_docker(dry_run=True, packages=_make_docker_packages())
-        mock_build.assert_not_called()
-
-
-def test_maybe_publish_docker_skips_when_docker_not_found() -> None:
-    with (
-        patch("dev_cli.changesets.shutil.which", return_value=None),
-        patch("dev_cli.changesets.is_docker_image_published") as mock_check,
-    ):
-        maybe_publish_docker(dry_run=False, packages=_make_docker_packages())
-        mock_check.assert_not_called()
-
-
-def test_maybe_publish_docker_skips_packages_without_docker() -> None:
-    """Packages without docker config should be silently skipped."""
+def test_plan_docker_skips_packages_without_docker() -> None:
     packages = [
         PackageJson(
             name="no-docker-pkg",
@@ -691,18 +681,13 @@ def test_maybe_publish_docker_skips_packages_without_docker() -> None:
             docker=None,
         ),
     ]
-    with (
-        patch("dev_cli.changesets.shutil.which", return_value="/usr/bin/docker"),
-        patch("dev_cli.changesets.is_docker_image_published") as mock_check,
-        patch("dev_cli.changesets.build_and_push_docker_image") as mock_build,
-    ):
-        maybe_publish_docker(dry_run=False, packages=packages)
-        mock_check.assert_not_called()
-        mock_build.assert_not_called()
+    with patch("dev_cli.changesets.is_docker_image_published") as mock_check:
+        builds, manifests = plan_docker(packages)
+    mock_check.assert_not_called()
+    assert builds == [] and manifests == []
 
 
-def test_maybe_publish_docker_uses_per_package_version() -> None:
-    """Each Docker image uses its own package version, not a shared one."""
+def test_plan_docker_uses_per_package_version() -> None:
     packages = [
         PackageJson(
             name="pkg-a",
@@ -729,26 +714,71 @@ def test_maybe_publish_docker_uses_per_package_version() -> None:
             ),
         ),
     ]
-    with (
-        patch("dev_cli.changesets.shutil.which", return_value="/usr/bin/docker"),
-        patch("dev_cli.changesets.is_docker_image_published", return_value=False),
-        patch("dev_cli.changesets.build_and_push_docker_image") as mock_build,
-    ):
-        maybe_publish_docker(dry_run=False, packages=packages)
-        assert mock_build.call_count == 2
-        # First call uses pkg-a's version 1.0.0
-        first_tags = mock_build.call_args_list[0][0][1]
-        assert any("1.0.0" in t for t in first_tags)
-        # Second call uses pkg-b's version 2.0.0
-        second_tags = mock_build.call_args_list[1][0][1]
-        assert any("2.0.0" in t for t in second_tags)
+    with patch("dev_cli.changesets.is_docker_image_published", return_value=False):
+        builds, _ = plan_docker(packages)
+    by_pkg = {b.package: b for b in builds}
+    assert by_pkg["pkg-a"].version == "1.0.0"
+    assert by_pkg["pkg-a"].build_tag.endswith("1.0.0-amd64")
+    assert by_pkg["pkg-b"].version == "2.0.0"
+    assert by_pkg["pkg-b"].build_tag.endswith("2.0.0-amd64")
 
 
-# -- maybe_publish_helm tests --
+def _docker_build_action() -> DockerBuildAction:
+    return DockerBuildAction(
+        package="pkg",
+        image="llamaindex/test",
+        dockerfile="docker/Dockerfile",
+        target="t",
+        platform="linux/amd64",
+        version="1.0.0",
+        build_tag="docker.io/llamaindex/test:1.0.0-amd64",
+        cache_scope="pkg-amd64",
+    )
+
+
+def test_execute_docker_build_action_dry_run_skips_run_command() -> None:
+    with patch("dev_cli.changesets.run_command") as mock_run:
+        execute_docker_build_action(_docker_build_action(), dry_run=True)
+    mock_run.assert_not_called()
+
+
+def test_execute_docker_build_action_invokes_buildx() -> None:
+    with patch("dev_cli.changesets.run_command") as mock_run:
+        execute_docker_build_action(_docker_build_action(), dry_run=False)
+    cmd = mock_run.call_args[0][0]
+    assert cmd[:3] == ["docker", "buildx", "build"]
+    assert "--push" in cmd
+    assert "--platform" in cmd and "linux/amd64" in cmd
+    assert "--tag" in cmd and "docker.io/llamaindex/test:1.0.0-amd64" in cmd
+
+
+def test_execute_docker_manifest_action_combines_source_tags() -> None:
+    action = DockerManifestAction(
+        package="pkg",
+        image="llamaindex/test",
+        version="1.0.0",
+        final_tags=[
+            "docker.io/llamaindex/test:1.0.0",
+            "docker.io/llamaindex/test:latest",
+        ],
+        source_tags=[
+            "docker.io/llamaindex/test:1.0.0-amd64",
+            "docker.io/llamaindex/test:1.0.0-arm64",
+        ],
+    )
+    with patch("dev_cli.changesets.run_command") as mock_run:
+        execute_docker_manifest_action(action, dry_run=False)
+    cmd = mock_run.call_args[0][0]
+    assert cmd[:4] == ["docker", "buildx", "imagetools", "create"]
+    assert cmd.count("--tag") == 2
+    assert "docker.io/llamaindex/test:1.0.0-amd64" in cmd
+    assert "docker.io/llamaindex/test:1.0.0-arm64" in cmd
+
+
+# -- plan_helm / execute_helm_action tests --
 
 
 def _make_helm_packages() -> list[PackageJson]:
-    """Create test PackageJson instances with Helm configs."""
     return [
         PackageJson(
             name="llama-agents",
@@ -767,65 +797,20 @@ def _make_helm_packages() -> list[PackageJson]:
     ]
 
 
-def test_maybe_publish_helm_already_published() -> None:
-    with (
-        patch("dev_cli.changesets.shutil.which", return_value="/usr/bin/helm"),
-        patch("dev_cli.changesets.is_helm_chart_published", return_value=True),
-        patch("dev_cli.changesets.run_command") as mock_run,
-    ):
-        maybe_publish_helm(dry_run=False, packages=_make_helm_packages())
-        mock_run.assert_not_called()
+def test_plan_helm_skips_already_published() -> None:
+    with patch("dev_cli.changesets.is_helm_chart_published", return_value=True):
+        actions = plan_helm(_make_helm_packages())
+    assert actions == []
 
 
-def test_maybe_publish_helm_dry_run() -> None:
-    with (
-        patch("dev_cli.changesets.shutil.which", return_value="/usr/bin/helm"),
-        patch("dev_cli.changesets.is_helm_chart_published", return_value=False),
-        patch("dev_cli.changesets.run_command") as mock_run,
-    ):
-        maybe_publish_helm(dry_run=True, packages=_make_helm_packages())
-        mock_run.assert_not_called()
+def test_plan_helm_emits_one_action_per_chart() -> None:
+    with patch("dev_cli.changesets.is_helm_chart_published", return_value=False):
+        actions = plan_helm(_make_helm_packages())
+    assert [a.package for a in actions] == ["llama-agents", "llama-agents-crds"]
+    assert all(a.version == "0.4.14" for a in actions)
 
 
-def test_maybe_publish_helm_runs_commands() -> None:
-    with (
-        patch("dev_cli.changesets.shutil.which", return_value="/usr/bin/helm"),
-        patch("dev_cli.changesets.is_helm_chart_published", return_value=False),
-        patch("dev_cli.changesets.run_command") as mock_run,
-    ):
-        maybe_publish_helm(dry_run=False, packages=_make_helm_packages())
-        # 2 charts × 2 commands each = 4
-        assert mock_run.call_count == 4
-        mock_run.assert_any_call(["helm", "package", "/fake/charts/llama-agents"])
-        mock_run.assert_any_call(
-            [
-                "helm",
-                "push",
-                "llama-agents-0.4.14.tgz",
-                "oci://docker.io/llamaindex",
-            ]
-        )
-        mock_run.assert_any_call(["helm", "package", "/fake/charts/llama-agents-crds"])
-        mock_run.assert_any_call(
-            [
-                "helm",
-                "push",
-                "llama-agents-crds-0.4.14.tgz",
-                "oci://docker.io/llamaindex",
-            ]
-        )
-
-
-def test_maybe_publish_helm_skips_when_helm_not_found() -> None:
-    with (
-        patch("dev_cli.changesets.shutil.which", return_value=None),
-        patch("dev_cli.changesets.is_helm_chart_published") as mock_check,
-    ):
-        maybe_publish_helm(dry_run=False, packages=_make_helm_packages())
-        mock_check.assert_not_called()
-
-
-def test_maybe_publish_helm_skips_packages_without_helm() -> None:
+def test_plan_helm_skips_packages_without_helm() -> None:
     packages = [
         PackageJson(
             name="no-helm-pkg",
@@ -835,12 +820,43 @@ def test_maybe_publish_helm_skips_packages_without_helm() -> None:
             helm=None,
         ),
     ]
-    with (
-        patch("dev_cli.changesets.shutil.which", return_value="/usr/bin/helm"),
-        patch("dev_cli.changesets.is_helm_chart_published") as mock_check,
-    ):
-        maybe_publish_helm(dry_run=False, packages=packages)
-        mock_check.assert_not_called()
+    with patch("dev_cli.changesets.is_helm_chart_published") as mock_check:
+        assert plan_helm(packages) == []
+    mock_check.assert_not_called()
+
+
+def test_execute_helm_action_dry_run_skips_run_command() -> None:
+    action = HelmAction(
+        package="llama-agents",
+        chart_path="/fake/charts/llama-agents",
+        version="0.4.14",
+        registry="oci://docker.io/llamaindex",
+    )
+    with patch("dev_cli.changesets.run_command") as mock_run:
+        execute_helm_action(action, dry_run=True)
+    mock_run.assert_not_called()
+
+
+def test_execute_helm_action_packages_and_pushes() -> None:
+    action = HelmAction(
+        package="llama-agents",
+        chart_path="/fake/charts/llama-agents",
+        version="0.4.14",
+        registry="oci://docker.io/llamaindex",
+    )
+    with patch("dev_cli.changesets.run_command") as mock_run:
+        execute_helm_action(action, dry_run=False)
+    assert mock_run.call_args_list[0][0][0] == [
+        "helm",
+        "package",
+        "/fake/charts/llama-agents",
+    ]
+    assert mock_run.call_args_list[1][0][0] == [
+        "helm",
+        "push",
+        "llama-agents-0.4.14.tgz",
+        "oci://docker.io/llamaindex",
+    ]
 
 
 def test_is_helm_chart_published_uses_chart_name() -> None:

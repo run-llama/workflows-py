@@ -100,13 +100,12 @@ jobs:
           retention-days: 14
 
   # ---------------------------------------------------------------------------
-  # PyPI: one job per package. Each job name includes the package so the
-  # Actions UI shows a checkmark per published PyPI release.
+  # PyPI: one job per package so the Actions UI shows a checkmark per release.
   # ---------------------------------------------------------------------------
   pypi:
     name: "pypi: ${{ matrix.item.package }}"
     needs: plan
-    if: needs.plan.outputs.has_work == 'true' && needs.plan.outputs.pypi != '[]'
+    if: needs.plan.outputs.pypi != '[]'
     runs-on: ubuntu-latest
     environment: release
     strategy:
@@ -115,32 +114,18 @@ jobs:
         item: ${{ fromJSON(needs.plan.outputs.pypi) }}
     steps:
       - uses: actions/checkout@v5
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v5
-        with:
-          node-version: "22"
-          cache: "pnpm"
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.11"
-      - uses: astral-sh/setup-uv@v7
-      - run: pnpm install
-      - uses: actions/download-artifact@v4
-        with:
-          name: publish-plan
-      - name: Publish to PyPI
-        run: uv run dev publish-pypi --plan publish-plan.json --package '${{ matrix.item.package }}'
+      - uses: ./.github/actions/setup-publish
+      - run: uv run dev publish-action --plan publish-plan.json --kind pypi --package '${{ matrix.item.package }}'
 
   # ---------------------------------------------------------------------------
-  # Docker builds: one job per (image, platform). arm64 runs on native arm
-  # hardware, amd64 on standard runners — no QEMU emulation. Each job
-  # pushes a per-arch tag like ``repo:version-amd64``; the manifest job
-  # below stitches them into the final multi-arch tags.
+  # Docker builds: one job per (image, platform) so amd64 / arm64 build on
+  # native runners in parallel — no QEMU emulation. The manifest job below
+  # stitches the per-arch tags into the final multi-arch tags.
   # ---------------------------------------------------------------------------
   docker-build:
     name: "docker: ${{ matrix.item.package }} (${{ matrix.item.platform }})"
     needs: plan
-    if: needs.plan.outputs.has_work == 'true' && needs.plan.outputs.docker_builds != '[]'
+    if: needs.plan.outputs.docker_builds != '[]'
     runs-on: ${{ matrix.item.platform == 'linux/arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
     environment: release
     strategy:
@@ -149,43 +134,25 @@ jobs:
         item: ${{ fromJSON(needs.plan.outputs.docker_builds) }}
     steps:
       - uses: actions/checkout@v5
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v5
-        with:
-          node-version: "22"
-          cache: "pnpm"
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.11"
-      - uses: astral-sh/setup-uv@v7
-      - run: pnpm install
+      - uses: ./.github/actions/setup-publish
       - uses: docker/setup-buildx-action@v3
-      # Expose ACTIONS_RUNTIME_TOKEN / ACTIONS_CACHE_URL so buildx can
-      # read/write the GitHub Actions cache (type=gha).
+      # Expose ACTIONS_RUNTIME_TOKEN / ACTIONS_CACHE_URL for buildx type=gha cache.
       - uses: crazy-max/ghaction-github-runtime@v3
       - uses: docker/login-action@v3
         with:
           registry: docker.io
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - uses: actions/download-artifact@v4
-        with:
-          name: publish-plan
-      - name: Build and push ${{ matrix.item.platform }}
-        run: |
-          uv run dev publish-docker \
-            --plan publish-plan.json \
+      - run: |
+          uv run dev publish-action \
+            --plan publish-plan.json --kind docker \
             --image '${{ matrix.item.image }}' \
             --platform '${{ matrix.item.platform }}'
 
-  # ---------------------------------------------------------------------------
-  # Manifest merge: stitches per-arch tags into the final ``:version``,
-  # ``:latest`` and ``:major.minor`` tags that users consume.
-  # ---------------------------------------------------------------------------
   docker-manifest:
     name: "docker-manifest: ${{ matrix.item.package }}"
     needs: [plan, docker-build]
-    if: needs.plan.outputs.has_work == 'true' && needs.plan.outputs.docker_manifests != '[]'
+    if: needs.plan.outputs.docker_manifests != '[]'
     runs-on: ubuntu-latest
     environment: release
     strategy:
@@ -194,29 +161,16 @@ jobs:
         item: ${{ fromJSON(needs.plan.outputs.docker_manifests) }}
     steps:
       - uses: actions/checkout@v5
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v5
-        with:
-          node-version: "22"
-          cache: "pnpm"
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.11"
-      - uses: astral-sh/setup-uv@v7
-      - run: pnpm install
+      - uses: ./.github/actions/setup-publish
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
           registry: docker.io
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - uses: actions/download-artifact@v4
-        with:
-          name: publish-plan
-      - name: Create multi-arch manifest
-        run: |
-          uv run dev publish-docker-manifest \
-            --plan publish-plan.json \
+      - run: |
+          uv run dev publish-action \
+            --plan publish-plan.json --kind docker-manifest \
             --image '${{ matrix.item.image }}'
 
   # ---------------------------------------------------------------------------
@@ -226,13 +180,10 @@ jobs:
   helm:
     name: "helm: ${{ matrix.item.package }}"
     needs: [plan, docker-manifest]
-    # Run even when there are no docker manifests (charts can be published
-    # on their own) — but only when there are helm actions.
     if: |
       always() &&
       needs.plan.result == 'success' &&
       (needs.docker-manifest.result == 'success' || needs.docker-manifest.result == 'skipped') &&
-      needs.plan.outputs.has_work == 'true' &&
       needs.plan.outputs.helm != '[]'
     runs-on: ubuntu-latest
     environment: release
@@ -242,16 +193,7 @@ jobs:
         item: ${{ fromJSON(needs.plan.outputs.helm) }}
     steps:
       - uses: actions/checkout@v5
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v5
-        with:
-          node-version: "22"
-          cache: "pnpm"
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.11"
-      - uses: astral-sh/setup-uv@v7
-      - run: pnpm install
+      - uses: ./.github/actions/setup-publish
       - uses: azure/setup-helm@v4
         with:
           version: '3.18.1'
@@ -260,14 +202,10 @@ jobs:
           registry: docker.io
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - uses: actions/download-artifact@v4
-        with:
-          name: publish-plan
-      - name: Publish helm chart
-        run: uv run dev publish-helm --plan publish-plan.json --package '${{ matrix.item.package }}'
+      - run: uv run dev publish-action --plan publish-plan.json --kind helm --package '${{ matrix.item.package }}'
 
   # ---------------------------------------------------------------------------
-  # Finalize: create git tags for everything we just published and fire the
+  # Finalize: create git tags for everything we just published and fire
   # downstream repository dispatches. Runs only if all publish jobs
   # succeeded (or were legitimately skipped because there was no work).
   # ---------------------------------------------------------------------------
@@ -293,23 +231,18 @@ jobs:
         with:
           fetch-depth: 0
           token: ${{ steps.app-token.outputs.token }}
-      - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v5
         with:
           node-version: "22"
-          cache: "pnpm"
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.11"
-      - uses: astral-sh/setup-uv@v7
-      - run: pnpm install
       - uses: actions/download-artifact@v4
         with:
           name: publish-plan
       - name: Create and push git tags
         env:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
-        run: uv run dev publish-git-tags
+        run: |
+          npx -y @changesets/cli tag
+          git push --tags
 
       - name: Extract published llama-agents-server version
         if: github.ref == 'refs/heads/main'
