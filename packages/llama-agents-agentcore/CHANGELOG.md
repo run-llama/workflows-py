@@ -1,5 +1,11 @@
 # llama-agents-agentcore
 
+## 0.8.9
+
+### Patch Changes
+
+- cc313f8: Bump boto3 dep
+
 ## 0.8.8
 
 ### Patch Changes
