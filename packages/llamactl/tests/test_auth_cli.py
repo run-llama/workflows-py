@@ -1,5 +1,4 @@
 from types import SimpleNamespace
-from typing import Awaitable, Callable
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -142,10 +141,16 @@ def test_auth_project_interactive_sets_selected() -> None:
 
 
 @pytest.mark.asyncio
-async def test_create_or_update_agent_api_key_retries_and_raises_on_network_error() -> (
+async def test_create_or_update_agent_api_key_raises_on_network_error_without_retry() -> (
     None
 ):
-    """Network errors while provisioning API tokens should be retried with a clear message."""
+    """Network errors while provisioning API tokens should surface immediately
+    with a clear message, without auto-retrying.
+
+    create_agent_api_key is a non-idempotent POST. Auto-retrying on a transient
+    network error can produce duplicate API keys per llamactl login. See the
+    2026-04-08 document-extraction rollout plan Phase 3 client retry audit.
+    """
     profile = Auth(
         id="id-1",
         name="test",
@@ -164,28 +169,11 @@ async def test_create_or_update_agent_api_key_retries_and_raises_on_network_erro
 
     mock_client.create_agent_api_key = AsyncMock(side_effect=httpx.RequestError("boom"))
 
-    async def fake_run_with_network_retries(
-        operation: Callable[[], Awaitable[object]],
-        *,
-        max_attempts: int = 3,
-    ) -> object:
-        attempts = 0
-        while True:
-            try:
-                attempts += 1
-                return await operation()
-            except httpx.RequestError:
-                if attempts >= max_attempts:
-                    raise
-
-    with patch(
-        "llama_agents.cli.utils.retry.run_with_network_retries",
-        side_effect=fake_run_with_network_retries,
-    ):
-        with pytest.raises(Exception) as exc_info:
-            await _create_or_update_agent_api_key(mock_auth_svc, profile)
+    with pytest.raises(Exception) as exc_info:
+        await _create_or_update_agent_api_key(mock_auth_svc, profile)
 
     msg = str(exc_info.value)
     assert "Network error while provisioning an API token" in msg
-    # Should have retried multiple times
-    assert mock_client.create_agent_api_key.await_count == 3
+    # Should have tried exactly once — no silent retry amplification on
+    # non-idempotent POST.
+    assert mock_client.create_agent_api_key.await_count == 1

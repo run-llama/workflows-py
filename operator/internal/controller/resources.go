@@ -69,6 +69,10 @@ const (
 	// Default rollout timeout in seconds (30 minutes)
 	DefaultRolloutTimeoutSeconds int32 = 1800
 
+	// Build artifact GC walks ReplicaSets up to this limit to discover
+	// referenced buildIds, so pin it rather than relying on the apps/v1 default.
+	DeploymentRevisionHistoryLimit int32 = 10
+
 	// Environment variable for rollout timeout configuration
 	EnvRolloutTimeoutSeconds = "LLAMA_DEPLOY_ROLLOUT_TIMEOUT_SECONDS"
 
@@ -386,6 +390,43 @@ func (r *LlamaDeploymentReconciler) reconcileBuild(ctx context.Context, llamaDep
 	if llamaDeploy.Status.BuildId == buildId && llamaDeploy.Status.BuildStatus == BuildStatusSucceeded {
 		logger.V(1).Info("Build artifact already exists", "buildId", buildId)
 		return buildId, nil, nil
+	}
+
+	// If the spec advanced mid-build, cancel the stale in-flight Job so it
+	// doesn't race the new one uploading. Succeeded stale Jobs are preserved
+	// for the A → B → A rollback-by-cache-hit path.
+	if llamaDeploy.Status.BuildId != "" && llamaDeploy.Status.BuildId != buildId &&
+		(llamaDeploy.Status.BuildStatus == BuildStatusPending || llamaDeploy.Status.BuildStatus == BuildStatusRunning) {
+		staleBuildId := llamaDeploy.Status.BuildId
+		staleJobName := fmt.Sprintf("%s-build-%s", llamaDeploy.Name, staleBuildId)
+		if len(staleJobName) > 63 {
+			staleJobName = staleJobName[:63]
+		}
+		staleJob := &batchv1.Job{}
+		getErr := r.Get(ctx, client.ObjectKey{Name: staleJobName, Namespace: llamaDeploy.Namespace}, staleJob)
+		switch {
+		case errors.IsNotFound(getErr):
+			// Already gone (TTL reaped it, or a prior reconcile deleted it).
+		case getErr != nil:
+			return "", nil, fmt.Errorf("failed to check stale build job: %w", getErr)
+		case staleJob.Status.Succeeded > 0:
+			logger.V(1).Info("Prior build succeeded; leaving Job in place",
+				"staleBuildId", staleBuildId, "jobName", staleJobName)
+		default:
+			logger.Info("Superseding in-flight build Job for previous buildId",
+				"staleBuildId", staleBuildId,
+				"newBuildId", buildId,
+				"jobName", staleJobName)
+			if err := r.Delete(ctx, staleJob,
+				client.PropagationPolicy(metav1.DeletePropagationBackground),
+			); err != nil && !errors.IsNotFound(err) {
+				return "", nil, fmt.Errorf("failed to delete superseded build job: %w", err)
+			}
+			if r.Recorder != nil {
+				r.Recorder.Event(llamaDeploy, corev1.EventTypeNormal, PhaseBuilding,
+					fmt.Sprintf("Superseded stale build Job: %s", staleJobName))
+			}
+		}
 	}
 
 	// Check if a build Job already exists for this buildId
@@ -1044,6 +1085,7 @@ func (r *LlamaDeploymentReconciler) createDeploymentForLlama(llamaDeploy *llamad
 		Spec: appsv1.DeploymentSpec{
 			Replicas:                &replicas,
 			ProgressDeadlineSeconds: getRolloutTimeoutSeconds(),
+			RevisionHistoryLimit:    ptr(DeploymentRevisionHistoryLimit),
 			Selector: &metav1.LabelSelector{
 				MatchLabels: map[string]string{"app": llamaDeploy.Name},
 			},

@@ -421,7 +421,6 @@ async def _create_or_update_agent_api_key(auth_svc: AuthService, profile: Auth) 
     """
     import httpx
     from llama_agents.cli.auth.client import PlatformAuthClient
-    from llama_agents.cli.utils.retry import run_with_network_retries
 
     if profile.api_key is not None:
         async with PlatformAuthClient(profile.api_url, profile.api_key) as client:
@@ -438,10 +437,10 @@ async def _create_or_update_agent_api_key(auth_svc: AuthService, profile: Auth) 
         async with auth_svc.profile_client(profile) as client:
             name = f"{profile.name} llamactl on {profile.device_oidc.device_name if profile.device_oidc else 'unknown'}"
 
+            # Do not wrap in run_with_network_retries — this POST is
+            # non-idempotent and a retry on timeout creates duplicate keys.
             try:
-                api_key = await run_with_network_retries(
-                    lambda: client.create_agent_api_key(name)
-                )
+                api_key = await client.create_agent_api_key(name)
             except httpx.HTTPStatusError:
                 # Do not treat HTTP errors as transient; re-raise for normal handling.
                 raise

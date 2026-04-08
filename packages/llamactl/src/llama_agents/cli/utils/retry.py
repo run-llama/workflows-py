@@ -34,6 +34,9 @@ async def run_with_network_retries(
 
     Retries transient httpx network errors with exponential backoff, but does not retry
     HTTP status errors. After the final attempt, the last exception is re-raised.
+
+    Only wrap idempotent / read-only operations — retrying a non-idempotent
+    POST/PATCH/DELETE on a timeout can cause duplicate server-side mutations.
     """
     async for attempt in AsyncRetrying(
         retry=retry_if_exception(_is_transient_httpx_error),

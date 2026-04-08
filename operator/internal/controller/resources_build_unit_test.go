@@ -872,6 +872,205 @@ func TestReconcileBuild_SkipsWhenRepoUrlEmpty(t *testing.T) {
 	}
 }
 
+// When the spec advances mid-build, the in-flight Job for the old buildId
+// must be deleted so it doesn't race the new one to upload.
+func TestReconcileBuild_SupersedesInFlightJob_OnBuildIdChange(t *testing.T) {
+	scheme := newTestScheme()
+
+	staleBuildId := "stalebuild1234"
+	staleJobName := fmt.Sprintf("%s-build-%s", "my-app", staleBuildId)
+	if len(staleJobName) > 63 {
+		staleJobName = staleJobName[:63]
+	}
+
+	llamaDeploy := &llamadeployv1.LlamaDeployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "my-app",
+			Namespace:  "default",
+			Generation: 2,
+		},
+		Spec: llamadeployv1.LlamaDeploymentSpec{
+			ProjectId: "proj-123",
+			RepoUrl:   "https://github.com/example/repo",
+			GitRef:    "main",
+			GitSha:    "abc123", // new git_sha → new computeBuildId
+		},
+		Status: llamadeployv1.LlamaDeploymentStatus{
+			BuildId:     staleBuildId,
+			BuildStatus: BuildStatusRunning,
+			Phase:       PhaseBuilding,
+		},
+	}
+
+	// In-flight Job for the stale buildId: no Succeeded, no Failed.
+	staleJob := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      staleJobName,
+			Namespace: "default",
+			Labels: map[string]string{
+				"deploy.llamaindex.ai/deployment": "my-app",
+				"deploy.llamaindex.ai/build-id":   staleBuildId,
+			},
+		},
+		Status: batchv1.JobStatus{}, // still running
+	}
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(llamaDeploy, staleJob).
+		WithStatusSubresource(llamaDeploy).
+		Build()
+
+	r := &LlamaDeploymentReconciler{Client: fakeClient, Scheme: scheme}
+	ctx := context.Background()
+
+	_, result, err := r.reconcileBuild(ctx, llamaDeploy)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result == nil {
+		t.Fatal("expected non-nil result after creating new build job")
+	}
+
+	// The stale Job should have been deleted.
+	var fetchedStale batchv1.Job
+	err = fakeClient.Get(ctx, types.NamespacedName{Name: staleJobName, Namespace: "default"}, &fetchedStale)
+	if err == nil {
+		t.Error("expected stale Job to be deleted, but it still exists")
+	}
+
+	// The new build Job should exist.
+	newBuildId := computeBuildId(llamaDeploy)
+	if newBuildId == staleBuildId {
+		t.Fatalf("test invariant broken: stale and new buildId are both %q", newBuildId)
+	}
+	newJobName := fmt.Sprintf("%s-build-%s", "my-app", newBuildId)
+	if len(newJobName) > 63 {
+		newJobName = newJobName[:63]
+	}
+	var newJob batchv1.Job
+	if err := fakeClient.Get(ctx, types.NamespacedName{Name: newJobName, Namespace: "default"}, &newJob); err != nil {
+		t.Errorf("expected new build Job %q to be created: %v", newJobName, err)
+	}
+}
+
+// Succeeded stale Jobs must be left alone so their artifacts remain available
+// for A → B → A rollback-by-cache-hit.
+func TestReconcileBuild_DoesNotDeleteSucceededSupersededJob(t *testing.T) {
+	scheme := newTestScheme()
+
+	staleBuildId := "succeededstale1"
+	staleJobName := fmt.Sprintf("%s-build-%s", "my-app", staleBuildId)
+	if len(staleJobName) > 63 {
+		staleJobName = staleJobName[:63]
+	}
+
+	llamaDeploy := &llamadeployv1.LlamaDeployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "my-app",
+			Namespace:  "default",
+			Generation: 2,
+		},
+		Spec: llamadeployv1.LlamaDeploymentSpec{
+			ProjectId: "proj-123",
+			RepoUrl:   "https://github.com/example/repo",
+			GitRef:    "main",
+			GitSha:    "new-sha",
+		},
+		Status: llamadeployv1.LlamaDeploymentStatus{
+			// BuildStatus is Running (stale) but the Job itself has Succeeded —
+			// the operator should inspect the Job and leave it alone.
+			BuildId:     staleBuildId,
+			BuildStatus: BuildStatusRunning,
+			Phase:       PhaseBuilding,
+		},
+	}
+
+	staleJob := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      staleJobName,
+			Namespace: "default",
+			Labels: map[string]string{
+				"deploy.llamaindex.ai/deployment": "my-app",
+				"deploy.llamaindex.ai/build-id":   staleBuildId,
+			},
+		},
+		Status: batchv1.JobStatus{Succeeded: 1},
+	}
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(llamaDeploy, staleJob).
+		WithStatusSubresource(llamaDeploy).
+		Build()
+
+	r := &LlamaDeploymentReconciler{Client: fakeClient, Scheme: scheme}
+	ctx := context.Background()
+
+	if _, _, err := r.reconcileBuild(ctx, llamaDeploy); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// The succeeded stale Job must still exist.
+	var fetchedStale batchv1.Job
+	if err := fakeClient.Get(ctx, types.NamespacedName{Name: staleJobName, Namespace: "default"}, &fetchedStale); err != nil {
+		t.Errorf("expected succeeded stale Job to be preserved, got err: %v", err)
+	}
+}
+
+// A stale Job that's already been reaped by TTL should not error — we just
+// proceed to create the new Job.
+func TestReconcileBuild_SupersedesJob_WhenStaleJobAlreadyGone(t *testing.T) {
+	scheme := newTestScheme()
+
+	llamaDeploy := &llamadeployv1.LlamaDeployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "my-app",
+			Namespace:  "default",
+			Generation: 2,
+		},
+		Spec: llamadeployv1.LlamaDeploymentSpec{
+			ProjectId: "proj-123",
+			RepoUrl:   "https://github.com/example/repo",
+			GitRef:    "main",
+			GitSha:    "abc123",
+		},
+		Status: llamadeployv1.LlamaDeploymentStatus{
+			BuildId:     "reapedstale12",
+			BuildStatus: BuildStatusRunning,
+			Phase:       PhaseBuilding,
+		},
+	}
+
+	fakeClient := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(llamaDeploy).
+		WithStatusSubresource(llamaDeploy).
+		Build()
+
+	r := &LlamaDeploymentReconciler{Client: fakeClient, Scheme: scheme}
+	ctx := context.Background()
+
+	_, result, err := r.reconcileBuild(ctx, llamaDeploy)
+	if err != nil {
+		t.Fatalf("unexpected error when stale Job is absent: %v", err)
+	}
+	if result == nil {
+		t.Fatal("expected non-nil result when creating new build job")
+	}
+
+	// New build Job should be created.
+	newBuildId := computeBuildId(llamaDeploy)
+	newJobName := fmt.Sprintf("%s-build-%s", "my-app", newBuildId)
+	if len(newJobName) > 63 {
+		newJobName = newJobName[:63]
+	}
+	var newJob batchv1.Job
+	if err := fakeClient.Get(ctx, types.NamespacedName{Name: newJobName, Namespace: "default"}, &newJob); err != nil {
+		t.Errorf("expected new build Job %q to be created: %v", newJobName, err)
+	}
+}
+
 func TestReconcileBuild_ProceedsWhenRepoUrlSetButGitShaEmpty(t *testing.T) {
 	scheme := newTestScheme()
 
