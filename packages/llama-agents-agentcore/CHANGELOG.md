@@ -1,5 +1,12 @@
 # llama-agents-agentcore
 
+## 0.8.10
+
+### Patch Changes
+
+- 30ae959: Bump boto3 dep
+- 30ae959: Fix session storage mount
+
 ## 0.8.9
 
 ### Patch Changes
