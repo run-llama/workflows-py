@@ -1,6 +1,6 @@
 {
   "name": "llama-agents-agentcore",
-  "version": "0.8.9",
+  "version": "0.8.10",
   "private": false,
   "dependencies": {
     "llama-agents-core": "workspace:*",
