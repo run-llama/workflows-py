@@ -47,14 +47,17 @@ def changeset_version() -> None:
 @click.option("--tag", is_flag=True, help="Tag the packages after publishing")
 @click.option("--dry-run", is_flag=True, help="Dry run the publish")
 def changeset_publish(tag: bool, dry_run: bool) -> None:
-    """Publish all packages."""
+    """Plan and publish all packages locally.
+
+    Builds a publish plan from the current workspace, then runs every
+    action sequentially. Same code path the CI fan-out uses, just with
+    no parallelism.
+    """
     os.chdir(Path(__file__).parents[3])
 
-    packages = changesets.get_pnpm_workspace_packages()
-
-    changesets.maybe_publish_pypi(dry_run, packages)
-    changesets.maybe_publish_docker(dry_run, packages)
-    changesets.maybe_publish_helm(dry_run, packages)
+    plan = changesets.build_publish_plan(changesets.get_pnpm_workspace_packages())
+    for action in plan.all_actions():
+        changesets.execute_action(action, dry_run=dry_run)
 
     if tag:
         if dry_run:

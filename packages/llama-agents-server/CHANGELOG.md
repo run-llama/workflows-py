@@ -1,5 +1,22 @@
 # llama-agents-server
 
+## 0.4.0
+
+### Minor Changes
+
+- 391f287: Make the context API opt-in via `accept_context_api=True` on `WorkflowServer`.
+
+### Patch Changes
+
+- 3432a83: Update debugger assets
+
+  - JavaScript: https://cdn.jsdelivr.net/npm/@llamaindex/workflow-debugger@0.2.36/dist/app.js
+  - CSS: https://cdn.jsdelivr.net/npm/@llamaindex/workflow-debugger@0.2.36/dist/app.css
+
+- Updated dependencies [b8c7c7e]
+  - llama-index-workflows@2.17.3
+  - llama-agents-client@0.3.3
+
 ## 0.3.3
 
 ### Patch Changes
