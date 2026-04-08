@@ -372,6 +372,55 @@ func computeBuildId(llamaDeploy *llamadeployv1.LlamaDeployment) string {
 	return hash[:16]
 }
 
+// supersedeStaleBuildJob cancels any in-flight build Job whose buildId has
+// been superseded by a new spec. Succeeded stale Jobs are preserved for the
+// A → B → A rollback-by-cache-hit path. A missing Job is a no-op (TTL may
+// have reaped it, or a prior reconcile deleted it).
+func (r *LlamaDeploymentReconciler) supersedeStaleBuildJob(
+	ctx context.Context,
+	llamaDeploy *llamadeployv1.LlamaDeployment,
+	newBuildId string,
+) error {
+	if llamaDeploy.Status.BuildId == "" || llamaDeploy.Status.BuildId == newBuildId {
+		return nil
+	}
+	if llamaDeploy.Status.BuildStatus != BuildStatusPending &&
+		llamaDeploy.Status.BuildStatus != BuildStatusRunning {
+		return nil
+	}
+
+	logger := log.FromContext(ctx)
+	staleBuildId := llamaDeploy.Status.BuildId
+	staleJobName := buildJobName(llamaDeploy.Name, staleBuildId)
+	staleJob := &batchv1.Job{}
+	getErr := r.Get(ctx, client.ObjectKey{Name: staleJobName, Namespace: llamaDeploy.Namespace}, staleJob)
+	switch {
+	case errors.IsNotFound(getErr):
+		return nil
+	case getErr != nil:
+		return fmt.Errorf("failed to check stale build job: %w", getErr)
+	case staleJob.Status.Succeeded > 0:
+		logger.V(1).Info("Prior build succeeded; leaving Job in place",
+			"staleBuildId", staleBuildId, "jobName", staleJobName)
+		return nil
+	}
+
+	logger.Info("Superseding in-flight build Job for previous buildId",
+		"staleBuildId", staleBuildId,
+		"newBuildId", newBuildId,
+		"jobName", staleJobName)
+	if err := r.Delete(ctx, staleJob,
+		client.PropagationPolicy(metav1.DeletePropagationBackground),
+	); err != nil && !errors.IsNotFound(err) {
+		return fmt.Errorf("failed to delete superseded build job: %w", err)
+	}
+	if r.Recorder != nil {
+		r.Recorder.Event(llamaDeploy, corev1.EventTypeNormal, PhaseBuilding,
+			fmt.Sprintf("Superseded stale build Job: %s", staleJobName))
+	}
+	return nil
+}
+
 // reconcileBuild ensures a build artifact exists for the current deployment inputs.
 // Returns the buildId if a build is ready, or ("", result, nil) if a build is in progress
 // and the caller should requeue.
@@ -403,37 +452,9 @@ func (r *LlamaDeploymentReconciler) reconcileBuild(ctx context.Context, llamaDep
 	}
 
 	// If the spec advanced mid-build, cancel the stale in-flight Job so it
-	// doesn't race the new one uploading. Succeeded stale Jobs are preserved
-	// for the A → B → A rollback-by-cache-hit path.
-	if llamaDeploy.Status.BuildId != "" && llamaDeploy.Status.BuildId != buildId &&
-		(llamaDeploy.Status.BuildStatus == BuildStatusPending || llamaDeploy.Status.BuildStatus == BuildStatusRunning) {
-		staleBuildId := llamaDeploy.Status.BuildId
-		staleJobName := buildJobName(llamaDeploy.Name, staleBuildId)
-		staleJob := &batchv1.Job{}
-		getErr := r.Get(ctx, client.ObjectKey{Name: staleJobName, Namespace: llamaDeploy.Namespace}, staleJob)
-		switch {
-		case errors.IsNotFound(getErr):
-			// Already gone (TTL reaped it, or a prior reconcile deleted it).
-		case getErr != nil:
-			return "", nil, fmt.Errorf("failed to check stale build job: %w", getErr)
-		case staleJob.Status.Succeeded > 0:
-			logger.V(1).Info("Prior build succeeded; leaving Job in place",
-				"staleBuildId", staleBuildId, "jobName", staleJobName)
-		default:
-			logger.Info("Superseding in-flight build Job for previous buildId",
-				"staleBuildId", staleBuildId,
-				"newBuildId", buildId,
-				"jobName", staleJobName)
-			if err := r.Delete(ctx, staleJob,
-				client.PropagationPolicy(metav1.DeletePropagationBackground),
-			); err != nil && !errors.IsNotFound(err) {
-				return "", nil, fmt.Errorf("failed to delete superseded build job: %w", err)
-			}
-			if r.Recorder != nil {
-				r.Recorder.Event(llamaDeploy, corev1.EventTypeNormal, PhaseBuilding,
-					fmt.Sprintf("Superseded stale build Job: %s", staleJobName))
-			}
-		}
+	// doesn't race the new one uploading.
+	if err := r.supersedeStaleBuildJob(ctx, llamaDeploy, buildId); err != nil {
+		return "", nil, err
 	}
 
 	// Check if a build Job already exists for this buildId
