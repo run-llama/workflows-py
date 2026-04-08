@@ -25,6 +25,7 @@ members = [
     "llama-index-workflows",
     "llamactl",
 ]
+overrides = [{ name = "boto3", specifier = ">=1.40.46,<1.40.62" }]
 
 [[package]]
 name = "a2wsgi"
@@ -2164,6 +2165,7 @@ version = "0.8.8"
 source = { editable = "packages/llama-agents-agentcore" }
 dependencies = [
     { name = "bedrock-agentcore" },
+    { name = "boto3" },
     { name = "click" },
     { name = "llama-agents-appserver" },
     { name = "llama-agents-core" },
@@ -2184,6 +2186,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "bedrock-agentcore", specifier = ">=1.2.0" },
+    { name = "boto3", specifier = ">=1.42.75" },
     { name = "click", specifier = ">=8.3.1" },
     { name = "llama-agents-appserver", editable = "packages/llama-agents-appserver" },
     { name = "llama-agents-core", editable = "packages/llama-agents-core" },
@@ -5275,6 +5278,7 @@ name = "testcontainers"
 version = "4.14.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
+    { name = "boto3" },
     { name = "docker" },
     { name = "python-dotenv" },
     { name = "typing-extensions" },
