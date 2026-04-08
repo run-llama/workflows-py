@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import functools
 import logging
+import traceback
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
@@ -439,4 +440,9 @@ async def invoke(payload: dict, context: Any) -> dict[str, Any]:
         return await handler_fn(payload, session_id)
     except Exception as e:
         logger.exception("Action '%s' failed", action)
-        return {"error": str(e), "action": action, "session_id": session_id}
+        return {
+            "error": str(e),
+            "traceback": traceback.format_exc(),
+            "action": action,
+            "session_id": session_id,
+        }

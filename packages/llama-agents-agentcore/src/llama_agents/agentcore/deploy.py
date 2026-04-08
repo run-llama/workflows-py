@@ -463,7 +463,7 @@ class AgentCoreDeployer:
             "environmentVariables": env_vars,
             "lifecycleConfiguration": {"maxLifetime": max_lifetime},
             "filesystemConfigurations": [
-                {"mountPoint": "/mnt/workspace", "filesystemType": "WORKSPACE"}
+                {"sessionStorage": {"mountPath": "/mnt/workspace"}}
             ],
         }
 
