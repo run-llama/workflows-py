@@ -44,7 +44,7 @@ class SqliteWorkflowStore(AbstractWorkflowStore):
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
-        conn = sqlite3.connect(self.db_path)
+        conn = sqlite3.connect(self.db_path, timeout=30.0)
         try:
             yield conn
         finally:
@@ -80,7 +80,7 @@ class SqliteWorkflowStore(AbstractWorkflowStore):
 
         Safe to call multiple times — only applies migrations not yet applied.
         """
-        conn = sqlite3.connect(db_path)
+        conn = sqlite3.connect(db_path, timeout=30.0)
         try:
             _run_migrations(conn)
             conn.commit()

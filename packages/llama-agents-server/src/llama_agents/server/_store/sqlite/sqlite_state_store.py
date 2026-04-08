@@ -75,7 +75,7 @@ class SqliteStateStore(Generic[MODEL_T]):
         return asyncio.Lock()
 
     def _connect(self) -> sqlite3.Connection:
-        return sqlite3.connect(self._db_path)
+        return sqlite3.connect(self._db_path, timeout=30.0)
 
     def _write_in_memory_state(self, serialized_state: dict[str, Any]) -> None:
         """Migrate InMemory-format state into the database."""
