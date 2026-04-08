@@ -155,6 +155,14 @@ unresolved-import = "error"
 # Exclude llama_agents.workflows alias (dynamic import aliasing not understood by static analyzers)
 exclude = ["**/uv.lock", "**/.gitignore", "**/llama_agents/workflows/**", "**/test_llama_agents_alias.py"]
 
+[tool.uv]
+# boto3 is constrained to the range aioboto3/aiobotocore supports so that
+# the workspace can resolve both llama-agents-agentcore (which declares
+# boto3>=1.42.75) and llama-agents-control-plane (which uses aioboto3).
+# When llama-agents-agentcore is installed standalone the override does not
+# apply, so it will pull the newer boto3 it needs.
+override-dependencies = ["boto3>=1.40.46,<1.40.62"]
+
 [tool.uv.sources]
 llama-agents-integration-tests = {workspace = true}
 llama-index-utils-workflow = {workspace = true}
@@ -167,14 +175,6 @@ llama-agents-control-plane = {workspace = true}
 llama-agents-appserver = {workspace = true}
 llamactl = {workspace = true}
 llama-agents-agentcore = {workspace = true}
-
-[tool.uv]
-# boto3 is constrained to the range aioboto3/aiobotocore supports so that
-# the workspace can resolve both llama-agents-agentcore (which declares
-# boto3>=1.42.75) and llama-agents-control-plane (which uses aioboto3).
-# When llama-agents-agentcore is installed standalone the override does not
-# apply, so it will pull the newer boto3 it needs.
-override-dependencies = ["boto3>=1.40.46,<1.40.62"]
 
 [tool.uv.workspace]
 exclude = [
