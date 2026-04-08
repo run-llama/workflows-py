@@ -14,6 +14,4 @@ def test_export(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     assert (tmp_path / agentcore_dir / "entrypoint.py").is_file()
     content = (tmp_path / agentcore_dir / "entrypoint.py").read_text()
     assert content.startswith("# SPDX-License-Identifier: MIT")
-    assert content.endswith(
-        '"session_id": session_id,\n        }\n'
-    )
+    assert content.endswith('"session_id": session_id,\n        }\n')
