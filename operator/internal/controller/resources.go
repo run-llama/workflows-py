@@ -81,6 +81,16 @@ const (
 	appserverTagPrefix = "appserver-"
 )
 
+// buildJobName computes the Job name for a given deployment/buildId combo,
+// truncated to Kubernetes' 63-character name limit.
+func buildJobName(deploymentName, buildId string) string {
+	name := fmt.Sprintf("%s-build-%s", deploymentName, buildId)
+	if len(name) > 63 {
+		name = name[:63]
+	}
+	return name
+}
+
 // looksLikeFilePath provides a lightweight heuristic to determine if a
 // deployment file path refers to a file rather than a directory. It avoids
 // filesystem access and relies on common file extensions and presence of an extension.
@@ -398,10 +408,7 @@ func (r *LlamaDeploymentReconciler) reconcileBuild(ctx context.Context, llamaDep
 	if llamaDeploy.Status.BuildId != "" && llamaDeploy.Status.BuildId != buildId &&
 		(llamaDeploy.Status.BuildStatus == BuildStatusPending || llamaDeploy.Status.BuildStatus == BuildStatusRunning) {
 		staleBuildId := llamaDeploy.Status.BuildId
-		staleJobName := fmt.Sprintf("%s-build-%s", llamaDeploy.Name, staleBuildId)
-		if len(staleJobName) > 63 {
-			staleJobName = staleJobName[:63]
-		}
+		staleJobName := buildJobName(llamaDeploy.Name, staleBuildId)
 		staleJob := &batchv1.Job{}
 		getErr := r.Get(ctx, client.ObjectKey{Name: staleJobName, Namespace: llamaDeploy.Namespace}, staleJob)
 		switch {
@@ -430,10 +437,7 @@ func (r *LlamaDeploymentReconciler) reconcileBuild(ctx context.Context, llamaDep
 	}
 
 	// Check if a build Job already exists for this buildId
-	jobName := fmt.Sprintf("%s-build-%s", llamaDeploy.Name, buildId)
-	if len(jobName) > 63 {
-		jobName = jobName[:63]
-	}
+	jobName := buildJobName(llamaDeploy.Name, buildId)
 
 	existingJob := &batchv1.Job{}
 	err := r.Get(ctx, client.ObjectKey{Name: jobName, Namespace: llamaDeploy.Namespace}, existingJob)
@@ -573,12 +577,7 @@ func (r *LlamaDeploymentReconciler) createBuildJob(llamaDeploy *llamadeployv1.Ll
 
 	envFrom := r.commonEnvFrom(llamaDeploy)
 
-	// Use a short suffix of the buildId for the Job name to avoid collisions
-	// Job names must be <= 63 chars
-	jobName := fmt.Sprintf("%s-build-%s", llamaDeploy.Name, buildId)
-	if len(jobName) > 63 {
-		jobName = jobName[:63]
-	}
+	jobName := buildJobName(llamaDeploy.Name, buildId)
 
 	return &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{

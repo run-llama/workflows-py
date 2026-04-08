@@ -9,6 +9,16 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from kubernetes.client import (
+    V1Container,
+    V1EnvVar,
+    V1LabelSelector,
+    V1PodSpec,
+    V1PodTemplateSpec,
+    V1ReplicaSet,
+    V1ReplicaSetSpec,
+)
+from llama_agents.control_plane import k8s_client
 from llama_agents.control_plane.build_api import build_gc
 from llama_agents.control_plane.build_api.build_storage import ArtifactInfo
 
@@ -55,6 +65,28 @@ def _artifact(
     )
 
 
+def _replicaset_with_build_id(build_id: str) -> V1ReplicaSet:
+    """Build a V1ReplicaSet whose pod template references the given build_id
+    via the LLAMA_DEPLOY_BUILD_ID env var — matching what the GC walks."""
+    return V1ReplicaSet(
+        spec=V1ReplicaSetSpec(
+            selector=V1LabelSelector(match_labels={}),
+            template=V1PodTemplateSpec(
+                spec=V1PodSpec(
+                    containers=[
+                        V1Container(
+                            name="app",
+                            env=[
+                                V1EnvVar(name="LLAMA_DEPLOY_BUILD_ID", value=build_id)
+                            ],
+                        )
+                    ],
+                ),
+            ),
+        ),
+    )
+
+
 @pytest.fixture
 def now() -> datetime:
     return datetime(2026, 4, 8, 12, 0, 0, tzinfo=timezone.utc)
@@ -71,7 +103,7 @@ def patched_gc(fake_storage: FakeStorage):
     with (
         patch.object(build_gc, "build_artifact_storage", fake_storage),
         patch.object(
-            build_gc.k8s_client,
+            k8s_client,
             "list_replicasets_for_deployment",
             AsyncMock(return_value=[]),
         ) as mock_list,
@@ -146,45 +178,7 @@ async def test_retains_referenced_artifact_regardless_of_age(
         _artifact("app", "build-ancient", age_seconds=10 * 24 * 3600, now=now),
     ]
 
-    # Build a fake ReplicaSet object shape that matches what the GC walks:
-    # rs.spec.template.spec.containers[].env[].{name,value}
-    class _Env:
-        def __init__(self, name: str, value: str) -> None:
-            self.name = name
-            self.value = value
-
-    class _Container:
-        def __init__(self, env: list[_Env]) -> None:
-            self.env = env
-
-    class _PodSpec:
-        def __init__(self, containers: list[_Container]) -> None:
-            self.containers = containers
-            self.init_containers: list[_Container] = []
-
-    class _Template:
-        def __init__(self, spec: _PodSpec) -> None:
-            self.spec = spec
-
-    class _RSSpec:
-        def __init__(self, template: _Template) -> None:
-            self.template = template
-
-    class _RS:
-        def __init__(self, spec: _RSSpec) -> None:
-            self.spec = spec
-
-    mock_list.return_value = [
-        _RS(
-            _RSSpec(
-                _Template(
-                    _PodSpec(
-                        [_Container([_Env("LLAMA_DEPLOY_BUILD_ID", "build-ancient")])]
-                    )
-                )
-            )
-        )
-    ]
+    mock_list.return_value = [_replicaset_with_build_id("build-ancient")]
 
     deleted = await build_gc.gc_build_artifacts("app", now=now)
 
@@ -281,3 +275,37 @@ async def test_delete_all_artifacts_for_deployment(
     assert count == 2
     assert len(storage.deleted) == 2
     assert storage.artifacts == []
+
+
+@pytest.mark.asyncio
+async def test_partial_delete_failure_does_not_abort_remaining(now: datetime) -> None:
+    """One failing delete in a concurrent batch must not prevent the others
+    from running; the returned count should reflect only successful deletes."""
+    artifacts = [
+        _artifact("app", "build-good-1", age_seconds=3 * 3600, now=now),
+        _artifact("app", "build-bad", age_seconds=3 * 3600, now=now),
+        _artifact("app", "build-good-2", age_seconds=3 * 3600, now=now),
+    ]
+    deleted: list[tuple[str, str]] = []
+
+    async def delete_artifact(deployment_name: str, build_id: str) -> None:
+        if build_id == "build-bad":
+            raise RuntimeError("simulated S3 failure")
+        deleted.append((deployment_name, build_id))
+
+    fake = AsyncMock()
+    fake.list_artifacts = AsyncMock(return_value=artifacts)
+    fake.delete_artifact = AsyncMock(side_effect=delete_artifact)
+
+    with (
+        patch.object(build_gc, "build_artifact_storage", fake),
+        patch.object(
+            k8s_client,
+            "list_replicasets_for_deployment",
+            AsyncMock(return_value=[]),
+        ),
+    ):
+        count = await build_gc.gc_build_artifacts("app", now=now)
+
+    assert count == 2
+    assert sorted(bid for _, bid in deleted) == ["build-good-1", "build-good-2"]

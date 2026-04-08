@@ -141,15 +141,12 @@ def test_auth_project_interactive_sets_selected() -> None:
 
 
 @pytest.mark.asyncio
-async def test_create_or_update_agent_api_key_raises_on_network_error_without_retry() -> (
-    None
-):
-    """Network errors while provisioning API tokens should surface immediately
-    with a clear message, without auto-retrying.
+async def test_create_or_update_agent_api_key_does_not_retry_read_timeout() -> None:
+    """Read-phase errors must not trigger retries.
 
-    create_agent_api_key is a non-idempotent POST. Auto-retrying on a transient
-    network error can produce duplicate API keys per llamactl login. See the
-    2026-04-08 document-extraction rollout plan Phase 3 client retry audit.
+    create_agent_api_key is a non-idempotent POST: a ReadTimeout after the
+    request left the client could mean the server already created a key, so
+    retrying would duplicate it.
     """
     profile = Auth(
         id="id-1",
@@ -167,13 +164,48 @@ async def test_create_or_update_agent_api_key_raises_on_network_error_without_re
     mock_client_cm.__aenter__.return_value = mock_client
     mock_auth_svc.profile_client.return_value = mock_client_cm
 
-    mock_client.create_agent_api_key = AsyncMock(side_effect=httpx.RequestError("boom"))
+    mock_client.create_agent_api_key = AsyncMock(
+        side_effect=httpx.ReadTimeout("server took too long")
+    )
 
     with pytest.raises(Exception) as exc_info:
         await _create_or_update_agent_api_key(mock_auth_svc, profile)
 
-    msg = str(exc_info.value)
-    assert "Network error while provisioning an API token" in msg
-    # Should have tried exactly once — no silent retry amplification on
-    # non-idempotent POST.
+    assert "Network error while provisioning an API token" in str(exc_info.value)
     assert mock_client.create_agent_api_key.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_create_or_update_agent_api_key_retries_connect_error() -> None:
+    """Connect-phase errors (DNS, connection refused, connect timeout) happen
+    before the request is sent, so retrying is safe even for a non-idempotent
+    POST. The CLI should absorb a brief connectivity blip.
+    """
+    profile = Auth(
+        id="id-1",
+        name="test",
+        api_url="https://example.com",
+        project_id="proj",
+        api_key=None,
+        api_key_id=None,
+        device_oidc=None,
+    )
+
+    mock_auth_svc = MagicMock()
+    mock_client_cm = AsyncMock()
+    mock_client = MagicMock()
+    mock_client_cm.__aenter__.return_value = mock_client
+    mock_auth_svc.profile_client.return_value = mock_client_cm
+
+    mock_client.create_agent_api_key = AsyncMock(
+        side_effect=httpx.ConnectError("connection refused")
+    )
+
+    # Patch tenacity's sleep so the test doesn't pay real back-off.
+    with patch("tenacity.nap.time.sleep"), patch("asyncio.sleep", AsyncMock()):
+        with pytest.raises(Exception) as exc_info:
+            await _create_or_update_agent_api_key(mock_auth_svc, profile)
+
+    assert "Network error while provisioning an API token" in str(exc_info.value)
+    # Default max_attempts=3 — every attempt should have run the operation.
+    assert mock_client.create_agent_api_key.await_count == 3

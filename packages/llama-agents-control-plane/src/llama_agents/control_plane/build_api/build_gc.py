@@ -8,6 +8,7 @@ the grace window must exceed the Job TTL.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 
@@ -16,6 +17,10 @@ from llama_agents.control_plane.build_api.build_service import build_artifact_st
 from llama_agents.control_plane.settings import settings
 
 logger = logging.getLogger(__name__)
+
+# Bounds concurrency when deleting aged-out build artifacts so a large
+# catch-up cohort can't saturate the storage client pool.
+_GC_DELETE_CONCURRENCY = 10
 
 
 async def _get_referenced_build_ids_from_replicasets(
@@ -55,7 +60,8 @@ async def gc_build_artifacts(
 
     Returns the number of artifacts deleted.
     """
-    if build_artifact_storage is None:
+    storage = build_artifact_storage
+    if storage is None:
         return 0
 
     referenced_build_ids = await _get_referenced_build_ids_from_replicasets(
@@ -63,14 +69,14 @@ async def gc_build_artifacts(
     )
     if keep_build_ids:
         referenced_build_ids |= keep_build_ids
-    artifacts = await build_artifact_storage.list_artifacts(deployment_id)
+    artifacts = await storage.list_artifacts(deployment_id)
 
     current_time = now if now is not None else datetime.now(timezone.utc)
     grace_cutoff = current_time - timedelta(
         seconds=settings.build_artifact_gc_grace_seconds
     )
 
-    deleted = 0
+    to_delete: list[str] = []
     retained_by_grace = 0
     for artifact in artifacts:
         if artifact.build_id in referenced_build_ids:
@@ -85,13 +91,35 @@ async def gc_build_artifacts(
             retained_by_grace += 1
             continue
 
-        logger.info(
-            "Deleting unreferenced build artifact: deployment=%s build_id=%s",
-            deployment_id,
-            artifact.build_id,
+        to_delete.append(artifact.build_id)
+
+    deleted = 0
+    if to_delete:
+        sem = asyncio.Semaphore(_GC_DELETE_CONCURRENCY)
+
+        async def _delete(build_id: str) -> None:
+            async with sem:
+                logger.info(
+                    "Deleting unreferenced build artifact: deployment=%s build_id=%s",
+                    deployment_id,
+                    build_id,
+                )
+                await storage.delete_artifact(deployment_id, build_id)
+
+        results = await asyncio.gather(
+            *(_delete(bid) for bid in to_delete),
+            return_exceptions=True,
         )
-        await build_artifact_storage.delete_artifact(deployment_id, artifact.build_id)
-        deleted += 1
+        for build_id, result in zip(to_delete, results):
+            if isinstance(result, BaseException):
+                logger.warning(
+                    "Failed to delete build artifact: deployment=%s build_id=%s error=%s",
+                    deployment_id,
+                    build_id,
+                    result,
+                )
+            else:
+                deleted += 1
 
     if deleted > 0 or retained_by_grace > 0:
         logger.info(
