@@ -186,7 +186,7 @@ def test_add_step_not_a_step() -> None:
         WorkflowValidationError,
         match="Step function another_step is missing the `@step` decorator.",
     ):
-        TestWorkflow.add_step(another_step)  # type: ignore
+        TestWorkflow.add_step(another_step)  # type: ignore[reportArgumentType]
 
 
 def test_workflow_disable_validation() -> None:
@@ -268,7 +268,7 @@ async def test_workflow_context_to_dict() -> None:
         ctx = handler.ctx
         await signal_ready.wait()
         # get the context dict
-        data = ctx.to_dict()  # type:ignore
+        data = ctx.to_dict()
 
         await handler.cancel_run()
 
@@ -288,7 +288,7 @@ class HumanInTheLoopWorkflow(Workflow):
     async def step1(self, ctx: Context, ev: StartEvent) -> InputRequiredEvent:
         cur_runs = await ctx.store.get("step1_runs", default=0)
         await ctx.store.set("step1_runs", cur_runs + 1)
-        return InputRequiredEvent(prefix="Enter a number: ")  # type:ignore
+        return InputRequiredEvent(prefix="Enter a number: ")  # type: ignore[reportCallIssue]
 
     @step
     async def step2(self, ctx: Context, ev: HumanResponseEvent) -> StopEvent:
@@ -314,8 +314,8 @@ async def test_human_in_the_loop_with_resume() -> None:
             break
 
     assert handler.exception()
-    new_handler = workflow.run(ctx=Context.from_dict(workflow, ctx_dict))  # type:ignore
-    new_handler.ctx.send_event(HumanResponseEvent(response="42"))  # type:ignore
+    new_handler = workflow.run(ctx=Context.from_dict(workflow, ctx_dict))  # type: ignore[reportArgumentType]
+    new_handler.ctx.send_event(HumanResponseEvent(response="42"))  # type: ignore[reportCallIssue]
 
     final_result = await new_handler
     assert final_result == "42"

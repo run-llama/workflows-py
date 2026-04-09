@@ -317,7 +317,7 @@ async def _action_run(
         ).model_dump()
 
     workflow_name = str(parsed[0])
-    start_event: StartEvent = parsed[1]  # ty: ignore[invalid-assignment]  # type: ignore
+    start_event: StartEvent = parsed[1]  # type: ignore[reportAssignmentType]  # ty: ignore[invalid-assignment]
     handler_id = _resolve_handler_id(payload, session_id)
     service = get_agentcore_service()
 

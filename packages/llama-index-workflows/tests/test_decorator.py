@@ -16,7 +16,7 @@ def test_decorated_config() -> None:
         async def entry(self, ev: StartEvent) -> StopEvent:
             return StopEvent(result="done")
 
-    def f(self, ev: Event) -> Event:  # type: ignore  # noqa: ANN001
+    def f(self, ev: Event) -> Event:  # noqa: ANN001
         return Event()
 
     res = step(workflow=LocalWorkflow)(f)

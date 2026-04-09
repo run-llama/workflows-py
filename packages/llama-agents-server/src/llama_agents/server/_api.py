@@ -1026,10 +1026,7 @@ class _WorkflowAPI:
         }
 
         status_in: list[Status] | None = (
-            cast(  # type: ignore[ty:invalid-argument-type]
-                list[Status],
-                list(set(allowed_status_values).intersection(status_values)),
-            )
+            list(set(allowed_status_values).intersection(status_values))
             if status_values is not None
             else None
         )
