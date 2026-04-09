@@ -42,14 +42,25 @@ class SqliteWorkflowStore(AbstractWorkflowStore):
         self._conditions: weakref.WeakValueDictionary[str, asyncio.Condition] = (
             weakref.WeakValueDictionary()
         )
+        if single_connection:
+            self._persistent_conn = self._open_nolock(db_path)
         if auto_migrate:
             self._run_migrations()
+
+    @staticmethod
+    def _open_nolock(db_path: str) -> sqlite3.Connection:
+        """Open a SQLite connection with file locking disabled.
+
+        Uses the ``unix-none`` VFS so that SQLite never issues ``fcntl``
+        lock calls.  Safe when the database is only accessed by a single
+        process (e.g. AgentCore session storage).
+        """
+        return sqlite3.connect(f"file:{db_path}?vfs=unix-none", uri=True)
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
         if self._single_connection:
-            if self._persistent_conn is None:
-                self._persistent_conn = sqlite3.connect(self.db_path)
+            assert self._persistent_conn is not None
             yield self._persistent_conn
         else:
             conn = sqlite3.connect(self.db_path, timeout=30.0)
@@ -83,9 +94,7 @@ class SqliteWorkflowStore(AbstractWorkflowStore):
         return cond
 
     def _run_migrations(self) -> None:
-        if self._single_connection:
-            if self._persistent_conn is None:
-                self._persistent_conn = sqlite3.connect(self.db_path)
+        if self._persistent_conn is not None:
             _run_migrations(self._persistent_conn)
             self._persistent_conn.commit()
         else:
