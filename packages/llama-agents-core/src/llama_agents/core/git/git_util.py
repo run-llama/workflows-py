@@ -73,6 +73,7 @@ class GitAccessError(Exception):
 _ALLOWED_SCHEMES = {"https", "http"}
 
 _FULL_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+_SHA_LIKE_RE = re.compile(r"^[0-9a-f]{7,40}$")
 
 
 def validate_git_url(url: str) -> None:
@@ -176,7 +177,11 @@ def _resolved_git_ref_for_head(repo: Repo) -> str | None:
 
 
 def _checkout_ref(repo: Repo, git_ref: str) -> None:
-    """Update HEAD to point at the requested ref. Raises GitAccessError if not found."""
+    """Update HEAD to point at the requested ref.
+
+    Raises GitAccessError if the ref cannot be resolved or if a short SHA-like
+    ref is ambiguous.
+    """
     ref_bytes = git_ref.encode()
 
     candidates = (
@@ -198,8 +203,21 @@ def _checkout_ref(repo: Repo, git_ref: str) -> None:
         try:
             obj = repo[ref_bytes]
             target_sha = obj.id
-        except KeyError:
+        except (AssertionError, KeyError):
             target_sha = None
+
+    if target_sha is None and _SHA_LIKE_RE.match(git_ref):
+        try:
+            matching_shas = repo.object_store.iter_prefix(ref_bytes)
+            target_sha = next(matching_shas)
+            if next(matching_shas, None) is not None:
+                raise GitAccessError(f"Git ref is ambiguous: {git_ref}")
+        except StopIteration as e:
+            raise GitAccessError(f"Git ref not found: {git_ref}") from e
+        except GitAccessError:
+            raise
+        except Exception as e:
+            raise GitAccessError(f"Git ref not found: {git_ref}") from e
 
     if target_sha is None:
         raise GitAccessError(f"Git ref not found: {git_ref}")
@@ -223,8 +241,9 @@ def clone_repo(
     Args:
         repository_url: The URL of the repository to clone
         git_ref: The git reference to checkout, if provided. May be a branch
-            name, tag, or full 40-character commit SHA. Short SHAs are not
-            supported by the dulwich-backed implementation.
+            name, tag, full 40-character commit SHA, or a short SHA-like
+            prefix. SHA-like refs are resolved after clone so they do not get
+            misclassified as branch names.
         basic_auth: The basic auth to use to clone the repository, in
             ``user:password`` form. Token-only credentials are also accepted
             (passed via the URL user component).
@@ -251,7 +270,7 @@ def clone_repo(
         target_path.mkdir(parents=True, exist_ok=True)
 
     branch_arg: bytes | None = None
-    is_sha_ref = bool(git_ref and _FULL_SHA_RE.match(git_ref))
+    is_sha_ref = bool(git_ref and _SHA_LIKE_RE.match(git_ref))
     if git_ref and not is_sha_ref:
         branch_arg = git_ref.encode()
 

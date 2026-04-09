@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 LlamaIndex Inc.
+
 import asyncio
 import logging
 import shutil
@@ -233,16 +236,18 @@ class GitService:
             )
 
         # Probe public access via the GitHub API to skip the cloning fallback.
-        try:
-            public_info = await GitHubApiClient().get_repository_info(owner, repo)
-        except HTTPStatusError:
-            public_info = None
-        if public_info is not None and not public_info.private:
+        public_probe = await GitHubApiClient().probe_repository_info(owner, repo)
+        public_probe_inconclusive = public_probe.status == "inconclusive"
+        if (
+            public_probe.status == "found"
+            and public_probe.value is not None
+            and not public_probe.value.private
+        ):
             logger.info("Access resolved for %s/%s: public", owner, repo)
             return GitRepository(
                 url=repository_url,
                 access_token=None,
-                default_branch=public_info.default_branch,
+                default_branch=public_probe.value.default_branch,
             )
 
         logger.info(
@@ -375,6 +380,16 @@ class GitService:
                 message = (
                     "Personal Access Token does not have access to this repository."
                 )
+            elif public_probe_inconclusive and existence.exists is None:
+                logger.info(
+                    "Anonymous GitHub probe for %s/%s was inconclusive; treating as public",
+                    owner,
+                    repo,
+                )
+                return GitRepository(
+                    url=repository_url,
+                    access_token=None,
+                )
             else:
                 message = (
                     f"Unable to access GitHub repository '{owner}/{repo}'. "
@@ -423,30 +438,50 @@ class GitService:
 
         clients.append((GitHubApiClient(), "unauthenticated"))
 
+        saw_inconclusive = False
         for client, source in clients:
             try:
-                repo_info = await client.get_repository_info(owner, repo_name)
+                repo_info = await client.probe_repository_info(owner, repo_name)
             except HTTPStatusError:
                 repo_info = None
 
             if repo_info is not None:
-                return RepositoryExistenceResult(
-                    exists=True, via_installation=source == "installation"
-                )
+                if repo_info.status == "found":
+                    return RepositoryExistenceResult(
+                        exists=True, via_installation=source == "installation"
+                    )
+                if repo_info.status == "inconclusive":
+                    saw_inconclusive = True
+            else:
+                saw_inconclusive = True
 
+        saw_owner_not_found = False
         for client, _ in clients:
             try:
-                owner_info = await client.get_owner_info(owner)
+                owner_info = await client.probe_owner_info(owner)
             except HTTPStatusError:
                 owner_info = None
 
             if owner_info is not None:
-                return RepositoryExistenceResult(exists=None)
+                if owner_info.status == "found":
+                    return RepositoryExistenceResult(exists=None)
+                if owner_info.status == "not_found":
+                    saw_owner_not_found = True
+                elif owner_info.status == "inconclusive":
+                    saw_inconclusive = True
+            else:
+                saw_inconclusive = True
 
-        return RepositoryExistenceResult(
-            exists=False,
-            message=f"GitHub owner '{owner}' does not exist.",
-        )
+        if saw_owner_not_found:
+            return RepositoryExistenceResult(
+                exists=False,
+                message=f"GitHub owner '{owner}' does not exist.",
+            )
+
+        if saw_inconclusive:
+            return RepositoryExistenceResult(exists=None)
+
+        return RepositoryExistenceResult(exists=None)
 
     async def _check_generic_access_type(
         self,

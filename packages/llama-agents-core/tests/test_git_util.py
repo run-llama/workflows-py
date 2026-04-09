@@ -1,3 +1,8 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 LlamaIndex Inc.
+
+from __future__ import annotations
+
 import socket
 import tempfile
 from pathlib import Path
@@ -7,9 +12,11 @@ import pytest
 from dulwich import porcelain
 from dulwich.errors import HangupException
 from dulwich.refs import Ref
+from dulwich.repo import Repo
 from llama_agents.core.git.git_util import (
     GitAccessError,
     GitCloneResult,
+    _checkout_ref,
     clone_repo,
     get_commit_sha_for_ref,
     get_unpushed_commits_count,
@@ -151,6 +158,28 @@ def test_clone_repo_full_sha(mock_clone: MagicMock) -> None:
 
 
 @patch(f"{GIT_UTIL}.porcelain.clone")
+def test_clone_repo_short_sha_like_ref(mock_clone: MagicMock) -> None:
+    """Short SHA-like refs are cloned without branch= and checked out after clone."""
+    abbrev_sha = "deadbeef"
+    fake_repo = _make_fake_repo("a" * 40)
+    mock_clone.return_value = fake_repo
+
+    with patch(f"{GIT_UTIL}._checkout_ref") as mock_checkout:
+        with tempfile.TemporaryDirectory() as t:
+            result = clone_repo(
+                "https://github.com/user/repo.git",
+                git_ref=abbrev_sha,
+                dest_dir=Path(t) / "sub",
+                depth=1,
+            )
+
+    assert mock_clone.call_args.kwargs["branch"] is None
+    assert mock_clone.call_args.kwargs["depth"] is None
+    mock_checkout.assert_called_once_with(fake_repo, abbrev_sha)
+    assert result == GitCloneResult(git_sha="a" * 40, git_ref=abbrev_sha)
+
+
+@patch(f"{GIT_UTIL}.porcelain.clone")
 def test_clone_repo_network_error(mock_clone: MagicMock) -> None:
     """Network errors from dulwich are normalized to GitAccessError."""
     mock_clone.side_effect = HangupException()
@@ -220,6 +249,54 @@ def test_clone_repo_sha_overrides_depth(mock_clone: MagicMock) -> None:
     assert mock_clone.call_args.kwargs["branch"] is None
 
 
+def _make_real_repo_with_commit(tmp_path: Path) -> tuple[Repo, str]:
+    porcelain.init(str(tmp_path))
+    (tmp_path / "f.txt").write_text("hello")
+    porcelain.add(str(tmp_path), [str(tmp_path / "f.txt")])
+    sha = porcelain.commit(
+        str(tmp_path),
+        message=b"init",
+        author=b"t <t@example.com>",
+        committer=b"t <t@example.com>",
+    )
+    return Repo(str(tmp_path)), sha.decode()
+
+
+def test_checkout_ref_resolves_short_sha_prefix(tmp_path: Path) -> None:
+    """Short SHA prefixes resolve to the matching commit object."""
+    repo, sha = _make_real_repo_with_commit(tmp_path)
+    try:
+        _checkout_ref(repo, sha[:8])
+        assert repo.head().decode() == sha
+    finally:
+        repo.close()
+
+
+def test_checkout_ref_rejects_ambiguous_short_sha_prefix(tmp_path: Path) -> None:
+    """Ambiguous short SHA prefixes raise a user-facing access error."""
+    repo, _ = _make_real_repo_with_commit(tmp_path)
+    try:
+        with patch.object(
+            repo.object_store,
+            "iter_prefix",
+            return_value=iter([b"a" * 40, b"b" * 40]),
+        ):
+            with pytest.raises(GitAccessError, match="ambiguous"):
+                _checkout_ref(repo, "deadbeef")
+    finally:
+        repo.close()
+
+
+def test_checkout_ref_rejects_missing_short_sha_prefix(tmp_path: Path) -> None:
+    """Missing short SHA prefixes raise a user-facing access error."""
+    repo, _ = _make_real_repo_with_commit(tmp_path)
+    try:
+        with pytest.raises(GitAccessError, match="Git ref not found: deadbeef"):
+            _checkout_ref(repo, "deadbeef")
+    finally:
+        repo.close()
+
+
 def test_clone_repo_rejects_dangerous_url() -> None:
     with pytest.raises(GitAccessError):
         clone_repo("ext::sh -c echo pwned")
@@ -287,8 +364,6 @@ def test_get_unpushed_commits_count_ahead(tmp_path: Path) -> None:
     )
 
     # Set up an "upstream" tracking ref pointing at the first commit
-    from dulwich.repo import Repo
-
     repo = Repo(str(tmp_path))
     try:
         repo.refs[Ref(b"refs/remotes/origin/main")] = first_sha  # type: ignore[index]  # ty: ignore[invalid-assignment]

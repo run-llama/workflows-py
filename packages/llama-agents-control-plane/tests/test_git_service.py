@@ -1,3 +1,7 @@
+from __future__ import annotations
+
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 LlamaIndex Inc.
 from typing import Generator
 from unittest.mock import patch
 
@@ -192,6 +196,17 @@ def mock_pat_access(
     )
 
 
+def mock_rate_limited_public_repo(
+    router: respx.Router, owner: str, repo: str, status_code: int
+) -> None:
+    router.get(f"https://api.github.com/repos/{owner}/{repo}").mock(
+        return_value=respx.MockResponse(status_code)
+    )
+    router.get(f"https://api.github.com/users/{owner}").mock(
+        return_value=respx.MockResponse(status_code)
+    )
+
+
 @pytest.mark.asyncio
 async def test_public_github_repo(
     service: GitService,
@@ -218,6 +233,28 @@ async def test_public_github_repo(
         result.github_app_installation_url
         == "https://github.com/apps/TestApp/installations/new/permissions?target_id=12345"
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status_code", [403, 429], ids=["forbidden", "rate-limited"])
+async def test_public_github_repo_with_anonymous_probe_throttle(
+    service: GitService,
+    project_id: str,
+    mock_github_api: respx.Router,
+    status_code: int,
+) -> None:
+    """Anonymous throttling should not force a public GitHub repo into the inaccessible path."""
+    mock_rate_limited_public_repo(
+        mock_github_api, owner="public", repo="repo", status_code=status_code
+    )
+
+    result = await service.validate_repository(
+        "https://github.com/public/repo", project_id=project_id
+    )
+
+    assert result.accessible is True
+    assert "public repository" in result.message
+    assert result.github_app_name is None
 
 
 @pytest.mark.asyncio

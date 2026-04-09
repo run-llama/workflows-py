@@ -1,5 +1,9 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 LlamaIndex Inc.
+
 import base64
-from typing import Callable
+from dataclasses import dataclass
+from typing import Callable, Generic, Literal, TypeVar
 
 import httpx
 from aiocache import cached
@@ -7,6 +11,16 @@ from pydantic import TypeAdapter
 
 from ._github_auth import get_github_app_auth
 from .github_api_schema import GithubAppInstallation, GitHubOwnerInfo, GitHubRepository
+
+ProbeStatus = Literal["found", "not_found", "inconclusive"]
+T = TypeVar("T")
+
+
+@dataclass
+class GitHubProbeResult(Generic[T]):
+    status: ProbeStatus
+    value: T | None = None
+    status_code: int | None = None
 
 
 class GitHubApiClient:
@@ -32,6 +46,24 @@ class GitHubApiClient:
             response.raise_for_status()
             return None  # unreachable, but satisfies type checker
 
+    async def probe_owner_info(self, owner: str) -> GitHubProbeResult[GitHubOwnerInfo]:
+        """Probe owner information without treating throttling as a hard failure."""
+        response = await self.client.get(f"/users/{owner}", timeout=10.0)
+        if response.status_code == 200:
+            data = response.json()
+            return GitHubProbeResult(
+                status="found",
+                value=GitHubOwnerInfo(
+                    id=data["id"], login=data["login"], type=data["type"]
+                ),
+                status_code=200,
+            )
+        if response.status_code == 404:
+            return GitHubProbeResult(status="not_found", status_code=404)
+        return GitHubProbeResult(
+            status="inconclusive", status_code=response.status_code
+        )
+
     async def get_repository_info(
         self, owner: str, repo: str
     ) -> GitHubRepository | None:
@@ -42,6 +74,23 @@ class GitHubApiClient:
             return None
         response.raise_for_status()
         return GitHubRepository.model_validate(response.json())
+
+    async def probe_repository_info(
+        self, owner: str, repo: str
+    ) -> GitHubProbeResult[GitHubRepository]:
+        """Probe repository information without treating throttling as a hard failure."""
+        response = await self.client.get(f"/repos/{owner}/{repo}")
+        if response.status_code == 200:
+            return GitHubProbeResult(
+                status="found",
+                value=GitHubRepository.model_validate(response.json()),
+                status_code=200,
+            )
+        if response.status_code == 404:
+            return GitHubProbeResult(status="not_found", status_code=404)
+        return GitHubProbeResult(
+            status="inconclusive", status_code=response.status_code
+        )
 
     async def get_commit_sha(self, owner: str, repo: str, ref: str) -> str | None:
         """Resolve any git ref (branch, tag, full SHA, short SHA) to a full commit SHA.
