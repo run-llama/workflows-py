@@ -44,10 +44,8 @@ def parse_github_repo_url(repo_url: str) -> tuple[str, str]:
     Raises:
         ValueError: If URL format is not recognized
     """
-    # Remove .git suffix if present
     url = repo_url.rstrip("/").removesuffix(".git")
 
-    # Handle different GitHub URL formats
     patterns = [
         r"https://github\.com/([^/]+)/([^/]+)",
         r"git@github\.com:([^/]+)/([^/]+)",
@@ -222,7 +220,6 @@ def _checkout_ref(repo: Repo, git_ref: str) -> None:
     if target_sha is None:
         raise GitAccessError(f"Git ref not found: {git_ref}")
 
-    # Detach HEAD onto the target sha and reset the working tree.
     repo.refs.set_symbolic_ref(_HEAD_REF, _DETACHED_BRANCH_REF)
     repo.refs[_DETACHED_BRANCH_REF] = target_sha
     porcelain.reset(repo, "hard", target_sha.decode())
@@ -282,8 +279,6 @@ def clone_repo(
     if is_sha_ref:
         effective_depth = None
 
-    # porcelain.clone forwards transport-specific kwargs via **kwargs typed as
-    # Any; build the dict dynamically to keep static checkers quiet.
     transport_kwargs: dict[str, Any] = {}
     if user is not None:
         transport_kwargs["username"] = user
@@ -382,8 +377,6 @@ def _probe_remote(
     except Exception:
         return False
     try:
-        # `path` is the str path component returned by dulwich; the
-        # transport's `get_refs` expects bytes.
         client.get_refs(path.encode() if isinstance(path, str) else path)
         return True
     except Exception:
@@ -404,9 +397,6 @@ def validate_git_credential_access(repository_url: str, basic_auth: str) -> bool
 
 
 def is_git_repo() -> bool:
-    """
-    checks if the cwd is a git repo
-    """
     try:
         Repo.discover(start=str(Path.cwd())).close()
         return True
@@ -415,9 +405,6 @@ def is_git_repo() -> bool:
 
 
 def list_remotes() -> list[str]:
-    """
-    list the remote urls for the current git repo
-    """
     try:
         repo = Repo.discover(start=str(Path.cwd()))
     except NotGitRepository as e:
@@ -439,9 +426,6 @@ def list_remotes() -> list[str]:
 
 
 def get_current_branch() -> str | None:
-    """
-    get the current branch for the current git repo
-    """
     try:
         repo = Repo.discover(start=str(Path.cwd()))
     except NotGitRepository as e:
@@ -461,9 +445,6 @@ def get_current_branch() -> str | None:
 
 
 def get_commit_sha_for_ref(ref: str) -> str | None:
-    """
-    get the commit SHA for a specified ref (branch, commit, HEAD...)
-    """
     try:
         repo = Repo.discover(start=str(Path.cwd()))
     except NotGitRepository as e:
@@ -494,9 +475,6 @@ def get_commit_sha_for_ref(ref: str) -> str | None:
 
 
 def get_git_root() -> Path:
-    """
-    get the root of the current git repo
-    """
     try:
         repo = Repo.discover(start=str(Path.cwd()))
     except NotGitRepository as e:

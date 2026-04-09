@@ -38,8 +38,6 @@ from .github_api_client import (
     pat_api_client,
 )
 
-# Candidate config filenames discovered in the deployment directory when
-# fetching via the GitHub Contents API.
 _CONFIG_FILES = (
     "llama_agents.toml",
     "llama_deploy.toml",
@@ -47,6 +45,22 @@ _CONFIG_FILES = (
     "llama_agents.yaml",
     "llama_deploy.yaml",
 )
+
+_CONFIG_EXTENSIONS = (".yaml", ".yml", ".toml")
+
+
+def _looks_like_config_file(path: str) -> bool:
+    lower = path.lower()
+    return any(lower.endswith(ext) for ext in _CONFIG_EXTENSIONS)
+
+
+def _deployment_base_dir(deployment_rel_path: str) -> Path:
+    """Return the directory that contains the deployment config."""
+    if _looks_like_config_file(deployment_rel_path):
+        return Path(deployment_rel_path).parent
+    if deployment_rel_path not in ("", "."):
+        return Path(deployment_rel_path)
+    return Path(".")
 
 
 @dataclass
@@ -205,12 +219,10 @@ class GitService:
 
     def _is_github_repository(self, repository_url: str) -> bool:
         """Check if the repository URL is a GitHub repository."""
-        # Handle SSH shorthand: git@github.com:owner/repo.git
         if repository_url.startswith("git@"):
             host = repository_url.split("@", 1)[1].split(":", 1)[0]
             return host == "github.com"
 
-        # Handle URLs with scheme (https://, ssh://, git://) and schemeless (github.com/...)
         url = repository_url
         if "://" not in url:
             url = "https://" + url
@@ -235,7 +247,6 @@ class GitService:
                 )
             )
 
-        # Probe public access via the GitHub API to skip the cloning fallback.
         public_probe = await GitHubApiClient().probe_repository_info(owner, repo)
         public_probe_inconclusive = public_probe.status == "inconclusive"
         if (
@@ -257,7 +268,6 @@ class GitService:
         github_app_auth = get_github_app_auth()
         org_installation = None
 
-        # Check GitHub App access first (preferred method)
         if github_app_auth:
             repo_installation = await github_app_api_client.get_repository_installation(
                 owner, repo
@@ -287,7 +297,6 @@ class GitService:
             else:
                 logger.info("No GitHub App installation found for %s/%s", owner, repo)
 
-        # Try PAT validation (provided PAT or existing deployment PAT)
         pat_to_test = pat or existing_pat
 
         if pat_to_test:
@@ -492,14 +501,12 @@ class GitService:
     ) -> GitAccessType:
         """Validate non-GitHub repository access using git commands."""
 
-        # First, try public access
         if await asyncio.to_thread(validate_git_public_access, repository_url):
             return GitRepository(
                 url=repository_url,
                 access_token=None,
             )
 
-        # Try PAT/credential validation (provided PAT or existing deployment PAT)
         pat_to_test = pat or existing_pat
 
         if pat_to_test:
@@ -519,7 +526,6 @@ class GitService:
                     message="Personal Access Token does not have access to this repository.",
                 )
 
-        # No access method worked
         logger.warning(
             "Generic repo inaccessible: %s — private or does not exist",
             repository_url,
@@ -537,7 +543,6 @@ class GitService:
         if not deployment_id:
             return False
 
-        # Only obsolete if we have both PAT and GitHub App configured
         github_app_auth = get_github_app_auth()
         if not github_app_auth:
             return False
@@ -549,7 +554,6 @@ class GitService:
         if not deployment_id:
             return False
 
-        # For non-GitHub repos, PAT is obsolete if repo is now public and deployment has PAT
         has_pat = await k8s_client.has_deployment_pat(deployment_id)
         return has_pat
 
@@ -682,7 +686,6 @@ class GitService:
                 )
             repo_root = Path(temp_dir)
             deployment_rel_path = deployment_file_path or DEFAULT_DEPLOYMENT_FILE_PATH
-            # Parse config; this supersedes the older heuristic validate_deployment_file
             config_path = repo_root / deployment_rel_path
             try:
                 config = read_deployment_config(repo_root, config_path)
@@ -732,9 +735,6 @@ class GitService:
 
         client = await self._github_client_for_access(access)
 
-        # Resolve the ref to a SHA. If git_ref is None, fall back to the
-        # default branch (reusing the cached value from the access probe
-        # when possible to avoid a duplicate /repos/<owner>/<repo> call).
         try:
             target_ref = git_ref
             if target_ref is None:
@@ -799,8 +799,6 @@ class GitService:
                     error_message=f"Invalid deployment config: {str(e)}",
                 )
 
-            # If the config declares a UI directory, fetch its package.json so
-            # the UI build path can resolve.
             if config.ui and config.ui.directory:
                 try:
                     await self._fetch_ui_package_json(
@@ -819,7 +817,6 @@ class GitService:
                         repo,
                         e,
                     )
-                # Re-parse so the UI metadata can be merged from package.json.
                 try:
                     config = await asyncio.to_thread(
                         read_deployment_config, repo_root, config_path
@@ -877,13 +874,7 @@ class GitService:
         on-disk parser (`read_deployment_config`) can read them. Returns
         True if at least one file was fetched.
         """
-        # Decide whether deployment_rel_path is a directory or a specific file.
-        lower = deployment_rel_path.lower()
-        is_file = (
-            lower.endswith(".yaml") or lower.endswith(".yml") or lower.endswith(".toml")
-        )
-
-        if is_file:
+        if _looks_like_config_file(deployment_rel_path):
             content = await client.get_file_contents(
                 owner, repo, deployment_rel_path, ref
             )
@@ -894,7 +885,6 @@ class GitService:
             target.write_bytes(content)
             return True
 
-        # Treat as a directory containing one of the candidate config files.
         config_dir = (
             (repo_root / deployment_rel_path)
             if deployment_rel_path not in ("", ".")
@@ -931,17 +921,7 @@ class GitService:
         repo_root: Path,
     ) -> bool:
         """Fetch ``package.json`` for the UI directory and write it to disk."""
-        lower = deployment_rel_path.lower()
-        is_file = (
-            lower.endswith(".yaml") or lower.endswith(".yml") or lower.endswith(".toml")
-        )
-        base_dir = (
-            Path(deployment_rel_path).parent
-            if is_file
-            else Path(deployment_rel_path)
-            if deployment_rel_path not in ("", ".")
-            else Path(".")
-        )
+        base_dir = _deployment_base_dir(deployment_rel_path)
         relative_pkg_path = base_dir / ui_directory / "package.json"
         api_path = relative_pkg_path.as_posix().removeprefix("./")
 

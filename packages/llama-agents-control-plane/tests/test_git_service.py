@@ -2,6 +2,7 @@ from __future__ import annotations
 
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 LlamaIndex Inc.
+import base64
 from typing import Generator
 from unittest.mock import patch
 
@@ -704,8 +705,6 @@ async def test_validate_github_application_uses_contents_api_not_clone(
     mock_github_api: respx.Router,
 ) -> None:
     """validate_git_application for a GitHub URL must not call clone_repo."""
-    import base64
-
     # Repo is public so the access lookup short-circuits.
     mock_github_repo_and_owner(
         mock_github_api,

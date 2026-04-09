@@ -130,8 +130,7 @@ class GitHubApiClient:
             return None
         response.raise_for_status()
         data = response.json()
-        # The Contents API returns a list when the path resolves to a directory.
-        if isinstance(data, list):
+        if isinstance(data, list):  # directory listing, not a file
             return None
         if data.get("type") != "file":
             return None
