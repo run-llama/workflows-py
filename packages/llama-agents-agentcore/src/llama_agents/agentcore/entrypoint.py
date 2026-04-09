@@ -146,18 +146,33 @@ def _get_sqlite_db_path() -> str:
 def _cleanup_stale_sqlite_locks(db_path: str) -> None:
     """Remove stale WAL/SHM files left by a crashed previous session.
 
-    If the main DB file exists but no other process has it open, leftover
-    ``-wal`` and ``-shm`` files can prevent new connections from acquiring
-    a write lock.  Removing them lets SQLite start fresh.
+    Only removes the files if we can successfully acquire an exclusive
+    lock on the database, proving no other process has it open.
     """
     import os
+    import sqlite3
 
-    for suffix in ("-wal", "-shm"):
-        lock_file = db_path + suffix
-        if os.path.exists(lock_file):
+    wal_path = db_path + "-wal"
+    shm_path = db_path + "-shm"
+    if not os.path.exists(wal_path) and not os.path.exists(shm_path):
+        return
+
+    try:
+        conn = sqlite3.connect(db_path, timeout=1.0)
+        # If we can get an exclusive lock, no other process is using the DB.
+        conn.execute("BEGIN EXCLUSIVE")
+        conn.rollback()
+        conn.close()
+    except sqlite3.OperationalError:
+        # Another process actually has the DB open — leave files alone.
+        logger.debug("SQLite lock files exist and DB is actively locked; skipping cleanup.")
+        return
+
+    for path in (wal_path, shm_path):
+        if os.path.exists(path):
             try:
-                os.remove(lock_file)
-                logger.info("Removed stale SQLite lock file: %s", lock_file)
+                os.remove(path)
+                logger.info("Removed stale SQLite lock file: %s", path)
             except OSError:
                 pass
 
