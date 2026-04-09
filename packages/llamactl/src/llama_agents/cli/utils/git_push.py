@@ -117,7 +117,7 @@ def internal_push_refspec(git_ref: str | None) -> tuple[str, str]:
     if git_ref is None:
         return "main", "refs/heads/main"
 
-    if git_ref is not None and FULL_SHA_RE.fullmatch(git_ref):
+    if FULL_SHA_RE.fullmatch(git_ref):
         return git_ref, f"refs/llamactl/pins/{git_ref}"
 
     if git_ref.startswith("refs/"):

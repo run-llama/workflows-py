@@ -6,6 +6,7 @@ Backed by the pure-Python ``dulwich`` library so the host does not need a
 """
 
 import asyncio
+import contextlib
 import io
 import ipaddress
 import re
@@ -13,6 +14,7 @@ import shutil
 import socket
 import tempfile
 import urllib.parse
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -31,6 +33,19 @@ _REFS_HEADS = b"refs/heads/"
 _REFS_TAGS = b"refs/tags/"
 _REFS_REMOTES = b"refs/remotes/"
 _DETACHED_BRANCH_REF = Ref(b"refs/heads/_llama_checkout")
+
+
+@contextlib.contextmanager
+def _discover_repo() -> Iterator[Repo]:
+    """Discover the repo at cwd, yield it, and guarantee close."""
+    try:
+        repo = Repo.discover(start=str(Path.cwd()))
+    except NotGitRepository as e:
+        raise GitAccessError("Not a git repository") from e
+    try:
+        yield repo
+    finally:
+        repo.close()
 
 
 def parse_github_repo_url(repo_url: str) -> tuple[str, str]:
@@ -215,7 +230,7 @@ def resolve_ref_in_repo(repo: Repo, git_ref: str) -> bytes | None:
             pass
         except GitAccessError:
             raise
-        except Exception:
+        except (KeyError, OSError):
             pass
 
     return None
@@ -461,19 +476,14 @@ async def validate_git_credential_access(repository_url: str, basic_auth: str) -
 
 def is_git_repo() -> bool:
     try:
-        Repo.discover(start=str(Path.cwd())).close()
-        return True
-    except NotGitRepository:
+        with _discover_repo():
+            return True
+    except GitAccessError:
         return False
 
 
 def list_remotes() -> list[str]:
-    try:
-        repo = Repo.discover(start=str(Path.cwd()))
-    except NotGitRepository as e:
-        raise GitAccessError("Not a git repository") from e
-
-    try:
+    with _discover_repo() as repo:
         config = repo.get_config()
         urls: list[str] = []
         for section in config.sections():
@@ -484,16 +494,10 @@ def list_remotes() -> list[str]:
                     continue
                 urls.append(url.decode())
         return urls
-    finally:
-        repo.close()
 
 
 def get_current_branch() -> str | None:
-    try:
-        repo = Repo.discover(start=str(Path.cwd()))
-    except NotGitRepository as e:
-        raise GitAccessError("Not a git repository") from e
-    try:
+    with _discover_repo() as repo:
         head_ref = repo.refs.read_ref(_HEAD_REF)
         if head_ref is None:
             return None
@@ -503,18 +507,11 @@ def get_current_branch() -> str | None:
             return None
         branch = head_ref[len(_REFS_HEADS) :].decode()
         return branch or None
-    finally:
-        repo.close()
 
 
 def get_commit_sha_for_ref(ref: str) -> str | None:
-    try:
-        repo = Repo.discover(start=str(Path.cwd()))
-    except NotGitRepository as e:
-        raise GitAccessError("Not a git repository") from e
-
-    ref_bytes = ref.encode()
-    try:
+    with _discover_repo() as repo:
+        ref_bytes = ref.encode()
         for candidate in (
             Ref(ref_bytes),
             Ref(_REFS_HEADS + ref_bytes),
@@ -533,19 +530,11 @@ def get_commit_sha_for_ref(ref: str) -> str | None:
             except KeyError:
                 return None
         return None
-    finally:
-        repo.close()
 
 
 def get_git_root() -> Path:
-    try:
-        repo = Repo.discover(start=str(Path.cwd()))
-    except NotGitRepository as e:
-        raise GitAccessError("Not a git repository") from e
-    try:
+    with _discover_repo() as repo:
         return Path(repo.path)
-    finally:
-        repo.close()
 
 
 def working_tree_has_changes() -> bool:
@@ -571,51 +560,47 @@ def get_unpushed_commits_count() -> int | None:
     - Returns 0 if the status cannot be determined
     """
     try:
-        repo = Repo.discover(start=str(Path.cwd()))
-    except NotGitRepository:
+        with _discover_repo() as repo:
+            try:
+                head_ref = repo.refs.read_ref(_HEAD_REF)
+            except Exception:
+                return 0
+            if not head_ref or not head_ref.startswith(b"ref: "):
+                # Detached HEAD — no upstream concept
+                return None
+            branch_full = head_ref[5:]
+            if not branch_full.startswith(_REFS_HEADS):
+                return None
+            branch_name = branch_full[len(_REFS_HEADS) :]
+
+            config = repo.get_config()
+            try:
+                merge_ref = config.get((b"branch", branch_name), b"merge")
+                remote = config.get((b"branch", branch_name), b"remote")
+            except KeyError:
+                return None
+
+            if not merge_ref.startswith(_REFS_HEADS):
+                return None
+            upstream_branch = merge_ref[len(_REFS_HEADS) :]
+            tracking_ref = Ref(_REFS_REMOTES + remote + b"/" + upstream_branch)
+
+            try:
+                local_sha = repo.refs[_HEAD_REF]
+                upstream_sha = repo.refs[tracking_ref]
+            except KeyError:
+                return 0
+
+            try:
+                walker = Walker(
+                    repo.object_store,
+                    [local_sha],
+                    exclude=[upstream_sha],
+                    max_entries=1001,
+                )
+                count = sum(1 for _ in walker)
+            except Exception:
+                return 0
+            return count
+    except GitAccessError:
         return 0
-
-    try:
-        try:
-            head_ref = repo.refs.read_ref(_HEAD_REF)
-        except Exception:
-            return 0
-        if not head_ref or not head_ref.startswith(b"ref: "):
-            # Detached HEAD — no upstream concept
-            return None
-        branch_full = head_ref[5:]
-        if not branch_full.startswith(_REFS_HEADS):
-            return None
-        branch_name = branch_full[len(_REFS_HEADS) :]
-
-        config = repo.get_config()
-        try:
-            merge_ref = config.get((b"branch", branch_name), b"merge")
-            remote = config.get((b"branch", branch_name), b"remote")
-        except KeyError:
-            return None
-
-        if not merge_ref.startswith(_REFS_HEADS):
-            return None
-        upstream_branch = merge_ref[len(_REFS_HEADS) :]
-        tracking_ref = Ref(_REFS_REMOTES + remote + b"/" + upstream_branch)
-
-        try:
-            local_sha = repo.refs[_HEAD_REF]
-            upstream_sha = repo.refs[tracking_ref]
-        except KeyError:
-            return 0
-
-        try:
-            walker = Walker(
-                repo.object_store,
-                [local_sha],
-                exclude=[upstream_sha],
-                max_entries=1001,
-            )
-            count = sum(1 for _ in walker)
-        except Exception:
-            return 0
-        return count
-    finally:
-        repo.close()
