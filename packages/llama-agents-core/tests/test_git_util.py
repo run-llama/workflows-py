@@ -18,6 +18,7 @@ from llama_agents.core.git.git_util import (
     GitCloneResult,
     _checkout_ref,
     clone_repo,
+    clone_repo_sync,
     get_commit_sha_for_ref,
     get_unpushed_commits_count,
     is_git_repo,
@@ -38,6 +39,38 @@ def _make_fake_repo(head_sha: str = "abc123def456" * 3 + "0000") -> MagicMock:
     fake_repo.refs.read_ref.return_value = b"ref: refs/heads/main"
     fake_repo.close = MagicMock()
     return fake_repo
+
+
+def _make_clone_source(path: Path) -> tuple[str, str, str]:
+    """Create a git repo with two commits and a v1.0 tag on the first.
+
+    Returns (first_sha, second_sha, default_branch_name).
+    """
+    porcelain.init(str(path))
+    (path / "f.txt").write_text("hello")
+    porcelain.add(str(path), [str(path / "f.txt")])
+    sha1 = porcelain.commit(
+        str(path),
+        message=b"first",
+        author=b"t <t@example.com>",
+        committer=b"t <t@example.com>",
+    )
+    repo = Repo(str(path))
+    repo.refs[Ref(b"refs/tags/v1.0")] = sha1  # type: ignore[index]  # ty: ignore[invalid-assignment]
+    head_ref = repo.refs.read_ref(Ref(b"HEAD"))
+    assert head_ref is not None
+    branch = head_ref.removeprefix(b"ref: refs/heads/").decode()
+    repo.close()
+
+    (path / "f.txt").write_text("updated")
+    porcelain.add(str(path), [str(path / "f.txt")])
+    sha2 = porcelain.commit(
+        str(path),
+        message=b"second",
+        author=b"t <t@example.com>",
+        committer=b"t <t@example.com>",
+    )
+    return sha1.decode(), sha2.decode(), branch
 
 
 def test_parse_github_repo_url() -> None:
@@ -79,39 +112,26 @@ def test_parse_github_repo_url() -> None:
         parse_github_repo_url("https://github.com/owner")
 
 
-@patch(f"{GIT_UTIL}.porcelain.clone")
-@pytest.mark.asyncio
-async def test_clone_repo_branch_success(mock_clone: MagicMock) -> None:
+def test_clone_repo_branch_success(tmp_path: Path) -> None:
     """clone_repo with a branch ref returns the resolved SHA and ref."""
-    mock_clone.return_value = _make_fake_repo("a" * 40)
+    src = tmp_path / "source"
+    sha1, sha2, branch = _make_clone_source(src)
 
-    with tempfile.TemporaryDirectory() as t:
-        result = await clone_repo(
-            "https://github.com/user/repo.git", "main", dest_dir=Path(t) / "sub"
-        )
+    with patch(f"{GIT_UTIL}.validate_git_url"):
+        result = clone_repo_sync(str(src), branch, dest_dir=tmp_path / "dest")
 
-    assert result == GitCloneResult(git_sha="a" * 40, git_ref="main")
-    assert mock_clone.call_count == 1
-    call = mock_clone.call_args
-    # branch is passed through as bytes
-    assert call.kwargs["branch"] == b"main"
-    assert call.kwargs["source"] == "https://github.com/user/repo.git"
-    assert call.kwargs["depth"] is None
+    assert result == GitCloneResult(git_sha=sha2, git_ref=branch)
 
 
-@patch(f"{GIT_UTIL}.porcelain.clone")
-@pytest.mark.asyncio
-async def test_clone_repo_no_ref(mock_clone: MagicMock) -> None:
+def test_clone_repo_no_ref(tmp_path: Path) -> None:
     """clone_repo with no ref resolves the remote default branch."""
-    mock_clone.return_value = _make_fake_repo("b" * 40)
+    src = tmp_path / "source"
+    sha1, sha2, branch = _make_clone_source(src)
 
-    with tempfile.TemporaryDirectory() as t:
-        result = await clone_repo(
-            "https://github.com/user/repo.git", dest_dir=Path(t) / "sub"
-        )
+    with patch(f"{GIT_UTIL}.validate_git_url"):
+        result = clone_repo_sync(str(src), dest_dir=tmp_path / "dest")
 
-    assert result == GitCloneResult(git_sha="b" * 40, git_ref="main")
-    assert mock_clone.call_args.kwargs["branch"] is None
+    assert result == GitCloneResult(git_sha=sha2, git_ref=branch)
 
 
 @patch(f"{GIT_UTIL}.porcelain.clone")
@@ -135,59 +155,33 @@ async def test_clone_repo_no_ref_detached_resolves_tag(mock_clone: MagicMock) ->
     assert result == GitCloneResult(git_sha=head_sha.decode(), git_ref="v1.2.3")
 
 
-@patch(f"{GIT_UTIL}.porcelain.clone")
-@pytest.mark.asyncio
-async def test_clone_repo_full_sha(mock_clone: MagicMock) -> None:
+def test_clone_repo_full_sha(tmp_path: Path) -> None:
     """A 40-char SHA is fetched as the default ref then checked out."""
-    sha = "deadbeef" * 5  # 40 chars
-    fake_repo = MagicMock()
-    fake_repo.head.return_value = sha.encode()
-    fake_repo.refs.read_ref.return_value = b"ref: refs/heads/main"
-    fake_repo.refs.__getitem__.return_value = sha.encode()
-    mock_clone.return_value = fake_repo
+    src = tmp_path / "source"
+    sha1, sha2, branch = _make_clone_source(src)
 
-    with patch(f"{GIT_UTIL}._checkout_ref") as mock_checkout:
-        with tempfile.TemporaryDirectory() as t:
-            result = await clone_repo(
-                "https://github.com/user/repo.git",
-                git_ref=sha,
-                dest_dir=Path(t) / "sub",
-            )
+    with patch(f"{GIT_UTIL}.validate_git_url"):
+        result = clone_repo_sync(str(src), git_ref=sha1, dest_dir=tmp_path / "dest")
 
-    # branch=None when ref is a SHA — let dulwich pick the default branch first
-    assert mock_clone.call_args.kwargs["branch"] is None
-    mock_checkout.assert_called_once()
-    assert result.git_sha == sha
-    assert result.git_ref == sha
+    assert result.git_sha == sha1
+    assert result.git_ref == sha1
 
 
-@patch(f"{GIT_UTIL}.porcelain.clone")
-@pytest.mark.asyncio
-async def test_clone_repo_explicit_git_sha_preserves_ref_metadata(
-    mock_clone: MagicMock,
-) -> None:
+def test_clone_repo_explicit_git_sha_preserves_ref_metadata(tmp_path: Path) -> None:
     """An explicit SHA checkout keeps the symbolic ref as metadata."""
-    sha = "deadbeef" * 5  # 40 chars
-    fake_repo = MagicMock()
-    fake_repo.head.return_value = sha.encode()
-    fake_repo.refs.read_ref.return_value = b"ref: refs/heads/main"
-    fake_repo.refs.__getitem__.return_value = sha.encode()
-    mock_clone.return_value = fake_repo
+    src = tmp_path / "source"
+    sha1, sha2, branch = _make_clone_source(src)
 
-    with patch(f"{GIT_UTIL}._checkout_ref") as mock_checkout:
-        with tempfile.TemporaryDirectory() as t:
-            result = await clone_repo(
-                "https://github.com/user/repo.git",
-                git_ref="feature/branch",
-                git_sha=sha,
-                dest_dir=Path(t) / "sub",
-                depth=1,
-            )
+    with patch(f"{GIT_UTIL}.validate_git_url"):
+        result = clone_repo_sync(
+            str(src),
+            git_ref="my-feature",
+            git_sha=sha1,
+            dest_dir=tmp_path / "dest",
+            depth=1,
+        )
 
-    assert mock_clone.call_args.kwargs["branch"] is None
-    assert mock_clone.call_args.kwargs["depth"] is None
-    mock_checkout.assert_called_once_with(fake_repo, sha)
-    assert result == GitCloneResult(git_sha=sha, git_ref="feature/branch")
+    assert result == GitCloneResult(git_sha=sha1, git_ref="my-feature")
 
 
 @patch(f"{GIT_UTIL}.porcelain.clone")
@@ -223,27 +217,19 @@ async def test_clone_repo_explicit_git_sha_does_not_require_initial_head(
     assert result == GitCloneResult(git_sha=sha, git_ref="feature/branch")
 
 
-@patch(f"{GIT_UTIL}.porcelain.clone")
-@pytest.mark.asyncio
-async def test_clone_repo_short_sha_like_ref(mock_clone: MagicMock) -> None:
+def test_clone_repo_short_sha_like_ref(tmp_path: Path) -> None:
     """Short SHA-like refs are cloned without branch= and checked out after clone."""
-    abbrev_sha = "deadbeef"
-    fake_repo = _make_fake_repo("a" * 40)
-    mock_clone.return_value = fake_repo
+    src = tmp_path / "source"
+    sha1, sha2, branch = _make_clone_source(src)
+    short = sha1[:8]
 
-    with patch(f"{GIT_UTIL}._checkout_ref") as mock_checkout:
-        with tempfile.TemporaryDirectory() as t:
-            result = await clone_repo(
-                "https://github.com/user/repo.git",
-                git_ref=abbrev_sha,
-                dest_dir=Path(t) / "sub",
-                depth=1,
-            )
+    with patch(f"{GIT_UTIL}.validate_git_url"):
+        result = clone_repo_sync(
+            str(src), git_ref=short, dest_dir=tmp_path / "dest", depth=1
+        )
 
-    assert mock_clone.call_args.kwargs["branch"] is None
-    assert mock_clone.call_args.kwargs["depth"] is None
-    mock_checkout.assert_called_once_with(fake_repo, abbrev_sha)
-    assert result == GitCloneResult(git_sha="a" * 40, git_ref=abbrev_sha)
+    assert result.git_sha == sha1
+    assert result.git_ref == short
 
 
 @patch(f"{GIT_UTIL}.porcelain.clone")
@@ -377,28 +363,36 @@ async def test_clone_repo_rejects_dangerous_url() -> None:
 # Lightweight tests for new git helpers
 
 
-@patch(f"{GIT_UTIL}.porcelain.status")
-@patch(f"{GIT_UTIL}.Path.cwd")
-def test_working_tree_has_changes_true(_cwd: MagicMock, mock_status: MagicMock) -> None:
-    mock_status.return_value = MagicMock(
-        staged={"add": [], "delete": [], "modify": ["file.py"]},
-        unstaged=[],
-        untracked=[],
+def test_working_tree_has_changes_true(tmp_path: Path) -> None:
+    porcelain.init(str(tmp_path))
+    (tmp_path / "f.txt").write_text("hello")
+    porcelain.add(str(tmp_path), [str(tmp_path / "f.txt")])
+    porcelain.commit(
+        str(tmp_path),
+        message=b"init",
+        author=b"t <t@example.com>",
+        committer=b"t <t@example.com>",
     )
-    assert working_tree_has_changes() is True
+    (tmp_path / "f.txt").write_text("changed")
+    porcelain.add(str(tmp_path), [str(tmp_path / "f.txt")])
+
+    with patch(f"{GIT_UTIL}.Path.cwd", return_value=tmp_path):
+        assert working_tree_has_changes() is True
 
 
-@patch(f"{GIT_UTIL}.porcelain.status")
-@patch(f"{GIT_UTIL}.Path.cwd")
-def test_working_tree_has_changes_false(
-    _cwd: MagicMock, mock_status: MagicMock
-) -> None:
-    mock_status.return_value = MagicMock(
-        staged={"add": [], "delete": [], "modify": []},
-        unstaged=[],
-        untracked=[],
+def test_working_tree_has_changes_false(tmp_path: Path) -> None:
+    porcelain.init(str(tmp_path))
+    (tmp_path / "f.txt").write_text("hello")
+    porcelain.add(str(tmp_path), [str(tmp_path / "f.txt")])
+    porcelain.commit(
+        str(tmp_path),
+        message=b"init",
+        author=b"t <t@example.com>",
+        committer=b"t <t@example.com>",
     )
-    assert working_tree_has_changes() is False
+
+    with patch(f"{GIT_UTIL}.Path.cwd", return_value=tmp_path):
+        assert working_tree_has_changes() is False
 
 
 @patch(f"{GIT_UTIL}.porcelain.status", side_effect=Exception("boom"))
