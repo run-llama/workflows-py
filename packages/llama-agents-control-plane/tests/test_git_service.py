@@ -658,3 +658,117 @@ async def test_github_org_installation_selected_repos_without_access(
         result.github_app_installation_url
         == "https://github.com/apps/TestApp/installations/new/permissions?target_id=12345"
     )
+
+
+@pytest.mark.asyncio
+async def test_validate_github_application_uses_contents_api_not_clone(
+    service: GitService,
+    project_id: str,
+    mock_github_api: respx.Router,
+) -> None:
+    """validate_git_application for a GitHub URL must not call clone_repo."""
+    import base64
+
+    # Repo is public so the access lookup short-circuits.
+    mock_github_repo_and_owner(
+        mock_github_api,
+        owner="acme",
+        repo="agent-app",
+        repo_private=False,
+    )
+
+    # Resolve a branch ref to a SHA via the Commits API.
+    mock_github_api.get(
+        "https://api.github.com/repos/acme/agent-app/commits/main"
+    ).mock(
+        return_value=respx.MockResponse(
+            200,
+            json={"sha": "abc123def4567890abc123def4567890abc12345"},
+        )
+    )
+
+    # Provide a pyproject.toml with a [tool.llamadeploy] block via Contents API.
+    pyproject_toml = (
+        b"[project]\nname = 'agent-app'\n\n"
+        b"[tool.llamadeploy]\nname = 'agent-app'\n"
+        b"workflows = { default = 'agent_app.workflow:app' }\n"
+    )
+    encoded = base64.b64encode(pyproject_toml).decode()
+    mock_github_api.get(
+        "https://api.github.com/repos/acme/agent-app/contents/pyproject.toml"
+    ).mock(
+        return_value=respx.MockResponse(
+            200,
+            json={
+                "type": "file",
+                "name": "pyproject.toml",
+                "content": encoded,
+                "encoding": "base64",
+            },
+        )
+    )
+    # Other config candidates return 404.
+    for filename in (
+        "llama_agents.toml",
+        "llama_deploy.toml",
+        "llama_agents.yaml",
+        "llama_deploy.yaml",
+    ):
+        mock_github_api.get(
+            f"https://api.github.com/repos/acme/agent-app/contents/{filename}"
+        ).mock(return_value=respx.MockResponse(404))
+
+    with patch(
+        f"{GIT_SERVICE}.clone_repo",
+        side_effect=AssertionError("clone_repo must not be called for GitHub URLs"),
+    ):
+        result = await service.validate_git_application(
+            repository_url="https://github.com/acme/agent-app",
+            git_ref="main",
+            deployment_file_path=".",
+        )
+
+    assert result.is_valid is True
+    assert result.git_sha == "abc123def4567890abc123def4567890abc12345"
+    assert result.git_ref == "main"
+
+
+@pytest.mark.asyncio
+async def test_validate_github_application_missing_config(
+    service: GitService,
+    project_id: str,
+    mock_github_api: respx.Router,
+) -> None:
+    """A repo with no recognized config files should report a clear error."""
+    mock_github_repo_and_owner(
+        mock_github_api,
+        owner="acme",
+        repo="empty-app",
+        repo_private=False,
+    )
+    mock_github_api.get(
+        "https://api.github.com/repos/acme/empty-app/commits/main"
+    ).mock(return_value=respx.MockResponse(200, json={"sha": "f" * 40}))
+    for filename in (
+        "llama_agents.toml",
+        "llama_deploy.toml",
+        "pyproject.toml",
+        "llama_agents.yaml",
+        "llama_deploy.yaml",
+    ):
+        mock_github_api.get(
+            f"https://api.github.com/repos/acme/empty-app/contents/{filename}"
+        ).mock(return_value=respx.MockResponse(404))
+
+    with patch(
+        f"{GIT_SERVICE}.clone_repo",
+        side_effect=AssertionError("clone_repo must not be called for GitHub URLs"),
+    ):
+        result = await service.validate_git_application(
+            repository_url="https://github.com/acme/empty-app",
+            git_ref="main",
+            deployment_file_path=".",
+        )
+
+    assert result.is_valid is False
+    assert "No deployment config found" in (result.error_message or "")

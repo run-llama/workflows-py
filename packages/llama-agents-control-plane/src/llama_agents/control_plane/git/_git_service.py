@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import shutil
 import tempfile
 import urllib.parse
 from dataclasses import dataclass
@@ -32,6 +33,16 @@ from .github_api_client import (
     github_app_api_client,
     installation_api_client,
     pat_api_client,
+)
+
+# Config files to fetch via the GitHub Contents API. Mirrors the platform's
+# RepoConfigService implementation.
+_CONFIG_FILES = (
+    "llama_agents.toml",
+    "llama_deploy.toml",
+    "pyproject.toml",
+    "llama_agents.yaml",
+    "llama_deploy.yaml",
 )
 
 
@@ -220,8 +231,14 @@ class GitService:
                 )
             )
 
-        # First, probe public access via git directly to avoid GitHub API rate limits.
-        if await asyncio.to_thread(validate_git_public_access, repository_url):
+        # First, probe public access via the GitHub API. Avoids the dulwich
+        # ls-remote round trip and stays consistent with the rest of the
+        # GitHub fast path.
+        try:
+            public_info = await GitHubApiClient().get_repository_info(owner, repo)
+        except HTTPStatusError:
+            public_info = None
+        if public_info is not None and public_info.private is False:
             logger.info("Access resolved for %s/%s: public", owner, repo)
             return GitRepository(url=repository_url, access_token=None)
 
@@ -583,6 +600,34 @@ class GitService:
                 error_message=access.message,
             )
 
+        if self._is_github_repository(repository_url):
+            return await self._validate_github_application(
+                repository_url=repository_url,
+                git_ref=git_ref,
+                deployment_file_path=deployment_file_path,
+                access=access,
+            )
+
+        return await self._validate_via_clone(
+            repository_url=repository_url,
+            git_ref=git_ref,
+            deployment_file_path=deployment_file_path,
+            auth=auth,
+        )
+
+    async def _validate_via_clone(
+        self,
+        repository_url: str,
+        git_ref: str | None,
+        deployment_file_path: str | None,
+        auth: str | None,
+    ) -> GitApplicationValidationResponse:
+        """Legacy validation path: clone the repo and parse config from disk.
+
+        Used for non-GitHub repositories where the GitHub Contents API is
+        unavailable. The clone goes through the dulwich-backed `clone_repo`
+        wrapped in `asyncio.to_thread` so it does not block the event loop.
+        """
         with tempfile.TemporaryDirectory() as temp_dir:
             try:
                 result = await asyncio.to_thread(
@@ -626,6 +671,248 @@ class GitService:
                 valid_deployment_file_path=deployment_file_path,
                 ui_build_output_path=ui_dist_relative_to_repo,
             )
+
+    async def _validate_github_application(
+        self,
+        repository_url: str,
+        git_ref: str | None,
+        deployment_file_path: str | None,
+        access: GitAccessType,
+    ) -> GitApplicationValidationResponse:
+        """Validate a GitHub repository's deployment config without cloning.
+
+        Mirrors the platform's `RepoConfigService.get_repository_config` flow:
+        resolve the ref via the Commits API, fetch candidate config files via
+        the Contents API, then parse the result on disk.
+        """
+        try:
+            owner, repo = parse_github_repo_url(repository_url)
+        except ValueError as e:
+            return GitApplicationValidationResponse(
+                is_valid=False,
+                error_message=str(e),
+            )
+
+        client = await self._github_client_for_access(access)
+
+        # Resolve the ref to a SHA. If git_ref is None, fall back to the
+        # default branch.
+        try:
+            target_ref = git_ref
+            if target_ref is None:
+                target_ref = await client.get_default_branch(owner, repo)
+            if target_ref is None:
+                return GitApplicationValidationResponse(
+                    is_valid=False,
+                    error_message=(
+                        f"Could not determine default branch for {owner}/{repo}."
+                    ),
+                )
+            commit_sha = await client.get_commit_sha(owner, repo, target_ref)
+        except HTTPStatusError as e:
+            return GitApplicationValidationResponse(
+                is_valid=False,
+                error_message=f"GitHub API error resolving ref: {e}",
+            )
+        if commit_sha is None:
+            return GitApplicationValidationResponse(
+                is_valid=False,
+                error_message=f"Git ref not found: {git_ref or target_ref}",
+            )
+
+        deployment_rel_path = deployment_file_path or DEFAULT_DEPLOYMENT_FILE_PATH
+
+        temp_dir = tempfile.mkdtemp(prefix="cp_repo_config_")
+        try:
+            repo_root = Path(temp_dir)
+            try:
+                fetched_any = await self._fetch_config_files(
+                    client, owner, repo, commit_sha, deployment_rel_path, repo_root
+                )
+            except HTTPStatusError as e:
+                return GitApplicationValidationResponse(
+                    is_valid=False,
+                    error_message=f"GitHub API error fetching config: {e}",
+                )
+
+            if not fetched_any:
+                return GitApplicationValidationResponse(
+                    is_valid=False,
+                    error_message=(
+                        f"No deployment config found at {deployment_rel_path}"
+                    ),
+                )
+
+            config_path = repo_root / deployment_rel_path
+            try:
+                config = await asyncio.to_thread(
+                    read_deployment_config, repo_root, config_path
+                )
+                config.validate_config()
+            except Exception as e:
+                return GitApplicationValidationResponse(
+                    is_valid=False,
+                    error_message=f"Invalid deployment config: {str(e)}",
+                )
+
+            # If the config declares a UI directory, fetch its package.json so
+            # the UI build path can resolve.
+            if config.ui and config.ui.directory:
+                try:
+                    await self._fetch_ui_package_json(
+                        client,
+                        owner,
+                        repo,
+                        commit_sha,
+                        deployment_rel_path,
+                        config.ui.directory,
+                        repo_root,
+                    )
+                except HTTPStatusError as e:
+                    logger.warning(
+                        "Failed to fetch UI package.json for %s/%s: %s",
+                        owner,
+                        repo,
+                        e,
+                    )
+                # Re-parse so the UI metadata can be merged from package.json.
+                try:
+                    config = await asyncio.to_thread(
+                        read_deployment_config, repo_root, config_path
+                    )
+                    config.validate_config()
+                except Exception as e:
+                    return GitApplicationValidationResponse(
+                        is_valid=False,
+                        error_message=f"Invalid deployment config: {str(e)}",
+                    )
+
+            config_parent = resolve_config_parent(repo_root, config_path)
+            ui_dist_relative_to_config = ui_build_output_path(config_parent, config)
+            ui_dist_relative_to_repo = (
+                (config_parent / ui_dist_relative_to_config).relative_to(repo_root)
+                if ui_dist_relative_to_config
+                else None
+            )
+
+            return GitApplicationValidationResponse(
+                is_valid=True,
+                git_sha=commit_sha,
+                git_ref=git_ref or target_ref,
+                valid_deployment_file_path=deployment_file_path,
+                ui_build_output_path=ui_dist_relative_to_repo,
+            )
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+    async def _github_client_for_access(self, access: GitAccessType) -> GitHubApiClient:
+        """Return a Contents-API client appropriate for the resolved access type."""
+        if isinstance(access, GitHubAppAccess):
+            installation_token = (
+                await github_app_api_client.get_installation_access_token(
+                    access.installation_id
+                )
+            )
+            return installation_api_client(installation_token)
+        if isinstance(access, GitRepository) and access.access_token:
+            # access_token is stored as "user:password" — strip the leading
+            # "x-access-token:" form when present.
+            token = access.access_token
+            if ":" in token:
+                token = token.split(":", 1)[1]
+            return pat_api_client(token)
+        return GitHubApiClient()
+
+    @staticmethod
+    async def _fetch_config_files(
+        client: GitHubApiClient,
+        owner: str,
+        repo: str,
+        ref: str,
+        deployment_rel_path: str,
+        repo_root: Path,
+    ) -> bool:
+        """Fetch candidate config files from the GitHub Contents API.
+
+        Writes any successfully fetched files into ``repo_root`` so the
+        on-disk parser (`read_deployment_config`) can read them. Returns
+        True if at least one file was fetched.
+        """
+        # Decide whether deployment_rel_path is a directory or a specific file.
+        lower = deployment_rel_path.lower()
+        is_file = (
+            lower.endswith(".yaml") or lower.endswith(".yml") or lower.endswith(".toml")
+        )
+
+        if is_file:
+            content = await client.get_file_contents(
+                owner, repo, deployment_rel_path, ref
+            )
+            if content is None:
+                return False
+            target = repo_root / deployment_rel_path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(content)
+            return True
+
+        # Treat as a directory containing one of the candidate config files.
+        config_dir = (
+            (repo_root / deployment_rel_path)
+            if deployment_rel_path not in ("", ".")
+            else repo_root
+        )
+        config_dir.mkdir(parents=True, exist_ok=True)
+
+        async def fetch(filename: str) -> tuple[str, bytes | None]:
+            file_path = (
+                f"{deployment_rel_path}/{filename}"
+                if deployment_rel_path not in ("", ".")
+                else filename
+            )
+            return filename, await client.get_file_contents(owner, repo, file_path, ref)
+
+        results = await asyncio.gather(*[fetch(name) for name in _CONFIG_FILES])
+        fetched_any = False
+        for filename, content in results:
+            if content is None:
+                continue
+            target = config_dir / filename
+            target.write_bytes(content)
+            fetched_any = True
+        return fetched_any
+
+    @staticmethod
+    async def _fetch_ui_package_json(
+        client: GitHubApiClient,
+        owner: str,
+        repo: str,
+        ref: str,
+        deployment_rel_path: str,
+        ui_directory: str,
+        repo_root: Path,
+    ) -> bool:
+        """Fetch ``package.json`` for the UI directory and write it to disk."""
+        lower = deployment_rel_path.lower()
+        is_file = (
+            lower.endswith(".yaml") or lower.endswith(".yml") or lower.endswith(".toml")
+        )
+        base_dir = (
+            Path(deployment_rel_path).parent
+            if is_file
+            else Path(deployment_rel_path)
+            if deployment_rel_path not in ("", ".")
+            else Path(".")
+        )
+        relative_pkg_path = base_dir / ui_directory / "package.json"
+        api_path = str(relative_pkg_path).replace("\\", "/").lstrip("./")
+
+        content = await client.get_file_contents(owner, repo, api_path, ref)
+        if content is None:
+            return False
+        target = repo_root / relative_pkg_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(content)
+        return True
 
 
 git_service = GitService()
