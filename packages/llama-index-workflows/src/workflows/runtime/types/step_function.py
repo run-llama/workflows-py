@@ -8,6 +8,7 @@ import functools
 import inspect
 import time
 import uuid
+import weakref
 from contextvars import copy_context
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Protocol, TypeVar
 
@@ -170,7 +171,7 @@ def as_step_worker_function(
         token = StepWorkerStateContextVar.set(
             StepWorkerContext(state=state, returns=returns)
         )
-        ctx_token = InternalContextVar.set(internal_context)
+        ctx_token = InternalContextVar.set(weakref.ref(internal_context))
 
         try:
             config = workflow._get_steps()[step_name]._step_config

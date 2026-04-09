@@ -38,6 +38,7 @@ from workflows.runtime.types.internal_state import BrokerState
 from workflows.runtime.types.plugin import (
     ExternalRunAdapter,
 )
+from workflows.runtime.types.results import InternalContextVar
 from workflows.types import RunResultT
 from workflows.utils import _nanoid as nanoid
 
@@ -167,14 +168,18 @@ class Context(Generic[MODEL_T]):
                 await ctx.wait_for_event(SomeEvent)
             ```
         """
-        from workflows.runtime.types.results import InternalContextVar
-
         try:
-            return InternalContextVar.get()
+            ref = InternalContextVar.get()
         except LookupError:
             raise WorkflowRuntimeError(
                 "Context.get_current() may only be called from within a step function"
             )
+        ctx = ref()
+        if ctx is None:
+            raise WorkflowRuntimeError(
+                "Context.get_current() may only be called from within a step function"
+            )
+        return ctx
 
     @property
     def is_running(self) -> bool:
