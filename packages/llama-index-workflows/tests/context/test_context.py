@@ -845,7 +845,7 @@ async def test_get_step_context_supports_wait_for_event() -> None:
             ctx = Context.get_step_context()
             result = await ctx.wait_for_event(
                 ResumeEvent,
-                waiter_event=InputRequiredEvent(prefix="waiting"),  # type: ignore[call-arg]
+                waiter_event=InputRequiredEvent(),
             )
             return StopEvent(result=result.value)
 
