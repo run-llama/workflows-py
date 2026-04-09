@@ -80,12 +80,13 @@ def test_parse_github_repo_url() -> None:
 
 
 @patch(f"{GIT_UTIL}.porcelain.clone")
-def test_clone_repo_branch_success(mock_clone: MagicMock) -> None:
+@pytest.mark.asyncio
+async def test_clone_repo_branch_success(mock_clone: MagicMock) -> None:
     """clone_repo with a branch ref returns the resolved SHA and ref."""
     mock_clone.return_value = _make_fake_repo("a" * 40)
 
     with tempfile.TemporaryDirectory() as t:
-        result = clone_repo(
+        result = await clone_repo(
             "https://github.com/user/repo.git", "main", dest_dir=Path(t) / "sub"
         )
 
@@ -99,12 +100,13 @@ def test_clone_repo_branch_success(mock_clone: MagicMock) -> None:
 
 
 @patch(f"{GIT_UTIL}.porcelain.clone")
-def test_clone_repo_no_ref(mock_clone: MagicMock) -> None:
+@pytest.mark.asyncio
+async def test_clone_repo_no_ref(mock_clone: MagicMock) -> None:
     """clone_repo with no ref resolves the remote default branch."""
     mock_clone.return_value = _make_fake_repo("b" * 40)
 
     with tempfile.TemporaryDirectory() as t:
-        result = clone_repo(
+        result = await clone_repo(
             "https://github.com/user/repo.git", dest_dir=Path(t) / "sub"
         )
 
@@ -113,7 +115,8 @@ def test_clone_repo_no_ref(mock_clone: MagicMock) -> None:
 
 
 @patch(f"{GIT_UTIL}.porcelain.clone")
-def test_clone_repo_no_ref_detached_resolves_tag(mock_clone: MagicMock) -> None:
+@pytest.mark.asyncio
+async def test_clone_repo_no_ref_detached_resolves_tag(mock_clone: MagicMock) -> None:
     """A detached HEAD that matches a tag returns the tag name as the ref."""
     fake_repo = MagicMock()
     head_sha = b"c" * 40
@@ -125,7 +128,7 @@ def test_clone_repo_no_ref_detached_resolves_tag(mock_clone: MagicMock) -> None:
     mock_clone.return_value = fake_repo
 
     with tempfile.TemporaryDirectory() as t:
-        result = clone_repo(
+        result = await clone_repo(
             "https://github.com/user/repo.git", dest_dir=Path(t) / "sub"
         )
 
@@ -133,7 +136,8 @@ def test_clone_repo_no_ref_detached_resolves_tag(mock_clone: MagicMock) -> None:
 
 
 @patch(f"{GIT_UTIL}.porcelain.clone")
-def test_clone_repo_full_sha(mock_clone: MagicMock) -> None:
+@pytest.mark.asyncio
+async def test_clone_repo_full_sha(mock_clone: MagicMock) -> None:
     """A 40-char SHA is fetched as the default ref then checked out."""
     sha = "deadbeef" * 5  # 40 chars
     fake_repo = MagicMock()
@@ -144,7 +148,7 @@ def test_clone_repo_full_sha(mock_clone: MagicMock) -> None:
 
     with patch(f"{GIT_UTIL}._checkout_ref") as mock_checkout:
         with tempfile.TemporaryDirectory() as t:
-            result = clone_repo(
+            result = await clone_repo(
                 "https://github.com/user/repo.git",
                 git_ref=sha,
                 dest_dir=Path(t) / "sub",
@@ -158,7 +162,8 @@ def test_clone_repo_full_sha(mock_clone: MagicMock) -> None:
 
 
 @patch(f"{GIT_UTIL}.porcelain.clone")
-def test_clone_repo_short_sha_like_ref(mock_clone: MagicMock) -> None:
+@pytest.mark.asyncio
+async def test_clone_repo_short_sha_like_ref(mock_clone: MagicMock) -> None:
     """Short SHA-like refs are cloned without branch= and checked out after clone."""
     abbrev_sha = "deadbeef"
     fake_repo = _make_fake_repo("a" * 40)
@@ -166,7 +171,7 @@ def test_clone_repo_short_sha_like_ref(mock_clone: MagicMock) -> None:
 
     with patch(f"{GIT_UTIL}._checkout_ref") as mock_checkout:
         with tempfile.TemporaryDirectory() as t:
-            result = clone_repo(
+            result = await clone_repo(
                 "https://github.com/user/repo.git",
                 git_ref=abbrev_sha,
                 dest_dir=Path(t) / "sub",
@@ -180,24 +185,26 @@ def test_clone_repo_short_sha_like_ref(mock_clone: MagicMock) -> None:
 
 
 @patch(f"{GIT_UTIL}.porcelain.clone")
-def test_clone_repo_network_error(mock_clone: MagicMock) -> None:
+@pytest.mark.asyncio
+async def test_clone_repo_network_error(mock_clone: MagicMock) -> None:
     """Network errors from dulwich are normalized to GitAccessError."""
     mock_clone.side_effect = HangupException()
 
     with tempfile.TemporaryDirectory() as t:
         with pytest.raises(GitAccessError, match="Failed to clone"):
-            clone_repo(
+            await clone_repo(
                 "https://github.com/user/repo.git", "main", dest_dir=Path(t) / "sub"
             )
 
 
 @patch(f"{GIT_UTIL}.porcelain.clone")
-def test_clone_repo_with_basic_auth(mock_clone: MagicMock) -> None:
+@pytest.mark.asyncio
+async def test_clone_repo_with_basic_auth(mock_clone: MagicMock) -> None:
     """Basic auth gets parsed and forwarded to dulwich as username/password."""
     mock_clone.return_value = _make_fake_repo("e" * 40)
 
     with tempfile.TemporaryDirectory() as t:
-        clone_repo(
+        await clone_repo(
             "https://github.com/user/repo.git",
             "main",
             basic_auth="someuser:tokenvalue",
@@ -210,12 +217,13 @@ def test_clone_repo_with_basic_auth(mock_clone: MagicMock) -> None:
 
 
 @patch(f"{GIT_UTIL}.porcelain.clone")
-def test_clone_repo_passes_depth(mock_clone: MagicMock) -> None:
+@pytest.mark.asyncio
+async def test_clone_repo_passes_depth(mock_clone: MagicMock) -> None:
     """Callers can request a shallow clone via the depth parameter."""
     mock_clone.return_value = _make_fake_repo("f" * 40)
 
     with tempfile.TemporaryDirectory() as t:
-        clone_repo(
+        await clone_repo(
             "https://github.com/user/repo.git",
             "main",
             dest_dir=Path(t) / "sub",
@@ -226,7 +234,8 @@ def test_clone_repo_passes_depth(mock_clone: MagicMock) -> None:
 
 
 @patch(f"{GIT_UTIL}.porcelain.clone")
-def test_clone_repo_sha_overrides_depth(mock_clone: MagicMock) -> None:
+@pytest.mark.asyncio
+async def test_clone_repo_sha_overrides_depth(mock_clone: MagicMock) -> None:
     """When given a SHA-shaped ref, depth is dropped to ensure reachability."""
     sha = "deadbeef" * 5  # 40 chars
     fake_repo = MagicMock()
@@ -237,7 +246,7 @@ def test_clone_repo_sha_overrides_depth(mock_clone: MagicMock) -> None:
 
     with patch(f"{GIT_UTIL}._checkout_ref"):
         with tempfile.TemporaryDirectory() as t:
-            clone_repo(
+            await clone_repo(
                 "https://github.com/user/repo.git",
                 git_ref=sha,
                 dest_dir=Path(t) / "sub",
@@ -297,9 +306,10 @@ def test_checkout_ref_rejects_missing_short_sha_prefix(tmp_path: Path) -> None:
         repo.close()
 
 
-def test_clone_repo_rejects_dangerous_url() -> None:
+@pytest.mark.asyncio
+async def test_clone_repo_rejects_dangerous_url() -> None:
     with pytest.raises(GitAccessError):
-        clone_repo("ext::sh -c echo pwned")
+        await clone_repo("ext::sh -c echo pwned")
 
 
 # Lightweight tests for new git helpers
@@ -410,19 +420,25 @@ def test_get_unpushed_commits_count_no_repo(tmp_path: Path) -> None:
 
 
 @patch(f"{GIT_UTIL}._probe_remote")
-def test_validate_git_public_access_true(mock_probe: MagicMock) -> None:
+@pytest.mark.asyncio
+async def test_validate_git_public_access_true(mock_probe: MagicMock) -> None:
     mock_probe.return_value = True
     with patch(f"{GIT_UTIL}.validate_git_url_no_ssrf"):
-        assert validate_git_public_access("https://github.com/public/repo.git") is True
+        assert (
+            await validate_git_public_access("https://github.com/public/repo.git")
+            is True
+        )
     mock_probe.assert_called_once_with("https://github.com/public/repo.git")
 
 
 @patch(f"{GIT_UTIL}._probe_remote")
-def test_validate_git_public_access_false(mock_probe: MagicMock) -> None:
+@pytest.mark.asyncio
+async def test_validate_git_public_access_false(mock_probe: MagicMock) -> None:
     mock_probe.return_value = False
     with patch(f"{GIT_UTIL}.validate_git_url_no_ssrf"):
         assert (
-            validate_git_public_access("https://github.com/private/repo.git") is False
+            await validate_git_public_access("https://github.com/private/repo.git")
+            is False
         )
 
 

@@ -5,6 +5,7 @@ Backed by the pure-Python ``dulwich`` library so the host does not need a
 ``git`` binary on PATH.
 """
 
+import asyncio
 import io
 import ipaddress
 import re
@@ -225,7 +226,7 @@ def _checkout_ref(repo: Repo, git_ref: str) -> None:
     porcelain.reset(repo, "hard", target_sha.decode())
 
 
-def clone_repo(
+def clone_repo_sync(
     repository_url: str,
     git_ref: str | None = None,
     basic_auth: str | None = None,
@@ -331,6 +332,24 @@ def clone_repo(
             shutil.rmtree(cleanup_temp, ignore_errors=True)
 
 
+async def clone_repo(
+    repository_url: str,
+    git_ref: str | None = None,
+    basic_auth: str | None = None,
+    dest_dir: Path | str | None = None,
+    depth: int | None = None,
+) -> GitCloneResult:
+    """Clone a repository without blocking the event loop."""
+    return await asyncio.to_thread(
+        clone_repo_sync,
+        repository_url,
+        git_ref,
+        basic_auth,
+        dest_dir,
+        depth,
+    )
+
+
 def validate_deployment_file(repo_dir: Path, deployment_file_path: str) -> bool:
     """
     Validate that the deployment file exists in the repository.
@@ -383,17 +402,29 @@ def _probe_remote(
         return False
 
 
-def validate_git_public_access(repository_url: str) -> bool:
+def validate_git_public_access_sync(repository_url: str) -> bool:
     """Check if a git repository is publicly accessible without authentication."""
     validate_git_url_no_ssrf(repository_url)
     return _probe_remote(repository_url)
 
 
-def validate_git_credential_access(repository_url: str, basic_auth: str) -> bool:
+async def validate_git_public_access(repository_url: str) -> bool:
+    """Check if a git repository is publicly accessible without blocking."""
+    return await asyncio.to_thread(validate_git_public_access_sync, repository_url)
+
+
+def validate_git_credential_access_sync(repository_url: str, basic_auth: str) -> bool:
     """Check if a credential provides access to a git repository."""
     validate_git_url_no_ssrf(repository_url)
     user, password = _split_basic_auth(basic_auth)
     return _probe_remote(repository_url, user=user, password=password)
+
+
+async def validate_git_credential_access(repository_url: str, basic_auth: str) -> bool:
+    """Check credentialed git access without blocking the event loop."""
+    return await asyncio.to_thread(
+        validate_git_credential_access_sync, repository_url, basic_auth
+    )
 
 
 def is_git_repo() -> bool:

@@ -33,7 +33,7 @@ from llama_agents.appserver.workflow_loader import (
     validate_required_env_vars,
 )
 from llama_agents.core.git.git_util import (
-    clone_repo,
+    clone_repo_sync as clone_repo,
 )
 
 logger = logging.getLogger(__name__)

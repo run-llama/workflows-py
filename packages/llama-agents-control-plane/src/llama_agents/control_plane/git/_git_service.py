@@ -247,7 +247,7 @@ class GitService:
                 )
             )
 
-        if await asyncio.to_thread(validate_git_public_access, repository_url):
+        if await validate_git_public_access(repository_url):
             logger.info("Access resolved for %s/%s: public", owner, repo)
             return GitRepository(
                 url=repository_url,
@@ -464,7 +464,7 @@ class GitService:
     ) -> GitAccessType:
         """Validate non-GitHub repository access using git commands."""
 
-        if await asyncio.to_thread(validate_git_public_access, repository_url):
+        if await validate_git_public_access(repository_url):
             return GitRepository(
                 url=repository_url,
                 access_token=None,
@@ -473,9 +473,7 @@ class GitService:
         pat_to_test = pat or existing_pat
 
         if pat_to_test:
-            if await asyncio.to_thread(
-                validate_git_credential_access, repository_url, pat_to_test
-            ):
+            if await validate_git_credential_access(repository_url, pat_to_test):
                 return GitRepository(
                     url=repository_url,
                     access_token=pat_to_test,
@@ -627,16 +625,12 @@ class GitService:
         deployment_file_path: str | None,
         auth: str | None,
     ) -> GitApplicationValidationResponse:
-        """Legacy validation path: clone the repo and parse config from disk.
-
-        Used for non-GitHub repositories where the GitHub Contents API is
-        unavailable. The clone goes through the dulwich-backed `clone_repo`
-        wrapped in `asyncio.to_thread` so it does not block the event loop.
+        """Used for non-GitHub repositories where the GitHub Contents API is
+        unavailable.
         """
         with tempfile.TemporaryDirectory() as temp_dir:
             try:
-                result = await asyncio.to_thread(
-                    clone_repo,
+                result = await clone_repo(
                     repository_url,
                     git_ref=git_ref,
                     basic_auth=auth,
