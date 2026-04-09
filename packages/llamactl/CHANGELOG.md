@@ -1,5 +1,14 @@
 # llamactl
 
+## 0.6.9
+
+### Patch Changes
+
+- 7ad3049: Reduce full clones from github for config, repo validation, and sha discovery. Reduce dependencies on system git, preferring dulwich
+- Updated dependencies [7ad3049]
+  - llama-agents-appserver@0.10.4
+  - llama-agents-core@0.8.5
+
 ## 0.6.8
 
 ### Patch Changes
