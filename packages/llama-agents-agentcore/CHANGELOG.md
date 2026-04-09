@@ -1,5 +1,11 @@
 # llama-agents-agentcore
 
+## 0.8.11
+
+### Patch Changes
+
+- 9f52f40: Make the sqlite db more resliant to locking
+
 ## 0.8.10
 
 ### Patch Changes

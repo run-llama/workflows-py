@@ -2161,7 +2161,7 @@ wheels = [
 
 [[package]]
 name = "llama-agents-agentcore"
-version = "0.8.10"
+version = "0.8.11"
 source = { editable = "packages/llama-agents-agentcore" }
 dependencies = [
     { name = "bedrock-agentcore" },
@@ -2306,7 +2306,7 @@ dev = [
 
 [[package]]
 name = "llama-agents-control-plane"
-version = "0.10.3"
+version = "0.10.4"
 source = { editable = "packages/llama-agents-control-plane" }
 dependencies = [
     { name = "a2wsgi" },
@@ -2592,7 +2592,7 @@ dev = [
 
 [[package]]
 name = "llama-agents-server"
-version = "0.4.0"
+version = "0.4.1"
 source = { editable = "packages/llama-agents-server" }
 dependencies = [
     { name = "httpx" },
@@ -2819,7 +2819,7 @@ dev = [
 
 [[package]]
 name = "llamactl"
-version = "0.6.6"
+version = "0.6.7"
 source = { editable = "packages/llamactl" }
 dependencies = [
     { name = "aiohttp" },
