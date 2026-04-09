@@ -225,13 +225,23 @@ class IdleReleaseDecorator(BaseRuntimeDecorator):
 
     @override
     async def destroy(self) -> None:
+        # Cancel all pending background tasks (deferred-release timers, etc.)
+        # before running cleanup. This prevents a race where a deferred-release
+        # task fires after destroy() returns and aborts a run that a new server
+        # instance has already reclaimed with the same run_id via the shared
+        # basic_runtime singleton.
+        for task in list(self._background_tasks):
+            task.cancel()
+        if self._background_tasks:
+            await asyncio.gather(*self._background_tasks, return_exceptions=True)
+
         await super().destroy()
-        if self.stop_task is not None:
-            try:
-                self.stop_task.cancel()
-            except Exception:
-                pass
-        self.stop_task = self._spawn_task(self._on_server_stop())
+
+        # Run cleanup synchronously instead of spawning a background task.
+        # This ensures all active runs are aborted before destroy() returns,
+        # preventing the old server's cleanup from racing with a new server
+        # that reuses the same run_id.
+        await self._on_server_stop()
 
     async def _on_server_stop(self) -> None:
         """Cancel all active runs."""
