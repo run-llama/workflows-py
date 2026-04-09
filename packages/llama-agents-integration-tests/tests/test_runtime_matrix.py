@@ -238,7 +238,7 @@ class SyncWorkflow(Workflow):
 class MultiRunWorkflow(Workflow):
     @step
     async def step(self, ev: StartEvent) -> StopEvent:
-        return StopEvent(result=ev.number * 2)  # type: ignore
+        return StopEvent(result=ev.number * 2)
 
 
 class ErrorWorkflow(Workflow):
