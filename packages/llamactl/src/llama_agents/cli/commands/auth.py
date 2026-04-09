@@ -438,9 +438,13 @@ async def _create_or_update_agent_api_key(auth_svc: AuthService, profile: Auth) 
         async with auth_svc.profile_client(profile) as client:
             name = f"{profile.name} llamactl on {profile.device_oidc.device_name if profile.device_oidc else 'unknown'}"
 
+            # Non-idempotent POST: only retry connect-phase errors so we
+            # absorb initial-connectivity blips without risking duplicate
+            # keys from a read-timeout retry.
             try:
                 api_key = await run_with_network_retries(
-                    lambda: client.create_agent_api_key(name)
+                    lambda: client.create_agent_api_key(name),
+                    idempotent=False,
                 )
             except httpx.HTTPStatusError:
                 # Do not treat HTTP errors as transient; re-raise for normal handling.

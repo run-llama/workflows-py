@@ -104,6 +104,14 @@ class ControlPlaneSettings(BaseSettings):
         alias="BUILD_S3_KEY_PREFIX",
     )
 
+    # Must exceed the operator's build Job TTLSecondsAfterFinished (3600s) so
+    # an artifact whose Job is still within its TTL is guaranteed to exist.
+    build_artifact_gc_grace_seconds: int = Field(
+        default=4500,
+        description="Grace window (seconds) before an unreferenced build artifact is eligible for GC.",
+        alias="BUILD_ARTIFACT_GC_GRACE_SECONDS",
+    )
+
     # Code repo settings
     code_repo_s3_key_prefix: str = Field(
         default="git",
