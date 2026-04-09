@@ -163,6 +163,35 @@ async def test_clone_repo_full_sha(mock_clone: MagicMock) -> None:
 
 @patch(f"{GIT_UTIL}.porcelain.clone")
 @pytest.mark.asyncio
+async def test_clone_repo_explicit_git_sha_preserves_ref_metadata(
+    mock_clone: MagicMock,
+) -> None:
+    """An explicit SHA checkout keeps the symbolic ref as metadata."""
+    sha = "deadbeef" * 5  # 40 chars
+    fake_repo = MagicMock()
+    fake_repo.head.return_value = sha.encode()
+    fake_repo.refs.read_ref.return_value = b"ref: refs/heads/main"
+    fake_repo.refs.__getitem__.return_value = sha.encode()
+    mock_clone.return_value = fake_repo
+
+    with patch(f"{GIT_UTIL}._checkout_ref") as mock_checkout:
+        with tempfile.TemporaryDirectory() as t:
+            result = await clone_repo(
+                "https://github.com/user/repo.git",
+                git_ref="feature/branch",
+                git_sha=sha,
+                dest_dir=Path(t) / "sub",
+                depth=1,
+            )
+
+    assert mock_clone.call_args.kwargs["branch"] is None
+    assert mock_clone.call_args.kwargs["depth"] is None
+    mock_checkout.assert_called_once_with(fake_repo, sha)
+    assert result == GitCloneResult(git_sha=sha, git_ref="feature/branch")
+
+
+@patch(f"{GIT_UTIL}.porcelain.clone")
+@pytest.mark.asyncio
 async def test_clone_repo_short_sha_like_ref(mock_clone: MagicMock) -> None:
     """Short SHA-like refs are cloned without branch= and checked out after clone."""
     abbrev_sha = "deadbeef"

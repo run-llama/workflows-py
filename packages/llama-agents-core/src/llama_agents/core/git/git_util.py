@@ -232,6 +232,7 @@ def clone_repo_sync(
     basic_auth: str | None = None,
     dest_dir: Path | str | None = None,
     depth: int | None = None,
+    git_sha: str | None = None,
 ) -> GitCloneResult:
     """
     Clone a repository and checkout a specific ref, if provided. If user reportable access errors occur, raises a GitAccessError.
@@ -242,6 +243,9 @@ def clone_repo_sync(
             name, tag, full 40-character commit SHA, or a short SHA-like
             prefix. SHA-like refs are resolved after clone so they do not get
             misclassified as branch names.
+        git_sha: Optional pinned commit SHA to check out explicitly. When set,
+            this takes precedence over ``git_ref`` for checkout behavior and
+            depth selection.
         basic_auth: The basic auth to use to clone the repository, in
             ``user:password`` form. Token-only credentials are also accepted
             (passed via the URL user component).
@@ -267,9 +271,10 @@ def clone_repo_sync(
         target_path = Path(dest_dir)
         target_path.mkdir(parents=True, exist_ok=True)
 
-    branch_arg: bytes | None = None
+    explicit_git_sha = bool(git_sha)
     is_sha_ref = bool(git_ref and _SHA_LIKE_RE.match(git_ref))
-    if git_ref and not is_sha_ref:
+    branch_arg: bytes | None = None
+    if not explicit_git_sha and git_ref and not is_sha_ref:
         branch_arg = git_ref.encode()
 
     # When the caller pinned a specific SHA, depth=1 of the default branch
@@ -277,7 +282,7 @@ def clone_repo_sync(
     # "shallow fetch this SHA" path, so fall back to a full clone in that
     # case to guarantee the SHA is reachable.
     effective_depth = depth
-    if is_sha_ref:
+    if explicit_git_sha or is_sha_ref:
         effective_depth = None
 
     transport_kwargs: dict[str, Any] = {}
@@ -315,9 +320,14 @@ def clone_repo_sync(
 
             resolved_ref: str | None = git_ref
 
-            if git_ref and is_sha_ref:
+            if git_sha is not None:
                 # Dulwich cannot fetch a specific SHA at clone time, so check
-                # out the requested commit after the default-branch clone.
+                # out the requested commit after the clone.
+                _checkout_ref(repo, git_sha)
+                head_sha_bytes = repo.head()
+            elif git_ref and is_sha_ref:
+                # Preserve the historical compatibility path for SHA-shaped
+                # git_ref values that callers still pass through the generic API.
                 _checkout_ref(repo, git_ref)
                 head_sha_bytes = repo.head()
                 resolved_ref = git_ref
@@ -338,6 +348,7 @@ async def clone_repo(
     basic_auth: str | None = None,
     dest_dir: Path | str | None = None,
     depth: int | None = None,
+    git_sha: str | None = None,
 ) -> GitCloneResult:
     """Clone a repository without blocking the event loop."""
     return await asyncio.to_thread(
@@ -347,6 +358,7 @@ async def clone_repo(
         basic_auth,
         dest_dir,
         depth,
+        git_sha,
     )
 
 

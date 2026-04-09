@@ -32,9 +32,7 @@ from llama_agents.appserver.workflow_loader import (
     load_environment_variables,
     validate_required_env_vars,
 )
-from llama_agents.core.git.git_util import (
-    clone_repo_sync as clone_repo,
-)
+from llama_agents.core.git.git_util import clone_repo_sync as clone_repo
 
 logger = logging.getLogger(__name__)
 
@@ -241,10 +239,13 @@ def bootstrap_app_from_repo(
         raise ValueError("repo_url is required to bootstrap")
     clone_repo(
         repository_url=repo_url,
-        git_ref=bootstrap_settings.git_sha or bootstrap_settings.git_ref,
+        git_ref=bootstrap_settings.git_ref,
+        git_sha=bootstrap_settings.git_sha,
         basic_auth=bootstrap_settings.auth_token,
         dest_dir=target_dir,
-        depth=1,
+        depth=1
+        if bootstrap_settings.git_sha is None and bootstrap_settings.git_ref is not None
+        else None,
     )
     # Ensure target_dir exists locally when running tests outside a container
     os.makedirs(target_dir, exist_ok=True)

@@ -74,9 +74,10 @@ def test_bootstrap_minimal_happy_path(
         clone.assert_called_once_with(
             repository_url="https://example.com/repo.git",
             git_ref=None,
+            git_sha=None,
             basic_auth="tok",
             dest_dir=str(tmp_path),
-            depth=1,
+            depth=None,
         )
 
     # configure_settings received proper app_root and deployment_file_path
@@ -93,12 +94,12 @@ def test_bootstrap_minimal_happy_path(
     assert args[0] == Path(tmp_path)
 
 
-def test_bootstrap_invokes_clone_repo_with_git_sha_over_git_ref(
+def test_bootstrap_invokes_clone_repo_with_explicit_git_sha_and_git_ref(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """
     If both `LLAMA_DEPLOY_GIT_SHA` and `LLAMA_DEPLOY_GIT_REF` are set,
-    `git_sha` takes precedence and is passed as the `git_ref` argument to `clone_repo`.
+    bootstrap should pass them separately and avoid the shallow-clone path.
     """
     _write_minimal_deployment_config(tmp_path)
     _set_bootstrap_env(
@@ -114,7 +115,33 @@ def test_bootstrap_invokes_clone_repo_with_git_sha_over_git_ref(
 
         clone.assert_called_once_with(
             repository_url="https://example.com/repo.git",
-            git_ref="deadbeef",
+            git_ref="feature/branch",
+            git_sha="deadbeef",
+            basic_auth="tok",
+            dest_dir=str(tmp_path),
+            depth=None,
+        )
+
+
+def test_bootstrap_invokes_clone_repo_with_git_ref_only(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """If only `LLAMA_DEPLOY_GIT_REF` is set, bootstrap should use the ref path."""
+    _write_minimal_deployment_config(tmp_path)
+    _set_bootstrap_env(
+        monkeypatch,
+        repo_url="https://example.com/repo.git",
+        auth_token="tok",
+        git_ref="feature/branch",
+    )
+
+    with mock.patch("llama_agents.appserver.bootstrap.clone_repo") as clone:
+        bootstrap_app_from_repo(target_dir=str(tmp_path))
+
+        clone.assert_called_once_with(
+            repository_url="https://example.com/repo.git",
+            git_ref="feature/branch",
+            git_sha=None,
             basic_auth="tok",
             dest_dir=str(tmp_path),
             depth=1,
@@ -244,7 +271,8 @@ def test_bootstrap_propagates_errors_from_clone(
     )
     # Do not stub pipeline; we expect to raise before any other calls
     with mock.patch(
-        "llama_agents.appserver.bootstrap.clone_repo", side_effect=RuntimeError("boom")
+        "llama_agents.appserver.bootstrap.clone_repo",
+        side_effect=RuntimeError("boom"),
     ):
         with pytest.raises(RuntimeError):
             bootstrap_app_from_repo(target_dir=str(tmp_path))
