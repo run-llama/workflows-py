@@ -136,8 +136,30 @@ def _get_sqlite_db_path() -> str:
     """Return the SQLite DB path, preferring AgentCore session storage."""
     workspace = Path(AGENTCORE_WORKSPACE)
     if workspace.exists() and workspace.is_dir():
-        return str(workspace / SQLITE_DB_NAME)
-    return SQLITE_DB_NAME
+        db_path = str(workspace / SQLITE_DB_NAME)
+    else:
+        db_path = SQLITE_DB_NAME
+    _cleanup_stale_sqlite_locks(db_path)
+    return db_path
+
+
+def _cleanup_stale_sqlite_locks(db_path: str) -> None:
+    """Remove stale WAL/SHM files left by a crashed previous session.
+
+    If the main DB file exists but no other process has it open, leftover
+    ``-wal`` and ``-shm`` files can prevent new connections from acquiring
+    a write lock.  Removing them lets SQLite start fresh.
+    """
+    import os
+
+    for suffix in ("-wal", "-shm"):
+        lock_file = db_path + suffix
+        if os.path.exists(lock_file):
+            try:
+                os.remove(lock_file)
+                logger.info("Removed stale SQLite lock file: %s", lock_file)
+            except OSError:
+                pass
 
 
 @functools.lru_cache(maxsize=1)
