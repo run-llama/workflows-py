@@ -197,7 +197,7 @@ def mock_pat_access(
     )
 
 
-def mock_rate_limited_public_repo(
+def mock_api_throttled_public_repo(
     router: respx.Router, owner: str, repo: str, status_code: int
 ) -> None:
     router.get(f"https://api.github.com/repos/{owner}/{repo}").mock(
@@ -238,20 +238,21 @@ async def test_public_github_repo(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("status_code", [403, 429], ids=["forbidden", "rate-limited"])
-async def test_public_github_repo_with_anonymous_probe_throttle(
+async def test_public_github_repo_uses_git_probe_instead_of_anonymous_api(
     service: GitService,
     project_id: str,
     mock_github_api: respx.Router,
     status_code: int,
 ) -> None:
-    """Anonymous throttling should not force a public GitHub repo into the inaccessible path."""
-    mock_rate_limited_public_repo(
+    """Public GitHub detection should rely on the git transport probe, not the REST API."""
+    mock_api_throttled_public_repo(
         mock_github_api, owner="public", repo="repo", status_code=status_code
     )
 
-    result = await service.validate_repository(
-        "https://github.com/public/repo", project_id=project_id
-    )
+    with patch(f"{GIT_SERVICE}.validate_git_public_access", return_value=True):
+        result = await service.validate_repository(
+            "https://github.com/public/repo", project_id=project_id
+        )
 
     assert result.accessible is True
     assert "public repository" in result.message
@@ -754,9 +755,12 @@ async def test_validate_github_application_uses_contents_api_not_clone(
             f"https://api.github.com/repos/acme/agent-app/contents/{filename}"
         ).mock(return_value=respx.MockResponse(404))
 
-    with patch(
-        f"{GIT_SERVICE}.clone_repo",
-        side_effect=AssertionError("clone_repo must not be called for GitHub URLs"),
+    with (
+        patch(
+            f"{GIT_SERVICE}.clone_repo",
+            side_effect=AssertionError("clone_repo must not be called for GitHub URLs"),
+        ),
+        patch(f"{GIT_SERVICE}.validate_git_public_access", return_value=True),
     ):
         result = await service.validate_git_application(
             repository_url="https://github.com/acme/agent-app",
@@ -796,9 +800,12 @@ async def test_validate_github_application_missing_config(
             f"https://api.github.com/repos/acme/empty-app/contents/{filename}"
         ).mock(return_value=respx.MockResponse(404))
 
-    with patch(
-        f"{GIT_SERVICE}.clone_repo",
-        side_effect=AssertionError("clone_repo must not be called for GitHub URLs"),
+    with (
+        patch(
+            f"{GIT_SERVICE}.clone_repo",
+            side_effect=AssertionError("clone_repo must not be called for GitHub URLs"),
+        ),
+        patch(f"{GIT_SERVICE}.validate_git_public_access", return_value=True),
     ):
         result = await service.validate_git_application(
             repository_url="https://github.com/acme/empty-app",
