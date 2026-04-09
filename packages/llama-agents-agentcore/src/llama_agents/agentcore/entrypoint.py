@@ -165,7 +165,9 @@ def _cleanup_stale_sqlite_locks(db_path: str) -> None:
         conn.close()
     except sqlite3.OperationalError:
         # Another process actually has the DB open — leave files alone.
-        logger.debug("SQLite lock files exist and DB is actively locked; skipping cleanup.")
+        logger.debug(
+            "SQLite lock files exist and DB is actively locked; skipping cleanup."
+        )
         return
 
     for path in (wal_path, shm_path):
