@@ -88,6 +88,18 @@ jobs:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
 
+      # When there are pending changesets, the step above runs ``pnpm -w
+      # run version`` to build the release PR. With ``commitMode:
+      # github-api`` those edits are committed through the API and left
+      # uncommitted in the local working tree. If we don't reset, the
+      # plan step below scans the mutated tree, emits actions for the
+      # *next* versions, and the downstream publish jobs (which do a
+      # fresh checkout of the branch) then build artifacts for the
+      # previous versions and fail to match the plan. Reset so the plan
+      # reflects what is actually committed on the branch.
+      - name: Reset working tree after changesets action
+        run: git reset --hard HEAD
+
       - name: Compute publish plan
         id: plan
         run: uv run dev changeset-plan --output publish-plan.json
