@@ -1,5 +1,13 @@
 # llama-agents-agentcore
 
+## 0.8.14
+
+### Patch Changes
+
+- Updated dependencies [7ad3049]
+  - llama-agents-appserver@0.10.4
+  - llama-agents-core@0.8.5
+
 ## 0.8.13
 
 ### Patch Changes
