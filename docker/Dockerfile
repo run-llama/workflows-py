@@ -1,11 +1,10 @@
-# Common base stage. Intentionally does NOT install the git CLI: the
-# control plane reads git repositories via dulwich (pure Python) and the
-# git binary is dead weight + supply-chain surface in that image.
-# Stages that DO need git (currently just appserver, because user code
-# may declare git+https:// pip dependencies) inherit from base-appserver.
-FROM python:3.12-slim AS base-common
+# Base stage with common dependencies
+FROM python:3.12-slim AS base
 
 COPY --from=ghcr.io/astral-sh/uv:0.7.20 /uv /uvx /bin/
+
+# Install system dependencies for development
+RUN apt-get update && rm -rf /var/lib/apt/lists/*
 
 # Create a non-root user
 RUN groupadd --gid 1001 appgroup && \
@@ -24,19 +23,6 @@ ENV PATH=/app/.venv/bin:$PATH
 
 
 ##############################################################################
-###                Base for stages that need the git CLI                   ###
-##############################################################################
-#
-# git is required by user-code "pip install git+https://..." dependencies
-# during appserver bootstrap.
-FROM base-common AS base-appserver
-
-RUN apt-get update && apt-get install -y \
-    git \
-    && rm -rf /var/lib/apt/lists/*
-
-
-##############################################################################
 ##############################################################################
 ############################## CONTROL PLANE #################################
 ##############################################################################
@@ -47,7 +33,7 @@ RUN apt-get update && apt-get install -y \
 ##############################################################################
 #
 # pulls in all packages, and installs as non-editable
-FROM base-common AS controlplane-builder
+FROM base AS controlplane-builder
 
 ARG PACKAGE_NAME=llama-agents-control-plane
 
@@ -63,7 +49,7 @@ RUN uv sync --frozen --no-dev --package $PACKAGE_NAME --no-editable
 ###                   Control Plane - RUNNER                               ###
 ##############################################################################
 
-FROM base-common AS controlplane
+FROM base AS controlplane
 
 # Copy the builder stage
 COPY --from=controlplane-builder /app/.venv /app/.venv
@@ -90,7 +76,7 @@ CMD ["python", "-m", "llama_agents.control_plane.main", "--host", "0.0.0.0", "--
 ##############################################################################
 #
 # pulls in all packages, and installs as non-editable
-FROM base-appserver AS appserver-builder
+FROM base AS appserver-builder
 
 ARG PACKAGE_NAME=llama-agents-appserver
 
@@ -109,10 +95,11 @@ RUN uv build --package llama-agents-core --sdist
 ###                   App Server - RUNNER                                  ###
 ##############################################################################
 
-FROM base-appserver AS appserver
+FROM base AS appserver
 
-# Install Node.js and pnpm
+# Install Node.js, pnpm, and git for bootstrap-time git+https dependencies.
 RUN apt-get update && apt-get install -y \
+    git \
     curl \
     && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y nodejs \
