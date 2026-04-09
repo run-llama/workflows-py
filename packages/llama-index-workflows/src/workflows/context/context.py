@@ -145,12 +145,12 @@ class Context(Generic[MODEL_T]):
         return new_ctx
 
     @staticmethod
-    def get_current() -> Context:
+    def get_step_context() -> Context:
         """Return the `Context` for the currently executing step.
 
-        This is useful for middleware, decorators, or wrappers that need
-        access to the step context without requiring the user-defined step
-        function to declare a ``ctx: Context`` parameter.
+        This is useful for decorators or wrappers around step functions that
+        need access to the step context without requiring the user-defined
+        step to declare a ``ctx: Context`` parameter.
 
         Returns:
             Context: The context instance (in internal-face state) for the
@@ -163,21 +163,21 @@ class Context(Generic[MODEL_T]):
             ```python
             from workflows import Context
 
-            async def my_middleware():
-                ctx = Context.get_current()
-                await ctx.wait_for_event(SomeEvent)
+            # Inside a decorator that wraps a step function
+            ctx = Context.get_step_context()
+            ctx.send_event(ProgressEvent(msg="step starting"))
             ```
         """
         try:
             ref = InternalContextVar.get()
         except LookupError:
             raise WorkflowRuntimeError(
-                "Context.get_current() may only be called from within a step function"
+                "Context.get_step_context() may only be called from within a step function"
             )
         ctx = ref()
         if ctx is None:
             raise WorkflowRuntimeError(
-                "Context.get_current() may only be called from within a step function"
+                "Context.get_step_context() may only be called from within a step function"
             )
         return ctx
 
