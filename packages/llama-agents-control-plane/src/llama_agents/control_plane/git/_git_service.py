@@ -54,12 +54,30 @@ def _looks_like_config_file(path: str) -> bool:
     return any(lower.endswith(ext) for ext in _CONFIG_EXTENSIONS)
 
 
+def _normalize_repo_relative_path(repo_path: str) -> Path:
+    """Return a normalized repo-relative path or raise on traversal attempts."""
+    candidate = Path(repo_path)
+    if candidate.is_absolute() or ".." in candidate.parts:
+        raise ValueError(f"Path must stay within the repository: {repo_path}")
+
+    normalized_parts = [part for part in candidate.parts if part not in ("", ".")]
+    if not normalized_parts:
+        return Path(".")
+    return Path(*normalized_parts)
+
+
+def _repo_target_path(repo_root: Path, repo_path: str) -> Path:
+    """Build a safe local path under ``repo_root`` for a repo-relative path."""
+    return repo_root / _normalize_repo_relative_path(repo_path)
+
+
 def _deployment_base_dir(deployment_rel_path: str) -> Path:
     """Return the directory that contains the deployment config."""
+    normalized = _normalize_repo_relative_path(deployment_rel_path)
     if _looks_like_config_file(deployment_rel_path):
-        return Path(deployment_rel_path).parent
-    if deployment_rel_path not in ("", "."):
-        return Path(deployment_rel_path)
+        return normalized.parent
+    if normalized != Path("."):
+        return normalized
     return Path(".")
 
 
@@ -247,11 +265,19 @@ class GitService:
                 )
             )
 
-        if await validate_git_public_access(repository_url):
-            logger.info("Access resolved for %s/%s: public", owner, repo)
-            return GitRepository(
-                url=repository_url,
-                access_token=None,
+        try:
+            if await validate_git_public_access(repository_url):
+                logger.info("Access resolved for %s/%s: public", owner, repo)
+                return GitRepository(
+                    url=repository_url,
+                    access_token=None,
+                )
+        except GitAccessError as e:
+            logger.info(
+                "Public probe skipped for %s/%s: %s",
+                owner,
+                repo,
+                e,
             )
 
         logger.info(
@@ -720,13 +746,27 @@ class GitService:
             )
 
         deployment_rel_path = deployment_file_path or DEFAULT_DEPLOYMENT_FILE_PATH
+        try:
+            normalized_deployment_rel_path = _normalize_repo_relative_path(
+                deployment_rel_path
+            )
+        except ValueError as e:
+            return GitApplicationValidationResponse(
+                is_valid=False,
+                error_message=f"Invalid deployment path: {e}",
+            )
 
         temp_dir = tempfile.mkdtemp(prefix="cp_repo_config_")
         try:
             repo_root = Path(temp_dir)
             try:
                 fetched_any = await self._fetch_config_files(
-                    client, owner, repo, commit_sha, deployment_rel_path, repo_root
+                    client,
+                    owner,
+                    repo,
+                    commit_sha,
+                    normalized_deployment_rel_path.as_posix(),
+                    repo_root,
                 )
             except HTTPStatusError as e:
                 return GitApplicationValidationResponse(
@@ -742,7 +782,7 @@ class GitService:
                     ),
                 )
 
-            config_path = repo_root / deployment_rel_path
+            config_path = repo_root / normalized_deployment_rel_path
             try:
                 config = read_deployment_config(repo_root, config_path)
                 config.validate_config()
@@ -759,7 +799,7 @@ class GitService:
                         owner,
                         repo,
                         commit_sha,
-                        deployment_rel_path,
+                        normalized_deployment_rel_path.as_posix(),
                         config.ui.directory,
                         repo_root,
                     )
@@ -831,16 +871,12 @@ class GitService:
             )
             if content is None:
                 return False
-            target = repo_root / deployment_rel_path
+            target = _repo_target_path(repo_root, deployment_rel_path)
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(content)
             return True
 
-        config_dir = (
-            (repo_root / deployment_rel_path)
-            if deployment_rel_path not in ("", ".")
-            else repo_root
-        )
+        config_dir = _repo_target_path(repo_root, deployment_rel_path)
         config_dir.mkdir(parents=True, exist_ok=True)
 
         async def fetch(filename: str) -> tuple[str, bytes | None]:
@@ -873,13 +909,15 @@ class GitService:
     ) -> bool:
         """Fetch ``package.json`` for the UI directory and write it to disk."""
         base_dir = _deployment_base_dir(deployment_rel_path)
-        relative_pkg_path = base_dir / ui_directory / "package.json"
+        relative_pkg_path = _normalize_repo_relative_path(
+            (base_dir / ui_directory / "package.json").as_posix()
+        )
         api_path = relative_pkg_path.as_posix().removeprefix("./")
 
         content = await client.get_file_contents(owner, repo, api_path, ref)
         if content is None:
             return False
-        target = repo_root / relative_pkg_path
+        target = _repo_target_path(repo_root, relative_pkg_path.as_posix())
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(content)
         return True

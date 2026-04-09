@@ -2,6 +2,7 @@
 # Copyright (c) 2026 LlamaIndex Inc.
 
 import base64
+import urllib.parse
 from typing import Callable
 
 import httpx
@@ -52,7 +53,8 @@ class GitHubApiClient:
         Returns the full 40-character SHA, or None if the ref does not resolve.
         Treats GitHub's 422 (ambiguous short SHA) the same as a 404.
         """
-        response = await self.client.get(f"/repos/{owner}/{repo}/commits/{ref}")
+        encoded_ref = urllib.parse.quote(ref, safe="")
+        response = await self.client.get(f"/repos/{owner}/{repo}/commits/{encoded_ref}")
         if response.status_code in (404, 422):
             return None
         response.raise_for_status()

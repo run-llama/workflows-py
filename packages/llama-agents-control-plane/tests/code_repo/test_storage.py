@@ -109,6 +109,7 @@ async def test_resolve_ref_supports_commit_sha_and_tags(tmp_path: Path) -> None:
         assert await storage.resolve_ref("deploy-5", "main") == commit_sha
         assert await storage.resolve_ref("deploy-5", "v1.0.0") == commit_sha
         assert await storage.resolve_ref("deploy-5", commit_sha) == commit_sha
+        assert await storage.resolve_ref("deploy-5", commit_sha[:8]) == commit_sha
 
 
 @pytest.mark.asyncio

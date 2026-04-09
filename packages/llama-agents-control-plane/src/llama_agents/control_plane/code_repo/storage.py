@@ -22,6 +22,7 @@ from ..storage import S3ObjectStorage
 logger = logging.getLogger(__name__)
 
 FULL_GIT_SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
+SHORT_GIT_SHA_PATTERN = re.compile(r"^[0-9a-f]{7,39}$")
 
 
 class CodeRepoStorage(S3ObjectStorage):
@@ -136,6 +137,25 @@ class CodeRepoStorage(S3ObjectStorage):
                 if FULL_GIT_SHA_PATTERN.fullmatch(git_ref):
                     try:
                         obj = repo.get_object(ObjectID(git_ref.encode()))
+                    except KeyError:
+                        return None
+                    if obj.type_name == b"commit":
+                        return obj.id.decode()
+                    return None
+
+                if SHORT_GIT_SHA_PATTERN.fullmatch(git_ref):
+                    try:
+                        matches = repo.object_store.iter_prefix(git_ref.encode())
+                        target_sha = next(matches)
+                    except StopIteration:
+                        return None
+
+                    # Reject ambiguous prefixes rather than silently picking one.
+                    if next(matches, None) is not None:
+                        return None
+
+                    try:
+                        obj = repo.get_object(target_sha)
                     except KeyError:
                         return None
                     if obj.type_name == b"commit":

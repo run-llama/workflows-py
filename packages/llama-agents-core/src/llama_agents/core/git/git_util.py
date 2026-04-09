@@ -311,13 +311,6 @@ def clone_repo_sync(
             ) from e
 
         try:
-            try:
-                head_sha_bytes = repo.head()
-            except KeyError as e:
-                raise GitAccessError(
-                    f"Cloned repository {repository_url} has no HEAD"
-                ) from e
-
             resolved_ref: str | None = git_ref
 
             if git_sha is not None:
@@ -325,7 +318,15 @@ def clone_repo_sync(
                 # out the requested commit after the clone.
                 _checkout_ref(repo, git_sha)
                 head_sha_bytes = repo.head()
-            elif git_ref and is_sha_ref:
+            else:
+                try:
+                    head_sha_bytes = repo.head()
+                except KeyError as e:
+                    raise GitAccessError(
+                        f"Cloned repository {repository_url} has no HEAD"
+                    ) from e
+
+            if git_sha is None and git_ref and is_sha_ref:
                 # Preserve the historical compatibility path for SHA-shaped
                 # git_ref values that callers still pass through the generic API.
                 _checkout_ref(repo, git_ref)

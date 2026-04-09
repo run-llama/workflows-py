@@ -3,7 +3,8 @@ from __future__ import annotations
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 LlamaIndex Inc.
 import base64
-from typing import Generator
+from pathlib import Path
+from typing import Generator, cast
 from unittest.mock import patch
 
 import llama_agents.control_plane.git._git_service as git_service_module
@@ -11,6 +12,8 @@ import pytest
 import respx
 from llama_agents.control_plane.git import GitService, git_service
 from llama_agents.control_plane.git._github_auth import GitHubAppAuth
+from llama_agents.control_plane.git.github_api_client import GitHubApiClient
+from llama_agents.core.git.git_util import GitAccessError
 
 GIT_SERVICE = "llama_agents.control_plane.git._git_service"
 
@@ -815,3 +818,151 @@ async def test_validate_github_application_missing_config(
 
     assert result.is_valid is False
     assert "No deployment config found" in (result.error_message or "")
+
+
+@pytest.mark.asyncio
+async def test_validate_github_application_encodes_slash_ref(
+    service: GitService,
+    project_id: str,
+    mock_github_api: respx.Router,
+) -> None:
+    mock_github_repo_and_owner(
+        mock_github_api,
+        owner="acme",
+        repo="agent-app",
+        repo_private=False,
+    )
+
+    mock_github_api.get(
+        "https://api.github.com/repos/acme/agent-app/commits/feature%2Fui"
+    ).mock(
+        return_value=respx.MockResponse(
+            200,
+            json={"sha": "1234567890abcdef1234567890abcdef12345678"},
+        )
+    )
+
+    pyproject_toml = (
+        b"[project]\nname = 'agent-app'\n\n"
+        b"[tool.llamadeploy]\nname = 'agent-app'\n"
+        b"workflows = { default = 'agent_app.workflow:app' }\n"
+    )
+    encoded = base64.b64encode(pyproject_toml).decode()
+    mock_github_api.get(
+        "https://api.github.com/repos/acme/agent-app/contents/pyproject.toml"
+    ).mock(
+        return_value=respx.MockResponse(
+            200,
+            json={
+                "type": "file",
+                "name": "pyproject.toml",
+                "content": encoded,
+                "encoding": "base64",
+            },
+        )
+    )
+    for filename in (
+        "llama_agents.toml",
+        "llama_deploy.toml",
+        "llama_agents.yaml",
+        "llama_deploy.yaml",
+    ):
+        mock_github_api.get(
+            f"https://api.github.com/repos/acme/agent-app/contents/{filename}"
+        ).mock(return_value=respx.MockResponse(404))
+
+    with patch(f"{GIT_SERVICE}.validate_git_public_access", return_value=True):
+        result = await service.validate_git_application(
+            repository_url="https://github.com/acme/agent-app",
+            git_ref="feature/ui",
+            deployment_file_path=".",
+        )
+
+    assert result.is_valid is True
+    assert result.git_ref == "feature/ui"
+    assert result.git_sha == "1234567890abcdef1234567890abcdef12345678"
+
+
+@pytest.mark.asyncio
+async def test_validate_github_repository_ssh_url_handles_public_probe_error(
+    service: GitService,
+    project_id: str,
+    mock_github_api: respx.Router,
+) -> None:
+    mock_github_api.get("https://api.github.com/repos/acme/private-repo").mock(
+        return_value=respx.MockResponse(404)
+    )
+    mock_github_api.get("https://api.github.com/users/acme").mock(
+        return_value=respx.MockResponse(
+            200,
+            json={"id": 123, "login": "acme", "type": "Organization"},
+        )
+    )
+
+    with patch(
+        f"{GIT_SERVICE}.validate_git_public_access",
+        side_effect=GitAccessError("Only HTTP(S) URLs are supported for probe"),
+    ):
+        result = await service.validate_repository(
+            "git@github.com:acme/private-repo.git",
+            project_id=project_id,
+        )
+
+    assert result.accessible is False
+    assert "Unable to access GitHub repository 'acme/private-repo'" in result.message
+
+
+@pytest.mark.asyncio
+async def test_validate_github_application_rejects_traversal_path(
+    service: GitService,
+    project_id: str,
+    mock_github_api: respx.Router,
+) -> None:
+    mock_github_repo_and_owner(
+        mock_github_api,
+        owner="acme",
+        repo="agent-app",
+        repo_private=False,
+    )
+    mock_github_api.get(
+        "https://api.github.com/repos/acme/agent-app/commits/main"
+    ).mock(return_value=respx.MockResponse(200, json={"sha": "a" * 40}))
+
+    with (
+        patch(
+            f"{GIT_SERVICE}.clone_repo",
+            side_effect=AssertionError("clone_repo must not be called for GitHub URLs"),
+        ),
+        patch(f"{GIT_SERVICE}.validate_git_public_access", return_value=True),
+    ):
+        result = await service.validate_git_application(
+            repository_url="https://github.com/acme/agent-app",
+            git_ref="main",
+            deployment_file_path="../../../../tmp/owned/llama_agents.yaml",
+        )
+
+    assert result.is_valid is False
+    assert result.error_message == (
+        "Invalid deployment path: Path must stay within the repository: "
+        "../../../../tmp/owned/llama_agents.yaml"
+    )
+
+
+@pytest.mark.asyncio
+async def test_fetch_ui_package_json_rejects_path_traversal() -> None:
+    class UnexpectedClient:
+        async def get_file_contents(
+            self, owner: str, repo: str, path: str, ref: str
+        ) -> bytes | None:
+            raise AssertionError(f"unexpected GitHub contents fetch for {path}")
+
+    with pytest.raises(ValueError, match="Path must stay within the repository"):
+        await GitService._fetch_ui_package_json(
+            cast(GitHubApiClient, UnexpectedClient()),
+            "acme",
+            "agent-app",
+            "main",
+            "configs/llama_agents.yaml",
+            "../../outside",
+            Path("/tmp/repo"),
+        )
