@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import tempfile
 import urllib.parse
@@ -80,7 +81,7 @@ class GitService:
                 repository_url, pat, existing_pat
             )
         else:
-            return self._check_generic_access_type(
+            return await self._check_generic_access_type(
                 repository_url, deployment_id, pat, existing_pat
             )
 
@@ -220,7 +221,7 @@ class GitService:
             )
 
         # First, probe public access via git directly to avoid GitHub API rate limits.
-        if validate_git_public_access(repository_url):
+        if await asyncio.to_thread(validate_git_public_access, repository_url):
             logger.info("Access resolved for %s/%s: public", owner, repo)
             return GitRepository(url=repository_url, access_token=None)
 
@@ -427,7 +428,7 @@ class GitService:
             message=f"GitHub owner '{owner}' does not exist.",
         )
 
-    def _check_generic_access_type(
+    async def _check_generic_access_type(
         self,
         repository_url: str,
         deployment_id: str | None = None,
@@ -437,7 +438,7 @@ class GitService:
         """Validate non-GitHub repository access using git commands."""
 
         # First, try public access
-        if validate_git_public_access(repository_url):
+        if await asyncio.to_thread(validate_git_public_access, repository_url):
             return GitRepository(
                 url=repository_url,
                 access_token=None,
@@ -447,7 +448,9 @@ class GitService:
         pat_to_test = pat or existing_pat
 
         if pat_to_test:
-            if validate_git_credential_access(repository_url, pat_to_test):
+            if await asyncio.to_thread(
+                validate_git_credential_access, repository_url, pat_to_test
+            ):
                 return GitRepository(
                     url=repository_url,
                     access_token=pat_to_test,
@@ -582,11 +585,12 @@ class GitService:
 
         with tempfile.TemporaryDirectory() as temp_dir:
             try:
-                result = clone_repo(
+                result = await asyncio.to_thread(
+                    clone_repo,
                     repository_url,
-                    dest_dir=Path(temp_dir),
-                    basic_auth=auth,
                     git_ref=git_ref,
+                    basic_auth=auth,
+                    dest_dir=Path(temp_dir),
                 )
             except GitAccessError as e:
                 return GitApplicationValidationResponse(
