@@ -1,5 +1,11 @@
 # llama-agents-agentcore
 
+## 0.8.13
+
+### Patch Changes
+
+- 3850844: Support single connection mode for sqlite
+
 ## 0.8.12
 
 ### Patch Changes

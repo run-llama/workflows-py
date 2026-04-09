@@ -1,5 +1,11 @@
 # llama-agents-server
 
+## 0.4.2
+
+### Patch Changes
+
+- 3850844: Support single connection mode for sqlite
+
 ## 0.4.1
 
 ### Patch Changes
