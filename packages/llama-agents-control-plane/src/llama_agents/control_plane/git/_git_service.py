@@ -35,8 +35,8 @@ from .github_api_client import (
     pat_api_client,
 )
 
-# Config files to fetch via the GitHub Contents API. Mirrors the platform's
-# RepoConfigService implementation.
+# Candidate config filenames discovered in the deployment directory when
+# fetching via the GitHub Contents API.
 _CONFIG_FILES = (
     "llama_agents.toml",
     "llama_deploy.toml",
@@ -57,6 +57,7 @@ class GitHubAppAccess:
 class GitRepository:
     url: str
     access_token: str | None  # passed as basic auth colon delimited username:password
+    default_branch: str | None = None
 
 
 @dataclass
@@ -231,16 +232,18 @@ class GitService:
                 )
             )
 
-        # First, probe public access via the GitHub API. Avoids the dulwich
-        # ls-remote round trip and stays consistent with the rest of the
-        # GitHub fast path.
+        # Probe public access via the GitHub API to skip the cloning fallback.
         try:
             public_info = await GitHubApiClient().get_repository_info(owner, repo)
         except HTTPStatusError:
             public_info = None
-        if public_info is not None and public_info.private is False:
+        if public_info is not None and not public_info.private:
             logger.info("Access resolved for %s/%s: public", owner, repo)
-            return GitRepository(url=repository_url, access_token=None)
+            return GitRepository(
+                url=repository_url,
+                access_token=None,
+                default_branch=public_info.default_branch,
+            )
 
         logger.info(
             "Public probe failed for %s/%s, trying authenticated methods", owner, repo
@@ -681,8 +684,7 @@ class GitService:
     ) -> GitApplicationValidationResponse:
         """Validate a GitHub repository's deployment config without cloning.
 
-        Mirrors the platform's `RepoConfigService.get_repository_config` flow:
-        resolve the ref via the Commits API, fetch candidate config files via
+        Resolve the ref via the Commits API, fetch candidate config files via
         the Contents API, then parse the result on disk.
         """
         try:
@@ -696,11 +698,18 @@ class GitService:
         client = await self._github_client_for_access(access)
 
         # Resolve the ref to a SHA. If git_ref is None, fall back to the
-        # default branch.
+        # default branch (reusing the cached value from the access probe
+        # when possible to avoid a duplicate /repos/<owner>/<repo> call).
         try:
             target_ref = git_ref
             if target_ref is None:
-                target_ref = await client.get_default_branch(owner, repo)
+                if (
+                    isinstance(access, GitRepository)
+                    and access.default_branch is not None
+                ):
+                    target_ref = access.default_branch
+                else:
+                    target_ref = await client.get_default_branch(owner, repo)
             if target_ref is None:
                 return GitApplicationValidationResponse(
                     is_valid=False,
@@ -815,12 +824,7 @@ class GitService:
             )
             return installation_api_client(installation_token)
         if isinstance(access, GitRepository) and access.access_token:
-            # access_token is stored as "user:password" — strip the leading
-            # "x-access-token:" form when present.
-            token = access.access_token
-            if ":" in token:
-                token = token.split(":", 1)[1]
-            return pat_api_client(token)
+            return pat_api_client(access.access_token)
         return GitHubApiClient()
 
     @staticmethod
@@ -904,7 +908,7 @@ class GitService:
             else Path(".")
         )
         relative_pkg_path = base_dir / ui_directory / "package.json"
-        api_path = str(relative_pkg_path).replace("\\", "/").lstrip("./")
+        api_path = relative_pkg_path.as_posix().removeprefix("./")
 
         content = await client.get_file_contents(owner, repo, api_path, ref)
         if content is None:

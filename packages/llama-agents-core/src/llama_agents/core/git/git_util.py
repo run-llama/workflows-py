@@ -1,8 +1,8 @@
 """
-Git utilities for the purpose of exploring, cloning, and parsing llama-deploy repositories.
-Responsibilities are lower level git access, as well as some application specific config parsing.
+Git utilities for exploring, cloning, and parsing llama-deploy repositories.
 
-Backed by ``dulwich`` (pure-Python git) — does NOT shell out to the ``git`` CLI.
+Backed by the pure-Python ``dulwich`` library so the host does not need a
+``git`` binary on PATH.
 """
 
 import io
@@ -19,7 +19,7 @@ from typing import Any
 import yaml
 from dulwich import porcelain
 from dulwich.client import get_transport_and_path
-from dulwich.errors import HangupException, NotGitRepository
+from dulwich.errors import NotGitRepository
 from dulwich.refs import Ref
 from dulwich.repo import Repo
 from dulwich.walk import Walker
@@ -60,14 +60,6 @@ def parse_github_repo_url(repo_url: str) -> tuple[str, str]:
             return match.group(1), match.group(2)
 
     raise ValueError(f"Could not parse GitHub repository URL: {repo_url}")
-
-
-def inject_basic_auth(url: str, basic_auth: str | None = None) -> str:
-    """Inject basic auth into a URL if provided"""
-    if basic_auth and "://" in url and "@" not in url:
-        scheme, rest = url.split("://", 1)
-        url = f"{scheme}://{basic_auth}@{rest}"
-    return url
 
 
 class GitAccessError(Exception):
@@ -271,9 +263,8 @@ def clone_repo(
     if is_sha_ref:
         effective_depth = None
 
-    # dulwich.porcelain.clone forwards transport-specific kwargs (including
-    # username/password) via a generically-typed **kwargs. Build the dict
-    # dynamically and type as Any to keep static checkers happy.
+    # porcelain.clone forwards transport-specific kwargs via **kwargs typed as
+    # Any; build the dict dynamically to keep static checkers quiet.
     transport_kwargs: dict[str, Any] = {}
     if user is not None:
         transport_kwargs["username"] = user
@@ -291,17 +282,10 @@ def clone_repo(
                 errstream=io.BytesIO(),
                 **transport_kwargs,
             )
-        except (HangupException, NotGitRepository) as e:
-            raise GitAccessError(
-                f"Failed to clone repository {repository_url}: {e}"
-            ) from e
-        except OSError as e:
-            raise GitAccessError(
-                f"Failed to clone repository {repository_url}: {e}"
-            ) from e
         except Exception as e:
-            # Dulwich raises a variety of network-layer errors (urllib3 errors,
-            # GitProtocolError subclasses, etc). Normalize to GitAccessError.
+            # Dulwich surfaces network/protocol failures as a mix of
+            # HangupException, NotGitRepository, OSError, and assorted
+            # GitProtocolError subclasses — normalize them all here.
             raise GitAccessError(
                 f"Failed to clone repository {repository_url}: {e}"
             ) from e
@@ -317,18 +301,12 @@ def clone_repo(
             resolved_ref: str | None = git_ref
 
             if git_ref and is_sha_ref:
-                # The clone landed on the remote default branch; we need to
-                # check out the requested commit. Dulwich does not let us
-                # ask for a specific SHA at clone time, so do it after.
-                try:
-                    _checkout_ref(repo, git_ref)
-                except GitAccessError:
-                    # Re-raise as-is so callers see the descriptive message.
-                    raise
+                # Dulwich cannot fetch a specific SHA at clone time, so check
+                # out the requested commit after the default-branch clone.
+                _checkout_ref(repo, git_ref)
                 head_sha_bytes = repo.head()
                 resolved_ref = git_ref
             elif git_ref is None:
-                # No ref requested — surface the resolved branch/tag for the caller.
                 resolved_ref = _resolved_git_ref_for_head(repo)
 
             return GitCloneResult(git_sha=head_sha_bytes.decode(), git_ref=resolved_ref)

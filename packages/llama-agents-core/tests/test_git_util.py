@@ -1,5 +1,4 @@
 import socket
-import subprocess
 import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -454,8 +453,3 @@ def test_validate_git_url_no_ssrf_rejects_dns_failure() -> None:
     ):
         with pytest.raises(GitAccessError, match="DNS resolution failed"):
             validate_git_url_no_ssrf("https://nonexistent.example.com/repo.git")
-
-
-# Keep an import for subprocess so this file's lint stays clean — we no longer
-# mock subprocess but we do exercise the timeout type via pytest's parametrize.
-_ = subprocess
