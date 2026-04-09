@@ -76,6 +76,7 @@ def test_bootstrap_minimal_happy_path(
             git_ref=None,
             basic_auth="tok",
             dest_dir=str(tmp_path),
+            depth=1,
         )
 
     # configure_settings received proper app_root and deployment_file_path
@@ -116,6 +117,7 @@ def test_bootstrap_invokes_clone_repo_with_git_sha_over_git_ref(
             git_ref="deadbeef",
             basic_auth="tok",
             dest_dir=str(tmp_path),
+            depth=1,
         )
 
 

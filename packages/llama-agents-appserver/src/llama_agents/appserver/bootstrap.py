@@ -244,6 +244,11 @@ def bootstrap_app_from_repo(
         git_ref=bootstrap_settings.git_sha or bootstrap_settings.git_ref,
         basic_auth=bootstrap_settings.auth_token,
         dest_dir=target_dir,
+        # Bootstrap runs once per build with a resolved git_sha already in
+        # hand from the validation step. Skip downloading full history.
+        # NOTE: setuptools_scm-based packages relying on tag history may need
+        # to pin their version explicitly or set SETUPTOOLS_SCM_PRETEND_VERSION.
+        depth=1,
     )
     # Ensure target_dir exists locally when running tests outside a container
     os.makedirs(target_dir, exist_ok=True)

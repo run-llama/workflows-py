@@ -197,6 +197,30 @@ def test_clone_repo_passes_depth(mock_clone: MagicMock) -> None:
     assert mock_clone.call_args.kwargs["depth"] == 1
 
 
+@patch(f"{GIT_UTIL}.porcelain.clone")
+def test_clone_repo_sha_overrides_depth(mock_clone: MagicMock) -> None:
+    """When given a SHA-shaped ref, depth is dropped to ensure reachability."""
+    sha = "deadbeef" * 5  # 40 chars
+    fake_repo = MagicMock()
+    fake_repo.head.return_value = sha.encode()
+    fake_repo.refs.read_ref.return_value = b"ref: refs/heads/main"
+    fake_repo.refs.__getitem__.return_value = sha.encode()
+    mock_clone.return_value = fake_repo
+
+    with patch(f"{GIT_UTIL}._checkout_ref"):
+        with tempfile.TemporaryDirectory() as t:
+            clone_repo(
+                "https://github.com/user/repo.git",
+                git_ref=sha,
+                dest_dir=Path(t) / "sub",
+                depth=1,
+            )
+
+    assert mock_clone.call_args.kwargs["depth"] is None
+    # branch is None for a SHA ref since we can't pass a SHA as a branch
+    assert mock_clone.call_args.kwargs["branch"] is None
+
+
 def test_clone_repo_rejects_dangerous_url() -> None:
     with pytest.raises(GitAccessError):
         clone_repo("ext::sh -c echo pwned")

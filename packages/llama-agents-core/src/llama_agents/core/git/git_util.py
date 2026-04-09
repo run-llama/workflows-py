@@ -263,6 +263,14 @@ def clone_repo(
     if git_ref and not is_sha_ref:
         branch_arg = git_ref.encode()
 
+    # When the caller pinned a specific SHA, depth=1 of the default branch
+    # may not contain the requested commit. dulwich does not have a clean
+    # "shallow fetch this SHA" path, so fall back to a full clone in that
+    # case to guarantee the SHA is reachable.
+    effective_depth = depth
+    if is_sha_ref:
+        effective_depth = None
+
     # dulwich.porcelain.clone forwards transport-specific kwargs (including
     # username/password) via a generically-typed **kwargs. Build the dict
     # dynamically and type as Any to keep static checkers happy.
@@ -277,7 +285,7 @@ def clone_repo(
             repo = porcelain.clone(
                 source=repository_url,
                 target=str(target_path),
-                depth=depth,
+                depth=effective_depth,
                 branch=branch_arg,
                 checkout=True,
                 errstream=io.BytesIO(),
