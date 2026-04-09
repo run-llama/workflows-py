@@ -13,7 +13,7 @@ async def test_validate_git_application_ui_path_for_pyproject_at_examples_basic_
     tmp_path: Path,
 ) -> None:
     # Arrange: mock clone_repo to populate a temp repo layout with pyproject at examples/basic_ui and UI under examples/basic_ui/ui
-    def _mock_clone_repo(
+    async def _mock_clone_repo(
         repository_url: str,
         git_ref: str | None = None,
         basic_auth: str | None = None,

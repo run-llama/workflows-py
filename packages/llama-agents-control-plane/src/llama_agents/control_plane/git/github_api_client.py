@@ -1,3 +1,8 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 LlamaIndex Inc.
+
+import base64
+import urllib.parse
 from typing import Callable
 
 import httpx
@@ -41,6 +46,54 @@ class GitHubApiClient:
             return None
         response.raise_for_status()
         return GitHubRepository.model_validate(response.json())
+
+    async def get_commit_sha(self, owner: str, repo: str, ref: str) -> str | None:
+        """Resolve any git ref (branch, tag, full SHA, short SHA) to a full commit SHA.
+
+        Returns the full 40-character SHA, or None if the ref does not resolve.
+        Treats GitHub's 422 (ambiguous short SHA) the same as a 404.
+        """
+        encoded_ref = urllib.parse.quote(ref, safe="")
+        response = await self.client.get(f"/repos/{owner}/{repo}/commits/{encoded_ref}")
+        if response.status_code in (404, 422):
+            return None
+        response.raise_for_status()
+        data = response.json()
+        sha = data.get("sha")
+        if not isinstance(sha, str):
+            return None
+        return sha
+
+    async def get_default_branch(self, owner: str, repo: str) -> str | None:
+        """Return the default branch name for the repository, or None if 404."""
+        repo_info = await self.get_repository_info(owner, repo)
+        if repo_info is None:
+            return None
+        return repo_info.default_branch
+
+    async def get_file_contents(
+        self, owner: str, repo: str, path: str, ref: str
+    ) -> bytes | None:
+        """Fetch a file from a repository via the Contents API.
+
+        Returns the decoded file bytes, or None if the path does not exist
+        or points at a directory.
+        """
+        response = await self.client.get(
+            f"/repos/{owner}/{repo}/contents/{path}", params={"ref": ref}
+        )
+        if response.status_code == 404:
+            return None
+        response.raise_for_status()
+        data = response.json()
+        if isinstance(data, list):  # directory listing, not a file
+            return None
+        if data.get("type") != "file":
+            return None
+        content = data.get("content")
+        if not isinstance(content, str):
+            return None
+        return base64.b64decode(content.replace("\n", ""))
 
 
 def get_app_jwt_client() -> httpx.AsyncClient:

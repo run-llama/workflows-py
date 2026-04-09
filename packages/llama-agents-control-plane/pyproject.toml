@@ -45,7 +45,7 @@ dependencies = [
   "cryptography>=44.0.0",
   "aioboto3>=13.0.0",
   "pyyaml>=6.0",
-  "dulwich>=0.22.0",
+  "dulwich[https]>=0.22.0",
   "a2wsgi>=1.10.0"
 ]
 

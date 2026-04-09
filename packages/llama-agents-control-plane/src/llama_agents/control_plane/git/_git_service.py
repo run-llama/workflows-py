@@ -1,4 +1,9 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 LlamaIndex Inc.
+
+import asyncio
 import logging
+import shutil
 import tempfile
 import urllib.parse
 from dataclasses import dataclass
@@ -33,6 +38,48 @@ from .github_api_client import (
     pat_api_client,
 )
 
+_CONFIG_FILES = (
+    "llama_agents.toml",
+    "llama_deploy.toml",
+    "pyproject.toml",
+    "llama_agents.yaml",
+    "llama_deploy.yaml",
+)
+
+_CONFIG_EXTENSIONS = (".yaml", ".yml", ".toml")
+
+
+def _looks_like_config_file(path: str) -> bool:
+    lower = path.lower()
+    return any(lower.endswith(ext) for ext in _CONFIG_EXTENSIONS)
+
+
+def _normalize_repo_relative_path(repo_path: str) -> Path:
+    """Return a normalized repo-relative path or raise on traversal attempts."""
+    candidate = Path(repo_path)
+    if candidate.is_absolute() or ".." in candidate.parts:
+        raise ValueError(f"Path must stay within the repository: {repo_path}")
+
+    normalized_parts = [part for part in candidate.parts if part not in ("", ".")]
+    if not normalized_parts:
+        return Path(".")
+    return Path(*normalized_parts)
+
+
+def _repo_target_path(repo_root: Path, repo_path: str) -> Path:
+    """Build a safe local path under ``repo_root`` for a repo-relative path."""
+    return repo_root / _normalize_repo_relative_path(repo_path)
+
+
+def _deployment_base_dir(deployment_rel_path: str) -> Path:
+    """Return the directory that contains the deployment config."""
+    normalized = _normalize_repo_relative_path(deployment_rel_path)
+    if _looks_like_config_file(deployment_rel_path):
+        return normalized.parent
+    if normalized != Path("."):
+        return normalized
+    return Path(".")
+
 
 @dataclass
 class GitHubAppAccess:
@@ -45,6 +92,7 @@ class GitHubAppAccess:
 class GitRepository:
     url: str
     access_token: str | None  # passed as basic auth colon delimited username:password
+    default_branch: str | None = None
 
 
 @dataclass
@@ -80,7 +128,7 @@ class GitService:
                 repository_url, pat, existing_pat
             )
         else:
-            return self._check_generic_access_type(
+            return await self._check_generic_access_type(
                 repository_url, deployment_id, pat, existing_pat
             )
 
@@ -189,12 +237,10 @@ class GitService:
 
     def _is_github_repository(self, repository_url: str) -> bool:
         """Check if the repository URL is a GitHub repository."""
-        # Handle SSH shorthand: git@github.com:owner/repo.git
         if repository_url.startswith("git@"):
             host = repository_url.split("@", 1)[1].split(":", 1)[0]
             return host == "github.com"
 
-        # Handle URLs with scheme (https://, ssh://, git://) and schemeless (github.com/...)
         url = repository_url
         if "://" not in url:
             url = "https://" + url
@@ -219,10 +265,20 @@ class GitService:
                 )
             )
 
-        # First, probe public access via git directly to avoid GitHub API rate limits.
-        if validate_git_public_access(repository_url):
-            logger.info("Access resolved for %s/%s: public", owner, repo)
-            return GitRepository(url=repository_url, access_token=None)
+        try:
+            if await validate_git_public_access(repository_url):
+                logger.info("Access resolved for %s/%s: public", owner, repo)
+                return GitRepository(
+                    url=repository_url,
+                    access_token=None,
+                )
+        except GitAccessError as e:
+            logger.info(
+                "Public probe skipped for %s/%s: %s",
+                owner,
+                repo,
+                e,
+            )
 
         logger.info(
             "Public probe failed for %s/%s, trying authenticated methods", owner, repo
@@ -231,7 +287,6 @@ class GitService:
         github_app_auth = get_github_app_auth()
         org_installation = None
 
-        # Check GitHub App access first (preferred method)
         if github_app_auth:
             repo_installation = await github_app_api_client.get_repository_installation(
                 owner, repo
@@ -261,7 +316,6 @@ class GitService:
             else:
                 logger.info("No GitHub App installation found for %s/%s", owner, repo)
 
-        # Try PAT validation (provided PAT or existing deployment PAT)
         pat_to_test = pat or existing_pat
 
         if pat_to_test:
@@ -427,7 +481,7 @@ class GitService:
             message=f"GitHub owner '{owner}' does not exist.",
         )
 
-    def _check_generic_access_type(
+    async def _check_generic_access_type(
         self,
         repository_url: str,
         deployment_id: str | None = None,
@@ -436,18 +490,16 @@ class GitService:
     ) -> GitAccessType:
         """Validate non-GitHub repository access using git commands."""
 
-        # First, try public access
-        if validate_git_public_access(repository_url):
+        if await validate_git_public_access(repository_url):
             return GitRepository(
                 url=repository_url,
                 access_token=None,
             )
 
-        # Try PAT/credential validation (provided PAT or existing deployment PAT)
         pat_to_test = pat or existing_pat
 
         if pat_to_test:
-            if validate_git_credential_access(repository_url, pat_to_test):
+            if await validate_git_credential_access(repository_url, pat_to_test):
                 return GitRepository(
                     url=repository_url,
                     access_token=pat_to_test,
@@ -461,7 +513,6 @@ class GitService:
                     message="Personal Access Token does not have access to this repository.",
                 )
 
-        # No access method worked
         logger.warning(
             "Generic repo inaccessible: %s — private or does not exist",
             repository_url,
@@ -479,7 +530,6 @@ class GitService:
         if not deployment_id:
             return False
 
-        # Only obsolete if we have both PAT and GitHub App configured
         github_app_auth = get_github_app_auth()
         if not github_app_auth:
             return False
@@ -491,7 +541,6 @@ class GitService:
         if not deployment_id:
             return False
 
-        # For non-GitHub repos, PAT is obsolete if repo is now public and deployment has PAT
         has_pat = await k8s_client.has_deployment_pat(deployment_id)
         return has_pat
 
@@ -580,13 +629,36 @@ class GitService:
                 error_message=access.message,
             )
 
+        if self._is_github_repository(repository_url):
+            return await self._validate_github_application(
+                repository_url=repository_url,
+                git_ref=git_ref,
+                deployment_file_path=deployment_file_path,
+                access=access,
+            )
+
+        return await self._validate_via_clone(
+            repository_url=repository_url,
+            git_ref=git_ref,
+            deployment_file_path=deployment_file_path,
+            auth=auth,
+        )
+
+    async def _validate_via_clone(
+        self,
+        repository_url: str,
+        git_ref: str | None,
+        deployment_file_path: str | None,
+        auth: str | None,
+    ) -> GitApplicationValidationResponse:
+        """Used for non-GitHub repositories where the GitHub Contents API is unavailable."""
         with tempfile.TemporaryDirectory() as temp_dir:
             try:
-                result = clone_repo(
+                result = await clone_repo(
                     repository_url,
-                    dest_dir=Path(temp_dir),
-                    basic_auth=auth,
                     git_ref=git_ref,
+                    basic_auth=auth,
+                    dest_dir=Path(temp_dir),
                 )
             except GitAccessError as e:
                 return GitApplicationValidationResponse(
@@ -595,7 +667,6 @@ class GitService:
                 )
             repo_root = Path(temp_dir)
             deployment_rel_path = deployment_file_path or DEFAULT_DEPLOYMENT_FILE_PATH
-            # Parse config; this supersedes the older heuristic validate_deployment_file
             config_path = repo_root / deployment_rel_path
             try:
                 config = read_deployment_config(repo_root, config_path)
@@ -622,6 +693,234 @@ class GitService:
                 valid_deployment_file_path=deployment_file_path,
                 ui_build_output_path=ui_dist_relative_to_repo,
             )
+
+    async def _validate_github_application(
+        self,
+        repository_url: str,
+        git_ref: str | None,
+        deployment_file_path: str | None,
+        access: GitAccessType,
+    ) -> GitApplicationValidationResponse:
+        """Validate a GitHub repository's deployment config without cloning.
+
+        Resolve the ref via the Commits API, fetch candidate config files via
+        the Contents API, then parse the result on disk.
+        """
+        try:
+            owner, repo = parse_github_repo_url(repository_url)
+        except ValueError as e:
+            return GitApplicationValidationResponse(
+                is_valid=False,
+                error_message=str(e),
+            )
+
+        client = await self._github_client_for_access(access)
+
+        try:
+            target_ref = git_ref
+            if target_ref is None:
+                if (
+                    isinstance(access, GitRepository)
+                    and access.default_branch is not None
+                ):
+                    target_ref = access.default_branch
+                else:
+                    target_ref = await client.get_default_branch(owner, repo)
+            if target_ref is None:
+                return GitApplicationValidationResponse(
+                    is_valid=False,
+                    error_message=(
+                        f"Could not determine default branch for {owner}/{repo}."
+                    ),
+                )
+            commit_sha = await client.get_commit_sha(owner, repo, target_ref)
+        except HTTPStatusError as e:
+            return GitApplicationValidationResponse(
+                is_valid=False,
+                error_message=f"GitHub API error resolving ref: {e}",
+            )
+        if commit_sha is None:
+            return GitApplicationValidationResponse(
+                is_valid=False,
+                error_message=f"Git ref not found: {git_ref or target_ref}",
+            )
+
+        deployment_rel_path = deployment_file_path or DEFAULT_DEPLOYMENT_FILE_PATH
+        try:
+            normalized_deployment_rel_path = _normalize_repo_relative_path(
+                deployment_rel_path
+            )
+        except ValueError as e:
+            return GitApplicationValidationResponse(
+                is_valid=False,
+                error_message=f"Invalid deployment path: {e}",
+            )
+
+        temp_dir = tempfile.mkdtemp(prefix="cp_repo_config_")
+        try:
+            repo_root = Path(temp_dir)
+            try:
+                fetched_any = await self._fetch_config_files(
+                    client,
+                    owner,
+                    repo,
+                    commit_sha,
+                    normalized_deployment_rel_path.as_posix(),
+                    repo_root,
+                )
+            except HTTPStatusError as e:
+                return GitApplicationValidationResponse(
+                    is_valid=False,
+                    error_message=f"GitHub API error fetching config: {e}",
+                )
+
+            if not fetched_any:
+                return GitApplicationValidationResponse(
+                    is_valid=False,
+                    error_message=(
+                        f"No deployment config found at {deployment_rel_path}"
+                    ),
+                )
+
+            config_path = repo_root / normalized_deployment_rel_path
+            try:
+                config = read_deployment_config(repo_root, config_path)
+                config.validate_config()
+            except Exception as e:
+                return GitApplicationValidationResponse(
+                    is_valid=False,
+                    error_message=f"Invalid deployment config: {str(e)}",
+                )
+
+            if config.ui and config.ui.directory:
+                try:
+                    await self._fetch_ui_package_json(
+                        client,
+                        owner,
+                        repo,
+                        commit_sha,
+                        normalized_deployment_rel_path.as_posix(),
+                        config.ui.directory,
+                        repo_root,
+                    )
+                except HTTPStatusError as e:
+                    logger.warning(
+                        "Failed to fetch UI package.json for %s/%s: %s",
+                        owner,
+                        repo,
+                        e,
+                    )
+                try:
+                    config = read_deployment_config(repo_root, config_path)
+                    config.validate_config()
+                except Exception as e:
+                    return GitApplicationValidationResponse(
+                        is_valid=False,
+                        error_message=f"Invalid deployment config: {str(e)}",
+                    )
+
+            config_parent = resolve_config_parent(repo_root, config_path)
+            ui_dist_relative_to_config = ui_build_output_path(config_parent, config)
+            ui_dist_relative_to_repo = (
+                (config_parent / ui_dist_relative_to_config).relative_to(repo_root)
+                if ui_dist_relative_to_config
+                else None
+            )
+
+            return GitApplicationValidationResponse(
+                is_valid=True,
+                git_sha=commit_sha,
+                git_ref=git_ref or target_ref,
+                valid_deployment_file_path=deployment_file_path,
+                ui_build_output_path=ui_dist_relative_to_repo,
+            )
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+    async def _github_client_for_access(self, access: GitAccessType) -> GitHubApiClient:
+        """Return a Contents-API client appropriate for the resolved access type."""
+        if isinstance(access, GitHubAppAccess):
+            installation_token = (
+                await github_app_api_client.get_installation_access_token(
+                    access.installation_id
+                )
+            )
+            return installation_api_client(installation_token)
+        if isinstance(access, GitRepository) and access.access_token:
+            return pat_api_client(access.access_token)
+        return GitHubApiClient()
+
+    @staticmethod
+    async def _fetch_config_files(
+        client: GitHubApiClient,
+        owner: str,
+        repo: str,
+        ref: str,
+        deployment_rel_path: str,
+        repo_root: Path,
+    ) -> bool:
+        """Fetch candidate config files from the GitHub Contents API.
+
+        Writes any successfully fetched files into ``repo_root`` so the
+        on-disk parser (`read_deployment_config`) can read them. Returns
+        True if at least one file was fetched.
+        """
+        if _looks_like_config_file(deployment_rel_path):
+            content = await client.get_file_contents(
+                owner, repo, deployment_rel_path, ref
+            )
+            if content is None:
+                return False
+            target = _repo_target_path(repo_root, deployment_rel_path)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(content)
+            return True
+
+        config_dir = _repo_target_path(repo_root, deployment_rel_path)
+        config_dir.mkdir(parents=True, exist_ok=True)
+
+        async def fetch(filename: str) -> tuple[str, bytes | None]:
+            file_path = (
+                f"{deployment_rel_path}/{filename}"
+                if deployment_rel_path not in ("", ".")
+                else filename
+            )
+            return filename, await client.get_file_contents(owner, repo, file_path, ref)
+
+        results = await asyncio.gather(*[fetch(name) for name in _CONFIG_FILES])
+        fetched_any = False
+        for filename, content in results:
+            if content is None:
+                continue
+            target = config_dir / filename
+            target.write_bytes(content)
+            fetched_any = True
+        return fetched_any
+
+    @staticmethod
+    async def _fetch_ui_package_json(
+        client: GitHubApiClient,
+        owner: str,
+        repo: str,
+        ref: str,
+        deployment_rel_path: str,
+        ui_directory: str,
+        repo_root: Path,
+    ) -> bool:
+        """Fetch ``package.json`` for the UI directory and write it to disk."""
+        base_dir = _deployment_base_dir(deployment_rel_path)
+        relative_pkg_path = _normalize_repo_relative_path(
+            (base_dir / ui_directory / "package.json").as_posix()
+        )
+        api_path = relative_pkg_path.as_posix().removeprefix("./")
+
+        content = await client.get_file_contents(owner, repo, api_path, ref)
+        if content is None:
+            return False
+        target = _repo_target_path(repo_root, relative_pkg_path.as_posix())
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(content)
+        return True
 
 
 git_service = GitService()

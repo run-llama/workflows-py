@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import re
 import shutil
 import sys
 import tarfile
@@ -13,15 +12,13 @@ from pathlib import Path
 from botocore.exceptions import ClientError
 from dulwich.objects import ObjectID
 from dulwich.porcelain import gc as dulwich_gc
-from dulwich.refs import Ref
 from dulwich.repo import Repo
+from llama_agents.core.git.git_util import GitAccessError, resolve_ref_in_repo
 from starlette.concurrency import run_in_threadpool
 
 from ..storage import S3ObjectStorage
 
 logger = logging.getLogger(__name__)
-
-FULL_GIT_SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 
 
 class CodeRepoStorage(S3ObjectStorage):
@@ -133,25 +130,20 @@ class CodeRepoStorage(S3ObjectStorage):
             return None
         try:
             with Repo(str(repo_path)) as repo:
-                if FULL_GIT_SHA_PATTERN.fullmatch(git_ref):
-                    try:
-                        obj = repo.get_object(ObjectID(git_ref.encode()))
-                    except KeyError:
-                        return None
-                    if obj.type_name == b"commit":
-                        return obj.id.decode()
+                try:
+                    target_sha = resolve_ref_in_repo(repo, git_ref)
+                except GitAccessError:
                     return None
-
-                candidate_refs = (
-                    [git_ref]
-                    if git_ref.startswith("refs/")
-                    else [f"refs/heads/{git_ref}", f"refs/tags/{git_ref}"]
-                )
-                for candidate_ref in candidate_refs:
-                    ref_key = Ref(candidate_ref.encode())
-                    if ref_key in repo.refs.allkeys():
-                        return repo.get_peeled(ref_key).decode()
-            return None
+                if target_sha is None:
+                    return None
+                # Only accept commit objects — reject trees, blobs, etc.
+                try:
+                    obj = repo.get_object(ObjectID(target_sha))
+                except KeyError:
+                    return None
+                if obj.type_name != b"commit":
+                    return None
+                return target_sha.decode()
         finally:
             shutil.rmtree(repo_path.parent, ignore_errors=True)
 

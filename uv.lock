@@ -1120,6 +1120,11 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/16/4c/ba5b5f88b8e0dd43b2629aca66f472d1c3e03644da120a124586d7dc65ca/dulwich-1.1.0-py3-none-any.whl", hash = "sha256:bcd67e7f9bdffb4b660330c4597d251cd33e74f5df6898a2c1e6a1730a62af06", size = 673697, upload-time = "2026-02-17T21:20:03.346Z" },
 ]
 
+[package.optional-dependencies]
+https = [
+    { name = "urllib3" },
+]
+
 [[package]]
 name = "dunamai"
 version = "1.26.0"
@@ -2313,7 +2318,7 @@ dependencies = [
     { name = "aioboto3" },
     { name = "aiocache" },
     { name = "cryptography" },
-    { name = "dulwich" },
+    { name = "dulwich", extra = ["https"] },
     { name = "fastapi", extra = ["standard"] },
     { name = "gitpython" },
     { name = "kubernetes" },
@@ -2352,7 +2357,7 @@ requires-dist = [
     { name = "aioboto3", specifier = ">=13.0.0" },
     { name = "aiocache", specifier = ">=0.12.3" },
     { name = "cryptography", specifier = ">=44.0.0" },
-    { name = "dulwich", specifier = ">=0.22.0" },
+    { name = "dulwich", extras = ["https"], specifier = ">=0.22.0" },
     { name = "fastapi", extras = ["standard"], specifier = ">=0.115.6,<0.116" },
     { name = "gitpython", specifier = ">=3.1.40,<4" },
     { name = "kubernetes", specifier = ">=33.1.0" },
@@ -2390,6 +2395,7 @@ name = "llama-agents-core"
 version = "0.8.4"
 source = { editable = "packages/llama-agents-core" }
 dependencies = [
+    { name = "dulwich", extra = ["https"] },
     { name = "fastapi" },
     { name = "overrides" },
     { name = "pydantic" },
@@ -2421,6 +2427,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "dulwich", extras = ["https"], specifier = ">=0.22.0" },
     { name = "fastapi", specifier = ">=0.115.0" },
     { name = "fastapi", marker = "extra == 'server'", specifier = ">=0.115.0" },
     { name = "httpx", marker = "extra == 'client'", specifier = ">=0.24.0,<1.0.0" },
