@@ -3,6 +3,7 @@ from unittest.mock import patch
 
 import pytest
 from click.testing import CliRunner
+from dulwich.errors import NotGitRepository
 from llama_agents.cli.app import app
 
 
@@ -38,10 +39,13 @@ def test_serve_does_not_crash_without_git(
 
     cfg = _write_minimal_yaml(tmp_path)
 
+    # Simulate "no git repo discoverable" — the dulwich-backed helpers
+    # raise NotGitRepository when there is no .git directory along the
+    # current path.
     with (
         patch(
-            "llama_agents.core.git.git_util.subprocess.run",
-            side_effect=FileNotFoundError(),
+            "llama_agents.core.git.git_util.Repo.discover",
+            side_effect=NotGitRepository("no git here"),
         ),
         patch("llama_agents.appserver.app.prepare_server"),
         patch("llama_agents.appserver.app.start_server_in_target_venv"),

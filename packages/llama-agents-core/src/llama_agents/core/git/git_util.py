@@ -1,18 +1,34 @@
 """
 Git utilities for the purpose of exploring, cloning, and parsing llama-deploy repositories.
 Responsibilities are lower level git access, as well as some application specific config parsing.
+
+Backed by ``dulwich`` (pure-Python git) — does NOT shell out to the ``git`` CLI.
 """
 
+import io
 import ipaddress
 import re
+import shutil
 import socket
-import subprocess
 import tempfile
 import urllib.parse
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import yaml
+from dulwich import porcelain
+from dulwich.client import get_transport_and_path
+from dulwich.errors import HangupException, NotGitRepository
+from dulwich.refs import Ref
+from dulwich.repo import Repo
+from dulwich.walk import Walker
+
+_HEAD_REF = Ref(b"HEAD")
+_REFS_HEADS = b"refs/heads/"
+_REFS_TAGS = b"refs/tags/"
+_REFS_REMOTES = b"refs/remotes/"
+_DETACHED_BRANCH_REF = Ref(b"refs/heads/_llama_checkout")
 
 
 def parse_github_repo_url(repo_url: str) -> tuple[str, str]:
@@ -54,54 +70,6 @@ def inject_basic_auth(url: str, basic_auth: str | None = None) -> str:
     return url
 
 
-def _run_process(args: list[str], cwd: str | None = None, timeout: int = 30) -> str:
-    """Run a process and raise a GitAccessError with detailed output if it fails.
-
-    The error message includes the command, return code, working directory,
-    and both stdout and stderr to aid debugging (e.g., git fetch failures).
-    """
-    try:
-        result = subprocess.run(
-            args, cwd=cwd, capture_output=True, text=True, check=False, timeout=timeout
-        )
-    except FileNotFoundError as e:
-        # Executable not found (e.g., git not installed). Normalize to GitAccessError
-        cmd = " ".join(args)
-        where = f" (cwd={cwd})" if cwd else ""
-        executable = args[0] if args else "<unknown>"
-        raise GitAccessError(
-            f"Executable not found: {executable}. Failed to run: {cmd}{where}"
-        ) from e
-    except OSError as e:
-        # Other OS-level execution errors (e.g., permission denied)
-        cmd = " ".join(args)
-        where = f" (cwd={cwd})" if cwd else ""
-        raise GitAccessError(
-            f"Failed to execute command: {cmd}{where}. {e.__class__.__name__}: {e}"
-        ) from e
-    except subprocess.TimeoutExpired:
-        cmd = " ".join(args)
-        where = f" (cwd={cwd})" if cwd else ""
-        raise GitAccessError(f"Command timed out after {timeout}s: {cmd}{where}")
-
-    if result.returncode != 0:
-        cmd = " ".join(args)
-        where = f" (cwd={cwd})" if cwd else ""
-        stdout = (result.stdout or "").strip()
-        stderr = (result.stderr or "").strip()
-        details = []
-        if stdout:
-            details.append(f"stdout:\n{stdout}")
-        if stderr:
-            details.append(f"stderr:\n{stderr}")
-        detail_block = "\n\n".join(details) if details else "(no output)"
-        raise GitAccessError(
-            f"Command failed with exit code {result.returncode}: {cmd}{where}\n{detail_block}"
-        )
-
-    return (result.stdout or "").strip()
-
-
 class GitAccessError(Exception):
     """Error raised when a user reportable git error occurs, e.g connection fails, cannot access repository, timeout, ref not found, etc."""
 
@@ -111,6 +79,8 @@ class GitAccessError(Exception):
 
 
 _ALLOWED_SCHEMES = {"https", "http"}
+
+_FULL_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 
 
 def validate_git_url(url: str) -> None:
@@ -176,81 +146,189 @@ class GitCloneResult:
     git_ref: str | None = None
 
 
+def _split_basic_auth(basic_auth: str | None) -> tuple[str | None, str | None]:
+    """Parse a ``user:password`` style string into separate components."""
+    if not basic_auth:
+        return None, None
+    if ":" not in basic_auth:
+        # Treat as a token-only credential (passed in the user slot)
+        return basic_auth, None
+    user, _, password = basic_auth.partition(":")
+    return user, password
+
+
+def _resolved_git_ref_for_head(repo: Repo) -> str | None:
+    """Read the symbolic HEAD ref and return a friendly branch/tag name (or None)."""
+    head_ref = repo.refs.read_ref(_HEAD_REF)
+    if head_ref is None:
+        return None
+    if head_ref.startswith(b"ref: "):
+        head_ref = head_ref[5:]
+    # If the read produced an actual SHA (40 hex), HEAD is detached.
+    if _FULL_SHA_RE.match(head_ref.decode(errors="replace")):
+        # Try to find a tag pointing at HEAD
+        head_sha = repo.refs[_HEAD_REF]
+        for ref_name in repo.refs.subkeys(Ref(_REFS_TAGS)):
+            tag_ref = Ref(_REFS_TAGS + ref_name)
+            try:
+                if repo.refs[tag_ref] == head_sha:
+                    return ref_name.decode()
+            except KeyError:
+                continue
+        return None
+    if head_ref.startswith(_REFS_HEADS):
+        return head_ref[len(_REFS_HEADS) :].decode()
+    if head_ref.startswith(_REFS_TAGS):
+        return head_ref[len(_REFS_TAGS) :].decode()
+    return head_ref.decode()
+
+
+def _checkout_ref(repo: Repo, git_ref: str) -> None:
+    """Update HEAD to point at the requested ref. Raises GitAccessError if not found."""
+    ref_bytes = git_ref.encode()
+
+    candidates = (
+        Ref(ref_bytes),
+        Ref(_REFS_HEADS + ref_bytes),
+        Ref(_REFS_TAGS + ref_bytes),
+        Ref(_REFS_REMOTES + b"origin/" + ref_bytes),
+    )
+
+    target_sha: bytes | None = None
+    for candidate in candidates:
+        try:
+            target_sha = repo.refs[candidate]
+            break
+        except KeyError:
+            continue
+
+    if target_sha is None and _FULL_SHA_RE.match(git_ref):
+        try:
+            obj = repo[ref_bytes]
+            target_sha = obj.id
+        except KeyError:
+            target_sha = None
+
+    if target_sha is None:
+        raise GitAccessError(f"Git ref not found: {git_ref}")
+
+    # Detach HEAD onto the target sha and reset the working tree.
+    repo.refs.set_symbolic_ref(_HEAD_REF, _DETACHED_BRANCH_REF)
+    repo.refs[_DETACHED_BRANCH_REF] = target_sha
+    porcelain.reset(repo, "hard", target_sha.decode())
+
+
 def clone_repo(
     repository_url: str,
     git_ref: str | None = None,
     basic_auth: str | None = None,
     dest_dir: Path | str | None = None,
+    depth: int | None = None,
 ) -> GitCloneResult:
     """
     Clone a repository and checkout a specific ref, if provided. If user reportable access errors occur, raises a GitAccessError.
 
     Args:
         repository_url: The URL of the repository to clone
-        git_ref: The git reference to checkout, if provided
-        basic_auth: The basic auth to use to clone the repository
-        dest_dir: The directory to clone the repository to, if provided
+        git_ref: The git reference to checkout, if provided. May be a branch
+            name, tag, or full 40-character commit SHA. Short SHAs are not
+            supported by the dulwich-backed implementation.
+        basic_auth: The basic auth to use to clone the repository, in
+            ``user:password`` form. Token-only credentials are also accepted
+            (passed via the URL user component).
+        dest_dir: The directory to clone the repository to, if provided. The
+            directory must not already contain a checkout — partial state is
+            not handled. When omitted, a temporary directory is used and
+            cleaned up after the function returns.
+        depth: Optional shallow clone depth. ``depth=1`` requests only the
+            most recent commit on the cloned ref. Defaults to a full clone
+            for backwards compatibility.
 
     Returns:
         GitCloneResult: A dataclass containing the git SHA and resolved git ref (e.g. main if None was provided)
     """
     validate_git_url(repository_url)
-    try:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            dest_dir = Path(temp_dir) if dest_dir is None else Path(dest_dir)
-            authenticated_url = inject_basic_auth(repository_url, basic_auth)
-            did_exist = (
-                dest_dir.exists() and dest_dir.is_dir() and list(dest_dir.iterdir())
-            )
-            if not did_exist:
-                # need to do a full clone to resolve any kind of ref without exploding in
-                # complexity (tag, branch, commit, short commit)
-                clone_args = [
-                    "git",
-                    "clone",
-                    "--",
-                    authenticated_url,
-                    str(dest_dir.absolute()),
-                ]
-                _run_process(clone_args)
+    user, password = _split_basic_auth(basic_auth)
 
-            if not git_ref:
-                resolved_branch = _run_process(
-                    ["git", "branch", "--show-current"],
-                    cwd=str(dest_dir.absolute()),
-                )
-                if resolved_branch:
-                    git_ref = resolved_branch
-                else:
-                    # Try exact tag match; if it fails, we just ignore and proceed
-                    try:
-                        resolved_tag = _run_process(
-                            ["git", "describe", "--tags", "--exact-match"],
-                            cwd=str(dest_dir.absolute()),
-                        )
-                        if resolved_tag:
-                            git_ref = resolved_tag
-                    except GitAccessError:
-                        pass
-            else:  # Checkout the ref
-                if did_exist:
-                    _run_process(
-                        ["git", "fetch", "origin"], cwd=str(dest_dir.absolute())
-                    )
-                _run_process(
-                    ["git", "checkout", git_ref, "--"], cwd=str(dest_dir.absolute())
-                )
-            # if no ref, stay on whatever the clone gave us/current commit
-            # return the resolved sha
-            resolved_sha = _run_process(
-                ["git", "rev-parse", "HEAD"], cwd=str(dest_dir.absolute())
-            ).strip()
-            return GitCloneResult(git_sha=resolved_sha, git_ref=git_ref)
-    except GitAccessError:
-        # Re-raise enriched errors from _run_process directly
-        raise
-    except subprocess.TimeoutExpired:
-        raise GitAccessError("Timeout while cloning repository")
+    cleanup_temp: Path | None = None
+    if dest_dir is None:
+        cleanup_temp = Path(tempfile.mkdtemp(prefix="llama_clone_"))
+        target_path = cleanup_temp
+    else:
+        target_path = Path(dest_dir)
+        target_path.mkdir(parents=True, exist_ok=True)
+
+    branch_arg: bytes | None = None
+    is_sha_ref = bool(git_ref and _FULL_SHA_RE.match(git_ref))
+    if git_ref and not is_sha_ref:
+        branch_arg = git_ref.encode()
+
+    # dulwich.porcelain.clone forwards transport-specific kwargs (including
+    # username/password) via a generically-typed **kwargs. Build the dict
+    # dynamically and type as Any to keep static checkers happy.
+    transport_kwargs: dict[str, Any] = {}
+    if user is not None:
+        transport_kwargs["username"] = user
+    if password is not None:
+        transport_kwargs["password"] = password
+
+    try:
+        try:
+            repo = porcelain.clone(
+                source=repository_url,
+                target=str(target_path),
+                depth=depth,
+                branch=branch_arg,
+                checkout=True,
+                errstream=io.BytesIO(),
+                **transport_kwargs,
+            )
+        except (HangupException, NotGitRepository) as e:
+            raise GitAccessError(
+                f"Failed to clone repository {repository_url}: {e}"
+            ) from e
+        except OSError as e:
+            raise GitAccessError(
+                f"Failed to clone repository {repository_url}: {e}"
+            ) from e
+        except Exception as e:
+            # Dulwich raises a variety of network-layer errors (urllib3 errors,
+            # GitProtocolError subclasses, etc). Normalize to GitAccessError.
+            raise GitAccessError(
+                f"Failed to clone repository {repository_url}: {e}"
+            ) from e
+
+        try:
+            try:
+                head_sha_bytes = repo.head()
+            except KeyError as e:
+                raise GitAccessError(
+                    f"Cloned repository {repository_url} has no HEAD"
+                ) from e
+
+            resolved_ref: str | None = git_ref
+
+            if git_ref and is_sha_ref:
+                # The clone landed on the remote default branch; we need to
+                # check out the requested commit. Dulwich does not let us
+                # ask for a specific SHA at clone time, so do it after.
+                try:
+                    _checkout_ref(repo, git_ref)
+                except GitAccessError:
+                    # Re-raise as-is so callers see the descriptive message.
+                    raise
+                head_sha_bytes = repo.head()
+                resolved_ref = git_ref
+            elif git_ref is None:
+                # No ref requested — surface the resolved branch/tag for the caller.
+                resolved_ref = _resolved_git_ref_for_head(repo)
+
+            return GitCloneResult(git_sha=head_sha_bytes.decode(), git_ref=resolved_ref)
+        finally:
+            repo.close()
+    finally:
+        if cleanup_temp is not None:
+            shutil.rmtree(cleanup_temp, ignore_errors=True)
 
 
 def validate_deployment_file(repo_dir: Path, deployment_file_path: str) -> bool:
@@ -285,37 +363,39 @@ def validate_deployment_file(repo_dir: Path, deployment_file_path: str) -> bool:
             return False
 
 
-def validate_git_public_access(repository_url: str) -> bool:
-    """Check if a git repository is publicly accessible using git ls-remote."""
-    validate_git_url_no_ssrf(repository_url)
+def _probe_remote(
+    repository_url: str, user: str | None = None, password: str | None = None
+) -> bool:
+    """Run an ls-remote-equivalent against ``repository_url``."""
+    transport_kwargs: dict[str, Any] = {}
+    if user is not None:
+        transport_kwargs["username"] = user
+    if password is not None:
+        transport_kwargs["password"] = password
     try:
-        result = subprocess.run(
-            ["git", "ls-remote", "--heads", "--", repository_url],
-            capture_output=True,
-            text=True,
-            timeout=30,
-            check=False,  # Don't raise on non-zero exit
-        )
-        return result.returncode == 0
-    except (subprocess.TimeoutExpired, Exception):
+        client, path = get_transport_and_path(repository_url, **transport_kwargs)
+    except Exception:
         return False
+    try:
+        # `path` is the str path component returned by dulwich; the
+        # transport's `get_refs` expects bytes.
+        client.get_refs(path.encode() if isinstance(path, str) else path)
+        return True
+    except Exception:
+        return False
+
+
+def validate_git_public_access(repository_url: str) -> bool:
+    """Check if a git repository is publicly accessible without authentication."""
+    validate_git_url_no_ssrf(repository_url)
+    return _probe_remote(repository_url)
 
 
 def validate_git_credential_access(repository_url: str, basic_auth: str) -> bool:
     """Check if a credential provides access to a git repository."""
     validate_git_url_no_ssrf(repository_url)
-    auth_url = inject_basic_auth(repository_url, basic_auth)
-    try:
-        result = subprocess.run(
-            ["git", "ls-remote", "--heads", "--", auth_url],
-            capture_output=True,
-            text=True,
-            timeout=30,
-            check=False,
-        )
-        return result.returncode == 0
-    except (subprocess.TimeoutExpired, Exception):
-        return False
+    user, password = _split_basic_auth(basic_auth)
+    return _probe_remote(repository_url, user=user, password=password)
 
 
 def is_git_repo() -> bool:
@@ -323,9 +403,9 @@ def is_git_repo() -> bool:
     checks if the cwd is a git repo
     """
     try:
-        _run_process(["git", "status"])
+        Repo.discover(start=str(Path.cwd())).close()
         return True
-    except GitAccessError:
+    except NotGitRepository:
         return False
 
 
@@ -333,32 +413,93 @@ def list_remotes() -> list[str]:
     """
     list the remote urls for the current git repo
     """
-    result = _run_process(["git", "remote", "-v"])
-    return [line.split()[1] for line in result.splitlines()]
+    try:
+        repo = Repo.discover(start=str(Path.cwd()))
+    except NotGitRepository as e:
+        raise GitAccessError("Not a git repository") from e
+
+    try:
+        config = repo.get_config()
+        urls: list[str] = []
+        for section in config.sections():
+            if len(section) == 2 and section[0] == b"remote":
+                try:
+                    url = config.get(section, b"url")
+                except KeyError:
+                    continue
+                urls.append(url.decode())
+        return urls
+    finally:
+        repo.close()
 
 
 def get_current_branch() -> str | None:
     """
     get the current branch for the current git repo
     """
-    result = _run_process(["git", "branch", "--show-current"])
-    return result.strip() if result.strip() else None
+    try:
+        repo = Repo.discover(start=str(Path.cwd()))
+    except NotGitRepository as e:
+        raise GitAccessError("Not a git repository") from e
+    try:
+        head_ref = repo.refs.read_ref(_HEAD_REF)
+        if head_ref is None:
+            return None
+        if head_ref.startswith(b"ref: "):
+            head_ref = head_ref[5:]
+        if not head_ref.startswith(_REFS_HEADS):
+            return None
+        branch = head_ref[len(_REFS_HEADS) :].decode()
+        return branch or None
+    finally:
+        repo.close()
 
 
 def get_commit_sha_for_ref(ref: str) -> str | None:
     """
     get the commit SHA for a specified ref (branch, commit, HEAD...)
     """
-    result = _run_process(["git", "rev-parse", ref])
-    return result.strip() if result.strip() else None
+    try:
+        repo = Repo.discover(start=str(Path.cwd()))
+    except NotGitRepository as e:
+        raise GitAccessError("Not a git repository") from e
+
+    ref_bytes = ref.encode()
+    try:
+        for candidate in (
+            Ref(ref_bytes),
+            Ref(_REFS_HEADS + ref_bytes),
+            Ref(_REFS_TAGS + ref_bytes),
+            Ref(_REFS_REMOTES + ref_bytes),
+        ):
+            try:
+                return repo.refs[candidate].decode()
+            except KeyError:
+                continue
+
+        if _FULL_SHA_RE.match(ref):
+            try:
+                obj = repo[ref_bytes]
+                return obj.id.decode()
+            except KeyError:
+                return None
+        return None
+    finally:
+        repo.close()
 
 
 def get_git_root() -> Path:
     """
     get the root of the current git repo
     """
-    result = _run_process(["git", "rev-parse", "--show-toplevel"])
-    return Path(result.strip())
+    try:
+        repo = Repo.discover(start=str(Path.cwd()))
+    except NotGitRepository as e:
+        raise GitAccessError("Not a git repository") from e
+    try:
+        return Path(repo.path)
+    finally:
+        repo.close()
 
 
 def working_tree_has_changes() -> bool:
@@ -367,16 +508,12 @@ def working_tree_has_changes() -> bool:
     Safe to call; returns False if unable to determine.
     """
     try:
-        result = subprocess.run(
-            ["git", "status", "--porcelain"],
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=30,
-        )
-        return bool((result.stdout or "").strip())
+        status = porcelain.status(str(Path.cwd()))
     except Exception:
         return False
+    staged = status.staged or {}
+    has_staged = any(staged.get(key) for key in ("add", "delete", "modify"))
+    return bool(has_staged or status.unstaged or status.untracked)
 
 
 def get_unpushed_commits_count() -> int | None:
@@ -388,37 +525,51 @@ def get_unpushed_commits_count() -> int | None:
     - Returns 0 if the status cannot be determined
     """
     try:
-        upstream = subprocess.run(
-            [
-                "git",
-                "rev-parse",
-                "--abbrev-ref",
-                "--symbolic-full-name",
-                "@{u}",
-            ],
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=30,
-        )
-        if upstream.returncode != 0:
+        repo = Repo.discover(start=str(Path.cwd()))
+    except NotGitRepository:
+        return 0
+
+    try:
+        try:
+            head_ref = repo.refs.read_ref(_HEAD_REF)
+        except Exception:
+            return 0
+        if not head_ref or not head_ref.startswith(b"ref: "):
+            # Detached HEAD — no upstream concept
+            return None
+        branch_full = head_ref[5:]
+        if not branch_full.startswith(_REFS_HEADS):
+            return None
+        branch_name = branch_full[len(_REFS_HEADS) :]
+
+        config = repo.get_config()
+        try:
+            merge_ref = config.get((b"branch", branch_name), b"merge")
+            remote = config.get((b"branch", branch_name), b"remote")
+        except KeyError:
             return None
 
-        ahead_behind = subprocess.run(
-            ["git", "rev-list", "--left-right", "--count", "@{u}...HEAD"],
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=30,
-        )
-        output = (ahead_behind.stdout or "").strip()
-        if not output:
+        if not merge_ref.startswith(_REFS_HEADS):
+            return None
+        upstream_branch = merge_ref[len(_REFS_HEADS) :]
+        tracking_ref = Ref(_REFS_REMOTES + remote + b"/" + upstream_branch)
+
+        try:
+            local_sha = repo.refs[_HEAD_REF]
+            upstream_sha = repo.refs[tracking_ref]
+        except KeyError:
             return 0
-        parts = output.split()
-        if len(parts) >= 2:
-            # format: behind ahead
-            ahead_count = int(parts[1])
-            return ahead_count
-        return 0
-    except Exception:
-        return 0
+
+        try:
+            walker = Walker(
+                repo.object_store,
+                [local_sha],
+                exclude=[upstream_sha],
+                max_entries=1001,
+            )
+            count = sum(1 for _ in walker)
+        except Exception:
+            return 0
+        return count
+    finally:
+        repo.close()
