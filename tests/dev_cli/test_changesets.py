@@ -16,6 +16,7 @@ from dev_cli.changesets import (
     HelmAction,
     HelmConfig,
     PackageJson,
+    PypiAction,
     PyProjectContainer,
     _resolve_template,
     _write_toml_values,
@@ -771,6 +772,47 @@ def test_execute_docker_manifest_action_combines_source_tags() -> None:
     assert cmd.count("--tag") == 2
     assert "docker.io/llamaindex/test:1.0.0-amd64" in cmd
     assert "docker.io/llamaindex/test:1.0.0-arm64" in cmd
+
+
+# -- _execute_pypi tests --
+
+
+def _write_pyproject(path: Path, name: str, version: str) -> None:
+    path.write_text(
+        f'[project]\nname = "{name}"\nversion = "{version}"\ndependencies = []\n'
+    )
+
+
+def test_execute_pypi_dry_run_skips_run_command(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pkg_dir = tmp_path / "packages" / "pkg"
+    pkg_dir.mkdir(parents=True)
+    _write_pyproject(pkg_dir / "pyproject.toml", "pkg", "1.2.3")
+    monkeypatch.chdir(tmp_path)
+    action = PypiAction(package="pkg", version="1.2.3", path="packages/pkg")
+    with patch("dev_cli.changesets.run_command") as mock_run:
+        execute_action(action, dry_run=True)
+    mock_run.assert_not_called()
+
+
+def test_execute_pypi_raises_when_plan_version_mismatches_on_disk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Reproduces the publish_changesets.yml bug: the plan was computed
+    # from a tree where ``pnpm -w run version`` had bumped pyproject.toml
+    # to 0.8.10, but the publish job checks out the branch fresh and
+    # sees the still-committed 0.8.9. Without this guard, uv build would
+    # silently produce 0.8.9 artifacts that don't match the plan glob.
+    pkg_dir = tmp_path / "packages" / "pkg"
+    pkg_dir.mkdir(parents=True)
+    _write_pyproject(pkg_dir / "pyproject.toml", "pkg", "0.8.9")
+    monkeypatch.chdir(tmp_path)
+    action = PypiAction(package="pkg", version="0.8.10", path="packages/pkg")
+    with patch("dev_cli.changesets.run_command") as mock_run:
+        with pytest.raises(RuntimeError, match="Plan expects pkg@0.8.10"):
+            execute_action(action, dry_run=False)
+    mock_run.assert_not_called()
 
 
 # -- plan_helm / execute_helm_action tests --
