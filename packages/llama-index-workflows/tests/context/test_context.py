@@ -16,6 +16,7 @@ from workflows.context.context import (
     _warn_is_running_in_step,
 )
 from workflows.context.external_context import ExternalContext
+from workflows.context.internal_context import InternalContext
 from workflows.context.serializers import JsonSerializer
 from workflows.context.state_store import (
     DictState,
@@ -775,6 +776,85 @@ def test_deserialize_state_from_dict_empty_dict_state() -> None:
 
     assert isinstance(result, DictState)
     assert len(list(result.items())) == 0
+
+
+# ============================================================================
+# Context.get_current() Tests
+# ============================================================================
+
+
+@pytest.mark.asyncio
+async def test_get_current_outside_step_raises() -> None:
+    """Calling Context.get_current() outside a step should raise WorkflowRuntimeError."""
+    with pytest.raises(WorkflowRuntimeError, match="may only be called from within"):
+        Context.get_current()
+
+
+@pytest.mark.asyncio
+async def test_get_current_inside_step() -> None:
+    """Context.get_current() should return the step's context inside a step."""
+    captured_ctx = None
+
+    class TestWorkflow(Workflow):
+        @step
+        async def my_step(self, ev: StartEvent) -> StopEvent:
+            nonlocal captured_ctx
+            captured_ctx = Context.get_current()
+            return StopEvent(result="done")
+
+    wf = TestWorkflow()
+    result = await wf.run()
+    assert result == "done"
+    assert captured_ctx is not None
+    # The returned context should be in internal face state
+    assert isinstance(captured_ctx._face, InternalContext)
+
+
+@pytest.mark.asyncio
+async def test_get_current_matches_ctx_parameter() -> None:
+    """Context.get_current() should return the same Context as the ctx parameter."""
+    ctx_from_param = None
+    ctx_from_get_current = None
+
+    class TestWorkflow(Workflow):
+        @step
+        async def my_step(self, ctx: Context, ev: StartEvent) -> StopEvent:
+            nonlocal ctx_from_param, ctx_from_get_current
+            ctx_from_param = ctx
+            ctx_from_get_current = Context.get_current()
+            return StopEvent(result="done")
+
+    wf = TestWorkflow()
+    await wf.run()
+    assert ctx_from_param is ctx_from_get_current
+
+
+@pytest.mark.asyncio
+async def test_get_current_supports_wait_for_event() -> None:
+    """Context.get_current() should return a context that supports wait_for_event."""
+
+    class ResumeEvent(Event):
+        value: str = "resumed"
+
+    class TestWorkflow(Workflow):
+        @step
+        async def waiting_step(self, ev: StartEvent) -> StopEvent:
+            ctx = Context.get_current()
+            result = await ctx.wait_for_event(
+                ResumeEvent,
+                waiter_event=InputRequiredEvent(prefix="waiting"),  # type: ignore[call-arg]
+            )
+            return StopEvent(result=result.value)
+
+    wf = TestWorkflow()
+    handler = wf.run()
+
+    async for ev in handler.stream_events():
+        if isinstance(ev, InputRequiredEvent):
+            handler.ctx.send_event(ResumeEvent(value="hello"))
+
+    result = await handler
+    assert result == "hello"
 
 
 def test_deserialize_state_from_dict_defaults_to_dict_state() -> None:

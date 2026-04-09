@@ -107,6 +107,10 @@ class WaitingForEvent(Exception, Generic[EventType]):
 
 StepWorkerStateContextVar = ContextVar[StepWorkerContext]("step_worker")
 
+# Holds the Context (in internal-face state) for the currently executing step.
+# Set alongside StepWorkerStateContextVar in as_step_worker_function().
+InternalContextVar: ContextVar[Any] = ContextVar("internal_context")
+
 
 ###################################
 # Data returned by step functions #

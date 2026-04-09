@@ -36,6 +36,7 @@ from workflows.runtime.types.plugin import (
     run_context,
 )
 from workflows.runtime.types.results import (
+    InternalContextVar,
     Returns,
     StepFunctionResult,
     StepWorkerContext,
@@ -169,6 +170,7 @@ def as_step_worker_function(
         token = StepWorkerStateContextVar.set(
             StepWorkerContext(state=state, returns=returns)
         )
+        ctx_token = InternalContextVar.set(internal_context)
 
         try:
             config = workflow._get_steps()[step_name]._step_config
@@ -276,6 +278,10 @@ def as_step_worker_function(
             await internal_context._finalize_step()
             return returns.return_values
         finally:
+            try:
+                InternalContextVar.reset(ctx_token)
+            except Exception:
+                pass
             try:
                 StepWorkerStateContextVar.reset(token)
             except Exception:

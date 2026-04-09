@@ -26,6 +26,7 @@ from workflows.context.pre_context import PreContext
 from workflows.errors import (
     ContextSerdeError,
     ContextStateError,
+    WorkflowRuntimeError,
 )
 from workflows.events import (
     Event,
@@ -141,6 +142,39 @@ class Context(Generic[MODEL_T]):
         new_ctx = cast(Context[MODEL_T], object.__new__(cls))
         new_ctx._face = face
         return new_ctx
+
+    @staticmethod
+    def get_current() -> Context:
+        """Return the `Context` for the currently executing step.
+
+        This is useful for middleware, decorators, or wrappers that need
+        access to the step context without requiring the user-defined step
+        function to declare a ``ctx: Context`` parameter.
+
+        Returns:
+            Context: The context instance (in internal-face state) for the
+            running step.
+
+        Raises:
+            WorkflowRuntimeError: If called outside of a step function.
+
+        Examples:
+            ```python
+            from workflows import Context
+
+            async def my_middleware():
+                ctx = Context.get_current()
+                await ctx.wait_for_event(SomeEvent)
+            ```
+        """
+        from workflows.runtime.types.results import InternalContextVar
+
+        try:
+            return InternalContextVar.get()
+        except LookupError:
+            raise WorkflowRuntimeError(
+                "Context.get_current() may only be called from within a step function"
+            )
 
     @property
     def is_running(self) -> bool:
