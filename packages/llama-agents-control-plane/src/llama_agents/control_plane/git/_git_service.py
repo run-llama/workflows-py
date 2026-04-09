@@ -625,9 +625,7 @@ class GitService:
         deployment_file_path: str | None,
         auth: str | None,
     ) -> GitApplicationValidationResponse:
-        """Used for non-GitHub repositories where the GitHub Contents API is
-        unavailable.
-        """
+        """Used for non-GitHub repositories where the GitHub Contents API is unavailable."""
         with tempfile.TemporaryDirectory() as temp_dir:
             try:
                 result = await clone_repo(
@@ -746,9 +744,7 @@ class GitService:
 
             config_path = repo_root / deployment_rel_path
             try:
-                config = await asyncio.to_thread(
-                    read_deployment_config, repo_root, config_path
-                )
+                config = read_deployment_config(repo_root, config_path)
                 config.validate_config()
             except Exception as e:
                 return GitApplicationValidationResponse(
@@ -775,9 +771,7 @@ class GitService:
                         e,
                     )
                 try:
-                    config = await asyncio.to_thread(
-                        read_deployment_config, repo_root, config_path
-                    )
+                    config = read_deployment_config(repo_root, config_path)
                     config.validate_config()
                 except Exception as e:
                     return GitApplicationValidationResponse(
