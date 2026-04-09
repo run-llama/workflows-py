@@ -70,7 +70,24 @@ def run_migrations(
         Defaults to ``[("server", _MIGRATIONS_PKG)]``.
     """
     # Enable WAL mode for concurrent read/write access.
-    conn.execute("PRAGMA journal_mode=WAL")
+    # Switching journal mode requires a write lock.  On container/network
+    # filesystems (or after a previous crash) the DB may be transiently
+    # locked, so retry a few times before falling back to the default
+    # (DELETE) journal mode.
+    for attempt in range(3):
+        try:
+            conn.execute("PRAGMA journal_mode=WAL")
+            break
+        except sqlite3.OperationalError:
+            if attempt < 2:
+                import time
+
+                time.sleep(0.5 * (attempt + 1))
+            else:
+                logger.warning(
+                    "Could not enable WAL journal mode; "
+                    "falling back to default journal mode."
+                )
 
     if sources is None:
         sources = [("server", _MIGRATIONS_PKG)]

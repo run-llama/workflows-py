@@ -29,6 +29,8 @@ from __future__ import annotations
 
 import functools
 import logging
+import os
+import sqlite3
 import traceback
 from datetime import datetime
 from pathlib import Path
@@ -136,8 +138,44 @@ def _get_sqlite_db_path() -> str:
     """Return the SQLite DB path, preferring AgentCore session storage."""
     workspace = Path(AGENTCORE_WORKSPACE)
     if workspace.exists() and workspace.is_dir():
-        return str(workspace / SQLITE_DB_NAME)
-    return SQLITE_DB_NAME
+        db_path = str(workspace / SQLITE_DB_NAME)
+    else:
+        db_path = SQLITE_DB_NAME
+    _cleanup_stale_sqlite_locks(db_path)
+    return db_path
+
+
+def _cleanup_stale_sqlite_locks(db_path: str) -> None:
+    """Remove stale WAL/SHM files left by a crashed previous session.
+
+    Only removes the files if we can successfully acquire an exclusive
+    lock on the database, proving no other process has it open.
+    """
+    wal_path = db_path + "-wal"
+    shm_path = db_path + "-shm"
+    if not os.path.exists(wal_path) and not os.path.exists(shm_path):
+        return
+
+    try:
+        conn = sqlite3.connect(db_path, timeout=1.0)
+        # If we can get an exclusive lock, no other process is using the DB.
+        conn.execute("BEGIN EXCLUSIVE")
+        conn.rollback()
+        conn.close()
+    except sqlite3.OperationalError:
+        # Another process actually has the DB open — leave files alone.
+        logger.debug(
+            "SQLite lock files exist and DB is actively locked; skipping cleanup."
+        )
+        return
+
+    for path in (wal_path, shm_path):
+        if os.path.exists(path):
+            try:
+                os.remove(path)
+                logger.info("Removed stale SQLite lock file: %s", path)
+            except OSError:
+                pass
 
 
 @functools.lru_cache(maxsize=1)
