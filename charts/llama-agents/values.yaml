@@ -39,7 +39,7 @@ images:
     repository: llamaindex/llama-agents-appserver
     # -- Appserver image tag
     # @section -- Images
-    tag: "0.10.2"
+    tag: "0.10.3"
     # -- Appserver image pull policy
     # @section -- Images
     pullPolicy: IfNotPresent

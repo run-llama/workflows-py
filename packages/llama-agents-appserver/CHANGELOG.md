@@ -1,5 +1,11 @@
 # llama-agents-appserver
 
+## 0.10.3
+
+### Patch Changes
+
+- 286c91a: Loosen appserver deps on llama-agents-server
+
 ## 0.10.2
 
 ### Patch Changes
