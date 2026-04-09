@@ -1,5 +1,11 @@
 # llama-agents-server
 
+## 0.4.3
+
+### Patch Changes
+
+- 12bda18: Ensure single_connection=True prevents locking from happening
+
 ## 0.4.2
 
 ### Patch Changes
