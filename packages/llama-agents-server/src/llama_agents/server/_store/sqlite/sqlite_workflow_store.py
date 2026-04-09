@@ -33,9 +33,12 @@ class SqliteWorkflowStore(AbstractWorkflowStore):
         db_path: str,
         poll_interval: float = 1.0,
         auto_migrate: bool = True,
+        single_connection: bool = False,
     ) -> None:
         self.db_path = db_path
         self.poll_interval = poll_interval
+        self._single_connection = single_connection
+        self._persistent_conn: sqlite3.Connection | None = None
         self._conditions: weakref.WeakValueDictionary[str, asyncio.Condition] = (
             weakref.WeakValueDictionary()
         )
@@ -44,11 +47,16 @@ class SqliteWorkflowStore(AbstractWorkflowStore):
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
-        conn = sqlite3.connect(self.db_path, timeout=30.0)
-        try:
-            yield conn
-        finally:
-            conn.close()
+        if self._single_connection:
+            if self._persistent_conn is None:
+                self._persistent_conn = sqlite3.connect(self.db_path)
+            yield self._persistent_conn
+        else:
+            conn = sqlite3.connect(self.db_path, timeout=30.0)
+            try:
+                yield conn
+            finally:
+                conn.close()
 
     def create_state_store(
         self,
@@ -58,7 +66,10 @@ class SqliteWorkflowStore(AbstractWorkflowStore):
         serializer: BaseSerializer | None = None,
     ) -> SqliteStateStore[Any]:
         store = SqliteStateStore(
-            db_path=self.db_path, run_id=run_id, state_type=state_type
+            db_path=self.db_path,
+            run_id=run_id,
+            state_type=state_type,
+            connection=self._persistent_conn,
         )
         if serialized_state is not None and serializer is not None:
             store._seed_from_serialized(serialized_state, serializer)
@@ -72,7 +83,13 @@ class SqliteWorkflowStore(AbstractWorkflowStore):
         return cond
 
     def _run_migrations(self) -> None:
-        self.run_migrations(self.db_path)
+        if self._single_connection:
+            if self._persistent_conn is None:
+                self._persistent_conn = sqlite3.connect(self.db_path)
+            _run_migrations(self._persistent_conn)
+            self._persistent_conn.commit()
+        else:
+            self.run_migrations(self.db_path)
 
     @staticmethod
     def run_migrations(db_path: str) -> None:

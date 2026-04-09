@@ -59,11 +59,13 @@ class SqliteStateStore(Generic[MODEL_T]):
         run_id: str,
         state_type: type[MODEL_T] | None = None,
         serializer: BaseSerializer | None = None,
+        connection: sqlite3.Connection | None = None,
     ) -> None:
         self._db_path = db_path
         self._run_id = run_id
         self.state_type = state_type or DictState  # type: ignore[assignment]  # ty: ignore[invalid-assignment]
         self._serializer = serializer or JsonSerializer()
+        self._shared_conn = connection
 
     @property
     def run_id(self) -> str:
@@ -75,6 +77,8 @@ class SqliteStateStore(Generic[MODEL_T]):
         return asyncio.Lock()
 
     def _connect(self) -> sqlite3.Connection:
+        if self._shared_conn is not None:
+            return self._shared_conn
         return sqlite3.connect(self._db_path, timeout=30.0)
 
     def _write_in_memory_state(self, serialized_state: dict[str, Any]) -> None:
