@@ -21,6 +21,7 @@ import yaml
 from dulwich import porcelain
 from dulwich.client import get_transport_and_path
 from dulwich.errors import NotGitRepository
+from dulwich.objects import ObjectID
 from dulwich.refs import Ref
 from dulwich.repo import Repo
 from dulwich.walk import Walker
@@ -71,8 +72,8 @@ class GitAccessError(Exception):
 
 _ALLOWED_SCHEMES = {"https", "http"}
 
-_FULL_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
-_SHA_LIKE_RE = re.compile(r"^[0-9a-f]{7,40}$")
+FULL_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+SHA_LIKE_RE = re.compile(r"^[0-9a-f]{7,40}$")
 
 
 def validate_git_url(url: str) -> None:
@@ -157,7 +158,7 @@ def _resolved_git_ref_for_head(repo: Repo) -> str | None:
     if head_ref.startswith(b"ref: "):
         head_ref = head_ref[5:]
     # If the read produced an actual SHA (40 hex), HEAD is detached.
-    if _FULL_SHA_RE.match(head_ref.decode(errors="replace")):
+    if FULL_SHA_RE.match(head_ref.decode(errors="replace")):
         # Try to find a tag pointing at HEAD
         head_sha = repo.refs[_HEAD_REF]
         for ref_name in repo.refs.subkeys(Ref(_REFS_TAGS)):
@@ -175,54 +176,72 @@ def _resolved_git_ref_for_head(repo: Repo) -> str | None:
     return head_ref.decode()
 
 
+def resolve_ref_in_repo(repo: Repo, git_ref: str) -> bytes | None:
+    """Resolve a git ref string to a commit SHA in a dulwich Repo.
+
+    Tries named refs (bare path, heads, tags), full SHA, then short SHA
+    prefix.  For named refs, annotated tags are peeled to the underlying
+    commit.
+
+    Returns the SHA as bytes, or ``None`` if the ref cannot be found.
+    Raises :class:`GitAccessError` when a short SHA prefix is ambiguous.
+    """
+    ref_bytes = git_ref.encode()
+
+    for candidate in (
+        Ref(ref_bytes),
+        Ref(_REFS_HEADS + ref_bytes),
+        Ref(_REFS_TAGS + ref_bytes),
+    ):
+        try:
+            return repo.get_peeled(candidate)
+        except KeyError:
+            continue
+
+    if FULL_SHA_RE.match(git_ref):
+        try:
+            return repo[ref_bytes].id
+        except (AssertionError, KeyError):
+            pass
+
+    if SHA_LIKE_RE.match(git_ref):
+        try:
+            matching_shas = repo.object_store.iter_prefix(ref_bytes)
+            first = next(matching_shas)
+            if next(matching_shas, None) is not None:
+                raise GitAccessError(f"Git ref is ambiguous: {git_ref}")
+            return first
+        except StopIteration:
+            pass
+        except GitAccessError:
+            raise
+        except Exception:
+            pass
+
+    return None
+
+
 def _checkout_ref(repo: Repo, git_ref: str) -> None:
     """Update HEAD to point at the requested ref.
 
     Raises GitAccessError if the ref cannot be resolved or if a short SHA-like
     ref is ambiguous.
     """
-    ref_bytes = git_ref.encode()
+    target_sha = resolve_ref_in_repo(repo, git_ref)
 
-    candidates = (
-        Ref(ref_bytes),
-        Ref(_REFS_HEADS + ref_bytes),
-        Ref(_REFS_TAGS + ref_bytes),
-        Ref(_REFS_REMOTES + b"origin/" + ref_bytes),
-    )
-
-    target_sha: bytes | None = None
-    for candidate in candidates:
+    # Also try remote tracking refs (only present in cloned repos)
+    if target_sha is None:
+        ref_bytes = git_ref.encode()
         try:
-            target_sha = repo.refs[candidate]
-            break
+            target_sha = repo.get_peeled(Ref(_REFS_REMOTES + b"origin/" + ref_bytes))
         except KeyError:
-            continue
-
-    if target_sha is None and _FULL_SHA_RE.match(git_ref):
-        try:
-            obj = repo[ref_bytes]
-            target_sha = obj.id
-        except (AssertionError, KeyError):
-            target_sha = None
-
-    if target_sha is None and _SHA_LIKE_RE.match(git_ref):
-        try:
-            matching_shas = repo.object_store.iter_prefix(ref_bytes)
-            target_sha = next(matching_shas)
-            if next(matching_shas, None) is not None:
-                raise GitAccessError(f"Git ref is ambiguous: {git_ref}")
-        except StopIteration as e:
-            raise GitAccessError(f"Git ref not found: {git_ref}") from e
-        except GitAccessError:
-            raise
-        except Exception as e:
-            raise GitAccessError(f"Git ref not found: {git_ref}") from e
+            pass
 
     if target_sha is None:
         raise GitAccessError(f"Git ref not found: {git_ref}")
 
     repo.refs.set_symbolic_ref(_HEAD_REF, _DETACHED_BRANCH_REF)
-    repo.refs[_DETACHED_BRANCH_REF] = target_sha
+    repo.refs[_DETACHED_BRANCH_REF] = ObjectID(target_sha)
     porcelain.reset(repo, "hard", target_sha.decode())
 
 
@@ -272,7 +291,7 @@ def clone_repo_sync(
         target_path.mkdir(parents=True, exist_ok=True)
 
     explicit_git_sha = bool(git_sha)
-    is_sha_ref = bool(git_ref and _SHA_LIKE_RE.match(git_ref))
+    is_sha_ref = bool(git_ref and SHA_LIKE_RE.match(git_ref))
     branch_arg: bytes | None = None
     if not explicit_git_sha and git_ref and not is_sha_ref:
         branch_arg = git_ref.encode()
@@ -507,7 +526,7 @@ def get_commit_sha_for_ref(ref: str) -> str | None:
             except KeyError:
                 continue
 
-        if _FULL_SHA_RE.match(ref):
+        if FULL_SHA_RE.match(ref):
             try:
                 obj = repo[ref_bytes]
                 return obj.id.decode()

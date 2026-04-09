@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-import re
 import subprocess
 
-FULL_GIT_SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
+from llama_agents.core.git.git_util import FULL_SHA_RE
 
 
 def _git_remote_name(deployment_id: str) -> str:
@@ -102,10 +101,6 @@ def push_to_remote(
     )
 
 
-def _is_full_git_sha(git_ref: str | None) -> bool:
-    return git_ref is not None and FULL_GIT_SHA_PATTERN.fullmatch(git_ref) is not None
-
-
 def git_ref_exists(ref_name: str) -> bool:
     result = subprocess.run(
         ["git", "show-ref", "--verify", "--quiet", ref_name],
@@ -122,7 +117,7 @@ def internal_push_refspec(git_ref: str | None) -> tuple[str, str]:
     if git_ref is None:
         return "main", "refs/heads/main"
 
-    if _is_full_git_sha(git_ref):
+    if git_ref is not None and FULL_SHA_RE.fullmatch(git_ref):
         return git_ref, f"refs/llamactl/pins/{git_ref}"
 
     if git_ref.startswith("refs/"):
