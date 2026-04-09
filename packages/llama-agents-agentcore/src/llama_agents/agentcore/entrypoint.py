@@ -29,6 +29,8 @@ from __future__ import annotations
 
 import functools
 import logging
+import os
+import sqlite3
 import traceback
 from datetime import datetime
 from pathlib import Path
@@ -149,9 +151,6 @@ def _cleanup_stale_sqlite_locks(db_path: str) -> None:
     Only removes the files if we can successfully acquire an exclusive
     lock on the database, proving no other process has it open.
     """
-    import os
-    import sqlite3
-
     wal_path = db_path + "-wal"
     shm_path = db_path + "-shm"
     if not os.path.exists(wal_path) and not os.path.exists(shm_path):
