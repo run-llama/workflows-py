@@ -1,5 +1,11 @@
 # llama-agents-server
 
+## 0.4.1
+
+### Patch Changes
+
+- 9f52f40: Make the sqlite db more resliant to locking
+
 ## 0.4.0
 
 ### Minor Changes

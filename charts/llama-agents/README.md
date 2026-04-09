@@ -70,7 +70,7 @@ helm upgrade llama-agents oci://docker.io/llamaindex/llama-agents
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | images.controlPlane.repository | string | `"llamaindex/llama-agents-control-plane"` | Control plane image repository |
-| images.controlPlane.tag | string | `"0.10.3"` | Control plane image tag |
+| images.controlPlane.tag | string | `"0.10.4"` | Control plane image tag |
 | images.controlPlane.pullPolicy | string | `"IfNotPresent"` | Control plane image pull policy |
 | images.operator.repository | string | `"llamaindex/llama-agents-operator"` | Operator image repository |
 | images.operator.tag | string | `"0.11.0"` | Operator image tag |
