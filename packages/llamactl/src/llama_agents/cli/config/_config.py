@@ -1,11 +1,12 @@
 """Configuration and profile management for llamactl"""
 
 import functools
-import os
 import sqlite3
 import uuid
 from pathlib import Path
 from typing import Any
+
+from llama_agents.cli.paths import resolve_llamactl_config_dir
 
 from ._migrations import run_migrations
 from .schema import DEFAULT_ENVIRONMENT, Auth, DeviceOIDC, Environment
@@ -58,14 +59,7 @@ class ConfigManager:
 
         Honors LLAMACTL_CONFIG_DIR when set. This helps tests isolate state.
         """
-        override = os.environ.get("LLAMACTL_CONFIG_DIR")
-        if override:
-            return Path(override).expanduser()
-        if os.name == "nt":  # Windows
-            config_dir = Path(os.environ.get("APPDATA", "~")) / "llamactl"
-        else:  # Unix-like (Linux, macOS)
-            config_dir = Path.home() / ".config" / "llamactl"
-        return config_dir.expanduser()
+        return resolve_llamactl_config_dir()
 
     def _ensure_config_dir(self) -> None:
         """Create configuration directory if it doesn't exist"""

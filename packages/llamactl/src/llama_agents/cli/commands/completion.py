@@ -10,6 +10,13 @@ import click
 from click.shell_completion import get_completion_class
 from llama_agents.cli.app import app
 from llama_agents.cli.options import global_options
+from llama_agents.cli.paths import (
+    bash_completion_dir,
+    bash_rc_path,
+    fish_completion_dir,
+    zsh_completion_dir,
+    zsh_rc_path,
+)
 from rich import print as rprint
 
 
@@ -81,6 +88,10 @@ def install(shell: str | None, dry_run: bool) -> None:
 # ---------------------------------------------------------------------------
 
 _MARKER = "# llamactl shell completion"
+_ZSH_BLOCK_START = "# >>> llamactl completion >>>"
+_ZSH_BLOCK_END = "# <<< llamactl completion <<<"
+_ZSH_FPATH_LINE = "fpath=(~/.zfunc $fpath)"
+_ZSH_COMPINIT_LINE = "autoload -Uz compinit && compinit"
 
 
 def _detect_shell() -> str:
@@ -92,11 +103,7 @@ def _detect_shell() -> str:
 
 
 def _install_bash(source: str, dry_run: bool) -> None:
-    # Preferred: ~/.local/share/bash-completion/completions/llamactl
-    comp_dir = Path.home() / ".local" / "share" / "bash-completion" / "completions"
-    if not comp_dir.exists():
-        comp_dir = Path.home() / ".bash_completion.d"
-
+    comp_dir = bash_completion_dir()
     target = comp_dir / "llamactl"
 
     if dry_run:
@@ -108,7 +115,7 @@ def _install_bash(source: str, dry_run: bool) -> None:
     rprint(f"Wrote completions to [cyan]{target}[/cyan]")
 
     # Ensure .bashrc sources the completion dir
-    bashrc = Path.home() / ".bashrc"
+    bashrc = bash_rc_path()
     _ensure_source_line(
         bashrc,
         f"source {target}",
@@ -117,7 +124,7 @@ def _install_bash(source: str, dry_run: bool) -> None:
 
 
 def _install_zsh(source: str, dry_run: bool) -> None:
-    zfunc = Path.home() / ".zfunc"
+    zfunc = zsh_completion_dir()
     target = zfunc / "_llamactl"
 
     if dry_run:
@@ -131,12 +138,12 @@ def _install_zsh(source: str, dry_run: bool) -> None:
     target.write_text(source)
     rprint(f"Wrote completions to [cyan]{target}[/cyan]")
 
-    zshrc = Path.home() / ".zshrc"
+    zshrc = zsh_rc_path()
     _ensure_zsh_fpath(zshrc, dry_run)
 
 
 def _install_fish(source: str, dry_run: bool) -> None:
-    comp_dir = Path.home() / ".config" / "fish" / "completions"
+    comp_dir = fish_completion_dir()
     target = comp_dir / "llamactl.fish"
 
     if dry_run:
@@ -149,64 +156,130 @@ def _install_fish(source: str, dry_run: bool) -> None:
 
 
 def _ensure_zsh_fpath(zshrc: Path, dry_run: bool) -> None:
-    """Ensure ~/.zfunc is in fpath *before* the first compinit call in .zshrc.
-
-    If compinit already exists somewhere in the file we insert the fpath line
-    right before it (so completions are discoverable).  If there is no
-    compinit we append both lines at the end.
-    """
-    fpath_line = "fpath=(~/.zfunc $fpath)"
-    compinit_line = "autoload -Uz compinit && compinit"
-
+    """Ensure llamactl's zsh block appears before the first live compinit."""
     if zshrc.exists():
         content = zshrc.read_text()
     else:
         content = ""
 
-    has_fpath = "~/.zfunc" in content and "fpath" in content
-    has_compinit = bool(re.search(r"^\s*compinit\b", content, re.MULTILINE)) or bool(
-        re.search(r"autoload.*compinit", content)
-    )
-
-    if has_fpath and has_compinit:
+    updated_content, actions = _plan_zshrc_update(content)
+    if not actions:
         return
 
     if dry_run:
-        if not has_fpath:
-            rprint(f"Would add to [cyan]{zshrc}[/cyan]: {fpath_line}")
-        if not has_compinit:
-            rprint(f"Would add to [cyan]{zshrc}[/cyan]: {compinit_line}")
+        for action in actions:
+            rprint(f"Would update [cyan]{zshrc}[/cyan]: {action}")
         return
 
-    if not has_fpath:
-        if has_compinit:
-            # Insert fpath line right before the first compinit occurrence
-            lines = content.splitlines(keepends=True)
-            out: list[str] = []
-            inserted = False
-            for ln in lines:
-                if (
-                    not inserted
-                    and ("compinit" in ln)
-                    and not ln.lstrip().startswith("#")
-                ):
-                    out.append(f"{fpath_line}  {_MARKER}\n")
-                    inserted = True
-                out.append(ln)
-            zshrc.write_text("".join(out))
-            rprint(f"Added to [cyan]{zshrc}[/cyan]: {fpath_line} (before compinit)")
-        else:
-            # No compinit at all — append both
-            with zshrc.open("a") as f:
-                f.write(f"\n{fpath_line}  {_MARKER}\n")
-                f.write(f"{compinit_line}  {_MARKER}\n")
-            rprint(f"Added to [cyan]{zshrc}[/cyan]: {fpath_line}")
-            rprint(f"Added to [cyan]{zshrc}[/cyan]: {compinit_line}")
-    elif not has_compinit:
-        # Has fpath but no compinit
-        with zshrc.open("a") as f:
-            f.write(f"\n{compinit_line}  {_MARKER}\n")
-        rprint(f"Added to [cyan]{zshrc}[/cyan]: {compinit_line}")
+    zshrc.write_text(updated_content)
+    for action in actions:
+        rprint(f"Updated [cyan]{zshrc}[/cyan]: {action}")
+
+
+def _plan_zshrc_update(content: str) -> tuple[str, list[str]]:
+    lines = content.splitlines()
+    had_trailing_newline = content.endswith("\n")
+    sanitized_lines, removed_block, removed_compinit = _strip_managed_zsh_lines(lines)
+
+    first_compinit_index = _first_live_compinit_index(sanitized_lines)
+    first_fpath_index = _first_live_zfunc_fpath_index(sanitized_lines)
+    needs_fpath_block = (
+        first_fpath_index is None
+        or first_compinit_index is not None
+        and first_fpath_index > first_compinit_index
+    )
+
+    updated_lines = list(sanitized_lines)
+    actions: list[str] = []
+    if needs_fpath_block:
+        insert_at = (
+            first_compinit_index
+            if first_compinit_index is not None
+            else len(updated_lines)
+        )
+        updated_lines[insert_at:insert_at] = _managed_zsh_fpath_block()
+        actions.append(
+            "ensure ~/.zfunc is added before compinit via the llamactl block"
+        )
+    elif removed_block:
+        actions.append("remove stale llamactl zsh block")
+
+    has_compinit = _first_live_compinit_index(updated_lines) is not None
+    if not has_compinit:
+        if updated_lines and updated_lines[-1] != "":
+            updated_lines.append("")
+        updated_lines.append(f"{_ZSH_COMPINIT_LINE}  {_MARKER}")
+        actions.append("add compinit because none was configured")
+    elif removed_compinit:
+        actions.append("remove stale llamactl-managed compinit line")
+
+    updated_content = "\n".join(updated_lines)
+    if updated_content and had_trailing_newline:
+        updated_content += "\n"
+    elif updated_content and not had_trailing_newline:
+        updated_content += "\n"
+    return updated_content, actions
+
+
+def _strip_managed_zsh_lines(
+    lines: list[str],
+) -> tuple[list[str], bool, bool]:
+    sanitized: list[str] = []
+    in_block = False
+    removed_block = False
+    removed_compinit = False
+
+    for line in lines:
+        stripped = line.strip()
+        if stripped == _ZSH_BLOCK_START:
+            in_block = True
+            removed_block = True
+            continue
+        if stripped == _ZSH_BLOCK_END:
+            in_block = False
+            continue
+        if in_block:
+            continue
+        if stripped == f"{_ZSH_FPATH_LINE}  {_MARKER}":
+            removed_block = True
+            continue
+        if stripped == f"{_ZSH_COMPINIT_LINE}  {_MARKER}":
+            removed_compinit = True
+            continue
+        sanitized.append(line)
+    return sanitized, removed_block, removed_compinit
+
+
+def _first_live_compinit_index(lines: list[str]) -> int | None:
+    for index, line in enumerate(lines):
+        if _is_live_compinit_line(line):
+            return index
+    return None
+
+
+def _first_live_zfunc_fpath_index(lines: list[str]) -> int | None:
+    for index, line in enumerate(lines):
+        stripped = line.lstrip()
+        if stripped.startswith("#"):
+            continue
+        if "~/.zfunc" in line and "fpath" in line:
+            return index
+    return None
+
+
+def _is_live_compinit_line(line: str) -> bool:
+    stripped = line.lstrip()
+    if stripped.startswith("#"):
+        return False
+    return bool(re.search(r"\bcompinit\b", stripped))
+
+
+def _managed_zsh_fpath_block() -> list[str]:
+    return [
+        _ZSH_BLOCK_START,
+        f"{_ZSH_FPATH_LINE}  {_MARKER}",
+        _ZSH_BLOCK_END,
+    ]
 
 
 def _ensure_source_line(rc_file: Path, line: str, dry_run: bool) -> None:

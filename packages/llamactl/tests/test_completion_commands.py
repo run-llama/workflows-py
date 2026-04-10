@@ -2,8 +2,25 @@
 # Copyright (c) 2026 LlamaIndex Inc.
 from __future__ import annotations
 
+from pathlib import Path
+
+import pytest
 from click.testing import CliRunner
 from llama_agents.cli.app import app
+
+
+def _first_matching_line_index(lines: list[str], predicate: str) -> int:
+    for index, line in enumerate(lines):
+        if predicate in line and not line.lstrip().startswith("#"):
+            return index
+    raise AssertionError(f"Could not find live line containing {predicate!r}")
+
+
+def _invoke_zsh_install(home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(Path, "home", lambda: home)
+    runner = CliRunner()
+    result = runner.invoke(app, ["completion", "install", "--shell", "zsh"])
+    assert result.exit_code == 0, result.output
 
 
 def test_completion_generate_zsh() -> None:
@@ -58,6 +75,52 @@ def test_completion_install_dry_run_fish() -> None:
     )
     assert result.exit_code == 0
     assert "Would write" in result.output
+
+
+def test_completion_install_zsh_repairs_ordered_completion_block(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    zshrc = home / ".zshrc"
+    zshrc.write_text(
+        "autoload -Uz compinit && compinit\n"
+        "fpath=(~/.zfunc $fpath)\n"
+        'echo "custom shell setup"\n'
+    )
+
+    _invoke_zsh_install(home, monkeypatch)
+
+    lines = zshrc.read_text().splitlines()
+    fpath_index = _first_matching_line_index(lines, "~/.zfunc")
+    compinit_index = _first_matching_line_index(lines, "compinit")
+    assert fpath_index < compinit_index
+
+    first_pass = zshrc.read_text()
+    _invoke_zsh_install(home, monkeypatch)
+    assert zshrc.read_text() == first_pass
+
+
+def test_completion_install_zsh_bootstraps_compinit_when_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home = tmp_path / "home"
+    home.mkdir()
+    zshrc = home / ".zshrc"
+    zshrc.write_text('export PATH="$HOME/bin:$PATH"\n')
+
+    _invoke_zsh_install(home, monkeypatch)
+
+    lines = zshrc.read_text().splitlines()
+    fpath_index = _first_matching_line_index(lines, "~/.zfunc")
+    compinit_index = _first_matching_line_index(lines, "compinit")
+    assert fpath_index < compinit_index
+    live_compinit_lines = [
+        line
+        for line in lines
+        if "compinit" in line and not line.lstrip().startswith("#")
+    ]
+    assert len(live_compinit_lines) == 1
 
 
 def test_completion_group_help() -> None:

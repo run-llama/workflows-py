@@ -1,4 +1,8 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 LlamaIndex Inc.
 """Tests for config.py - Database operations and profile management"""
+
+from __future__ import annotations
 
 import sqlite3
 import tempfile
@@ -6,6 +10,7 @@ from collections.abc import Generator
 from pathlib import Path
 
 import pytest
+from llama_agents.cli import paths as paths_module
 from llama_agents.cli.config._config import ConfigManager
 
 
@@ -20,6 +25,14 @@ def temp_config() -> Generator[ConfigManager, None, None]:
         config_manager._ensure_config_dir()
         config_manager._init_database()
         yield config_manager
+
+
+def _patch_standard_config_dir(
+    monkeypatch: pytest.MonkeyPatch, standard_dir: Path
+) -> None:
+    monkeypatch.setattr(
+        paths_module, "standard_llamactl_config_dir", lambda: standard_dir
+    )
 
 
 def test_create_profile(temp_config: ConfigManager) -> None:
@@ -267,3 +280,53 @@ def test_environment_methods_and_current_behavior(temp_config: ConfigManager) ->
     preferred = temp_config.get_current_profile(env_only_url)
     assert preferred is not None
     assert preferred.name == "only-here"
+
+
+def test_config_manager_honors_llamactl_config_dir_override(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    override_dir = tmp_path / "override-config"
+    monkeypatch.setenv("LLAMACTL_CONFIG_DIR", str(override_dir))
+
+    cfg = ConfigManager()
+
+    assert cfg.config_dir == override_dir
+    assert cfg.db_path == override_dir / "profiles.db"
+    assert cfg.db_path.exists()
+
+
+def test_config_manager_preserves_existing_legacy_profiles_db(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home_dir = tmp_path / "home"
+    legacy_dir = home_dir / ".config" / "llamactl"
+    standard_dir = tmp_path / "standard-config"
+    monkeypatch.setenv("HOME", str(home_dir))
+    monkeypatch.setenv("LLAMACTL_CONFIG_DIR", str(legacy_dir))
+
+    legacy_cfg = ConfigManager()
+    legacy_cfg.create_profile("legacy", "https://legacy.example", "legacy-project")
+
+    monkeypatch.delenv("LLAMACTL_CONFIG_DIR", raising=False)
+    _patch_standard_config_dir(monkeypatch, standard_dir)
+    cfg = ConfigManager()
+
+    assert cfg.config_dir == legacy_dir
+    assert cfg.db_path == legacy_dir / "profiles.db"
+    assert cfg.get_profile("legacy", "https://legacy.example") is not None
+
+
+def test_config_manager_uses_standard_config_dir_for_fresh_install(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home_dir = tmp_path / "home"
+    standard_dir = tmp_path / "standard-config"
+    monkeypatch.setenv("HOME", str(home_dir))
+    monkeypatch.delenv("LLAMACTL_CONFIG_DIR", raising=False)
+    _patch_standard_config_dir(monkeypatch, standard_dir)
+
+    cfg = ConfigManager()
+
+    assert cfg.config_dir == standard_dir
+    assert cfg.db_path == standard_dir / "profiles.db"
+    assert cfg.db_path.exists()
