@@ -2166,7 +2166,7 @@ wheels = [
 
 [[package]]
 name = "llama-agents-agentcore"
-version = "0.8.15"
+version = "0.8.16"
 source = { editable = "packages/llama-agents-agentcore" }
 dependencies = [
     { name = "bedrock-agentcore" },
