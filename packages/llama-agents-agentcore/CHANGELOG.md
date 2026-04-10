@@ -1,5 +1,11 @@
 # llama-agents-agentcore
 
+## 0.8.16
+
+### Patch Changes
+
+- d4448f8: Run agentcore workflows in background tasks
+
 ## 0.8.15
 
 ### Patch Changes
