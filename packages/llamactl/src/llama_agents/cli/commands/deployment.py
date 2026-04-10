@@ -443,7 +443,7 @@ def show_history(deployment_id: str | None, interactive: bool) -> None:
         raise click.Abort()
 
 
-@deployments.command("rollback", hidden=True)
+@deployments.command("rollback")
 @global_options
 @click.argument("deployment_id", required=False, type=DeploymentType())
 @click.option(

@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
-from dataclasses import dataclass
 from pathlib import Path
 
 import click
@@ -15,6 +14,12 @@ from llama_agents.cli.options import (
 )
 from llama_agents.cli.param_types import TemplateType
 from llama_agents.cli.styles import HEADER_COLOR_HEX
+from llama_agents.cli.templates import (
+    ALL_TEMPLATES,
+    HEADLESS_TEMPLATES,
+    UI_TEMPLATES,
+    TemplateOption,
+)
 from rich import print as rprint
 from rich.text import Text
 
@@ -69,132 +74,6 @@ def _create(
 ) -> None:
     import questionary
 
-    @dataclass
-    class TemplateOption:
-        id: str
-        name: str
-        description: str
-        source: GithubTemplateRepo
-        llama_cloud: bool
-
-    @dataclass
-    class GithubTemplateRepo:
-        url: str
-
-    ui_options = [
-        TemplateOption(
-            id="basic-ui",
-            name="Basic UI",
-            description="A basic starter workflow with a React Vite UI",
-            source=GithubTemplateRepo(
-                url="https://github.com/run-llama/template-workflow-basic-ui"
-            ),
-            llama_cloud=False,
-        ),
-        TemplateOption(
-            id="showcase",
-            name="Showcase",
-            description="A collection of workflow and UI patterns to build LlamaDeploy apps",
-            source=GithubTemplateRepo(
-                url="https://github.com/run-llama/template-workflow-showcase"
-            ),
-            llama_cloud=False,
-        ),
-        TemplateOption(
-            id="document-qa",
-            name="Document Question & Answer",
-            description="Upload documents and run question answering through a React UI",
-            source=GithubTemplateRepo(
-                url="https://github.com/run-llama/template-workflow-document-qa"
-            ),
-            llama_cloud=True,
-        ),
-        TemplateOption(
-            id="extraction-review",
-            name="Extraction Agent with Review UI",
-            description="Extract data from documents using a custom schema and Llama Cloud. Includes a UI to review and correct the results",
-            source=GithubTemplateRepo(
-                url="https://github.com/run-llama/template-workflow-data-extraction"
-            ),
-            llama_cloud=True,
-        ),
-        TemplateOption(
-            id="classify-extract-sec",
-            name="SEC Insights",
-            description="Upload SEC filings, classifying them to the appropriate type and extracting key information",
-            source=GithubTemplateRepo(
-                url="https://github.com/run-llama/template-workflow-classify-extract-sec"
-            ),
-            llama_cloud=True,
-        ),
-        TemplateOption(
-            id="extract-reconcile-invoice",
-            name="Invoice Extraction & Reconciliation",
-            description="Extract and reconcile invoice data against contracts",
-            source=GithubTemplateRepo(
-                url="https://github.com/run-llama/template-workflow-extract-reconcile-invoice"
-            ),
-            llama_cloud=True,
-        ),
-    ]
-
-    headless_options = [
-        TemplateOption(
-            id="basic",
-            name="Basic Workflow",
-            description="A base example that showcases usage patterns for workflows",
-            source=GithubTemplateRepo(
-                url="https://github.com/run-llama/template-workflow-basic"
-            ),
-            llama_cloud=False,
-        ),
-        TemplateOption(
-            id="document_parsing",
-            name="Document Parser",
-            description="A workflow that, using LlamaParse, parses unstructured documents and returns their raw text content",
-            source=GithubTemplateRepo(
-                url="https://github.com/run-llama/template-workflow-document-parsing"
-            ),
-            llama_cloud=True,
-        ),
-        TemplateOption(
-            id="human_in_the_loop",
-            name="Human in the Loop",
-            description="A workflow showcasing how to use human in the loop with LlamaIndex workflows",
-            source=GithubTemplateRepo(
-                url="https://github.com/run-llama/template-workflow-human-in-the-loop"
-            ),
-            llama_cloud=False,
-        ),
-        TemplateOption(
-            id="invoice_extraction",
-            name="Invoice Extraction",
-            description="A workflow that, given an invoice, extracts several key details using LlamaExtract",
-            source=GithubTemplateRepo(
-                url="https://github.com/run-llama/template-workflow-invoice-extraction"
-            ),
-            llama_cloud=True,
-        ),
-        TemplateOption(
-            id="rag",
-            name="RAG",
-            description="A workflow that embeds, indexes and queries your documents on the fly, providing you with a simple RAG pipeline",
-            source=GithubTemplateRepo(
-                url="https://github.com/run-llama/template-workflow-rag"
-            ),
-            llama_cloud=False,
-        ),
-        TemplateOption(
-            id="web_scraping",
-            name="Web Scraping",
-            description="A workflow that, given several urls, scrapes and summarizes their content using Google's Gemini API",
-            source=GithubTemplateRepo(
-                url="https://github.com/run-llama/template-workflow-web-scraping"
-            ),
-            llama_cloud=False,
-        ),
-    ]
-
     # Initialize git repository if git is available
     has_git = False
     git_initialized = False
@@ -220,7 +99,7 @@ def _create(
             choices=[questionary.Separator("------------ With UI -------------")]
             + [
                 questionary.Choice(title=o.name, value=o.id, description=o.description)
-                for o in ui_options
+                for o in UI_TEMPLATES
             ]
             + [
                 questionary.Separator(" "),
@@ -228,7 +107,7 @@ def _create(
             ]
             + [
                 questionary.Choice(title=o.name, value=o.id, description=o.description)
-                for o in headless_options
+                for o in HEADLESS_TEMPLATES
             ],
             style=questionary.Style(
                 [
@@ -237,7 +116,7 @@ def _create(
             ),
         ).ask()
     if template is None:
-        options = [o.id for o in ui_options + headless_options]
+        options = [o.id for o in ALL_TEMPLATES]
         rprint(
             Text(
                 f"No template selected. Select a template or pass a template name with --template <{'|'.join(options)}>"
@@ -258,7 +137,7 @@ def _create(
             dir = Path(template)
 
     resolved_template: TemplateOption | None = next(
-        (o for o in ui_options + headless_options if o.id == template), None
+        (o for o in ALL_TEMPLATES if o.id == template), None
     )
     if resolved_template is None:
         rprint(f"Template {template} not found")

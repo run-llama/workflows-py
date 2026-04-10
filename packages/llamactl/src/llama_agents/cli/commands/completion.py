@@ -3,17 +3,13 @@
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
 
 import click
 from click.shell_completion import get_completion_class
 from llama_agents.cli.app import app
-from llama_agents.cli.completion_cache import (
-    _env_hash,
-    refresh_cache,
-)
 from llama_agents.cli.options import global_options
-from llama_agents.cli.param_types import _fetch_deployments, _fetch_projects
 from rich import print as rprint
 
 
@@ -33,12 +29,10 @@ def generate(shell: str) -> None:
     """
     ctx = click.get_current_context()
     root_cmd = ctx.find_root().command
-    # Click uses env var format: _{PROG_NAME}_COMPLETE
-    shell_map = {"bash": "bash_source", "zsh": "zsh_source", "fish": "fish_source"}
     cls = get_completion_class(shell)
     if cls is None:
         raise click.ClickException(f"Unsupported shell: {shell}")
-    comp = cls(root_cmd, {}, "llamactl", shell_map[shell])
+    comp = cls(root_cmd, {}, "llamactl", "_LLAMACTL_COMPLETE")
     click.echo(comp.source())
 
 
@@ -65,11 +59,10 @@ def install(shell: str | None, dry_run: bool) -> None:
 
     ctx = click.get_current_context()
     root_cmd = ctx.find_root().command
-    shell_map = {"bash": "bash_source", "zsh": "zsh_source", "fish": "fish_source"}
     cls = get_completion_class(shell)
     if cls is None:
         raise click.ClickException(f"Unsupported shell: {shell}")
-    comp = cls(root_cmd, {}, "llamactl", shell_map[shell])
+    comp = cls(root_cmd, {}, "llamactl", "_LLAMACTL_COMPLETE")
     source = comp.source()
 
     if shell == "bash":
@@ -82,25 +75,6 @@ def install(shell: str | None, dry_run: bool) -> None:
     if not dry_run:
         rprint(f"\nDetected shell: [bold]{shell}[/bold]")
         rprint("Restart your shell or source the config to activate completions.")
-
-
-@completion.command("update")
-@global_options
-def update() -> None:
-    """Refresh the completion cache for API-backed resources.
-
-    Fetches the current deployment and project lists from the API and
-    writes them to the local completion cache so Tab shows up-to-date results.
-
-    Example: llamactl completion update
-    """
-    eh = _env_hash()
-
-    dep_items = refresh_cache("deployments", _fetch_deployments, eh, timeout=10.0)
-    rprint(f"Cached {len(dep_items)} deployments")
-
-    proj_items = refresh_cache("projects", _fetch_projects, eh, timeout=10.0)
-    rprint(f"Cached {len(proj_items)} projects")
 
 
 # ---------------------------------------------------------------------------
@@ -159,18 +133,7 @@ def _install_zsh(source: str, dry_run: bool) -> None:
     rprint(f"Wrote completions to [cyan]{target}[/cyan]")
 
     zshrc = Path.home() / ".zshrc"
-    # Ensure fpath includes ~/.zfunc
-    _ensure_source_line(
-        zshrc,
-        "fpath=(~/.zfunc $fpath)",
-        dry_run,
-    )
-    # Ensure compinit is called
-    _ensure_source_line(
-        zshrc,
-        "autoload -Uz compinit && compinit",
-        dry_run,
-    )
+    _ensure_zsh_fpath(zshrc, dry_run)
 
 
 def _install_fish(source: str, dry_run: bool) -> None:
@@ -186,11 +149,71 @@ def _install_fish(source: str, dry_run: bool) -> None:
     rprint(f"Wrote completions to [cyan]{target}[/cyan]")
 
 
+def _ensure_zsh_fpath(zshrc: Path, dry_run: bool) -> None:
+    """Ensure ~/.zfunc is in fpath *before* the first compinit call in .zshrc.
+
+    If compinit already exists somewhere in the file we insert the fpath line
+    right before it (so completions are discoverable).  If there is no
+    compinit we append both lines at the end.
+    """
+    fpath_line = "fpath=(~/.zfunc $fpath)"
+    compinit_line = "autoload -Uz compinit && compinit"
+
+    if zshrc.exists():
+        content = zshrc.read_text()
+    else:
+        content = ""
+
+    has_fpath = "~/.zfunc" in content and "fpath" in content
+    has_compinit = bool(re.search(r"^\s*compinit\b", content, re.MULTILINE)) or bool(
+        re.search(r"autoload.*compinit", content)
+    )
+
+    if has_fpath and has_compinit:
+        return
+
+    if dry_run:
+        if not has_fpath:
+            rprint(f"Would add to [cyan]{zshrc}[/cyan]: {fpath_line}")
+        if not has_compinit:
+            rprint(f"Would add to [cyan]{zshrc}[/cyan]: {compinit_line}")
+        return
+
+    if not has_fpath:
+        if has_compinit:
+            # Insert fpath line right before the first compinit occurrence
+            lines = content.splitlines(keepends=True)
+            out: list[str] = []
+            inserted = False
+            for ln in lines:
+                if (
+                    not inserted
+                    and ("compinit" in ln)
+                    and not ln.lstrip().startswith("#")
+                ):
+                    out.append(f"{fpath_line}  {_MARKER}\n")
+                    inserted = True
+                out.append(ln)
+            zshrc.write_text("".join(out))
+            rprint(f"Added to [cyan]{zshrc}[/cyan]: {fpath_line} (before compinit)")
+        else:
+            # No compinit at all — append both
+            with zshrc.open("a") as f:
+                f.write(f"\n{fpath_line}  {_MARKER}\n")
+                f.write(f"{compinit_line}  {_MARKER}\n")
+            rprint(f"Added to [cyan]{zshrc}[/cyan]: {fpath_line}")
+            rprint(f"Added to [cyan]{zshrc}[/cyan]: {compinit_line}")
+    elif not has_compinit:
+        # Has fpath but no compinit
+        with zshrc.open("a") as f:
+            f.write(f"\n{compinit_line}  {_MARKER}\n")
+        rprint(f"Added to [cyan]{zshrc}[/cyan]: {compinit_line}")
+
+
 def _ensure_source_line(rc_file: Path, line: str, dry_run: bool) -> None:
     """Append line to rc_file if not already present."""
     if rc_file.exists():
         content = rc_file.read_text()
-        # Check if line (or something equivalent) is already there
         if line in content:
             return
     else:

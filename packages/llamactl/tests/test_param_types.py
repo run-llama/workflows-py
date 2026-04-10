@@ -8,7 +8,7 @@ import click
 import llama_agents.cli.config.env_service as es
 import llama_agents.cli.param_types as pt
 import pytest
-from llama_agents.cli.completion_cache import write_cache
+from click.shell_completion import CompletionItem
 from llama_agents.cli.param_types import (
     DeploymentType,
     EnvironmentType,
@@ -17,11 +17,6 @@ from llama_agents.cli.param_types import (
     ProjectType,
     TemplateType,
 )
-
-
-@pytest.fixture(autouse=True)
-def _patch_cache_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: object) -> None:
-    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
 
 
 @pytest.fixture()
@@ -36,21 +31,19 @@ def param() -> click.Parameter:
     return click.Argument(["test_arg"])
 
 
-def test_deployment_type_returns_cached_items(
+def test_deployment_type_returns_fetched_items(
     ctx: click.Context, param: click.Parameter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    write_cache(
-        "deployments",
-        [
-            {"id": "my-app", "help": "My App — Running"},
-            {"id": "staging", "help": "Staging — Building"},
+    monkeypatch.setattr(
+        pt,
+        "_fetch_deployments",
+        lambda: [
+            CompletionItem("my-app"),
+            CompletionItem("staging"),
         ],
-        "abc123",
     )
 
     dt = DeploymentType()
-    monkeypatch.setattr(pt, "_env_hash", lambda: "abc123")
-
     items = dt.shell_complete(ctx, param, "")
     assert len(items) == 2
     assert items[0].value == "my-app"
@@ -60,15 +53,15 @@ def test_deployment_type_returns_cached_items(
     assert len(items) == 1
     assert items[0].value == "my-app"
 
-    # Filter matches help text too
-    items = dt.shell_complete(ctx, param, "staging")
-    assert len(items) == 1
-    assert items[0].value == "staging"
 
-
-def test_deployment_type_empty_cache(
-    ctx: click.Context, param: click.Parameter
+def test_deployment_type_fetch_failure(
+    ctx: click.Context, param: click.Parameter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    def _boom() -> list[CompletionItem]:
+        raise RuntimeError("API down")
+
+    monkeypatch.setattr(pt, "_fetch_deployments", _boom)
+
     dt = DeploymentType()
     items = dt.shell_complete(ctx, param, "")
     assert items == []
@@ -106,19 +99,17 @@ def test_profile_type_returns_profiles(
     assert items[0].value == "dev"
 
 
-def test_project_type_returns_cached_items(
+def test_project_type_returns_fetched_items(
     ctx: click.Context, param: click.Parameter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    write_cache(
-        "projects",
-        [
-            {"id": "proj_abc", "help": "My Project (3 deployments)"},
-            {"id": "proj_def", "help": "Staging (1 deployment)"},
+    monkeypatch.setattr(
+        pt,
+        "_fetch_projects",
+        lambda: [
+            CompletionItem("proj_abc", help="My Project (3 deployments)"),
+            CompletionItem("proj_def", help="Staging (1 deployment)"),
         ],
-        "abc123",
     )
-
-    monkeypatch.setattr(pt, "_env_hash", lambda: "abc123")
 
     proj = ProjectType()
     items = proj.shell_complete(ctx, param, "")
@@ -188,16 +179,14 @@ def test_git_sha_type_with_deployment_id(
     ctx: click.Context, param: click.Parameter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     ctx.params = {"deployment_id": "my-deploy"}
-    write_cache(
-        "git_sha_my-deploy",
-        [
-            {"id": "abc1234", "help": "2026-01-01T00:00:00"},
-            {"id": "def5678", "help": "2026-01-02T00:00:00"},
+    monkeypatch.setattr(
+        pt,
+        "_fetch_deployment_history",
+        lambda dep_id: [
+            CompletionItem("abc1234", help="2026-01-01T00:00:00"),
+            CompletionItem("def5678", help="2026-01-02T00:00:00"),
         ],
-        "abc123",
     )
-
-    monkeypatch.setattr(pt, "_env_hash", lambda: "abc123")
 
     gt = GitShaType()
     items = gt.shell_complete(ctx, param, "")

@@ -66,4 +66,3 @@ def test_completion_group_help() -> None:
     assert result.exit_code == 0
     assert "generate" in result.output
     assert "install" in result.output
-    assert "update" in result.output
