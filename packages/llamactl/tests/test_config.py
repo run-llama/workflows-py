@@ -1,4 +1,8 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 LlamaIndex Inc.
 """Tests for config.py - Database operations and profile management"""
+
+from __future__ import annotations
 
 import sqlite3
 import tempfile
@@ -267,3 +271,47 @@ def test_environment_methods_and_current_behavior(temp_config: ConfigManager) ->
     preferred = temp_config.get_current_profile(env_only_url)
     assert preferred is not None
     assert preferred.name == "only-here"
+
+
+def test_config_manager_honors_llamactl_config_dir_override(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    override_dir = tmp_path / "override-config"
+    monkeypatch.setenv("LLAMACTL_CONFIG_DIR", str(override_dir))
+
+    cfg = ConfigManager()
+
+    assert cfg.config_dir == override_dir
+    assert cfg.db_path == override_dir / "profiles.db"
+    assert cfg.db_path.exists()
+
+
+def test_config_manager_uses_xdg_config_home_on_unix(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home_dir = tmp_path / "home"
+    xdg_dir = tmp_path / "xdg-config"
+    monkeypatch.setenv("HOME", str(home_dir))
+    monkeypatch.delenv("LLAMACTL_CONFIG_DIR", raising=False)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(xdg_dir))
+
+    cfg = ConfigManager()
+
+    assert cfg.config_dir == xdg_dir / "llamactl"
+    assert cfg.db_path == xdg_dir / "llamactl" / "profiles.db"
+    assert cfg.db_path.exists()
+
+
+def test_config_manager_defaults_to_dot_config_on_unix(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home_dir = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home_dir))
+    monkeypatch.delenv("LLAMACTL_CONFIG_DIR", raising=False)
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+
+    cfg = ConfigManager()
+
+    assert cfg.config_dir == home_dir / ".config" / "llamactl"
+    assert cfg.db_path == home_dir / ".config" / "llamactl" / "profiles.db"
+    assert cfg.db_path.exists()

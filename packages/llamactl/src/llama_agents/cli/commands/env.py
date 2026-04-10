@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 
 import click
 from llama_agents.cli.config.schema import Environment
+from llama_agents.cli.param_types import EnvironmentType
 from llama_agents.cli.styles import (
     ACTIVE_INDICATOR,
     HEADER_COLOR,
@@ -113,7 +114,7 @@ def add_environment_cmd(api_url: str | None, interactive: bool) -> None:
 
 
 @env_group.command("delete")
-@click.argument("api_url", required=False)
+@click.argument("api_url", required=False, type=EnvironmentType())
 @interactive_option
 @global_options
 def delete_environment_cmd(api_url: str | None, interactive: bool) -> None:
@@ -148,7 +149,7 @@ def delete_environment_cmd(api_url: str | None, interactive: bool) -> None:
 
 
 @env_group.command("switch")
-@click.argument("api_url", required=False)
+@click.argument("api_url", required=False, type=EnvironmentType())
 @interactive_option
 @global_options
 def switch_environment_cmd(api_url: str | None, interactive: bool) -> None:
