@@ -1,5 +1,11 @@
 # llama-agents-agentcore
 
+## 0.8.15
+
+### Patch Changes
+
+- c95ffac: Run agentcore workflows in background tasks
+
 ## 0.8.14
 
 ### Patch Changes
