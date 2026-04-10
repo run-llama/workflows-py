@@ -5,34 +5,20 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from platformdirs import user_config_path
-
-
-def legacy_llamactl_config_dir() -> Path:
-    """Return the historical llamactl config directory."""
-    if os.name == "nt":
-        return (Path(os.environ.get("APPDATA", "~")) / "llamactl").expanduser()
-    return (Path.home() / ".config" / "llamactl").expanduser()
-
-
-def standard_llamactl_config_dir() -> Path:
-    """Return the platform-standard llamactl config directory."""
-    return user_config_path("llamactl", appauthor=False)
-
 
 def resolve_llamactl_config_dir() -> Path:
-    """Resolve the config directory without migrating existing profile state."""
+    """Resolve the config directory from the override/env/platform policy."""
     override = os.environ.get("LLAMACTL_CONFIG_DIR")
     if override:
         return Path(override).expanduser()
 
-    legacy = legacy_llamactl_config_dir()
-    standard = standard_llamactl_config_dir()
-    if legacy == standard:
-        return standard
-    if (legacy / "profiles.db").exists():
-        return legacy
-    return standard
+    if os.name == "nt":
+        return (Path(os.environ.get("APPDATA", "~")) / "llamactl").expanduser()
+
+    xdg_config_home = os.environ.get("XDG_CONFIG_HOME")
+    if xdg_config_home:
+        return (Path(xdg_config_home).expanduser() / "llamactl").expanduser()
+    return (Path.home() / ".config" / "llamactl").expanduser()
 
 
 def bash_completion_dir(home: Path | None = None) -> Path:

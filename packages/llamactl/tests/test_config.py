@@ -10,7 +10,6 @@ from collections.abc import Generator
 from pathlib import Path
 
 import pytest
-from llama_agents.cli import paths as paths_module
 from llama_agents.cli.config._config import ConfigManager
 
 
@@ -25,14 +24,6 @@ def temp_config() -> Generator[ConfigManager, None, None]:
         config_manager._ensure_config_dir()
         config_manager._init_database()
         yield config_manager
-
-
-def _patch_standard_config_dir(
-    monkeypatch: pytest.MonkeyPatch, standard_dir: Path
-) -> None:
-    monkeypatch.setattr(
-        paths_module, "standard_llamactl_config_dir", lambda: standard_dir
-    )
 
 
 def test_create_profile(temp_config: ConfigManager) -> None:
@@ -295,38 +286,32 @@ def test_config_manager_honors_llamactl_config_dir_override(
     assert cfg.db_path.exists()
 
 
-def test_config_manager_preserves_existing_legacy_profiles_db(
+def test_config_manager_uses_xdg_config_home_on_unix(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     home_dir = tmp_path / "home"
-    legacy_dir = home_dir / ".config" / "llamactl"
-    standard_dir = tmp_path / "standard-config"
+    xdg_dir = tmp_path / "xdg-config"
     monkeypatch.setenv("HOME", str(home_dir))
-    monkeypatch.setenv("LLAMACTL_CONFIG_DIR", str(legacy_dir))
-
-    legacy_cfg = ConfigManager()
-    legacy_cfg.create_profile("legacy", "https://legacy.example", "legacy-project")
-
     monkeypatch.delenv("LLAMACTL_CONFIG_DIR", raising=False)
-    _patch_standard_config_dir(monkeypatch, standard_dir)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(xdg_dir))
+
     cfg = ConfigManager()
 
-    assert cfg.config_dir == legacy_dir
-    assert cfg.db_path == legacy_dir / "profiles.db"
-    assert cfg.get_profile("legacy", "https://legacy.example") is not None
+    assert cfg.config_dir == xdg_dir / "llamactl"
+    assert cfg.db_path == xdg_dir / "llamactl" / "profiles.db"
+    assert cfg.db_path.exists()
 
 
-def test_config_manager_uses_standard_config_dir_for_fresh_install(
+def test_config_manager_defaults_to_dot_config_on_unix(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     home_dir = tmp_path / "home"
-    standard_dir = tmp_path / "standard-config"
     monkeypatch.setenv("HOME", str(home_dir))
     monkeypatch.delenv("LLAMACTL_CONFIG_DIR", raising=False)
-    _patch_standard_config_dir(monkeypatch, standard_dir)
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
 
     cfg = ConfigManager()
 
-    assert cfg.config_dir == standard_dir
-    assert cfg.db_path == standard_dir / "profiles.db"
+    assert cfg.config_dir == home_dir / ".config" / "llamactl"
+    assert cfg.db_path == home_dir / ".config" / "llamactl" / "profiles.db"
     assert cfg.db_path.exists()
