@@ -13,14 +13,14 @@ from llama_agents.cli.templates import ALL_TEMPLATES
 
 def _safe_fetch(fn: Any, timeout: float = 2.0) -> list[Any]:
     """Run a fetch function in a thread with a timeout. Returns [] on failure."""
+    pool = ThreadPoolExecutor(max_workers=1)
     try:
-        pool = ThreadPoolExecutor(max_workers=1)
         future = pool.submit(fn)
-        result = future.result(timeout=timeout)
-        pool.shutdown(wait=False)
-        return result
+        return future.result(timeout=timeout)
     except Exception:
         return []
+    finally:
+        pool.shutdown(wait=False)
 
 
 def _fetch_deployments() -> list[CompletionItem]:

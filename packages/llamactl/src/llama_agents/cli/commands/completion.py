@@ -19,6 +19,17 @@ def completion() -> None:
     pass
 
 
+def _completion_source(shell: str) -> str:
+    """Build and return the shell completion script for the given shell."""
+    ctx = click.get_current_context()
+    root_cmd = ctx.find_root().command
+    cls = get_completion_class(shell)
+    if cls is None:
+        raise click.ClickException(f"Unsupported shell: {shell}")
+    comp = cls(root_cmd, {}, "llamactl", "_LLAMACTL_COMPLETE")
+    return comp.source()
+
+
 @completion.command("generate")
 @click.argument("shell", type=click.Choice(["bash", "zsh", "fish"]))
 @global_options
@@ -27,13 +38,7 @@ def generate(shell: str) -> None:
 
     Example: llamactl completion generate zsh > ~/.zfunc/_llamactl
     """
-    ctx = click.get_current_context()
-    root_cmd = ctx.find_root().command
-    cls = get_completion_class(shell)
-    if cls is None:
-        raise click.ClickException(f"Unsupported shell: {shell}")
-    comp = cls(root_cmd, {}, "llamactl", "_LLAMACTL_COMPLETE")
-    click.echo(comp.source())
+    click.echo(_completion_source(shell))
 
 
 @completion.command("install")
@@ -57,13 +62,7 @@ def install(shell: str | None, dry_run: bool) -> None:
     if shell is None:
         shell = _detect_shell()
 
-    ctx = click.get_current_context()
-    root_cmd = ctx.find_root().command
-    cls = get_completion_class(shell)
-    if cls is None:
-        raise click.ClickException(f"Unsupported shell: {shell}")
-    comp = cls(root_cmd, {}, "llamactl", "_LLAMACTL_COMPLETE")
-    source = comp.source()
+    source = _completion_source(shell)
 
     if shell == "bash":
         _install_bash(source, dry_run)

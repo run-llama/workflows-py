@@ -33,7 +33,7 @@ def test_completion_generate_invalid_shell() -> None:
     assert result.exit_code != 0
 
 
-def test_completion_install_dry_run(monkeypatch: object) -> None:
+def test_completion_install_dry_run() -> None:
     runner = CliRunner()
     result = runner.invoke(
         app, ["completion", "install", "--shell", "zsh", "--dry-run"]
