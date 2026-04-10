@@ -713,10 +713,10 @@ def test_validate_detects_circular_resource_dependency() -> None:
     class B:
         pass
 
-    def cyclic_factory_a(b: Annotated[B, "placeholder"]) -> A:  # type: ignore
+    def cyclic_factory_a(b: Annotated[B, "placeholder"]) -> A:
         return A()
 
-    def cyclic_factory_b(a: Annotated[A, "placeholder"]) -> B:  # type: ignore
+    def cyclic_factory_b(a: Annotated[A, "placeholder"]) -> B:
         return B()
 
     cyclic_res_a = Resource(cyclic_factory_a)

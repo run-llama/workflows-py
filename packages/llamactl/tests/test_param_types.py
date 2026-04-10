@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import click
+import llama_agents.cli.config.env_service as es
+import llama_agents.cli.param_types as pt
 import pytest
 from llama_agents.cli.completion_cache import write_cache
 from llama_agents.cli.param_types import (
@@ -35,7 +37,7 @@ def param() -> click.Parameter:
 
 
 def test_deployment_type_returns_cached_items(
-    ctx: click.Context, param: click.Parameter
+    ctx: click.Context, param: click.Parameter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     write_cache(
         "deployments",
@@ -47,27 +49,21 @@ def test_deployment_type_returns_cached_items(
     )
 
     dt = DeploymentType()
-    # Patch _env_hash to return our test hash
-    import llama_agents.cli.param_types as pt
+    monkeypatch.setattr(pt, "_env_hash", lambda: "abc123")
 
-    original = pt._env_hash
-    pt._env_hash = lambda: "abc123"
-    try:
-        items = dt.shell_complete(ctx, param, "")
-        assert len(items) == 2
-        assert items[0].value == "my-app"
+    items = dt.shell_complete(ctx, param, "")
+    assert len(items) == 2
+    assert items[0].value == "my-app"
 
-        # Filter by prefix
-        items = dt.shell_complete(ctx, param, "my")
-        assert len(items) == 1
-        assert items[0].value == "my-app"
+    # Filter by prefix
+    items = dt.shell_complete(ctx, param, "my")
+    assert len(items) == 1
+    assert items[0].value == "my-app"
 
-        # Filter matches help text too
-        items = dt.shell_complete(ctx, param, "staging")
-        assert len(items) == 1
-        assert items[0].value == "staging"
-    finally:
-        pt._env_hash = original
+    # Filter matches help text too
+    items = dt.shell_complete(ctx, param, "staging")
+    assert len(items) == 1
+    assert items[0].value == "staging"
 
 
 def test_deployment_type_empty_cache(
@@ -97,33 +93,21 @@ def test_profile_type_returns_profiles(
         def current_auth_service(self) -> FakeAuthService:
             return FakeAuthService()
 
-    monkeypatch.setattr(
-        "llama_agents.cli.param_types.service",
-        FakeService(),
-        raising=False,
-    )
-    # Also need to patch the import inside the closure
-    import llama_agents.cli.config.env_service as es
+    monkeypatch.setattr(es, "service", FakeService())
 
-    original_service = es.service
-    es.service = FakeService()  # type: ignore[assignment]
+    prof = ProfileType()
+    items = prof.shell_complete(ctx, param, "")
+    assert len(items) == 2
+    assert items[0].value == "prod"
+    assert items[0].help == "https://api.prod.example.com"
 
-    try:
-        pt = ProfileType()
-        items = pt.shell_complete(ctx, param, "")
-        assert len(items) == 2
-        assert items[0].value == "prod"
-        assert items[0].help == "https://api.prod.example.com"
-
-        items = pt.shell_complete(ctx, param, "dev")
-        assert len(items) == 1
-        assert items[0].value == "dev"
-    finally:
-        es.service = original_service
+    items = prof.shell_complete(ctx, param, "dev")
+    assert len(items) == 1
+    assert items[0].value == "dev"
 
 
 def test_project_type_returns_cached_items(
-    ctx: click.Context, param: click.Parameter
+    ctx: click.Context, param: click.Parameter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     write_cache(
         "projects",
@@ -134,17 +118,12 @@ def test_project_type_returns_cached_items(
         "abc123",
     )
 
-    import llama_agents.cli.param_types as pt
+    monkeypatch.setattr(pt, "_env_hash", lambda: "abc123")
 
-    original = pt._env_hash
-    pt._env_hash = lambda: "abc123"
-    try:
-        proj = ProjectType()
-        items = proj.shell_complete(ctx, param, "")
-        assert len(items) == 2
-        assert items[0].value == "proj_abc"
-    finally:
-        pt._env_hash = original
+    proj = ProjectType()
+    items = proj.shell_complete(ctx, param, "")
+    assert len(items) == 2
+    assert items[0].value == "proj_abc"
 
 
 def test_environment_type_returns_environments(
@@ -165,19 +144,14 @@ def test_environment_type_returns_environments(
         def get_current_environment(self) -> FakeEnv:
             return FakeEnv(api_url="https://api.prod.example.com")
 
-    import llama_agents.cli.config.env_service as es
+    monkeypatch.setattr(es, "service", FakeService())
 
-    original_service = es.service
-    es.service = FakeService()  # type: ignore[assignment]
-    try:
-        et = EnvironmentType()
-        items = et.shell_complete(ctx, param, "")
-        assert len(items) == 2
-        # Current env should have "(current)" help
-        assert items[0].help == "(current)"
-        assert items[1].help == ""
-    finally:
-        es.service = original_service
+    et = EnvironmentType()
+    items = et.shell_complete(ctx, param, "")
+    assert len(items) == 2
+    # Current env should have "(current)" help
+    assert items[0].help == "(current)"
+    assert items[1].help == ""
 
 
 def test_template_type_returns_all_templates(
@@ -211,7 +185,7 @@ def test_git_sha_type_no_deployment_id(
 
 
 def test_git_sha_type_with_deployment_id(
-    ctx: click.Context, param: click.Parameter
+    ctx: click.Context, param: click.Parameter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     ctx.params = {"deployment_id": "my-deploy"}
     write_cache(
@@ -223,17 +197,12 @@ def test_git_sha_type_with_deployment_id(
         "abc123",
     )
 
-    import llama_agents.cli.param_types as pt
+    monkeypatch.setattr(pt, "_env_hash", lambda: "abc123")
 
-    original = pt._env_hash
-    pt._env_hash = lambda: "abc123"
-    try:
-        gt = GitShaType()
-        items = gt.shell_complete(ctx, param, "")
-        assert len(items) == 2
+    gt = GitShaType()
+    items = gt.shell_complete(ctx, param, "")
+    assert len(items) == 2
 
-        items = gt.shell_complete(ctx, param, "abc")
-        assert len(items) == 1
-        assert items[0].value == "abc1234"
-    finally:
-        pt._env_hash = original
+    items = gt.shell_complete(ctx, param, "abc")
+    assert len(items) == 1
+    assert items[0].value == "abc1234"
