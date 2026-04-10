@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import traceback
 from datetime import datetime, timezone
 from typing import Literal
 
@@ -228,7 +229,7 @@ class _WorkflowService:
 
         try:
             await run
-        except Exception:
+        except BaseException:
             logger.error(
                 "Workflow %s (handler=%s, run=%s) raised an exception",
                 handler.workflow_name,
@@ -236,6 +237,10 @@ class _WorkflowService:
                 handler.run_id,
                 exc_info=True,
             )
+            await self._store.update_handler_status(
+                handler.run_id, status="failed", error=traceback.format_exc()
+            )
+            raise
         handler_data = await self.load_handler(handler.handler_id)
         if handler_data is None:
             raise HandlerNotFoundError()
