@@ -48,7 +48,7 @@ DEFAULT_ORG = schema.OrgSummary(org_id="default", org_name="Default", is_default
 class PublicDeploymentService(AbstractPublicDeploymentsService):
     @override
     async def get_version(self) -> schema.VersionResponse:
-        capabilities: list[schema.Capability] = [schema.Capabilities.ORGS]
+        capabilities: list[schema.Capability] = [schema.Capabilities.ORGANIZATIONS]
         if code_repo_storage is not None:
             capabilities.append(schema.Capabilities.CODE_PUSH)
         return schema.VersionResponse(
@@ -74,8 +74,8 @@ class DeploymentService(AbstractDeploymentsService):
         return deployment
 
     @override
-    async def get_orgs(self) -> schema.OrgsListResponse:
-        return schema.OrgsListResponse(orgs=[DEFAULT_ORG])
+    async def get_organizations(self) -> schema.OrganizationsListResponse:
+        return schema.OrganizationsListResponse(organizations=[DEFAULT_ORG])
 
     @override
     async def get_projects(

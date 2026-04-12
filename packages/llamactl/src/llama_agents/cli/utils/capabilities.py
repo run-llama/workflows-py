@@ -34,9 +34,9 @@ def probe_code_push_support() -> bool | None:
     return _probe_capability(Capabilities.CODE_PUSH)
 
 
-def probe_orgs_support() -> bool | None:
-    """Probe the current environment's server for orgs capability.
+def probe_organizations_support() -> bool | None:
+    """Probe the current environment's server for organizations capability.
 
     Returns True/False if the probe succeeds, or None if it fails (fail open).
     """
-    return _probe_capability(Capabilities.ORGS)
+    return _probe_capability(Capabilities.ORGANIZATIONS)

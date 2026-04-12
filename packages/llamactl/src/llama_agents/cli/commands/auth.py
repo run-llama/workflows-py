@@ -18,7 +18,7 @@ from llama_agents.cli.styles import (
     PRIMARY_COL,
     WARNING,
 )
-from llama_agents.cli.utils.capabilities import probe_orgs_support
+from llama_agents.cli.utils.capabilities import probe_organizations_support
 from rich import print as rprint
 from rich.table import Table
 from rich.text import Text
@@ -97,10 +97,10 @@ def create_api_key_profile(
 
         # Interactive mode: prompt for token (masked) and validate
         token_value = api_key or _prompt_for_api_key()
-        org = _discover_org(auth_svc, api_key=token_value)
+        org = _discover_organization(auth_svc, api_key=token_value)
         org_id_for_projects = org.org_id if org is not None else None
         if org is not None:
-            rprint(f"Projects for [bold]{org.org_name}[/]")
+            rprint(f"Projects for organization [bold]{org.org_name}[/]")
         projects = _prompt_validate_api_key_and_list_projects(
             auth_svc, token_value, org_id=org_id_for_projects
         )
@@ -306,7 +306,7 @@ def change_project(
     # Discover org if not explicitly provided (profile exists, credentials available)
     org = None
     if org_id is None:
-        org = _discover_org(auth_svc)
+        org = _discover_organization(auth_svc)
         if org is not None:
             org_id = org.org_id
 
@@ -335,7 +335,7 @@ def change_project(
             return
 
         if org is not None:
-            rprint(f"Projects for [bold]{org.org_name}[/]")
+            rprint(f"Projects for organization [bold]{org.org_name}[/]")
 
         result = questionary.select(
             "Select a project",
@@ -497,7 +497,7 @@ def _create_device_profile() -> Auth:
     token = oidc_device.device_access_token
 
     # Discover org for project scoping (pass token — no profile exists yet)
-    org = _discover_org(auth_svc, api_key=token)
+    org = _discover_organization(auth_svc, api_key=token)
     org_id = org.org_id if org is not None else None
 
     # Obtain or prompt for project ID and create profile
@@ -509,7 +509,7 @@ def _create_device_profile() -> Auth:
         raise click.ClickException("No projects found for this account")
 
     if org is not None:
-        rprint(f"Projects for [bold]{org.org_name}[/]")
+        rprint(f"Projects for organization [bold]{org.org_name}[/]")
 
     selected_project_id = _select_or_enter_project(projects, True)
     if not selected_project_id:
@@ -731,7 +731,7 @@ def _list_projects(
     return asyncio.run(_run())
 
 
-def _list_orgs(
+def _list_organizations(
     auth_svc: AuthService,
     api_key: str | None = None,
 ) -> list[OrgSummary]:
@@ -744,25 +744,25 @@ def _list_orgs(
             api_key or (profile.api_key if profile else None),
             None if api_key is not None else auth_svc.auth_middleware(profile),
         ) as client:
-            return await client.list_orgs()
+            return await client.list_organizations()
 
     return asyncio.run(_run())
 
 
-def _discover_org(
+def _discover_organization(
     auth_svc: AuthService, api_key: str | None = None
 ) -> OrgSummary | None:
-    """Discover the default org from the server if it supports the orgs capability.
+    """Discover the default organization from the server.
 
     Returns the default OrgSummary (by is_default flag, falling back to first),
-    or None if the server doesn't support orgs.
+    or None if the server doesn't support organizations.
     """
-    if not probe_orgs_support():
+    if not probe_organizations_support():
         return None
-    orgs = _list_orgs(auth_svc, api_key=api_key)
-    if not orgs:
+    organizations = _list_organizations(auth_svc, api_key=api_key)
+    if not organizations:
         return None
-    return next((o for o in orgs if o.is_default), orgs[0])
+    return next((o for o in organizations if o.is_default), organizations[0])
 
 
 def _prompt_validate_api_key_and_list_projects(

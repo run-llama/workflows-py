@@ -13,10 +13,10 @@ class OrgSummary(Base):
     is_default: bool = False
 
 
-class OrgsListResponse(Base):
+class OrganizationsListResponse(Base):
     """Response model for listing organizations."""
 
-    orgs: list[OrgSummary]
+    organizations: list[OrgSummary]
 
 
 class ProjectSummary(Base):

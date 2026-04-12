@@ -14,20 +14,19 @@ from llama_agents.cli.options import (
     native_tls_option,
 )
 from llama_agents.cli.styles import WARNING
-from llama_agents.cli.utils.capabilities import probe_orgs_support
+from llama_agents.cli.utils.capabilities import probe_organizations_support
 from llama_agents.cli.utils.redact import redact_api_key
 from llama_agents.core.config import DEFAULT_DEPLOYMENT_FILE_PATH
 from llama_agents.core.deployment_config import (
     read_deployment_config_from_git_root_or_cwd,
 )
-from llama_agents.core.schema.projects import ProjectSummary
+from llama_agents.core.schema.projects import OrgSummary, ProjectSummary
 from rich import print as rprint
 
 from ..app import app
 
 if TYPE_CHECKING:
     from llama_agents.cli.config.schema import Auth
-    from llama_agents.core.schema.projects import OrgSummary
 
 logger = logging.getLogger(__name__)
 _ClickPath = getattr(click, "Path")
@@ -319,15 +318,16 @@ def _maybe_select_project_for_env_key() -> None:
     if not api_key:
         return
     try:
-        supports_orgs = probe_orgs_support()
+        supports_organizations = probe_organizations_support()
 
         async def _run() -> tuple[OrgSummary | None, list[ProjectSummary]]:
             async with ControlPlaneClient.ctx(base_url, api_key, None) as client:
                 org: OrgSummary | None = None
-                if supports_orgs:
-                    orgs = await client.list_orgs()
+                if supports_organizations:
+                    organizations = await client.list_organizations()
                     org = next(
-                        (o for o in orgs if o.is_default), orgs[0] if orgs else None
+                        (o for o in organizations if o.is_default),
+                        organizations[0] if organizations else None,
                     )
                 org_id = org.org_id if org is not None else None
                 projects = await client.list_projects(org_id=org_id)
@@ -341,7 +341,7 @@ def _maybe_select_project_for_env_key() -> None:
             return
 
         if org is not None:
-            rprint(f"Projects for [bold]{org.org_name}[/]")
+            rprint(f"Projects for organization [bold]{org.org_name}[/]")
 
         # Multiple: prompt selection
         choice = questionary.select(

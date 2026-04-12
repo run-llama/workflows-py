@@ -54,10 +54,10 @@ def create_v1beta1_deployments_router(
     async def get_version() -> schema.VersionResponse:
         return await public_service.get_version()
 
-    @router.get("/list-orgs")
-    async def get_orgs() -> schema.OrgsListResponse:
+    @router.get("/organizations")
+    async def get_organizations() -> schema.OrganizationsListResponse:
         """Get all organizations"""
-        return await deployments_service.get_orgs()
+        return await deployments_service.get_organizations()
 
     @router.get("/list-projects")
     async def get_projects(

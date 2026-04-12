@@ -47,7 +47,7 @@ def test_create_device_profile_cleans_up_on_api_key_failure() -> None:
             return_value=_make_fake_device_oidc(),
         ),
         patch(
-            "llama_agents.cli.commands.auth._discover_org",
+            "llama_agents.cli.commands.auth._discover_organization",
             return_value=None,
         ),
         patch(

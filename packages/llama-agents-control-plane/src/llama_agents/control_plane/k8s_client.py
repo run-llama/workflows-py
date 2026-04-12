@@ -248,7 +248,7 @@ async def find_deployment_id(name: str, force_suffix: bool = False) -> str:
 reserved_deployment_ids = [
     "validate-repository",
     "list-projects",
-    "list-orgs",
+    "organizations",
     "version",
 ]
 
