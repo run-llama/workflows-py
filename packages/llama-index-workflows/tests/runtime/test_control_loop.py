@@ -35,7 +35,7 @@ from workflows.events import (
     WorkflowTimedOutEvent,
 )
 from workflows.plugins.basic import setting_run_id
-from workflows.retry_policy import ConstantDelayRetryPolicy, RetryPolicyProto
+from workflows.retry_policy import ConstantDelayRetryPolicy, RetryPolicy
 from workflows.runtime.control_loop import control_loop
 from workflows.runtime.types.internal_state import BrokerState
 from workflows.runtime.types.plugin import RunContext, run_context
@@ -800,7 +800,7 @@ async def test_control_loop_retry_exhaustion_respects_total_time(
     test_plugin, _ = test_plugin_with_time_machine
     retry_delay = 0.01
 
-    class ElapsedTimeTrackingPolicy(RetryPolicyProto):
+    class ElapsedTimeTrackingPolicy(RetryPolicy):
         def __init__(self, retry_delay: float) -> None:
             self.retry_delay = retry_delay
             self.observed_elapsed_times: list[float] = []

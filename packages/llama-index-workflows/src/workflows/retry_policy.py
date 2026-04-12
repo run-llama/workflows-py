@@ -13,16 +13,16 @@ from typing import Protocol, runtime_checkable
 
 
 @runtime_checkable
-class RetryPolicyProto(Protocol):
+class RetryPolicy(Protocol):
     """
     Structural interface for step retry policies.
 
     Any object with a compatible ``next`` method satisfies this protocol,
-    including the built-in :class:`RetryPolicy`, :class:`ConstantDelayRetryPolicy`,
+    including the built-in :class:`ComposableRetryPolicy`, :class:`ConstantDelayRetryPolicy`,
     :class:`ExponentialBackoffRetryPolicy`, and user-defined policies.
 
     See Also:
-        - [RetryPolicy][workflows.retry_policy.RetryPolicy]
+        - [ComposableRetryPolicy][workflows.retry_policy.ComposableRetryPolicy]
         - [step][workflows.decorators.step]
     """
 
@@ -276,11 +276,11 @@ class stop_after_delay:
 
 
 # ---------------------------------------------------------------------------
-# Composable RetryPolicy
+# ComposableRetryPolicy
 # ---------------------------------------------------------------------------
 
 
-class RetryPolicy:
+class ComposableRetryPolicy:
     """Composable retry policy built from retry conditions, wait strategies, and stop conditions.
 
     Decomposes retry behavior into three orthogonal concerns:
@@ -293,7 +293,7 @@ class RetryPolicy:
         Retry only transient API errors with exponential backoff:
 
         ```python
-        @step(retry_policy=RetryPolicy(
+        @step(retry_policy=ComposableRetryPolicy(
             retry=retry_if_exception_type(RateLimitError, APITimeoutError),
             wait=wait_exponential(initial=1, multiplier=2, max=60),
             stop=stop_after_attempt(5),
@@ -305,7 +305,7 @@ class RetryPolicy:
         Stop after 2 minutes of total elapsed time:
 
         ```python
-        @step(retry_policy=RetryPolicy(
+        @step(retry_policy=ComposableRetryPolicy(
             wait=wait_fixed(10),
             stop=stop_after_delay(120),
         ))
@@ -341,7 +341,7 @@ class RetryPolicy:
 
 
 # ---------------------------------------------------------------------------
-# Legacy convenience policies — delegate to RetryPolicy internally
+# Legacy convenience policies — delegate to ComposableRetryPolicy internally
 # ---------------------------------------------------------------------------
 
 
@@ -366,7 +366,7 @@ class ConstantDelayRetryPolicy:
         """
         self.maximum_attempts = maximum_attempts
         self.delay = delay
-        self._inner = RetryPolicy(
+        self._inner = ComposableRetryPolicy(
             wait=wait_fixed(delay),
             stop=stop_after_attempt(maximum_attempts),
         )
@@ -425,7 +425,7 @@ class ExponentialBackoffRetryPolicy:
         self.multiplier = multiplier
         self.max_delay = max_delay
         self.jitter = jitter
-        self._inner = RetryPolicy(
+        self._inner = ComposableRetryPolicy(
             wait=_ExponentialWithFullJitter(
                 initial=initial_delay,
                 multiplier=multiplier,

@@ -10,6 +10,7 @@ from workflows.context import Context
 from workflows.decorators import step
 from workflows.events import Event, StartEvent, StopEvent
 from workflows.retry_policy import (
+    ComposableRetryPolicy,
     ConstantDelayRetryPolicy,
     ExponentialBackoffRetryPolicy,
     RetryPolicy,
@@ -165,7 +166,7 @@ def test_stop_after_delay() -> None:
 
 
 def test_retry_policy_defaults() -> None:
-    p = RetryPolicy()
+    p = ComposableRetryPolicy()
     err = Exception("fail")
     assert p.next(0.0, 0, err) == 5.0
     assert p.next(0.0, 1, err) == 5.0
@@ -174,7 +175,7 @@ def test_retry_policy_defaults() -> None:
 
 
 def test_retry_policy_with_retry_condition() -> None:
-    p = RetryPolicy(
+    p = ComposableRetryPolicy(
         retry=retry_if_exception_type(ValueError),
         stop=stop_after_attempt(5),
     )
@@ -183,7 +184,7 @@ def test_retry_policy_with_retry_condition() -> None:
 
 
 def test_retry_policy_with_wait_strategy() -> None:
-    p = RetryPolicy(
+    p = ComposableRetryPolicy(
         wait=wait_exponential(initial=1, multiplier=2, max=100),
         stop=stop_after_attempt(5),
     )
@@ -193,7 +194,7 @@ def test_retry_policy_with_wait_strategy() -> None:
 
 
 def test_retry_policy_stop_after_delay() -> None:
-    p = RetryPolicy(
+    p = ComposableRetryPolicy(
         wait=wait_fixed(1),
         stop=stop_after_delay(10),
     )
@@ -202,7 +203,7 @@ def test_retry_policy_stop_after_delay() -> None:
 
 
 def test_retry_policy_seed_forwarded() -> None:
-    p = RetryPolicy(
+    p = ComposableRetryPolicy(
         wait=wait_random(min=0, max=10),
         stop=stop_after_attempt(5),
     )
@@ -212,13 +213,13 @@ def test_retry_policy_seed_forwarded() -> None:
 
 
 def test_retry_policy_retry_none_retries_all() -> None:
-    p = RetryPolicy(retry=None, stop=stop_after_attempt(2))
+    p = ComposableRetryPolicy(retry=None, stop=stop_after_attempt(2))
     assert p.next(0.0, 0, ValueError("a")) == 5.0
     assert p.next(0.0, 0, RuntimeError("b")) == 5.0
 
 
 def test_retry_policy_all_three_composed() -> None:
-    p = RetryPolicy(
+    p = ComposableRetryPolicy(
         retry=retry_if_exception_type(ConnectionError),
         wait=wait_exponential(initial=0.5, multiplier=3, max=50),
         stop=stop_after_attempt(3),
@@ -229,6 +230,24 @@ def test_retry_policy_all_three_composed() -> None:
     assert p.next(0.0, 2, err) == 4.5
     assert p.next(0.0, 3, err) is None  # stopped
     assert p.next(0.0, 0, ValueError("bad")) is None  # not retryable
+
+
+def test_retry_policy_protocol_structural_match() -> None:
+    class CustomPolicy:
+        def next(
+            self,
+            elapsed_time: float,
+            attempts: int,
+            error: Exception,
+            *,
+            seed: int | None = None,
+        ) -> float | None:
+            return None
+
+    assert isinstance(CustomPolicy(), RetryPolicy)
+    assert isinstance(ComposableRetryPolicy(), RetryPolicy)
+    assert isinstance(ConstantDelayRetryPolicy(), RetryPolicy)
+    assert isinstance(ExponentialBackoffRetryPolicy(), RetryPolicy)
 
 
 # ---------------------------------------------------------------------------
@@ -395,14 +414,14 @@ async def test_retry_e2e_exponential() -> None:
 
 @pytest.mark.asyncio
 async def test_retry_e2e_composable_policy() -> None:
-    """RetryPolicy with retry condition filters exceptions correctly in a live workflow."""
+    """ComposableRetryPolicy with retry condition filters exceptions correctly in a live workflow."""
 
     class CountEvent(Event):
         pass
 
     class DummyWorkflow(Workflow):
         @step(
-            retry_policy=RetryPolicy(
+            retry_policy=ComposableRetryPolicy(
                 retry=retry_if_exception_type(ValueError),
                 wait=wait_fixed(0.1),
                 stop=stop_after_attempt(4),
@@ -426,11 +445,11 @@ async def test_retry_e2e_composable_policy() -> None:
 
 @pytest.mark.asyncio
 async def test_retry_e2e_composable_policy_non_retryable() -> None:
-    """RetryPolicy does not retry non-matching exception types."""
+    """ComposableRetryPolicy does not retry non-matching exception types."""
 
     class DummyWorkflow(Workflow):
         @step(
-            retry_policy=RetryPolicy(
+            retry_policy=ComposableRetryPolicy(
                 retry=retry_if_exception_type(ConnectionError),
                 wait=wait_fixed(0.1),
                 stop=stop_after_attempt(5),
