@@ -19,7 +19,7 @@ from .deployments import (
     apply_deployment_update,
 )
 from .git_validation import RepositoryValidationRequest, RepositoryValidationResponse
-from .projects import ProjectsListResponse, ProjectSummary
+from .projects import OrgsListResponse, OrgSummary, ProjectsListResponse, ProjectSummary
 from .public import Capabilities, Capability, VersionResponse
 
 __all__ = [
@@ -41,6 +41,8 @@ __all__ = [
     "LlamaDeploymentPhase",
     "RepositoryValidationResponse",
     "RepositoryValidationRequest",
+    "OrgSummary",
+    "OrgsListResponse",
     "ProjectSummary",
     "ProjectsListResponse",
     "VersionResponse",

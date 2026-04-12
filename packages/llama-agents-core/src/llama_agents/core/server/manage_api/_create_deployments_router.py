@@ -54,10 +54,17 @@ def create_v1beta1_deployments_router(
     async def get_version() -> schema.VersionResponse:
         return await public_service.get_version()
 
+    @router.get("/list-orgs")
+    async def get_orgs() -> schema.OrgsListResponse:
+        """Get all organizations"""
+        return await deployments_service.get_orgs()
+
     @router.get("/list-projects")
-    async def get_projects() -> schema.ProjectsListResponse:
+    async def get_projects(
+        org_id: Annotated[str | None, Query()] = None,
+    ) -> schema.ProjectsListResponse:
         """Get all unique projects with their deployment counts"""
-        return await deployments_service.get_projects()
+        return await deployments_service.get_projects(org_id=org_id)
 
     @router.post("/validate-repository")
     async def validate_repository(

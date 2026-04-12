@@ -47,11 +47,6 @@ def _get_service() -> EnvService:
     return service
 
 
-# Specific auth/login flow exceptions
-class NoProjectsFoundError(Exception):
-    """Raised when the authenticated user has no accessible projects."""
-
-
 # Create sub-applications for organizing commands
 @app.group(
     help="Login to llama cloud control plane to manage deployments",
@@ -127,15 +122,6 @@ def device_login() -> None:
         rprint(
             f"[green]Created login profile '{created.name}' and set as current[/green]"
         )
-
-    except NoProjectsFoundError:
-        # Friendly guidance for first-time users with no projects
-        rprint(f"[{WARNING}]⚠️ No Existing Projects - Welcome to LlamaCloud![/]")
-        rprint(f"[{WARNING}]Looks like this may be your first time logging in.[/]")
-        rprint(
-            f"[{WARNING}]Before you can get started, log in to https://cloud.llamaindex.ai to complete your account setup.[/]"
-        )
-        return
 
     except Exception as e:
         rprint(f"[red]Error: {e}[/red]")
@@ -284,19 +270,31 @@ def me() -> None:
 # Projects commands
 @auth.command("project")
 @click.argument("project_id", required=False, type=ProjectType())
+@click.option(
+    "--org", "org_id", default=None, help="Organization ID to scope projects to"
+)
 @interactive_option
 @global_options
-def change_project(project_id: str | None, interactive: bool) -> None:
+def change_project(
+    project_id: str | None, org_id: str | None, interactive: bool
+) -> None:
     """Change the active project for the current profile"""
     import questionary
 
     auth_svc = _get_service().current_auth_service()
     profile = validate_authenticated_profile(interactive)
+
+    # Discover org if not explicitly provided
+    org = None
+    if org_id is None:
+        org = _discover_org(auth_svc)
+        if org is not None:
+            org_id = org.org_id
     if project_id and profile.project_id == project_id:
         return
     if project_id:
         if auth_svc.env.requires_auth:
-            projects = _list_projects(auth_svc)
+            projects = _list_projects(auth_svc, org_id=org_id)
             if not next(
                 (project for project in projects if project.project_id == project_id),
                 None,
@@ -310,11 +308,15 @@ def change_project(project_id: str | None, interactive: bool) -> None:
             "No --project-id provided. Run `llamactl auth project --help` for more information."
         )
     try:
-        projects = _list_projects(auth_svc)
+        projects = _list_projects(auth_svc, org_id=org_id)
 
         if not projects:
             rprint(f"[{WARNING}]No projects found[/]")
             return
+
+        if org is not None:
+            rprint(f"Projects for [bold]{org.org_name}[/]")
+
         result = questionary.select(
             "Select a project",
             choices=[
@@ -473,11 +475,17 @@ def _create_device_profile() -> Auth:
 
     oidc_device = asyncio.run(_run_device_authentication(base_url))
 
+    # Discover org for project scoping
+    org = _discover_org(auth_svc)
+    org_id = org.org_id if org is not None else None
+
     # Obtain or prompt for project ID and create profile
-    projects = _list_projects(auth_svc, oidc_device.device_access_token)
+    projects = _list_projects(auth_svc, oidc_device.device_access_token, org_id=org_id)
     if not projects:
-        # No projects available for this user yet
-        raise NoProjectsFoundError()
+        raise click.ClickException("No projects found for this account")
+
+    if org is not None:
+        rprint(f"Projects for [bold]{org.org_name}[/]")
 
     selected_project_id = _select_or_enter_project(projects, True)
     if not selected_project_id:
@@ -683,6 +691,7 @@ def _prompt_for_api_key() -> str:
 def _list_projects(
     auth_svc: AuthService,
     api_key: str | None = None,
+    org_id: str | None = None,
 ) -> list[ProjectSummary]:
     async def _run() -> list[ProjectSummary]:
         from llama_agents.core.client.manage_client import ControlPlaneClient
@@ -693,9 +702,43 @@ def _list_projects(
             api_key or (profile.api_key if profile else None),
             None if api_key is not None else auth_svc.auth_middleware(profile),
         ) as client:
-            return await client.list_projects()
+            return await client.list_projects(org_id=org_id)
 
     return asyncio.run(_run())
+
+
+def _list_orgs(
+    auth_svc: AuthService,
+    api_key: str | None = None,
+) -> list[Any]:
+    async def _run() -> list[Any]:
+        from llama_agents.core.client.manage_client import ControlPlaneClient
+
+        profile = auth_svc.get_current_profile()
+        async with ControlPlaneClient.ctx(
+            auth_svc.env.api_url,
+            api_key or (profile.api_key if profile else None),
+            None if api_key is not None else auth_svc.auth_middleware(profile),
+        ) as client:
+            return await client.list_orgs()
+
+    return asyncio.run(_run())
+
+
+def _discover_org(auth_svc: AuthService) -> Any | None:
+    """Discover the current org from the server if it supports the orgs capability.
+
+    Returns the first OrgSummary, or None if the server doesn't support orgs.
+    """
+    from llama_agents.cli.utils.capabilities import probe_orgs_support
+
+    if not probe_orgs_support():
+        return None
+    try:
+        orgs = _list_orgs(auth_svc)
+        return orgs[0] if orgs else None
+    except Exception:
+        return None
 
 
 def _prompt_validate_api_key_and_list_projects(

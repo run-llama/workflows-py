@@ -4,7 +4,7 @@ import asyncio
 import logging
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import click
 from click.exceptions import Abort, Exit
@@ -318,16 +318,26 @@ def _maybe_select_project_for_env_key() -> None:
         return
     try:
 
-        async def _run() -> list[ProjectSummary]:
+        async def _run() -> tuple[list[Any], list[ProjectSummary]]:
             async with ControlPlaneClient.ctx(base_url, api_key, None) as client:
-                return await client.list_projects()
+                try:
+                    orgs = await client.list_orgs()
+                except Exception:
+                    orgs = []
+                org_id = orgs[0].org_id if orgs else None
+                projects = await client.list_projects(org_id=org_id)
+                return orgs, projects
 
-        projects = asyncio.run(_run())
+        orgs, projects = asyncio.run(_run())
         if not projects:
             return
         if len(projects) == 1:
             os.environ["LLAMA_DEPLOY_PROJECT_ID"] = projects[0].project_id
             return
+
+        if orgs:
+            rprint(f"Projects for [bold]{orgs[0].org_name}[/]")
+
         # Multiple: prompt selection
         choice = questionary.select(
             "Select a project",

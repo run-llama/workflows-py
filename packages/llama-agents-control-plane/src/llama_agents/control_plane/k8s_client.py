@@ -245,7 +245,12 @@ async def find_deployment_id(name: str, force_suffix: bool = False) -> str:
 
 
 # in order to not conflict in URI routes
-reserved_deployment_ids = ["validate-repository", "list-projects", "version"]
+reserved_deployment_ids = [
+    "validate-repository",
+    "list-projects",
+    "list-orgs",
+    "version",
+]
 
 
 async def create_deployment(

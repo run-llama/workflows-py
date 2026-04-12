@@ -22,9 +22,18 @@ class AbstractPublicDeploymentsService(ABC):
 
 class AbstractDeploymentsService(ABC):
     @abstractmethod
-    async def get_projects(self) -> schema.ProjectsListResponse:
+    async def get_orgs(self) -> schema.OrgsListResponse:
         """
-        Get a list of projects
+        Get a list of organizations.
+        """
+        ...
+
+    @abstractmethod
+    async def get_projects(
+        self, org_id: str | None = None
+    ) -> schema.ProjectsListResponse:
+        """
+        Get a list of projects, optionally filtered by org_id.
         """
         ...
 
