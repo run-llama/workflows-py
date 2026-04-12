@@ -42,7 +42,7 @@ from overrides import override
 logger = logging.getLogger(__name__)
 
 
-DEFAULT_ORG = schema.OrgSummary(org_id="default", org_name="Default")
+DEFAULT_ORG = schema.OrgSummary(org_id="default", org_name="Default", is_default=True)
 
 
 class PublicDeploymentService(AbstractPublicDeploymentsService):

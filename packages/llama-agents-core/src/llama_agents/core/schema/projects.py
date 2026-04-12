@@ -10,6 +10,7 @@ class OrgSummary(Base):
 
     org_id: str
     org_name: str
+    is_default: bool = False
 
 
 class OrgsListResponse(Base):

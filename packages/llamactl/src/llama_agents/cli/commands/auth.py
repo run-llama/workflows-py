@@ -7,7 +7,7 @@ import platform
 import subprocess
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 import click
 from llama_agents.cli.param_types import ProfileType, ProjectType
@@ -18,6 +18,7 @@ from llama_agents.cli.styles import (
     PRIMARY_COL,
     WARNING,
 )
+from llama_agents.cli.utils.capabilities import probe_orgs_support
 from rich import print as rprint
 from rich.table import Table
 from rich.text import Text
@@ -28,9 +29,13 @@ from ..options import global_options, interactive_option
 if TYPE_CHECKING:
     from llama_agents.cli.config.auth_service import AuthService
     from llama_agents.cli.config.env_service import EnvService
-    from llama_agents.core.schema.projects import ProjectSummary
+    from llama_agents.core.schema.projects import OrgSummary, ProjectSummary
 
     from ..config.schema import Auth, DeviceOIDC
+
+
+class NoProjectsFoundError(Exception):
+    """Raised when the authenticated user has no accessible projects on an org-less server."""
 
 
 _ClickPath = getattr(click, "Path")
@@ -92,7 +97,13 @@ def create_api_key_profile(
 
         # Interactive mode: prompt for token (masked) and validate
         token_value = api_key or _prompt_for_api_key()
-        projects = _prompt_validate_api_key_and_list_projects(auth_svc, token_value)
+        org = _discover_org(auth_svc, api_key=token_value)
+        org_id_for_projects = org.org_id if org is not None else None
+        if org is not None:
+            rprint(f"Projects for [bold]{org.org_name}[/]")
+        projects = _prompt_validate_api_key_and_list_projects(
+            auth_svc, token_value, org_id=org_id_for_projects
+        )
 
         # Select or enter project ID
         selected_project_id = project_id or _select_or_enter_project(
@@ -122,6 +133,14 @@ def device_login() -> None:
         rprint(
             f"[green]Created login profile '{created.name}' and set as current[/green]"
         )
+
+    except NoProjectsFoundError:
+        rprint(f"[{WARNING}]⚠️ No Existing Projects - Welcome to LlamaCloud![/]")
+        rprint(f"[{WARNING}]Looks like this may be your first time logging in.[/]")
+        rprint(
+            f"[{WARNING}]Before you can get started, log in to https://cloud.llamaindex.ai to complete your account setup.[/]"
+        )
+        return
 
     except Exception as e:
         rprint(f"[red]Error: {e}[/red]")
@@ -284,12 +303,13 @@ def change_project(
     auth_svc = _get_service().current_auth_service()
     profile = validate_authenticated_profile(interactive)
 
-    # Discover org if not explicitly provided
+    # Discover org if not explicitly provided (profile exists, credentials available)
     org = None
     if org_id is None:
         org = _discover_org(auth_svc)
         if org is not None:
             org_id = org.org_id
+
     if project_id and profile.project_id == project_id:
         return
     if project_id:
@@ -474,14 +494,18 @@ def _create_device_profile() -> Auth:
     base_url = auth_svc.env.api_url.rstrip("/")
 
     oidc_device = asyncio.run(_run_device_authentication(base_url))
+    token = oidc_device.device_access_token
 
-    # Discover org for project scoping
-    org = _discover_org(auth_svc)
+    # Discover org for project scoping (pass token — no profile exists yet)
+    org = _discover_org(auth_svc, api_key=token)
     org_id = org.org_id if org is not None else None
 
     # Obtain or prompt for project ID and create profile
-    projects = _list_projects(auth_svc, oidc_device.device_access_token, org_id=org_id)
+    projects = _list_projects(auth_svc, token, org_id=org_id)
     if not projects:
+        if org is None:
+            # Legacy org-less server — account not set up yet
+            raise NoProjectsFoundError()
         raise click.ClickException("No projects found for this account")
 
     if org is not None:
@@ -710,8 +734,8 @@ def _list_projects(
 def _list_orgs(
     auth_svc: AuthService,
     api_key: str | None = None,
-) -> list[Any]:
-    async def _run() -> list[Any]:
+) -> list[OrgSummary]:
+    async def _run() -> list[OrgSummary]:
         from llama_agents.core.client.manage_client import ControlPlaneClient
 
         profile = auth_svc.get_current_profile()
@@ -725,39 +749,39 @@ def _list_orgs(
     return asyncio.run(_run())
 
 
-def _discover_org(auth_svc: AuthService) -> Any | None:
-    """Discover the current org from the server if it supports the orgs capability.
+def _discover_org(
+    auth_svc: AuthService, api_key: str | None = None
+) -> OrgSummary | None:
+    """Discover the default org from the server if it supports the orgs capability.
 
-    Returns the first OrgSummary, or None if the server doesn't support orgs.
+    Returns the default OrgSummary (by is_default flag, falling back to first),
+    or None if the server doesn't support orgs.
     """
-    from llama_agents.cli.utils.capabilities import probe_orgs_support
-
     if not probe_orgs_support():
         return None
-    try:
-        orgs = _list_orgs(auth_svc)
-        return orgs[0] if orgs else None
-    except Exception:
+    orgs = _list_orgs(auth_svc, api_key=api_key)
+    if not orgs:
         return None
+    return next((o for o in orgs if o.is_default), orgs[0])
 
 
 def _prompt_validate_api_key_and_list_projects(
-    auth_svc: AuthService, api_key: str
+    auth_svc: AuthService, api_key: str, org_id: str | None = None
 ) -> list[ProjectSummary]:
     import httpx
 
     try:
-        return _list_projects(auth_svc, api_key)
+        return _list_projects(auth_svc, api_key, org_id=org_id)
     except httpx.HTTPStatusError as e:
         if e.response.status_code == 401:
             rprint("[red]Invalid API key. Please try again.[/red]")
             return _prompt_validate_api_key_and_list_projects(
-                auth_svc, _prompt_for_api_key()
+                auth_svc, _prompt_for_api_key(), org_id=org_id
             )
         if e.response.status_code == 403:
             rprint("[red]This environment requires a valid API key.[/red]")
             return _prompt_validate_api_key_and_list_projects(
-                auth_svc, _prompt_for_api_key()
+                auth_svc, _prompt_for_api_key(), org_id=org_id
             )
         raise
     except Exception as e:
@@ -825,7 +849,7 @@ def _select_profile(
             rprint(f"[{WARNING}]No profiles found[/]")
             return None
 
-        choices: list[Any] = []
+        choices: list[questionary.Choice] = []
         current = auth_svc.get_current_profile()
 
         for profile in profiles:
