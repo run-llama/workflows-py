@@ -329,6 +329,7 @@ class GitValidationWidget(Widget):
             client = get_client()
 
             try:
+                # validate_repository is a read-only POST, so retries are safe.
                 self.validation_response = await run_with_network_retries(
                     lambda: client.validate_repository(
                         repo_url=self.repo_url,

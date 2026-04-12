@@ -94,7 +94,7 @@ class PostgresStateStore(Generic[MODEL_T]):
         if issubclass(self.state_type, DictState):
             data = json.loads(state_json)
             return deserialize_dict_state_data(data, self._serializer)  # type: ignore[return-value]  # ty: ignore[invalid-return-type]
-        return self._serializer.deserialize(state_json)  # type: ignore[ty:invalid-return-type]
+        return self._serializer.deserialize(state_json)
 
     def _create_default_state(self) -> MODEL_T:
         return self.state_type()

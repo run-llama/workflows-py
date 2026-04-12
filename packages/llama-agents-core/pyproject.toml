@@ -16,12 +16,13 @@ dev = [
 
 [project]
 name = "llama-agents-core"
-version = "0.8.4"
+version = "0.8.5"
 description = "Core models and schemas for LlamaDeploy"
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.10, <4"
 dependencies = [
+  "dulwich[https]>=0.22.0",
   "fastapi>=0.115.0",
   "overrides>=7.7.0",
   "pydantic>=2.12.0",

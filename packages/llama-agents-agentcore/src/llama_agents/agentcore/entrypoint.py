@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import functools
 import logging
+import traceback
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
@@ -143,7 +144,7 @@ def _get_sqlite_db_path() -> str:
 def get_agentcore_service() -> AgentCoreService:
     workflows, _, _ = _load_workflows()
     db_path = _get_sqlite_db_path()
-    store = SqliteWorkflowStore(db_path=db_path)
+    store = SqliteWorkflowStore(db_path=db_path, single_connection=True)
     logger.info("Using SQLite workflow store at %s", db_path)
     service = AgentCoreService(app=app, store=store)
     for k in workflows:
@@ -278,7 +279,7 @@ async def _action_run(
         ).model_dump()
 
     workflow_name = str(parsed[0])
-    start_event: StartEvent = parsed[1]  # ty: ignore[invalid-assignment]  # type: ignore
+    start_event: StartEvent = parsed[1]  # type: ignore[reportAssignmentType]  # ty: ignore[invalid-assignment]
     handler_id = _resolve_handler_id(payload, session_id)
     service = get_agentcore_service()
 
@@ -439,4 +440,9 @@ async def invoke(payload: dict, context: Any) -> dict[str, Any]:
         return await handler_fn(payload, session_id)
     except Exception as e:
         logger.exception("Action '%s' failed", action)
-        return {"error": str(e), "action": action, "session_id": session_id}
+        return {
+            "error": str(e),
+            "traceback": traceback.format_exc(),
+            "action": action,
+            "session_id": session_id,
+        }

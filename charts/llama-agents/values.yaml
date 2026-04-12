@@ -19,7 +19,7 @@ images:
     repository: llamaindex/llama-agents-control-plane
     # -- Control plane image tag
     # @section -- Images
-    tag: "0.10.3"
+    tag: "0.10.5"
     # -- Control plane image pull policy
     # @section -- Images
     pullPolicy: IfNotPresent
@@ -39,7 +39,7 @@ images:
     repository: llamaindex/llama-agents-appserver
     # -- Appserver image tag
     # @section -- Images
-    tag: "0.10.2"
+    tag: "0.10.4"
     # -- Appserver image pull policy
     # @section -- Images
     pullPolicy: IfNotPresent

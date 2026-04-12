@@ -1,5 +1,27 @@
 # llama-agents
 
+## 0.10.10
+
+### Patch Changes
+
+- Updated dependencies [7ad3049]
+  - llama-agents-control-plane@0.10.5
+  - llama-agents-appserver@0.10.4
+
+## 0.10.9
+
+### Patch Changes
+
+- Updated dependencies [286c91a]
+  - llama-agents-appserver@0.10.3
+
+## 0.10.8
+
+### Patch Changes
+
+- Updated dependencies [740ee9e]
+  - llama-agents-control-plane@0.10.4
+
 ## 0.10.7
 
 ### Patch Changes

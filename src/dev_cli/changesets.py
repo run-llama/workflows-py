@@ -677,6 +677,19 @@ def _execute_pypi(action: PypiAction, dry_run: bool) -> None:
     if dry_run:
         click.echo("  dry run, skipping uv build / uv publish")
         return
+    # Guard against stale plans: the plan is generated in a different job
+    # from a potentially different working tree than this one, so confirm
+    # the checked-out package still matches the version we intend to
+    # publish before invoking uv build (which silently builds whatever
+    # version is on disk).
+    pyproject = Path.cwd() / action.path / "pyproject.toml"
+    _, on_disk = current_version(pyproject)
+    if on_disk != action.version:
+        raise RuntimeError(
+            f"Plan expects {action.package}@{action.version} but "
+            f"{pyproject} is at {on_disk}. The plan was generated from a "
+            f"different workspace state than the current checkout."
+        )
     run_command(["uv", "build", "--package", action.package])
     dist_prefix = action.package.replace("-", "_")
     pattern = f"dist/{dist_prefix}-{action.version}*"

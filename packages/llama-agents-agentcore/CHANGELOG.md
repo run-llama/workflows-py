@@ -1,5 +1,57 @@
 # llama-agents-agentcore
 
+## 0.8.16
+
+### Patch Changes
+
+- d4448f8: Run agentcore workflows in background tasks
+
+## 0.8.15
+
+### Patch Changes
+
+- c95ffac: Run agentcore workflows in background tasks
+
+## 0.8.14
+
+### Patch Changes
+
+- Updated dependencies [7ad3049]
+  - llama-agents-appserver@0.10.4
+  - llama-agents-core@0.8.5
+
+## 0.8.13
+
+### Patch Changes
+
+- 3850844: Support single connection mode for sqlite
+
+## 0.8.12
+
+### Patch Changes
+
+- Updated dependencies [286c91a]
+  - llama-agents-appserver@0.10.3
+
+## 0.8.11
+
+### Patch Changes
+
+- 9f52f40: Make the sqlite db more resliant to locking
+
+## 0.8.10
+
+### Patch Changes
+
+- 30ae959: Bump boto3 dep
+- 30ae959: Fix session storage mount
+
+## 0.8.9
+
+### Patch Changes
+
+- cc313f8: Bump boto3 dep
+
 ## 0.8.8
 
 ### Patch Changes

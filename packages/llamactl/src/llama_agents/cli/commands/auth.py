@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import click
+from llama_agents.cli.param_types import ProfileType, ProjectType
 from llama_agents.cli.styles import (
     ACTIVE_INDICATOR,
     HEADER_COLOR,
@@ -207,7 +208,7 @@ def config_database() -> None:
 
 @auth.command("switch")
 @global_options
-@click.argument("name", required=False)
+@click.argument("name", required=False, type=ProfileType())
 @interactive_option
 def switch_profile(name: str | None, interactive: bool) -> None:
     """Switch to a different profile"""
@@ -228,7 +229,7 @@ def switch_profile(name: str | None, interactive: bool) -> None:
 
 @auth.command("logout")
 @global_options
-@click.argument("name", required=False)
+@click.argument("name", required=False, type=ProfileType())
 @interactive_option
 def delete_profile(name: str | None, interactive: bool) -> None:
     """Logout from a profile and wipe all associated data"""
@@ -282,7 +283,7 @@ def me() -> None:
 
 # Projects commands
 @auth.command("project")
-@click.argument("project_id", required=False)
+@click.argument("project_id", required=False, type=ProjectType())
 @interactive_option
 @global_options
 def change_project(project_id: str | None, interactive: bool) -> None:
@@ -438,9 +439,13 @@ async def _create_or_update_agent_api_key(auth_svc: AuthService, profile: Auth) 
         async with auth_svc.profile_client(profile) as client:
             name = f"{profile.name} llamactl on {profile.device_oidc.device_name if profile.device_oidc else 'unknown'}"
 
+            # Non-idempotent POST: only retry connect-phase errors so we
+            # absorb initial-connectivity blips without risking duplicate
+            # keys from a read-timeout retry.
             try:
                 api_key = await run_with_network_retries(
-                    lambda: client.create_agent_api_key(name)
+                    lambda: client.create_agent_api_key(name),
+                    idempotent=False,
                 )
             except httpx.HTTPStatusError:
                 # Do not treat HTTP errors as transient; re-raise for normal handling.

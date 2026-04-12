@@ -33,22 +33,41 @@ class SqliteWorkflowStore(AbstractWorkflowStore):
         db_path: str,
         poll_interval: float = 1.0,
         auto_migrate: bool = True,
+        single_connection: bool = False,
     ) -> None:
         self.db_path = db_path
         self.poll_interval = poll_interval
+        self._single_connection = single_connection
+        self._persistent_conn: sqlite3.Connection | None = None
         self._conditions: weakref.WeakValueDictionary[str, asyncio.Condition] = (
             weakref.WeakValueDictionary()
         )
+        if single_connection:
+            self._persistent_conn = self._open_nolock(db_path)
         if auto_migrate:
             self._run_migrations()
 
+    @staticmethod
+    def _open_nolock(db_path: str) -> sqlite3.Connection:
+        """Open a SQLite connection with file locking disabled.
+
+        Uses the ``unix-none`` VFS so that SQLite never issues ``fcntl``
+        lock calls.  Safe when the database is only accessed by a single
+        process (e.g. AgentCore session storage).
+        """
+        return sqlite3.connect(f"file:{db_path}?vfs=unix-none", uri=True)
+
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
-        conn = sqlite3.connect(self.db_path)
-        try:
-            yield conn
-        finally:
-            conn.close()
+        if self._single_connection:
+            assert self._persistent_conn is not None
+            yield self._persistent_conn
+        else:
+            conn = sqlite3.connect(self.db_path, timeout=30.0)
+            try:
+                yield conn
+            finally:
+                conn.close()
 
     def create_state_store(
         self,
@@ -58,7 +77,10 @@ class SqliteWorkflowStore(AbstractWorkflowStore):
         serializer: BaseSerializer | None = None,
     ) -> SqliteStateStore[Any]:
         store = SqliteStateStore(
-            db_path=self.db_path, run_id=run_id, state_type=state_type
+            db_path=self.db_path,
+            run_id=run_id,
+            state_type=state_type,
+            connection=self._persistent_conn,
         )
         if serialized_state is not None and serializer is not None:
             store._seed_from_serialized(serialized_state, serializer)
@@ -72,7 +94,11 @@ class SqliteWorkflowStore(AbstractWorkflowStore):
         return cond
 
     def _run_migrations(self) -> None:
-        self.run_migrations(self.db_path)
+        if self._persistent_conn is not None:
+            _run_migrations(self._persistent_conn)
+            self._persistent_conn.commit()
+        else:
+            self.run_migrations(self.db_path)
 
     @staticmethod
     def run_migrations(db_path: str) -> None:
@@ -80,7 +106,7 @@ class SqliteWorkflowStore(AbstractWorkflowStore):
 
         Safe to call multiple times — only applies migrations not yet applied.
         """
-        conn = sqlite3.connect(db_path)
+        conn = sqlite3.connect(db_path, timeout=30.0)
         try:
             _run_migrations(conn)
             conn.commit()

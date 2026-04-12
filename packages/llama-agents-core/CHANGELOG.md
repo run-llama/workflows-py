@@ -1,5 +1,11 @@
 # llama-agents-core
 
+## 0.8.5
+
+### Patch Changes
+
+- 7ad3049: Reduce full clones from github for config, repo validation, and sha discovery. Reduce dependencies on system git, preferring dulwich
+
 ## 0.8.4
 
 ### Patch Changes

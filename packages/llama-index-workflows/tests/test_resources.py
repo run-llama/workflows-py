@@ -56,13 +56,13 @@ class ThirdEvent(Event):
 
 class ChatMessage(BaseModel):
     @classmethod
-    def from_str(cls, role, content):  # type: ignore  # noqa: ANN001
+    def from_str(cls, role, content):  # noqa: ANN001
         return mock.MagicMock(content=content)
 
 
 class Memory(mock.MagicMock):
     @classmethod
-    def from_defaults(cls, *args, **kwargs):  # type: ignore  # noqa: ANN002, ANN003
+    def from_defaults(cls, *args, **kwargs):  # noqa: ANN002, ANN003
         return mock.MagicMock()
 
 
@@ -227,7 +227,7 @@ def test_resource_config_path_selector_error(
 async def test_resource() -> None:
     m = Memory.from_defaults("user_id_123", token_limit=60000)
 
-    def get_memory(*args, **kwargs) -> Memory:  # type: ignore  # noqa: ANN002, ANN003
+    def get_memory(*args, **kwargs) -> Memory:  # noqa: ANN002, ANN003
         return m
 
     class TestWorkflow(Workflow):
@@ -252,7 +252,7 @@ async def test_resource() -> None:
 async def test_resource_async() -> None:
     m = Memory.from_defaults("user_id_123", token_limit=60000)
 
-    async def get_memory(*args, **kwargs) -> Memory:  # type: ignore  # noqa: ANN002, ANN003
+    async def get_memory(*args, **kwargs) -> Memory:  # noqa: ANN002, ANN003
         return m
 
     class TestWorkflow(Workflow):
@@ -348,19 +348,19 @@ async def test_caching_behavior() -> None:
         ) -> StopEvent:
             global cc
             counter_thing.incr()
-            cc = counter_thing.counter  # type: ignore
+            cc = counter_thing.counter
             return StopEvent()
 
     wf_1 = TestWorkflow(disable_validation=True)
     await wf_1.run()
     assert (
-        cc == 2  # type: ignore
+        cc == 2
     )  # this is expected to be 2, as it is a cached resource shared by test_step and test_step_2, which means at test_step counter_thing.counter goes from 0 to 1 and at test_step_2 goes from 1 to 2
 
     wf_2 = TestWorkflow(disable_validation=True)
     await wf_2.run()
     assert (
-        cc == 2  # type: ignore
+        cc == 2
     )  # the cache is workflow-specific, so since wf_2 is different from wf_1, we expect no interference between the two
 
 
@@ -438,7 +438,7 @@ async def test_non_caching_behavior() -> None:
         ) -> StepEvent:
             global cc1
             counter_thing.incr()
-            cc1 = counter_thing.counter  # type: ignore
+            cc1 = counter_thing.counter
             return StepEvent()
 
         @step
@@ -451,13 +451,13 @@ async def test_non_caching_behavior() -> None:
         ) -> StopEvent:
             global cc2
             counter_thing.incr()
-            cc2 = counter_thing.counter  # type: ignore
+            cc2 = counter_thing.counter
             return StopEvent()
 
     wf_1 = TestWorkflow(disable_validation=True)
     await wf_1.run()
-    assert cc1 == 1  # type: ignore
-    assert cc2 == 1  # type: ignore
+    assert cc1 == 1
+    assert cc2 == 1
 
 
 @pytest.mark.asyncio
@@ -568,10 +568,10 @@ async def test_circular_resource_dependency_detection() -> None:
     # Create the cycle by modifying __annotations__ after creating the resources
     # This allows us to create mutual dependencies
 
-    def cyclic_factory_a(b: Annotated[B, "placeholder"]) -> A:  # type: ignore
+    def cyclic_factory_a(b: Annotated[B, "placeholder"]) -> A:
         return A()
 
-    def cyclic_factory_b(a: Annotated[A, "placeholder"]) -> B:  # type: ignore
+    def cyclic_factory_b(a: Annotated[A, "placeholder"]) -> B:
         return B()
 
     # Create resources
@@ -713,10 +713,10 @@ def test_validate_detects_circular_resource_dependency() -> None:
     class B:
         pass
 
-    def cyclic_factory_a(b: Annotated[B, "placeholder"]) -> A:  # type: ignore
+    def cyclic_factory_a(b: Annotated[B, "placeholder"]) -> A:
         return A()
 
-    def cyclic_factory_b(a: Annotated[A, "placeholder"]) -> B:  # type: ignore
+    def cyclic_factory_b(a: Annotated[A, "placeholder"]) -> B:
         return B()
 
     cyclic_res_a = Resource(cyclic_factory_a)

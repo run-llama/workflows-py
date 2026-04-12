@@ -1,11 +1,17 @@
+from __future__ import annotations
+
+from typing import Any
+
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
 from llama_agents.server._runtime.server_runtime import ServerRuntimeDecorator
 from llama_agents.server._store.abstract_workflow_store import AbstractWorkflowStore
 from workflows import Workflow
-from workflows.events import Event
+from workflows.events import Event, StartEvent, StopEvent
+from workflows.runtime.types.internal_state import BrokerState
 from workflows.runtime.types.plugin import (
     RegisteredWorkflow,
     Runtime,
+    WorkflowRunFunction,
 )
 from workflows.runtime.types.results import StepFunctionResult, StepWorkerState
 from workflows.runtime.types.step_function import (
@@ -34,6 +40,29 @@ def as_agentcore_async_task(
     return step_worker
 
 
+def as_agentcore_workflow_run(
+    app: BedrockAgentCoreApp, name: str, fn: WorkflowRunFunction
+) -> WorkflowRunFunction:
+    """Wrap the entire workflow run as an async task.
+
+    Keeps the container alive for the full workflow duration, not just
+    individual steps.
+    """
+
+    async def wrapper(
+        init_state: BrokerState,
+        start_event: StartEvent | None = None,
+        tags: dict[str, Any] | None = None,
+    ) -> StopEvent:
+        task_id = app.add_async_task(f"{name}.run")
+        try:
+            return await fn(init_state, start_event, tags)
+        finally:
+            app.complete_async_task(task_id)
+
+    return wrapper
+
+
 class AgentCoreRuntimeDecorator(ServerRuntimeDecorator):
     def __init__(
         self,
@@ -56,9 +85,10 @@ class AgentCoreRuntimeDecorator(ServerRuntimeDecorator):
             step_name: as_agentcore_async_task(self.app, f"{name}.{step_name}", step)
             for step_name, step in as_step_worker_functions(workflow).items()
         }
+        run_fn = create_workflow_run_function(workflow)
         registered = RegisteredWorkflow(
             steps=wrapped_steps,
-            workflow_run_fn=create_workflow_run_function(workflow),
+            workflow_run_fn=as_agentcore_workflow_run(self.app, name, run_fn),
             workflow=workflow,
         )
         id_ = id(workflow)

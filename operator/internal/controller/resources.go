@@ -69,6 +69,10 @@ const (
 	// Default rollout timeout in seconds (30 minutes)
 	DefaultRolloutTimeoutSeconds int32 = 1800
 
+	// Build artifact GC walks ReplicaSets up to this limit to discover
+	// referenced buildIds, so pin it rather than relying on the apps/v1 default.
+	DeploymentRevisionHistoryLimit int32 = 10
+
 	// Environment variable for rollout timeout configuration
 	EnvRolloutTimeoutSeconds = "LLAMA_DEPLOY_ROLLOUT_TIMEOUT_SECONDS"
 
@@ -76,6 +80,16 @@ const (
 	// image tags like "appserver-0.8.1". New tags are plain versions ("0.8.1").
 	appserverTagPrefix = "appserver-"
 )
+
+// buildJobName computes the Job name for a given deployment/buildId combo,
+// truncated to Kubernetes' 63-character name limit.
+func buildJobName(deploymentName, buildId string) string {
+	name := fmt.Sprintf("%s-build-%s", deploymentName, buildId)
+	if len(name) > 63 {
+		name = name[:63]
+	}
+	return name
+}
 
 // looksLikeFilePath provides a lightweight heuristic to determine if a
 // deployment file path refers to a file rather than a directory. It avoids
@@ -358,6 +372,55 @@ func computeBuildId(llamaDeploy *llamadeployv1.LlamaDeployment) string {
 	return hash[:16]
 }
 
+// supersedeStaleBuildJob cancels any in-flight build Job whose buildId has
+// been superseded by a new spec. Succeeded stale Jobs are preserved for the
+// A → B → A rollback-by-cache-hit path. A missing Job is a no-op (TTL may
+// have reaped it, or a prior reconcile deleted it).
+func (r *LlamaDeploymentReconciler) supersedeStaleBuildJob(
+	ctx context.Context,
+	llamaDeploy *llamadeployv1.LlamaDeployment,
+	newBuildId string,
+) error {
+	if llamaDeploy.Status.BuildId == "" || llamaDeploy.Status.BuildId == newBuildId {
+		return nil
+	}
+	if llamaDeploy.Status.BuildStatus != BuildStatusPending &&
+		llamaDeploy.Status.BuildStatus != BuildStatusRunning {
+		return nil
+	}
+
+	logger := log.FromContext(ctx)
+	staleBuildId := llamaDeploy.Status.BuildId
+	staleJobName := buildJobName(llamaDeploy.Name, staleBuildId)
+	staleJob := &batchv1.Job{}
+	getErr := r.Get(ctx, client.ObjectKey{Name: staleJobName, Namespace: llamaDeploy.Namespace}, staleJob)
+	switch {
+	case errors.IsNotFound(getErr):
+		return nil
+	case getErr != nil:
+		return fmt.Errorf("failed to check stale build job: %w", getErr)
+	case staleJob.Status.Succeeded > 0:
+		logger.V(1).Info("Prior build succeeded; leaving Job in place",
+			"staleBuildId", staleBuildId, "jobName", staleJobName)
+		return nil
+	}
+
+	logger.Info("Superseding in-flight build Job for previous buildId",
+		"staleBuildId", staleBuildId,
+		"newBuildId", newBuildId,
+		"jobName", staleJobName)
+	if err := r.Delete(ctx, staleJob,
+		client.PropagationPolicy(metav1.DeletePropagationBackground),
+	); err != nil && !errors.IsNotFound(err) {
+		return fmt.Errorf("failed to delete superseded build job: %w", err)
+	}
+	if r.Recorder != nil {
+		r.Recorder.Event(llamaDeploy, corev1.EventTypeNormal, PhaseBuilding,
+			fmt.Sprintf("Superseded stale build Job: %s", staleJobName))
+	}
+	return nil
+}
+
 // reconcileBuild ensures a build artifact exists for the current deployment inputs.
 // Returns the buildId if a build is ready, or ("", result, nil) if a build is in progress
 // and the caller should requeue.
@@ -388,11 +451,14 @@ func (r *LlamaDeploymentReconciler) reconcileBuild(ctx context.Context, llamaDep
 		return buildId, nil, nil
 	}
 
-	// Check if a build Job already exists for this buildId
-	jobName := fmt.Sprintf("%s-build-%s", llamaDeploy.Name, buildId)
-	if len(jobName) > 63 {
-		jobName = jobName[:63]
+	// If the spec advanced mid-build, cancel the stale in-flight Job so it
+	// doesn't race the new one uploading.
+	if err := r.supersedeStaleBuildJob(ctx, llamaDeploy, buildId); err != nil {
+		return "", nil, err
 	}
+
+	// Check if a build Job already exists for this buildId
+	jobName := buildJobName(llamaDeploy.Name, buildId)
 
 	existingJob := &batchv1.Job{}
 	err := r.Get(ctx, client.ObjectKey{Name: jobName, Namespace: llamaDeploy.Namespace}, existingJob)
@@ -532,12 +598,7 @@ func (r *LlamaDeploymentReconciler) createBuildJob(llamaDeploy *llamadeployv1.Ll
 
 	envFrom := r.commonEnvFrom(llamaDeploy)
 
-	// Use a short suffix of the buildId for the Job name to avoid collisions
-	// Job names must be <= 63 chars
-	jobName := fmt.Sprintf("%s-build-%s", llamaDeploy.Name, buildId)
-	if len(jobName) > 63 {
-		jobName = jobName[:63]
-	}
+	jobName := buildJobName(llamaDeploy.Name, buildId)
 
 	return &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
@@ -1044,6 +1105,7 @@ func (r *LlamaDeploymentReconciler) createDeploymentForLlama(llamaDeploy *llamad
 		Spec: appsv1.DeploymentSpec{
 			Replicas:                &replicas,
 			ProgressDeadlineSeconds: getRolloutTimeoutSeconds(),
+			RevisionHistoryLimit:    ptr(DeploymentRevisionHistoryLimit),
 			Selector: &metav1.LabelSelector{
 				MatchLabels: map[string]string{"app": llamaDeploy.Name},
 			},

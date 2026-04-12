@@ -1,5 +1,19 @@
 # llama-agents-control-plane
 
+## 0.10.5
+
+### Patch Changes
+
+- 7ad3049: Reduce full clones from github for config, repo validation, and sha discovery. Reduce dependencies on system git, preferring dulwich
+- Updated dependencies [7ad3049]
+  - llama-agents-core@0.8.5
+
+## 0.10.4
+
+### Patch Changes
+
+- 740ee9e: Add a grace window to build artifact GC (configurable via `BUILD_ARTIFACT_GC_GRACE_SECONDS`, default 75m) and parallelize its delete loop with bounded concurrency. `llamactl auth`'s non-idempotent key-creation POST now only retries on connect-phase errors (`ConnectError`, `ConnectTimeout`, `PoolTimeout`) so initial-connectivity blips are absorbed without risking duplicate keys from a read-timeout retry.
+
 ## 0.10.3
 
 ### Patch Changes

@@ -11,6 +11,7 @@ import subprocess
 
 import click
 from llama_agents.cli.commands.auth import validate_authenticated_profile
+from llama_agents.cli.param_types import DeploymentType, GitShaType
 from llama_agents.cli.styles import HEADER_COLOR, MUTED_COL, PRIMARY_COL, WARNING
 from llama_agents.core.schema.deployments import (
     INTERNAL_CODE_REPO_SCHEME,
@@ -94,7 +95,7 @@ def list_deployments(interactive: bool) -> None:
 
 @deployments.command("get")
 @global_options
-@click.argument("deployment_id", required=False)
+@click.argument("deployment_id", required=False, type=DeploymentType())
 @interactive_option
 def get_deployment(deployment_id: str | None, interactive: bool) -> None:
     """Get details of a specific deployment"""
@@ -178,7 +179,7 @@ def create_deployment(
 
 @deployments.command("configure-git-remote")
 @global_options
-@click.argument("deployment_id", required=False)
+@click.argument("deployment_id", required=False, type=DeploymentType())
 @interactive_option
 def configure_git_remote_cmd(deployment_id: str | None, interactive: bool) -> None:
     """Configure a git remote for a deployment.
@@ -227,7 +228,7 @@ def configure_git_remote_cmd(deployment_id: str | None, interactive: bool) -> No
 
 @deployments.command("delete")
 @global_options
-@click.argument("deployment_id", required=False)
+@click.argument("deployment_id", required=False, type=DeploymentType())
 @interactive_option
 def delete_deployment(deployment_id: str | None, interactive: bool) -> None:
     """Delete a deployment"""
@@ -260,7 +261,7 @@ def delete_deployment(deployment_id: str | None, interactive: bool) -> None:
 
 @deployments.command("edit")
 @global_options
-@click.argument("deployment_id", required=False)
+@click.argument("deployment_id", required=False, type=DeploymentType())
 @interactive_option
 def edit_deployment(deployment_id: str | None, interactive: bool) -> None:
     """Interactively edit a deployment"""
@@ -342,7 +343,7 @@ def _internal_push_refspec(git_ref: str | None) -> tuple[str, str]:
 
 @deployments.command("update")
 @global_options
-@click.argument("deployment_id", required=False)
+@click.argument("deployment_id", required=False, type=DeploymentType())
 @click.option(
     "--git-ref",
     help="Reference branch, tag, or commit SHA for the deployment. If not provided, the current reference and latest commit on it will be used.",
@@ -402,7 +403,7 @@ def refresh_deployment(
 
 @deployments.command("history")
 @global_options
-@click.argument("deployment_id", required=False)
+@click.argument("deployment_id", required=False, type=DeploymentType())
 @interactive_option
 def show_history(deployment_id: str | None, interactive: bool) -> None:
     """Show release history for a deployment."""
@@ -442,10 +443,12 @@ def show_history(deployment_id: str | None, interactive: bool) -> None:
         raise click.Abort()
 
 
-@deployments.command("rollback", hidden=True)
+@deployments.command("rollback")
 @global_options
-@click.argument("deployment_id", required=False)
-@click.option("--git-sha", required=False, help="Git SHA to roll back to")
+@click.argument("deployment_id", required=False, type=DeploymentType())
+@click.option(
+    "--git-sha", required=False, type=GitShaType(), help="Git SHA to roll back to"
+)
 @interactive_option
 def rollback(deployment_id: str | None, git_sha: str | None, interactive: bool) -> None:
     """Rollback a deployment to a previous git sha."""

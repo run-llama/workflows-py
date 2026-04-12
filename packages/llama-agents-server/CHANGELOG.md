@@ -1,5 +1,23 @@
 # llama-agents-server
 
+## 0.4.3
+
+### Patch Changes
+
+- 12bda18: Ensure single_connection=True prevents locking from happening
+
+## 0.4.2
+
+### Patch Changes
+
+- 3850844: Support single connection mode for sqlite
+
+## 0.4.1
+
+### Patch Changes
+
+- 9f52f40: Make the sqlite db more resliant to locking
+
 ## 0.4.0
 
 ### Minor Changes

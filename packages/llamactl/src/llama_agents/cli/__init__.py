@@ -3,6 +3,7 @@ import warnings
 
 from llama_agents.cli.commands.agentcore import agentcore
 from llama_agents.cli.commands.auth import auth
+from llama_agents.cli.commands.completion import completion
 from llama_agents.cli.commands.deployment import deployments
 from llama_agents.cli.commands.dev import dev
 from llama_agents.cli.commands.env import env_group
@@ -28,6 +29,7 @@ def main() -> None:
 
 __all__ = [
     "app",
+    "completion",
     "deployments",
     "auth",
     "serve",

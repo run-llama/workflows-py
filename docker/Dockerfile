@@ -3,11 +3,6 @@ FROM python:3.12-slim AS base
 
 COPY --from=ghcr.io/astral-sh/uv:0.7.20 /uv /uvx /bin/
 
-# Install system dependencies for development
-RUN apt-get update && apt-get install -y \
-    git \
-    && rm -rf /var/lib/apt/lists/*
-
 # Create a non-root user
 RUN groupadd --gid 1001 appgroup && \
     useradd --uid 1001 --gid appgroup --shell /bin/bash --create-home appuser
@@ -99,8 +94,9 @@ RUN uv build --package llama-agents-core --sdist
 
 FROM base AS appserver
 
-# Install Node.js and pnpm
+# Install Node.js, pnpm, and git for bootstrap-time git+https dependencies.
 RUN apt-get update && apt-get install -y \
+    git \
     curl \
     && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y nodejs \
