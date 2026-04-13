@@ -257,7 +257,7 @@ def up(ctx: click.Context) -> None:
             "-f",
             str(PROJECT_ROOT / "operator" / "Tiltfile"),
             "--",
-            f"--target={target}",
+            target,
         ],
     )
 
