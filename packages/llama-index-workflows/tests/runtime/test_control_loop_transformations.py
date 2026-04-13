@@ -79,6 +79,8 @@ from workflows.runtime.types.ticks import (
     WorkflowTick,
 )
 
+pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
+
 
 class MyTestEvent(Event):
     value: int

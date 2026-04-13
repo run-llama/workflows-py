@@ -35,7 +35,13 @@ from workflows.events import (
     WorkflowTimedOutEvent,
 )
 from workflows.plugins.basic import setting_run_id
-from workflows.retry_policy import ConstantDelayRetryPolicy, RetryPolicy
+from workflows.retry_policy import (
+    ConstantDelayRetryPolicy,
+    RetryPolicy,
+    retry_policy,
+    stop_before_delay,
+    wait_fixed,
+)
 from workflows.runtime.control_loop import control_loop
 from workflows.runtime.types.internal_state import BrokerState
 from workflows.runtime.types.plugin import RunContext, run_context
@@ -44,6 +50,8 @@ from workflows.runtime.types.ticks import TickAddEvent, TickCancelRun
 from workflows.workflow import Workflow
 
 from .conftest import MockRunAdapter, MockRuntime
+
+pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
 
 
 class IntermediateEvent(Event):
@@ -818,7 +826,9 @@ async def test_control_loop_retry_exhaustion_respects_total_time(
             self.observed_attempts.append(attempts)
             return self.retry_delay
 
-    policy = ElapsedTimeTrackingPolicy(retry_delay=retry_delay)
+    policy: ElapsedTimeTrackingPolicy = ElapsedTimeTrackingPolicy(
+        retry_delay=retry_delay
+    )
 
     class TrackedRetryWorkflow(Workflow):
         total_calls = 0
@@ -863,6 +873,39 @@ async def test_control_loop_retry_exhaustion_respects_total_time(
     # Attempts should increment: 1, 2, 3, 4
     expected_attempts = list(range(1, len(policy.observed_attempts) + 1))
     assert policy.observed_attempts == expected_attempts
+
+
+@pytest.mark.asyncio
+async def test_control_loop_stop_before_delay_uses_upcoming_sleep(
+    test_plugin_with_time_machine: tuple[MockRunAdapter, time_machine.Coordinates],
+) -> None:
+    """Test that stop_before_delay stops before the next sleep crosses the limit."""
+    test_plugin, _ = test_plugin_with_time_machine
+    retry_delay = 0.01
+
+    class AlwaysFailsWorkflow(Workflow):
+        attempt_count = 0
+
+        @step(
+            retry_policy=retry_policy(
+                wait=wait_fixed(retry_delay),
+                stop=stop_before_delay(0.03),
+            )
+        )
+        async def always_fails(self, ev: StartEvent) -> StopEvent:
+            self.attempt_count += 1
+            raise ValueError(f"fail #{self.attempt_count}")
+
+    wf = AlwaysFailsWorkflow(timeout=5.0)
+
+    with pytest.raises(ValueError, match="fail #3"):
+        await run_control_loop(
+            workflow=wf,
+            start_event=StartEvent(),
+            test_runtime=test_plugin,
+        )
+
+    assert wf.attempt_count == 3
 
 
 @pytest.mark.asyncio

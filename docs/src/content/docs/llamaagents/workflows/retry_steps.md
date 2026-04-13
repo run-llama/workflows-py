@@ -8,54 +8,144 @@ A step that fails its execution might result in the failure of the entire workfl
 expected and the execution can be safely retried. Think of a HTTP request that times out because of a transient
 congestion of the network, or an external API call that hits a rate limiter.
 
-For all those situation where you want the step to try again, you can use a "Retry Policy". A retry policy is an object
-that instructs the workflow to execute a step multiple times, dictating how much time has to pass before a new attempt.
-Policies take into consideration how much time passed since the first failure, how many consecutive failures happened
-and which was the last error occurred.
+For all those situations where you want the step to try again, you can use a **retry policy**. A retry policy
+instructs the workflow to execute a step multiple times, controlling how long to wait before each new attempt,
+which errors are retryable, and when to give up.
 
-To set a policy for a specific step, all you have to do is passing a policy object to the `@step` decorator:
+The retry module is built from three families of composable building blocks:
 
+- **Retry conditions** decide whether an exception is retryable.
+- **Wait strategies** decide how long to sleep before the next attempt.
+- **Stop conditions** decide when the workflow should give up.
+
+Compose them into a policy with `retry_policy(retry=..., wait=..., stop=...)` and
+pass the result to the `@step` decorator. Retry conditions support `|` and `&`,
+wait strategies support `+`, and stop conditions support `|` and `&`.
+
+## Basic usage
 
 ```python
 from workflows import Workflow, Context, step
 from workflows.events import StartEvent, StopEvent
-from workflows.retry_policy import ConstantDelayRetryPolicy
+from workflows.retry_policy import (
+    retry_policy,
+    stop_after_attempt,
+    wait_fixed,
+)
 
 
 class MyWorkflow(Workflow):
-    # ...more workflow definition...
-
-    # This policy will retry this step on failure every 5 seconds for at most 10 times
-    @step(retry_policy=ConstantDelayRetryPolicy(delay=5, maximum_attempts=10))
+    @step(
+        retry_policy=retry_policy(
+            wait=wait_fixed(5),
+            stop=stop_after_attempt(10),
+        )
+    )
     async def flaky_step(self, ctx: Context, ev: StartEvent) -> StopEvent:
         result = flaky_call()  # this might raise
         return StopEvent(result=result)
 ```
 
-For steps that call LLM providers or rate-limited APIs, exponential backoff is usually a
-better fit. `ExponentialBackoffRetryPolicy` increases the delay after each attempt and
-optionally adds random jitter to avoid thundering-herd effects:
+With no arguments, `retry_policy()` retries all exceptions up to 3 attempts
+with a 5-second fixed delay between each. Pass `retry=`, `wait=`, or `stop=`
+to customize any component.
+
+## Filtering exceptions
+
+Use retry conditions to control which exceptions are retried:
+
+```python
+from workflows import Workflow, step
+from workflows.events import StartEvent, StopEvent
+from workflows.retry_policy import (
+    retry_policy,
+    retry_if_exception_message,
+    retry_if_exception_type,
+    stop_after_attempt,
+    stop_before_delay,
+    wait_fixed,
+    wait_random,
+)
+
+
+class MyWorkflow(Workflow):
+    @step(
+        retry_policy=retry_policy(
+            retry=retry_if_exception_type((TimeoutError, ConnectionError))
+            | retry_if_exception_message(match="rate limit|temporarily unavailable"),
+            wait=wait_fixed(1) + wait_random(0, 1),
+            stop=stop_after_attempt(5) | stop_before_delay(30),
+        )
+    )
+    async def call_provider(self, ev: StartEvent) -> StopEvent:
+        result = await flaky_call()
+        return StopEvent(result=result)
+```
+
+The named combinators are equivalent if you prefer a more explicit style:
+
+```python
+from workflows.retry_policy import (
+    retry_policy,
+    retry_any,
+    retry_if_exception_message,
+    retry_if_exception_type,
+    stop_any,
+    stop_after_attempt,
+    stop_before_delay,
+    wait_combine,
+    wait_fixed,
+    wait_random,
+)
+
+policy = retry_policy(
+    retry=retry_any(
+        retry_if_exception_type((TimeoutError, ConnectionError)),
+        retry_if_exception_message(match="rate limit|temporarily unavailable"),
+    ),
+    wait=wait_combine(wait_fixed(1), wait_random(0, 1)),
+    stop=stop_any(stop_after_attempt(5), stop_before_delay(30)),
+)
+```
+
+## Exponential backoff
+
+For steps that call LLM providers or rate-limited APIs, exponential backoff avoids
+thundering-herd effects:
 
 ```python
 from workflows import Workflow, Context, step
 from workflows.events import StartEvent, StopEvent
-from workflows.retry_policy import ExponentialBackoffRetryPolicy
+from workflows.retry_policy import (
+    retry_policy,
+    stop_after_attempt,
+    wait_exponential_jitter,
+)
 
 
 class MyWorkflow(Workflow):
-    # Starts at 1s, doubles each retry, caps at 30s, up to 5 attempts
-    @step(retry_policy=ExponentialBackoffRetryPolicy(
-        initial_delay=1, multiplier=2, max_delay=30, maximum_attempts=5,
-    ))
+    @step(
+        retry_policy=retry_policy(
+            wait=wait_exponential_jitter(initial=1, exp_base=2, max=30, jitter=1),
+            stop=stop_after_attempt(5),
+        )
+    )
     async def call_llm(self, ctx: Context, ev: StartEvent) -> StopEvent:
         result = await llm_call()  # this might raise on rate-limit
         return StopEvent(result=result)
 ```
 
-You can see the [API docs](/python/workflows-api-reference/retry_policy/) for a detailed description of the policies
-available in the framework. If you can't find a policy that's suitable for your use case, you can easily write a
-custom one. The only requirement for custom policies is to write a Python class that respects the `RetryPolicy`
-protocol. In other words, your custom policy class must have a method with the following signature:
+## Full API reference
+
+The module exposes many more retry conditions, wait strategies, and stop conditions
+than shown here. See the [API reference](/python/workflows-api-reference/retry_policy/)
+for the complete list of building blocks and their parameters.
+
+## Custom retry policies
+
+If the composable API doesn't cover your use case, you can write a custom policy.
+The only requirement is a class with a `next` method matching the `RetryPolicy`
+protocol:
 
 ```python
 def next(
@@ -64,7 +154,9 @@ def next(
     ...
 ```
 
-For example, this is a retry policy that's excited about the weekend and only retries a step if it's Friday:
+Return the number of seconds to wait before retrying, or `None` to stop.
+
+For example, this policy only retries on Fridays:
 
 ```python
 from datetime import datetime
@@ -76,8 +168,33 @@ class RetryOnFridayPolicy:
         self, elapsed_time: float, attempts: int, error: Exception
     ) -> Optional[float]:
         if datetime.today().strftime("%A") == "Friday":
-            # retry in 5 seconds
-            return 5
-        # tell the workflow we don't want to retry
-        return None
+            return 5  # retry in 5 seconds
+        return None  # don't retry
+```
+
+## Deprecated convenience constructors
+
+:::caution
+`ConstantDelayRetryPolicy` and `ExponentialBackoffRetryPolicy` predate the
+composable API and are kept for backwards compatibility only. Prefer
+`retry_policy(...)` with explicit retry, wait, and stop arguments.
+:::
+
+```python
+from workflows.retry_policy import ConstantDelayRetryPolicy
+
+# Deprecated — equivalent to:
+#   retry_policy(wait=wait_fixed(5), stop=stop_after_attempt(10))
+policy = ConstantDelayRetryPolicy(delay=5, maximum_attempts=10)
+```
+
+```python
+from workflows.retry_policy import ExponentialBackoffRetryPolicy
+
+# Deprecated — equivalent to:
+#   retry_policy(wait=wait_random_exponential(multiplier=1, exp_base=2, max=30),
+#                stop=stop_after_attempt(5))
+policy = ExponentialBackoffRetryPolicy(
+    initial_delay=1, multiplier=2, max_delay=30, maximum_attempts=5,
+)
 ```
