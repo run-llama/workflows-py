@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import click
-from llama_agents.cli.param_types import ProfileType, ProjectType
+from llama_agents.cli.param_types import OrgType, ProfileType, ProjectType
 from llama_agents.cli.styles import (
     ACTIVE_INDICATOR,
     HEADER_COLOR,
@@ -286,11 +286,52 @@ def me() -> None:
         raise click.Abort()
 
 
+# Organizations commands
+@auth.command("organizations")
+@global_options
+def list_organizations() -> None:
+    """List organizations available to the current profile"""
+    try:
+        auth_svc = _get_service().current_auth_service()
+        if not probe_organizations_support():
+            rprint(f"[{WARNING}]This server does not support organizations[/]")
+            return
+
+        organizations = _list_organizations(auth_svc)
+        if not organizations:
+            rprint(f"[{WARNING}]No organizations found[/]")
+            return
+
+        table = Table(show_edge=False, box=None, header_style=f"bold {HEADER_COLOR}")
+        table.add_column("  Org ID", style=PRIMARY_COL)
+        table.add_column("Name", style=MUTED_COL)
+        table.add_column("Default", style=MUTED_COL)
+
+        for org in organizations:
+            indicator = Text()
+            if org.is_default:
+                indicator.append("* ", style=ACTIVE_INDICATOR)
+            else:
+                indicator.append("  ")
+            indicator.append(org.org_id)
+            table.add_row(indicator, org.org_name, "yes" if org.is_default else "")
+
+        console.print(table)
+
+    except Exception as e:
+        rprint(f"[red]Error: {e}[/red]")
+        raise click.Abort()
+
+
 # Projects commands
 @auth.command("project")
 @click.argument("project_id", required=False, type=ProjectType())
 @click.option(
-    "--org", "org_id", default=None, help="Organization ID to scope projects to"
+    "--org",
+    "org_id",
+    default=None,
+    type=OrgType(),
+    help="Organization ID to scope projects to",
 )
 @interactive_option
 @global_options

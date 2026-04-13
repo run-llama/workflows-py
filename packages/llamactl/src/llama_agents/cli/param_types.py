@@ -45,6 +45,20 @@ def _fetch_projects() -> list[CompletionItem]:
     ]
 
 
+def _fetch_organizations() -> list[CompletionItem]:
+    from llama_agents.cli.client import get_control_plane_client
+
+    client = get_control_plane_client()
+    organizations = asyncio.run(client.list_organizations())
+    return [
+        CompletionItem(
+            o.org_id,
+            help=f"{o.org_name}{' (default)' if o.is_default else ''}",
+        )
+        for o in organizations
+    ]
+
+
 def _fetch_deployment_history(deployment_id: str) -> list[CompletionItem]:
     from llama_agents.cli.client import get_project_client
 
@@ -97,6 +111,15 @@ class ProjectType(click.ParamType):
         self, ctx: click.Context, param: click.Parameter, incomplete: str
     ) -> list[CompletionItem]:
         return _filter(_safe_fetch(_fetch_projects), incomplete)
+
+
+class OrgType(click.ParamType):
+    name = "org"
+
+    def shell_complete(
+        self, ctx: click.Context, param: click.Parameter, incomplete: str
+    ) -> list[CompletionItem]:
+        return _filter(_safe_fetch(_fetch_organizations), incomplete)
 
 
 class EnvironmentType(click.ParamType):
