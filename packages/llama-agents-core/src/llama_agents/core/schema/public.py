@@ -9,6 +9,7 @@ class Capabilities:
     """Known capability identifiers advertised by the server."""
 
     CODE_PUSH: Capability = "code_push"
+    ORGANIZATIONS: Capability = "organizations"
 
 
 class VersionResponse(Base):
