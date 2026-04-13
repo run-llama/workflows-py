@@ -1,7 +1,16 @@
 # Tiltfile for llama-agents local development
-# Requires a kind cluster named "kind" (context: kind-kind)
+# Supports kind (default) and docker-desktop targets.
+# Pass target via: tilt up -- --target=docker-desktop
 
-allow_k8s_contexts('kind-kind')
+config.define_string('target', args=True, usage='Cluster target: kind or docker-desktop')
+cfg = config.parse()
+target = cfg.get('target', 'kind')
+
+K8S_CONTEXTS = {
+    'kind': 'kind-kind',
+    'docker-desktop': 'docker-desktop',
+}
+allow_k8s_contexts(K8S_CONTEXTS[target])
 
 # ---------------------------------------------------------------------------
 # Docker images
@@ -35,13 +44,19 @@ docker_build(
 
 # App server — used by the operator at runtime (not in helm-rendered YAML).
 # The operator reads repo/tag from separate env vars, so Tilt can't auto-inject.
-# We build with a fixed tag and load into kind manually.
+# We build with a fixed tag and load into the cluster manually (kind only).
 APPSERVER_TAG = 'tilt-dev'
 APPSERVER_IMG = 'llama-agents-appserver:%s' % APPSERVER_TAG
 
+if target == 'kind':
+    _appserver_cmd = 'docker build -t %s -f ../docker/Dockerfile --target appserver .. && kind load docker-image %s --name kind' % (APPSERVER_IMG, APPSERVER_IMG)
+else:
+    # docker-desktop shares the Docker daemon — no load step needed
+    _appserver_cmd = 'docker build -t %s -f ../docker/Dockerfile --target appserver ..' % APPSERVER_IMG
+
 local_resource(
     'appserver-image',
-    cmd='docker build -t %s -f ../docker/Dockerfile --target appserver .. && kind load docker-image %s --name kind' % (APPSERVER_IMG, APPSERVER_IMG),
+    cmd=_appserver_cmd,
     deps=[
         '../packages/',
         '../docker/Dockerfile',
@@ -57,7 +72,7 @@ local_resource(
 # Prometheus Operator + Prometheus instance for ServiceMonitor-based scraping.
 # Installed outside Tilt's resource management to avoid label conflicts.
 local(
-    'tilt/scripts/install-prometheus.sh',
+    'tilt/scripts/install-prometheus.sh %s' % K8S_CONTEXTS[target],
     quiet=True,
 )
 
@@ -141,7 +156,7 @@ k8s_resource(
 # ---------------------------------------------------------------------------
 
 # Prune orphaned containerd snapshots inside the kind node every 6 hours.
-# Tilt and `kind load` create new content-addressed image layers on every
-# rebuild but never remove old ones, so overlayfs grows unbounded.
-k8s_yaml('tilt/k8s-manifests/kind-gc-cronjob.yaml')
-k8s_resource('kind-gc', labels=['infra'])
+# Only relevant for kind — its containerd layers grow unbounded.
+if target == 'kind':
+    k8s_yaml('tilt/k8s-manifests/kind-gc-cronjob.yaml')
+    k8s_resource('kind-gc', labels=['infra'])
