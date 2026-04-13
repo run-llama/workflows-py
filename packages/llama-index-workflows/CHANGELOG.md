@@ -1,5 +1,11 @@
 # llama-index-workflows
 
+## 2.18.0
+
+### Minor Changes
+
+- 43ff242: Add `Context.get_step_context()` static method to retrieve the step context without a `ctx` parameter in the step signature
+
 ## 2.17.3
 
 ### Patch Changes

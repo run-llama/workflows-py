@@ -1,5 +1,18 @@
 # llamactl
 
+## 0.7.0
+
+### Minor Changes
+
+- e8b8f47: feat: add support for organizations
+- e08c17c: Add shell tab-completion support with `llamactl completion generate` and `llamactl completion install`
+
+### Patch Changes
+
+- Updated dependencies [e8b8f47]
+  - llama-agents-core@0.9.0
+  - llama-agents-appserver@0.10.5
+
 ## 0.6.9
 
 ### Patch Changes
