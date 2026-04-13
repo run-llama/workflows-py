@@ -1,5 +1,16 @@
 # llama-agents-control-plane
 
+## 0.11.0
+
+### Minor Changes
+
+- e8b8f47: feat: add support for organizations
+
+### Patch Changes
+
+- Updated dependencies [e8b8f47]
+  - llama-agents-core@0.9.0
+
 ## 0.10.5
 
 ### Patch Changes

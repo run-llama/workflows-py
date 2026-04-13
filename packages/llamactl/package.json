@@ -1,6 +1,6 @@
 {
   "name": "llamactl",
-  "version": "0.6.9",
+  "version": "0.7.0",
   "private": false,
   "dependencies": {
     "llama-agents-core": "workspace:*",
