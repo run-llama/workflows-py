@@ -5,9 +5,13 @@
 """
 Local development environment for cloud_llama_deploy.
 
-  up     — create kind cluster (if needed) and start tilt
+  up     — create/ensure cluster and start tilt
   down   — tear down tilt resources, retaining data
-  down --delete — also delete the kind cluster
+  down --delete — also delete the kind cluster (kind target only)
+
+Targets:
+  kind            — (default) creates a kind cluster
+  docker-desktop  — uses Docker Desktop's built-in Kubernetes
 """
 
 import os
@@ -19,8 +23,13 @@ from textwrap import dedent
 import click
 
 PROJECT_ROOT = Path(__file__).parent.parent.absolute()
-CLUSTER_NAME = "kind"
 NAMESPACE = "llama-agents"
+
+TARGETS = ("kind", "docker-desktop")
+K8S_CONTEXTS = {
+    "kind": "kind-kind",
+    "docker-desktop": "docker-desktop",
+}
 
 
 def run(
@@ -36,24 +45,29 @@ def run(
     return result
 
 
-def cluster_exists() -> bool:
+# ---------------------------------------------------------------------------
+# kind helpers
+# ---------------------------------------------------------------------------
+
+
+def kind_cluster_exists() -> bool:
     result = run(["kind", "get", "clusters"], check=False, capture=True)
-    return CLUSTER_NAME in result.stdout
+    return "kind" in result.stdout
 
 
-def ensure_cluster() -> None:
-    if cluster_exists():
+def ensure_kind_cluster() -> None:
+    if kind_cluster_exists():
         result = run(
-            ["kind", "export", "kubeconfig", "--name", CLUSTER_NAME],
+            ["kind", "export", "kubeconfig", "--name", "kind"],
             check=False,
             capture=True,
         )
         if result.returncode == 0:
             return
-        print(f"Cluster '{CLUSTER_NAME}' exists but is broken, recreating...")
-        run(["kind", "delete", "cluster", "--name", CLUSTER_NAME])
+        print("Cluster 'kind' exists but is broken, recreating...")
+        run(["kind", "delete", "cluster", "--name", "kind"])
 
-    print(f"Creating kind cluster '{CLUSTER_NAME}'...")
+    print("Creating kind cluster 'kind'...")
 
     kind_config = dedent("""\
         kind: Cluster
@@ -88,7 +102,7 @@ def ensure_cluster() -> None:
                 "create",
                 "cluster",
                 "--name",
-                CLUSTER_NAME,
+                "kind",
                 "--config",
                 config_path,
             ]
@@ -96,10 +110,45 @@ def ensure_cluster() -> None:
     finally:
         os.unlink(config_path)
 
-    install_ingress_controller()
+    install_ingress_controller("kind")
 
 
-def install_ingress_controller() -> None:
+# ---------------------------------------------------------------------------
+# docker-desktop helpers
+# ---------------------------------------------------------------------------
+
+
+def ensure_docker_desktop_cluster() -> None:
+    context = K8S_CONTEXTS["docker-desktop"]
+    result = run(
+        ["kubectl", "--context", context, "cluster-info"],
+        check=False,
+        capture=True,
+    )
+    if result.returncode != 0:
+        print(
+            f"Kubernetes context '{context}' is not reachable.\n"
+            "Enable Kubernetes in Docker Desktop → Settings → Kubernetes.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    # Switch to the docker-desktop context
+    run(["kubectl", "config", "use-context", context])
+    install_ingress_controller("docker-desktop")
+
+
+# ---------------------------------------------------------------------------
+# shared helpers
+# ---------------------------------------------------------------------------
+
+INGRESS_MANIFESTS = {
+    "kind": "https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/kind/deploy.yaml",
+    "docker-desktop": "https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/cloud/deploy.yaml",
+}
+
+
+def install_ingress_controller(target: str) -> None:
     result = run(
         ["kubectl", "get", "namespace", "ingress-nginx"], check=False, capture=True
     )
@@ -107,14 +156,7 @@ def install_ingress_controller() -> None:
         return
 
     print("Installing nginx ingress controller...")
-    run(
-        [
-            "kubectl",
-            "apply",
-            "-f",
-            "https://raw.githubusercontent.com/kubernetes/ingress-nginx/main/deploy/static/provider/kind/deploy.yaml",
-        ]
-    )
+    run(["kubectl", "apply", "-f", INGRESS_MANIFESTS[target]])
 
     import time
 
@@ -152,25 +194,45 @@ def install_ingress_controller() -> None:
 
 
 @click.group()
-def cli() -> None:
+@click.option(
+    "--target",
+    type=click.Choice(TARGETS),
+    default="kind",
+    envvar="DEV_TARGET",
+    show_default=True,
+    help="Kubernetes target cluster.",
+)
+@click.pass_context
+def cli(ctx: click.Context, target: str) -> None:
     """Local development environment for cloud_llama_deploy."""
+    ctx.ensure_object(dict)
+    ctx.obj["target"] = target
 
 
 @cli.command()
-def up() -> None:
-    """Create kind cluster (if needed) and start tilt."""
-    version_cmds = {
-        "kind": ["kind", "--version"],
+@click.pass_context
+def up(ctx: click.Context) -> None:
+    """Create/ensure cluster and start tilt."""
+    target: str = ctx.obj["target"]
+
+    # Check required tools
+    version_cmds: dict[str, list[str]] = {
         "kubectl": ["kubectl", "version", "--client"],
         "docker": ["docker", "--version"],
         "tilt": ["tilt", "version"],
     }
+    if target == "kind":
+        version_cmds["kind"] = ["kind", "--version"]
+
     for tool, cmd in version_cmds.items():
         if run(cmd, check=False, capture=True).returncode != 0:
             print(f"Missing required tool: {tool}", file=sys.stderr)
             sys.exit(1)
 
-    ensure_cluster()
+    if target == "kind":
+        ensure_kind_cluster()
+    else:
+        ensure_docker_desktop_cluster()
 
     # Ensure namespace exists
     result = run(["kubectl", "get", "namespace", NAMESPACE], check=False, capture=True)
@@ -182,35 +244,67 @@ def up() -> None:
             "Note: no .env file found. GitHub integration requires GITHUB_APP_PRIVATE_KEY, GITHUB_APP_CLIENT_ID, GITHUB_APP_NAME, GITHUB_APP_SECRET."
         )
 
+    ingress_port = "8090" if target == "kind" else "80"
     print("Starting tilt...")
     print("  API:     http://localhost:8011")
     print("  Tilt UI: http://localhost:10350")
-    print("  Ingress: *.127.0.0.1.nip.io:8090")
-    os.execvp("tilt", ["tilt", "up", "-f", str(PROJECT_ROOT / "operator" / "Tiltfile")])
+    print(f"  Ingress: *.127.0.0.1.nip.io:{ingress_port}")
+    os.execvp(
+        "tilt",
+        [
+            "tilt",
+            "up",
+            "-f",
+            str(PROJECT_ROOT / "operator" / "Tiltfile"),
+            "--",
+            f"--target={target}",
+        ],
+    )
 
 
 @cli.command()
 @click.option("--delete", is_flag=True, help="Also delete the kind cluster")
-def down(delete: bool) -> None:
-    """Tear down tilt resources. Use --delete to also remove the cluster."""
+@click.pass_context
+def down(ctx: click.Context, delete: bool) -> None:
+    """Tear down tilt resources. Use --delete to also remove the cluster (kind only)."""
+    target: str = ctx.obj["target"]
+
     run(
         ["tilt", "down", "-f", str(PROJECT_ROOT / "operator" / "Tiltfile")], check=False
     )
 
     if delete:
-        if cluster_exists():
-            print(f"Deleting kind cluster '{CLUSTER_NAME}'...")
-            run(["kind", "delete", "cluster", "--name", CLUSTER_NAME])
+        if target != "kind":
+            print("--delete only applies to the kind target", file=sys.stderr)
+            return
+        if kind_cluster_exists():
+            print("Deleting kind cluster 'kind'...")
+            run(["kind", "delete", "cluster", "--name", "kind"])
 
 
 @cli.command()
-def status() -> None:
+@click.pass_context
+def status(ctx: click.Context) -> None:
     """Show cluster and deployment status."""
-    if not cluster_exists():
-        print(f"No kind cluster '{CLUSTER_NAME}' found")
-        return
+    target: str = ctx.obj["target"]
+    context = K8S_CONTEXTS[target]
 
-    run(["kind", "export", "kubeconfig", "--name", CLUSTER_NAME])
+    if target == "kind":
+        if not kind_cluster_exists():
+            print("No kind cluster 'kind' found")
+            return
+        run(["kind", "export", "kubeconfig", "--name", "kind"])
+    else:
+        result = run(
+            ["kubectl", "--context", context, "cluster-info"],
+            check=False,
+            capture=True,
+        )
+        if result.returncode != 0:
+            print(f"Kubernetes context '{context}' is not reachable")
+            return
+        run(["kubectl", "config", "use-context", context])
+
     run(["kubectl", "get", "pods", "-n", NAMESPACE], check=False)
 
 

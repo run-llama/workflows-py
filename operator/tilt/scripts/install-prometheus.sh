@@ -5,7 +5,7 @@ set -euo pipefail
 
 PROM_OP_VERSION="v0.89.0"
 NAMESPACE="monitoring"
-CONTEXT="kind-kind"
+CONTEXT="${1:-kind-kind}"
 KUBECTL="kubectl --context=$CONTEXT"
 
 # Create namespace if needed
