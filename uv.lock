@@ -2793,6 +2793,7 @@ dev = [
     { name = "pyyaml" },
     { name = "starlette" },
     { name = "structlog" },
+    { name = "tenacity" },
     { name = "time-machine" },
     { name = "uvicorn" },
 ]
@@ -2820,6 +2821,7 @@ dev = [
     { name = "pyyaml", specifier = ">=6.0.2" },
     { name = "starlette", specifier = ">=0.39.0" },
     { name = "structlog", specifier = ">=25.5.0" },
+    { name = "tenacity", specifier = ">=9.1.2" },
     { name = "time-machine", specifier = ">=2.19.0,<3.0.0" },
     { name = "uvicorn", specifier = ">=0.32.0" },
 ]
@@ -2844,11 +2846,6 @@ dependencies = [
     { name = "typing-extensions" },
 ]
 
-[package.optional-dependencies]
-agentcore = [
-    { name = "boto3" },
-]
-
 [package.dev-dependencies]
 dev = [
     { name = "pytest" },
@@ -2864,7 +2861,6 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "aiohttp", specifier = ">=3.12.14" },
-    { name = "boto3", marker = "extra == 'agentcore'", specifier = ">=1.35.0" },
     { name = "click", specifier = ">=8.2.1" },
     { name = "copier", specifier = ">=9.10.2" },
     { name = "llama-agents-agentcore", editable = "packages/llama-agents-agentcore" },
@@ -2879,7 +2875,6 @@ requires-dist = [
     { name = "typing-extensions", specifier = ">=4.15.0" },
     { name = "typing-extensions", marker = "python_full_version < '3.11'", specifier = ">=4.15.0" },
 ]
-provides-extras = ["agentcore"]
 
 [package.metadata.requires-dev]
 dev = [

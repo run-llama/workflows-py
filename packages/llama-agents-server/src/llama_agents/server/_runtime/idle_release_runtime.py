@@ -172,22 +172,19 @@ class IdleReleaseDecorator(BaseRuntimeDecorator):
     async def _release_idle_handler(self, run_id: str) -> None:
         """Release an idle handler from memory."""
         async with self._reload_lock(run_id):
-            while True:
-                handlers = await self._store.query(HandlerQuery(run_id_in=[run_id]))
-                if len(handlers) != 1 or handlers[0].idle_since is None:
-                    return
-                elapsed = (
-                    datetime.now(timezone.utc) - handlers[0].idle_since
-                ).total_seconds()
-                if elapsed < self._idle_timeout:
-                    await asyncio.sleep(max(0.0, self._idle_timeout - elapsed))
-                    continue
-                if run_id not in self._active_run_ids:
-                    return
-                self._active_run_ids.discard(run_id)
-                self._abort_inner_run(run_id)
-                logger.info(f"Released idle handler [run_id={run_id}] from memory")
+            handlers = await self._store.query(HandlerQuery(run_id_in=[run_id]))
+            if len(handlers) != 1 or handlers[0].idle_since is None:
                 return
+            elapsed = (
+                datetime.now(timezone.utc) - handlers[0].idle_since
+            ).total_seconds()
+            if elapsed < self._idle_timeout:
+                return
+            if run_id not in self._active_run_ids:
+                return
+            self._active_run_ids.discard(run_id)
+            self._abort_inner_run(run_id)
+            logger.info(f"Released idle handler [run_id={run_id}] from memory")
 
     def _abort_inner_run(self, run_id: str) -> None:
         """Cancel the inner runtime's control loop task for a run."""
