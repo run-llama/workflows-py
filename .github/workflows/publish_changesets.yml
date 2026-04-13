@@ -281,9 +281,9 @@ jobs:
       - name: Trigger downstream version bump
         if: github.ref == 'refs/heads/main' && vars.DOWNSTREAM_DISPATCH_REPO != ''
         env:
-          GH_TOKEN: ${{ secrets.DOWNSTREAM_DISPATCH_TOKEN }}
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
           DISPATCH_REPO: ${{ vars.DOWNSTREAM_DISPATCH_REPO }}
         run: |
-          PACKAGES=$(jq -c '[.pypi[] | {name: .package, version: .version}]' publish-plan.json)
+          PACKAGES=$(jq -c '[.pypi[] | {name: .package, version: .version}] + [.docker_manifests[] | {name: .image, version: .version}] + [.helm[] | {name: .package, version: .version}]' publish-plan.json)
           gh api "repos/$DISPATCH_REPO/dispatches" \
             --input - <<< "{\"event_type\":\"bump-cloud-llama-deploy\",\"client_payload\":{\"packages\":$PACKAGES}}"
