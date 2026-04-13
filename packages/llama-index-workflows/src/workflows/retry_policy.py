@@ -7,7 +7,14 @@ import random
 import re
 import warnings
 from collections.abc import Callable
+from datetime import timedelta
 from typing import Protocol, cast, runtime_checkable
+
+time_unit_type = int | float | timedelta
+
+
+def _to_seconds(value: time_unit_type) -> float:
+    return float(value.total_seconds() if isinstance(value, timedelta) else value)
 
 
 @runtime_checkable
@@ -69,7 +76,7 @@ class RetryPolicy(Protocol):
 class RetryCondition(Protocol):
     """Predicate that decides whether an exception is retryable."""
 
-    def __call__(self, error: Exception) -> bool: ...
+    def __call__(self, error: BaseException) -> bool: ...
 
 
 class WaitStrategy(Protocol):
@@ -89,7 +96,7 @@ class StopCondition(Protocol):
 class _RetryConditionBase:
     """Base class for retry predicates that support tenacity-style composition."""
 
-    def __call__(self, error: Exception) -> bool:
+    def __call__(self, error: BaseException) -> bool:
         raise NotImplementedError
 
     def __and__(self, other: RetryCondition) -> retry_all:
@@ -164,10 +171,10 @@ class retry_if_exception(_RetryConditionBase):
         ```
     """
 
-    def __init__(self, predicate: Callable[[Exception], bool]) -> None:
+    def __init__(self, predicate: Callable[[BaseException], bool]) -> None:
         self.predicate = predicate
 
-    def __call__(self, error: Exception) -> bool:
+    def __call__(self, error: BaseException) -> bool:
         return self.predicate(error)
 
 
@@ -186,7 +193,8 @@ class retry_if_exception_type(retry_if_exception):
 
     def __init__(
         self,
-        exception_types: type[Exception] | tuple[type[Exception], ...] = Exception,
+        exception_types: type[BaseException]
+        | tuple[type[BaseException], ...] = Exception,
     ) -> None:
         self.exception_types = exception_types
         super().__init__(lambda error: isinstance(error, exception_types))
@@ -207,7 +215,8 @@ class retry_if_not_exception_type(retry_if_exception):
 
     def __init__(
         self,
-        exception_types: type[Exception] | tuple[type[Exception], ...] = Exception,
+        exception_types: type[BaseException]
+        | tuple[type[BaseException], ...] = Exception,
     ) -> None:
         self.exception_types = exception_types
         super().__init__(lambda error: not isinstance(error, exception_types))
@@ -260,7 +269,7 @@ class retry_if_exception_message(_RetryConditionBase):
         self.match = match
         self._pattern = _compile_pattern(match)
 
-    def __call__(self, error: Exception) -> bool:
+    def __call__(self, error: BaseException) -> bool:
         error_message = str(error)
         if self.message is not None:
             return error_message == self.message
@@ -280,7 +289,7 @@ class retry_if_not_exception_message(retry_if_exception_message):
         ```
     """
 
-    def __call__(self, error: Exception) -> bool:
+    def __call__(self, error: BaseException) -> bool:
         return not super().__call__(error)
 
 
@@ -301,11 +310,12 @@ class retry_if_exception_cause_type(_RetryConditionBase):
 
     def __init__(
         self,
-        exception_types: type[Exception] | tuple[type[Exception], ...] = Exception,
+        exception_types: type[BaseException]
+        | tuple[type[BaseException], ...] = Exception,
     ) -> None:
         self.exception_types = exception_types
 
-    def __call__(self, error: Exception) -> bool:
+    def __call__(self, error: BaseException) -> bool:
         current: BaseException | None = error
         while current is not None:
             cause = current.__cause__
@@ -333,7 +343,7 @@ class retry_any(_RetryConditionBase):
     def __init__(self, *retries: RetryCondition) -> None:
         self.retries = retries
 
-    def __call__(self, error: Exception) -> bool:
+    def __call__(self, error: BaseException) -> bool:
         return any(retry(error) for retry in self.retries)
 
 
@@ -355,7 +365,7 @@ class retry_all(_RetryConditionBase):
     def __init__(self, *retries: RetryCondition) -> None:
         self.retries = retries
 
-    def __call__(self, error: Exception) -> bool:
+    def __call__(self, error: BaseException) -> bool:
         return all(retry(error) for retry in self.retries)
 
 
@@ -371,7 +381,7 @@ class retry_always(_RetryConditionBase):
         ```
     """
 
-    def __call__(self, error: Exception) -> bool:
+    def __call__(self, error: BaseException) -> bool:
         return True
 
 
@@ -388,7 +398,7 @@ class retry_never(_RetryConditionBase):
         ```
     """
 
-    def __call__(self, error: Exception) -> bool:
+    def __call__(self, error: BaseException) -> bool:
         return False
 
 
@@ -402,8 +412,8 @@ class wait_fixed(_WaitStrategyBase):
         ```
     """
 
-    def __init__(self, wait: float) -> None:
-        self.wait = wait
+    def __init__(self, wait: time_unit_type) -> None:
+        self.wait = _to_seconds(wait)
 
     def __call__(self, attempts: int, *, seed: int | None = None) -> float:
         return self.wait
@@ -437,15 +447,15 @@ class wait_exponential(_WaitStrategyBase):
 
     def __init__(
         self,
-        multiplier: float = 1.0,
-        exp_base: float = 2.0,
-        max: float = 60.0,
-        min: float = 0.0,
+        multiplier: int | float = 1.0,
+        exp_base: int | float = 2.0,
+        max: time_unit_type = 60.0,
+        min: time_unit_type = 0.0,
     ) -> None:
-        self.multiplier = multiplier
-        self.exp_base = exp_base
-        self.max = max
-        self.min = min
+        self.multiplier = float(multiplier)
+        self.exp_base = float(exp_base)
+        self.max = _to_seconds(max)
+        self.min = _to_seconds(min)
 
     def __call__(self, attempts: int, *, seed: int | None = None) -> float:
         return max(
@@ -469,13 +479,13 @@ class wait_incrementing(_WaitStrategyBase):
 
     def __init__(
         self,
-        start: float = 0.0,
-        increment: float = 100.0,
-        max: float = float("inf"),
+        start: time_unit_type = 0.0,
+        increment: time_unit_type = 100.0,
+        max: time_unit_type = float("inf"),
     ) -> None:
-        self.start = start
-        self.increment = increment
-        self.max = max
+        self.start = _to_seconds(start)
+        self.increment = _to_seconds(increment)
+        self.max = _to_seconds(max)
 
     def __call__(self, attempts: int, *, seed: int | None = None) -> float:
         result = self.start + (self.increment * attempts)
@@ -495,9 +505,9 @@ class wait_random(_WaitStrategyBase):
         ```
     """
 
-    def __init__(self, min: float = 0.0, max: float = 1.0) -> None:
-        self.min = min
-        self.max = max
+    def __init__(self, min: time_unit_type = 0.0, max: time_unit_type = 1.0) -> None:
+        self.min = _to_seconds(min)
+        self.max = _to_seconds(max)
 
     def __call__(self, attempts: int, *, seed: int | None = None) -> float:
         rng = random.Random(seed) if seed is not None else random
@@ -550,15 +560,15 @@ class wait_random_exponential(_WaitStrategyBase):
 
     def __init__(
         self,
-        multiplier: float = 1.0,
-        exp_base: float = 2.0,
-        max: float = 60.0,
-        min: float = 0.0,
+        multiplier: int | float = 1.0,
+        exp_base: int | float = 2.0,
+        max: time_unit_type = 60.0,
+        min: time_unit_type = 0.0,
     ) -> None:
-        self.multiplier = multiplier
-        self.exp_base = exp_base
-        self.max = max
-        self.min = min
+        self.multiplier = float(multiplier)
+        self.exp_base = float(exp_base)
+        self.max = _to_seconds(max)
+        self.min = _to_seconds(min)
 
     def __call__(self, attempts: int, *, seed: int | None = None) -> float:
         rng = random.Random(seed) if seed is not None else random
@@ -570,10 +580,10 @@ class wait_random_exponential(_WaitStrategyBase):
 
 
 def wait_full_jitter(
-    multiplier: float = 1.0,
-    exp_base: float = 2.0,
-    max: float = 60.0,
-    min: float = 0.0,
+    multiplier: int | float = 1.0,
+    exp_base: int | float = 2.0,
+    max: time_unit_type = 60.0,
+    min: time_unit_type = 0.0,
 ) -> wait_random_exponential:
     """
     Alias for `wait_random_exponential`.
@@ -663,8 +673,8 @@ class stop_after_delay(_StopConditionBase):
         ```
     """
 
-    def __init__(self, max_delay: float) -> None:
-        self.max_delay = max_delay
+    def __init__(self, max_delay: time_unit_type) -> None:
+        self.max_delay = _to_seconds(max_delay)
 
     def __call__(
         self, attempts: int, elapsed_time: float, *, upcoming_sleep: float = 0.0
@@ -685,8 +695,8 @@ class stop_before_delay(_StopConditionBase):
         ```
     """
 
-    def __init__(self, max_delay: float) -> None:
-        self.max_delay = max_delay
+    def __init__(self, max_delay: time_unit_type) -> None:
+        self.max_delay = _to_seconds(max_delay)
 
     def __call__(
         self, attempts: int, elapsed_time: float, *, upcoming_sleep: float = 0.0

@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 import inspect
+import types as builtin_types
+import typing
 from collections.abc import Callable
-from typing import Protocol, cast
+from typing import Protocol, Union, cast
 
 import pytest
 from tenacity import retry_all as tenacity_retry_all
@@ -80,114 +82,126 @@ class NamedCallable(Protocol):
     def __call__(self, *args: object, **kwargs: object) -> object: ...
 
 
-CONFORMANCE_CASES = cast(
-    list[tuple[str, NamedCallable, NamedCallable | None, bool]],
+CONFORMANCE_CASES: list[tuple[NamedCallable, NamedCallable | None, bool]] = cast(
+    list[tuple[NamedCallable, NamedCallable | None, bool]],
     [
-        ("wait_fixed", wait_fixed, tenacity_wait_fixed, True),
-        ("wait_none", wait_none, tenacity_wait_none, True),
-        ("wait_exponential", wait_exponential, tenacity_wait_exponential, True),
-        ("wait_incrementing", wait_incrementing, tenacity_wait_incrementing, True),
-        ("wait_random", wait_random, tenacity_wait_random, True),
-        (
-            "wait_exponential_jitter",
-            wait_exponential_jitter,
-            tenacity_wait_exponential_jitter,
-            True,
-        ),
-        (
-            "wait_random_exponential",
-            wait_random_exponential,
-            tenacity_wait_random_exponential,
-            True,
-        ),
-        ("wait_chain", wait_chain, tenacity_wait_chain, True),
-        ("wait_combine", wait_combine, tenacity_wait_combine, True),
-        ("stop_after_attempt", stop_after_attempt, tenacity_stop_after_attempt, True),
-        ("stop_after_delay", stop_after_delay, tenacity_stop_after_delay, True),
-        ("stop_any", stop_any, tenacity_stop_any, True),
-        ("stop_all", stop_all, tenacity_stop_all, True),
-        ("stop_before_delay", stop_before_delay, tenacity_stop_before_delay, True),
-        ("stop_never", stop_never, None, True),
-        ("retry_if_exception", retry_if_exception, tenacity_retry_if_exception, True),
-        (
-            "retry_if_exception_type",
-            retry_if_exception_type,
-            tenacity_retry_if_exception_type,
-            True,
-        ),
-        (
-            "retry_if_not_exception_type",
-            retry_if_not_exception_type,
-            tenacity_retry_if_not_exception_type,
-            True,
-        ),
-        (
-            "retry_if_exception_message",
-            retry_if_exception_message,
-            tenacity_retry_if_exception_message,
-            True,
-        ),
-        (
-            "retry_if_not_exception_message",
-            retry_if_not_exception_message,
-            tenacity_retry_if_not_exception_message,
-            True,
-        ),
-        (
-            "retry_if_exception_cause_type",
-            retry_if_exception_cause_type,
-            tenacity_retry_if_exception_cause_type,
-            True,
-        ),
-        ("retry_any", retry_any, tenacity_retry_any, True),
-        ("retry_all", retry_all, tenacity_retry_all, True),
-        ("retry_always", retry_always, None, True),
-        ("retry_never", retry_never, None, True),
-        (
-            "retry_unless_exception_type",
-            retry_unless_exception_type,
-            tenacity_retry_unless_exception_type,
-            True,
-        ),
+        (wait_fixed, tenacity_wait_fixed, True),
+        (wait_none, tenacity_wait_none, True),
+        (wait_exponential, tenacity_wait_exponential, True),
+        (wait_incrementing, tenacity_wait_incrementing, True),
+        (wait_random, tenacity_wait_random, True),
+        (wait_exponential_jitter, tenacity_wait_exponential_jitter, True),
+        (wait_random_exponential, tenacity_wait_random_exponential, True),
+        (wait_chain, tenacity_wait_chain, True),
+        (wait_combine, tenacity_wait_combine, True),
+        (stop_after_attempt, tenacity_stop_after_attempt, True),
+        (stop_after_delay, tenacity_stop_after_delay, True),
+        (stop_any, tenacity_stop_any, True),
+        (stop_all, tenacity_stop_all, True),
+        (stop_before_delay, tenacity_stop_before_delay, True),
+        (stop_never, None, True),
+        (retry_if_exception, tenacity_retry_if_exception, True),
+        (retry_if_exception_type, tenacity_retry_if_exception_type, True),
+        (retry_if_not_exception_type, tenacity_retry_if_not_exception_type, True),
+        (retry_if_exception_message, tenacity_retry_if_exception_message, True),
+        (retry_if_not_exception_message, tenacity_retry_if_not_exception_message, True),
+        (retry_if_exception_cause_type, tenacity_retry_if_exception_cause_type, True),
+        (retry_any, tenacity_retry_any, True),
+        (retry_all, tenacity_retry_all, True),
+        (retry_always, None, True),
+        (retry_never, None, True),
+        (retry_unless_exception_type, tenacity_retry_unless_exception_type, True),
     ],
 )
 
 
-def _parameter_names(callable_obj: Callable[..., object]) -> set[str]:
-    return {
+def _parameter_types(
+    callable_obj: Callable[..., object],
+) -> dict[str, type | object]:
+    """Return {name: resolved_annotation} for all non-self parameters."""
+    names = {
         name for name in inspect.signature(callable_obj).parameters if name != "self"
     }
+    target = callable_obj.__init__ if isinstance(callable_obj, type) else callable_obj  # type: ignore[misc]
+    try:
+        hints = typing.get_type_hints(target)
+    except Exception:
+        hints = {}
+    hints.pop("return", None)
+    return {name: hints.get(name, inspect.Parameter.empty) for name in names}
 
 
-@pytest.mark.parametrize("expected_name, ours, theirs, strict", CONFORMANCE_CASES)
+def _normalize(tp: object) -> object:
+    """Normalize type representations so ``X | Y`` equals ``Union[X, Y]``
+    and ``type[X]`` equals ``typing.Type[X]``, etc."""
+    # Callable parameter lists are represented as plain lists
+    if isinstance(tp, list):
+        return tuple(_normalize(a) for a in tp)
+    origin = typing.get_origin(tp)
+    if origin is Union or isinstance(tp, builtin_types.UnionType):
+        return frozenset(_normalize(a) for a in typing.get_args(tp))
+    if origin is not None:
+        return (origin, tuple(_normalize(a) for a in typing.get_args(tp)))
+    return tp
+
+
+def _types_match(ours: object, theirs: object) -> bool:
+    """Check our annotation matches tenacity's.
+
+    Normalizes union representations so ``X | Y`` equals ``Union[X, Y]``.
+    Accepts Protocol-vs-concrete-base-class mismatches for compositor *args
+    (we use Protocols, tenacity uses inheritance).
+    """
+    if ours == theirs:
+        return True
+    if _normalize(ours) == _normalize(theirs):
+        return True
+    # Our Protocol types vs tenacity's base classes are an intentional
+    # design choice (structural typing vs inheritance), not type drift.
+    return (
+        isinstance(ours, type)
+        and isinstance(theirs, type)
+        and getattr(ours, "_is_protocol", False)
+    )
+
+
+@pytest.mark.parametrize(
+    "ours, theirs, strict",
+    CONFORMANCE_CASES,
+    ids=[c[0].__name__ for c in CONFORMANCE_CASES],
+)
 def test_retry_policy_signatures_align_with_tenacity(
-    expected_name: str,
     ours: NamedCallable,
     theirs: NamedCallable | None,
     strict: bool,
 ) -> None:
-    assert ours.__name__ == expected_name, (
-        f"expected local callable name {expected_name!r}, got {ours.__name__!r}"
-    )
+    name = ours.__name__
+    ours_params = _parameter_types(ours)
+    theirs_params = {} if theirs is None else _parameter_types(theirs)
 
-    ours_names = _parameter_names(ours)
-    theirs_names = set() if theirs is None else _parameter_names(theirs)
+    ours_names = set(ours_params)
+    theirs_names = set(theirs_params)
 
     if strict:
         assert ours_names == theirs_names, (
-            f"{expected_name}: expected exact parameter match with tenacity; "
+            f"{name}: expected exact parameter match with tenacity; "
             f"missing={sorted(theirs_names - ours_names)}, "
             f"unexpected={sorted(ours_names - theirs_names)}"
         )
-        return
+    else:
+        assert ours_names <= theirs_names, (
+            f"{name}: expected our parameter names to be a subset of tenacity; "
+            f"unexpected={sorted(ours_names - theirs_names)}"
+        )
 
-    assert ours_names <= theirs_names, (
-        f"{expected_name}: expected our parameter names to be a subset of tenacity; "
-        f"unexpected={sorted(ours_names - theirs_names)}"
-    )
+    for param in sorted(ours_names & theirs_names):
+        assert _types_match(ours_params[param], theirs_params[param]), (
+            f"{name}.{param}: type mismatch — "
+            f"ours={ours_params[param]!r}, theirs={theirs_params[param]!r}"
+        )
 
 
 def test_wait_full_jitter_alias_matches_wait_random_exponential_signature() -> None:
-    assert _parameter_names(wait_full_jitter) == _parameter_names(
+    assert _parameter_types(wait_full_jitter) == _parameter_types(
         wait_random_exponential
     )
