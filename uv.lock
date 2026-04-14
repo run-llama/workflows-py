@@ -2276,7 +2276,7 @@ dev = [
 
 [[package]]
 name = "llama-agents-client"
-version = "0.3.4"
+version = "0.3.5"
 source = { editable = "packages/llama-agents-client" }
 dependencies = [
     { name = "httpx" },
@@ -2599,7 +2599,7 @@ dev = [
 
 [[package]]
 name = "llama-agents-server"
-version = "0.4.4"
+version = "0.4.5"
 source = { editable = "packages/llama-agents-server" }
 dependencies = [
     { name = "httpx" },
@@ -2764,7 +2764,7 @@ dev = [
 
 [[package]]
 name = "llama-index-workflows"
-version = "2.18.0"
+version = "2.19.0"
 source = { editable = "packages/llama-index-workflows" }
 dependencies = [
     { name = "llama-index-instrumentation" },
