@@ -12,7 +12,7 @@ on:
 
 jobs:
   publish-openapi:
-    if: github.repository == 'run-llama/workflows-py'
+    if: github.repository == 'run-llama/llama-agents'
     runs-on: ubuntu-latest
     permissions:
       contents: write

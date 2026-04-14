@@ -30,7 +30,7 @@ jobs:
     name: Plan release
     runs-on: ubuntu-latest
     environment: release
-    if: github.repository == 'run-llama/workflows-py' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev')
+    if: github.repository == 'run-llama/llama-agents' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/dev')
     outputs:
       has_work: ${{ steps.plan.outputs.has_work }}
       pypi: ${{ steps.plan.outputs.pypi }}
