@@ -6,7 +6,7 @@ title: Observability
 
 Observability is key for debugging workflows. Beyond just adding `print()` statements, `workflows` ship with an extensive instrumentation system that tracks the input and output of every workflow step.
 
-Furthermore, you can leverage this instrumentation system to add observability to any function outside of workflow steps! More in-depth examples for all of this information can be found in the [examples folder for observability](https://github.com/run-llama/workflows-py/tree/main/examples/observability).
+Furthermore, you can leverage this instrumentation system to add observability to any function outside of workflow steps! More in-depth examples for all of this information can be found in the [examples folder for observability](https://github.com/run-llama/llama-agents/tree/main/examples/observability).
 
 ## OpenTelemetry Integration
 
@@ -47,13 +47,13 @@ Workflows integrate seamlessly with popular observability platforms:
 
 [Arize Phoenix](https://docs.arize.com/phoenix/integrations/frameworks/llamaindex/llamaindex-workflows-tracing) provides real-time tracing and visualization for your workflows.
 
-You can read more in the [example notebook.](https://github.com/run-llama/workflows-py/blob/main/examples/observability/workflows_observablitiy_arize_phoenix.ipynb)
+You can read more in the [example notebook.](https://github.com/run-llama/llama-agents/blob/main/examples/observability/workflows_observablitiy_arize_phoenix.ipynb)
 
 ### Langfuse
 
 [Langfuse](https://github.com/langfuse/langfuse) directly integrates with the instrumentation system that ships with workflows.
 
-You can read more in the [example notebook.](https://github.com/run-llama/workflows-py/blob/main/examples/observability/workflows_observablitiy_langfuse.ipynb)
+You can read more in the [example notebook.](https://github.com/run-llama/llama-agents/blob/main/examples/observability/workflows_observablitiy_langfuse.ipynb)
 
 ### Opik
 
@@ -89,4 +89,4 @@ def example_fn(data: str) -> None:
 
 When you call instrumented functions, all spans and events are automatically captured by any configured tracing backend.
 
-See complete examples in the [examples/observability](https://github.com/run-llama/workflows-py/tree/main/examples/observability) directory.
+See complete examples in the [examples/observability](https://github.com/run-llama/llama-agents/tree/main/examples/observability) directory.
