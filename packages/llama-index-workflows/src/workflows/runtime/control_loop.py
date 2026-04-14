@@ -706,7 +706,7 @@ def _process_step_result_tick(
                     f"Unknown result type returned from step function ({tick.step_name}): {type(result.result)}"
                 )
         elif isinstance(result, StepWorkerFailed):
-            # Schedulea a retry if permitted, otherwise fail the workflow
+            # Schedule a retry if permitted, otherwise fail the workflow
             retries = worker_state.config.retry_policy
             failures = this_execution.attempts + 1
             elapsed_time = result.failed_at - this_execution.first_attempt_at

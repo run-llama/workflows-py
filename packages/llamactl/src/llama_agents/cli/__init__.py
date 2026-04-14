@@ -1,15 +1,14 @@
-import importlib.util
 import warnings
 
-from llama_agents.cli.commands.agentcore import agentcore
-from llama_agents.cli.commands.auth import auth
-from llama_agents.cli.commands.completion import completion
-from llama_agents.cli.commands.deployment import deployments
-from llama_agents.cli.commands.dev import dev
-from llama_agents.cli.commands.env import env_group
-from llama_agents.cli.commands.init import init
-from llama_agents.cli.commands.pkg import pkg
-from llama_agents.cli.commands.serve import serve
+import llama_agents.cli.commands.agentcore  # noqa: F401
+import llama_agents.cli.commands.auth  # noqa: F401
+import llama_agents.cli.commands.completion  # noqa: F401
+import llama_agents.cli.commands.deployment  # noqa: F401
+import llama_agents.cli.commands.dev  # noqa: F401
+import llama_agents.cli.commands.env  # noqa: F401
+import llama_agents.cli.commands.init  # noqa: F401
+import llama_agents.cli.commands.pkg  # noqa: F401
+import llama_agents.cli.commands.serve  # noqa: F401
 
 from .app import app
 
@@ -27,25 +26,7 @@ def main() -> None:
     app()
 
 
-__all__ = [
-    "app",
-    "completion",
-    "deployments",
-    "auth",
-    "serve",
-    "init",
-    "env_group",
-    "pkg",
-    "dev",
-    "agentcore",
-]
-
-# Conditionally import agentcore command if boto3 is available
-# (requires installing with: pip install llamactl[agentcore])
-if importlib.util.find_spec("boto3") is not None:
-    from llama_agents.cli.commands.agentcore import agentcore
-
-    __all__ += ["agentcore"]
+__all__ = ["app"]
 
 
 if __name__ == "__main__":

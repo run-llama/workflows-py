@@ -3,10 +3,10 @@ site_url: https://developers.llamaindex.ai/python/workflows-api-reference/
 extra:
   homepage: /
 extra_css:
-  - css/style.css
-  - css/algolia.css
+  - _static/css/custom.css
+  - _static/css/algolia.css
 extra_javascript:
-  - javascript/algolia.js
+  - _static/js/algolia.js
 markdown_extensions:
   - attr_list
   - admonition
@@ -24,7 +24,9 @@ plugins:
   - mkdocstrings:
       handlers:
         python:
+          load_external_modules: false
           options:
+            allow_inspection: false
             docstring_options:
               ignore_init_summary: true
             docstring_style: google
@@ -33,6 +35,8 @@ plugins:
               - "!^__init__"
             members_order: source
             merge_init_into_class: false
+            show_symbol_type_heading: true
+            show_symbol_type_toc: true
             separate_signature: true
             show_root_full_path: true
             show_root_heading: false

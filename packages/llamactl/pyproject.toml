@@ -41,11 +41,6 @@ dependencies = [
   "typing-extensions>=4.15.0 ; python_full_version < '3.11'"
 ]
 
-[project.optional-dependencies]
-agentcore = [
-  "boto3>=1.35.0"
-]
-
 [project.scripts]
 llamactl = "llama_agents.cli:main"
 

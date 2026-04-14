@@ -18,7 +18,7 @@ pip install llama-index-workflows
 - **Events**: Typed events that steps receive and emit (including `StartEvent`, `StopEvent`, and custom events).
 - **Decorators**: The `@step` decorator and related utilities for defining workflow steps.
 - **Handler**: `WorkflowHandler`, used to await results and stream intermediate events.
-- **Retry policy**: `RetryPolicy` configuration for per-step retry behavior.
+- **Retry policy**: `RetryPolicy`, retry conditions, wait strategies, and stop conditions for per-step retry behavior.
 - **Errors**: Exception types raised by the runtime (validation, configuration, and runtime errors).
 - **Resource**: Resource and dependency injection primitives used by steps.
 

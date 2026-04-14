@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import inspect
 from typing import (
     TYPE_CHECKING,
@@ -17,7 +18,7 @@ from typing import (
     overload,
 )
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel
 
 from .errors import WorkflowValidationError
 from .resource import ResourceDefinition
@@ -35,9 +36,8 @@ WorkflowGraphCheck = Literal["reachability", "terminal_event", "dead_end"]
 StepGraphCheck = Literal["reachability", "dead_end"]
 
 
-class StepConfig(BaseModel):
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-
+@dataclasses.dataclass
+class StepConfig:
     accepted_events: list[Any]
     event_name: str
     return_types: list[Any]
@@ -45,11 +45,8 @@ class StepConfig(BaseModel):
     num_workers: int
     retry_policy: RetryPolicy | None
     resources: list[ResourceDefinition]
-    context_state_type: type[BaseModel] | None = Field(default=None)
-    skip_graph_checks: list[StepGraphCheck] = Field(
-        default_factory=list,
-        description="Graph validation checks to skip for this step (e.g. 'reachability').",
-    )
+    context_state_type: type[BaseModel] | None = None
+    skip_graph_checks: list[StepGraphCheck] = dataclasses.field(default_factory=list)
 
 
 P = ParamSpec("P")
