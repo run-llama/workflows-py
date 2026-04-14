@@ -278,10 +278,32 @@ jobs:
           event-type: publish-openapi
           client-payload: '{"tag": "${{ steps.server-version.outputs.tag }}"}'
 
+      # The default app-token above is scoped to this repo only, so it
+      # can't dispatch to the downstream repo. Mint a second token
+      # scoped to DOWNSTREAM_DISPATCH_REPO for the dispatch call.
+      - name: Parse downstream dispatch repo
+        id: dispatch-repo
+        if: github.ref == 'refs/heads/main' && vars.DOWNSTREAM_DISPATCH_REPO != ''
+        env:
+          DISPATCH_REPO: ${{ vars.DOWNSTREAM_DISPATCH_REPO }}
+        run: |
+          echo "owner=${DISPATCH_REPO%%/*}" >> "$GITHUB_OUTPUT"
+          echo "repo=${DISPATCH_REPO##*/}" >> "$GITHUB_OUTPUT"
+
+      - name: Generate downstream dispatch token
+        id: dispatch-token
+        if: github.ref == 'refs/heads/main' && vars.DOWNSTREAM_DISPATCH_REPO != ''
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547 # v1
+        with:
+          app-id: ${{ secrets.CI_BOT_APP_ID }}
+          private-key: ${{ secrets.CI_BOT_PRIVATE_KEY }}
+          owner: ${{ steps.dispatch-repo.outputs.owner }}
+          repositories: ${{ steps.dispatch-repo.outputs.repo }}
+
       - name: Trigger downstream version bump
         if: github.ref == 'refs/heads/main' && vars.DOWNSTREAM_DISPATCH_REPO != ''
         env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          GH_TOKEN: ${{ steps.dispatch-token.outputs.token }}
           DISPATCH_REPO: ${{ vars.DOWNSTREAM_DISPATCH_REPO }}
         run: |
           PACKAGES=$(jq -c '[.pypi[] | {name: .package, version: .version}] + [.docker_manifests[] | {name: .image, version: .version}] + [.helm[] | {name: .package, version: .version}]' publish-plan.json)
