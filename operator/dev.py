@@ -193,27 +193,34 @@ def install_ingress_controller(target: str) -> None:
     )
 
 
-@click.group()
-@click.option(
+target_option = click.option(
     "--target",
     type=click.Choice(TARGETS),
-    default="kind",
+    default=None,
     envvar="DEV_TARGET",
-    show_default=True,
-    help="Kubernetes target cluster.",
+    help="Kubernetes target cluster. [default: kind]",
 )
+
+
+def resolve_target(ctx: click.Context, target: str | None) -> str:
+    return target or ctx.obj.get("target") or "kind"
+
+
+@click.group()
+@target_option
 @click.pass_context
-def cli(ctx: click.Context, target: str) -> None:
+def cli(ctx: click.Context, target: str | None) -> None:
     """Local development environment for cloud_llama_deploy."""
     ctx.ensure_object(dict)
     ctx.obj["target"] = target
 
 
 @cli.command()
+@target_option
 @click.pass_context
-def up(ctx: click.Context) -> None:
+def up(ctx: click.Context, target: str | None) -> None:
     """Create/ensure cluster and start tilt."""
-    target: str = ctx.obj["target"]
+    target = resolve_target(ctx, target)
 
     # Check required tools
     version_cmds: dict[str, list[str]] = {
@@ -264,13 +271,22 @@ def up(ctx: click.Context) -> None:
 
 @cli.command()
 @click.option("--delete", is_flag=True, help="Also delete the kind cluster")
+@target_option
 @click.pass_context
-def down(ctx: click.Context, delete: bool) -> None:
+def down(ctx: click.Context, delete: bool, target: str | None) -> None:
     """Tear down tilt resources. Use --delete to also remove the cluster (kind only)."""
-    target: str = ctx.obj["target"]
+    target = resolve_target(ctx, target)
 
     run(
-        ["tilt", "down", "-f", str(PROJECT_ROOT / "operator" / "Tiltfile")], check=False
+        [
+            "tilt",
+            "down",
+            "-f",
+            str(PROJECT_ROOT / "operator" / "Tiltfile"),
+            "--",
+            target,
+        ],
+        check=False,
     )
 
     if delete:
@@ -283,10 +299,11 @@ def down(ctx: click.Context, delete: bool) -> None:
 
 
 @cli.command()
+@target_option
 @click.pass_context
-def status(ctx: click.Context) -> None:
+def status(ctx: click.Context, target: str | None) -> None:
     """Show cluster and deployment status."""
-    target: str = ctx.obj["target"]
+    target = resolve_target(ctx, target)
     context = K8S_CONTEXTS[target]
 
     if target == "kind":
