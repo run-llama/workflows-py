@@ -1,5 +1,14 @@
 # llama-agents-agentcore
 
+## 0.8.17
+
+### Patch Changes
+
+- 44f444f: Add ServerRuntimeDecorator to chain
+- Updated dependencies [e8b8f47]
+  - llama-agents-core@0.9.0
+  - llama-agents-appserver@0.10.5
+
 ## 0.8.16
 
 ### Patch Changes

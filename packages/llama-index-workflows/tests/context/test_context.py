@@ -4,7 +4,10 @@
 from __future__ import annotations
 
 import asyncio
+import gc
 import json
+import weakref
+from typing import cast
 
 import pytest
 from pydantic import BaseModel
@@ -16,6 +19,7 @@ from workflows.context.context import (
     _warn_is_running_in_step,
 )
 from workflows.context.external_context import ExternalContext
+from workflows.context.internal_context import InternalContext
 from workflows.context.serializers import JsonSerializer
 from workflows.context.state_store import (
     DictState,
@@ -775,6 +779,119 @@ def test_deserialize_state_from_dict_empty_dict_state() -> None:
 
     assert isinstance(result, DictState)
     assert len(list(result.items())) == 0
+
+
+# ============================================================================
+# Context.get_step_context() Tests
+# ============================================================================
+
+
+@pytest.mark.asyncio
+async def test_get_step_context_outside_step_raises() -> None:
+    """Calling Context.get_step_context() outside a step should raise WorkflowRuntimeError."""
+    with pytest.raises(WorkflowRuntimeError, match="may only be called from within"):
+        Context.get_step_context()
+
+
+@pytest.mark.asyncio
+async def test_get_step_context_inside_step() -> None:
+    """Context.get_step_context() should return the step's context inside a step."""
+    captured_ctx = None
+
+    class TestWorkflow(Workflow):
+        @step
+        async def my_step(self, ev: StartEvent) -> StopEvent:
+            nonlocal captured_ctx
+            captured_ctx = Context.get_step_context()
+            return StopEvent(result="done")
+
+    wf = TestWorkflow()
+    result = await wf.run()
+    assert result == "done"
+    assert captured_ctx is not None
+    # The returned context should be in internal face state
+    assert isinstance(captured_ctx._face, InternalContext)
+
+
+@pytest.mark.asyncio
+async def test_get_step_context_matches_ctx_parameter() -> None:
+    """Context.get_step_context() should return the same Context as the ctx parameter."""
+    ctx_from_param = None
+    ctx_from_get_step_context = None
+
+    class TestWorkflow(Workflow):
+        @step
+        async def my_step(self, ctx: Context, ev: StartEvent) -> StopEvent:
+            nonlocal ctx_from_param, ctx_from_get_step_context
+            ctx_from_param = ctx
+            ctx_from_get_step_context = Context.get_step_context()
+            return StopEvent(result="done")
+
+    wf = TestWorkflow()
+    await wf.run()
+    assert ctx_from_param is ctx_from_get_step_context
+
+
+@pytest.mark.asyncio
+async def test_get_step_context_supports_wait_for_event() -> None:
+    """Context.get_step_context() should return a context that supports wait_for_event."""
+
+    class ResumeEvent(Event):
+        value: str = "resumed"
+
+    class TestWorkflow(Workflow):
+        @step
+        async def waiting_step(self, ev: StartEvent) -> StopEvent:
+            ctx = Context.get_step_context()
+            result = await ctx.wait_for_event(
+                ResumeEvent,
+                waiter_event=InputRequiredEvent(),
+            )
+            return StopEvent(result=result.value)
+
+    wf = TestWorkflow()
+    handler = wf.run()
+
+    async for ev in handler.stream_events():
+        if isinstance(ev, InputRequiredEvent):
+            handler.ctx.send_event(ResumeEvent(value="hello"))
+
+    result = await handler
+    assert result == "hello"
+
+
+@pytest.mark.asyncio
+async def test_get_step_context_does_not_pin_workflow() -> None:
+    """InternalContextVar should not pin the Workflow via timer handle context snapshots."""
+    handles: list[asyncio.TimerHandle] = []
+
+    class TinyWorkflow(Workflow):
+        @step
+        async def only(self, ev: StartEvent) -> StopEvent:
+            ctx = Context.get_step_context()
+            assert ctx is not None
+            # Schedule a long-lived timer that snapshots the current ContextVars
+            handles.append(asyncio.get_running_loop().call_later(3600, lambda: None))
+            return StopEvent(result="done")
+
+    refs: list[weakref.ReferenceType[Workflow]] = []
+    try:
+        for _ in range(5):
+            wf = TinyWorkflow()
+            refs.append(cast(weakref.ReferenceType[Workflow], weakref.ref(wf)))
+            await WorkflowTestRunner(wf).run()
+            del wf
+
+        for _ in range(3):
+            gc.collect()
+
+        assert all(r() is None for r in refs), (
+            f"{sum(r() is not None for r in refs)} workflows pinned by "
+            "InternalContextVar in TimerHandle context"
+        )
+    finally:
+        for h in handles:
+            h.cancel()
 
 
 def test_deserialize_state_from_dict_defaults_to_dict_state() -> None:

@@ -587,6 +587,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
+ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app/src:/app
 
 # llama-agents-agentcore discovers workflows from pyproject.toml at startup

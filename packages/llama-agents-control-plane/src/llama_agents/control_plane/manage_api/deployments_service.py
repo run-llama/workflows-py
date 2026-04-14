@@ -42,10 +42,13 @@ from overrides import override
 logger = logging.getLogger(__name__)
 
 
+DEFAULT_ORG = schema.OrgSummary(org_id="default", org_name="Default", is_default=True)
+
+
 class PublicDeploymentService(AbstractPublicDeploymentsService):
     @override
     async def get_version(self) -> schema.VersionResponse:
-        capabilities: list[schema.Capability] = []
+        capabilities: list[schema.Capability] = [schema.Capabilities.ORGANIZATIONS]
         if code_repo_storage is not None:
             capabilities.append(schema.Capabilities.CODE_PUSH)
         return schema.VersionResponse(
@@ -71,7 +74,13 @@ class DeploymentService(AbstractDeploymentsService):
         return deployment
 
     @override
-    async def get_projects(self) -> schema.ProjectsListResponse:
+    async def get_organizations(self) -> schema.OrganizationsListResponse:
+        return schema.OrganizationsListResponse(organizations=[DEFAULT_ORG])
+
+    @override
+    async def get_projects(
+        self, org_id: str | None = None
+    ) -> schema.ProjectsListResponse:
         return schema.ProjectsListResponse(
             projects=await k8s_client.get_projects_with_deployment_count()
         )

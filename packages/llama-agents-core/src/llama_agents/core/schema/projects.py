@@ -5,12 +5,27 @@ from pydantic import model_validator
 from .base import Base
 
 
+class OrgSummary(Base):
+    """Summary of an organization."""
+
+    org_id: str
+    org_name: str
+    is_default: bool = False
+
+
+class OrganizationsListResponse(Base):
+    """Response model for listing organizations."""
+
+    organizations: list[OrgSummary]
+
+
 class ProjectSummary(Base):
     """Summary of a project with deployment count"""
 
     project_id: str
     project_name: str
     deployment_count: int
+    org_id: str = "default"
 
     @model_validator(mode="before")
     @classmethod

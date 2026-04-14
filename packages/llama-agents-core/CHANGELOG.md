@@ -1,5 +1,11 @@
 # llama-agents-core
 
+## 0.9.0
+
+### Minor Changes
+
+- e8b8f47: feat: add support for organizations
+
 ## 0.8.5
 
 ### Patch Changes

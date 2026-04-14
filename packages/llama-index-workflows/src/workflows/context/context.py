@@ -26,6 +26,7 @@ from workflows.context.pre_context import PreContext
 from workflows.errors import (
     ContextSerdeError,
     ContextStateError,
+    WorkflowRuntimeError,
 )
 from workflows.events import (
     Event,
@@ -37,6 +38,7 @@ from workflows.runtime.types.internal_state import BrokerState
 from workflows.runtime.types.plugin import (
     ExternalRunAdapter,
 )
+from workflows.runtime.types.results import InternalContextVar
 from workflows.types import RunResultT
 from workflows.utils import _nanoid as nanoid
 
@@ -141,6 +143,43 @@ class Context(Generic[MODEL_T]):
         new_ctx = cast(Context[MODEL_T], object.__new__(cls))
         new_ctx._face = face
         return new_ctx
+
+    @staticmethod
+    def get_step_context() -> Context:
+        """Return the `Context` for the currently executing step.
+
+        This is useful for decorators or wrappers around step functions that
+        need access to the step context without requiring the user-defined
+        step to declare a ``ctx: Context`` parameter.
+
+        Returns:
+            Context: The context instance (in internal-face state) for the
+            running step.
+
+        Raises:
+            WorkflowRuntimeError: If called outside of a step function.
+
+        Examples:
+            ```python
+            from workflows import Context
+
+            # Inside a decorator that wraps a step function
+            ctx = Context.get_step_context()
+            ctx.send_event(ProgressEvent(msg="step starting"))
+            ```
+        """
+        try:
+            ref = InternalContextVar.get()
+        except LookupError:
+            raise WorkflowRuntimeError(
+                "Context.get_step_context() may only be called from within a step function"
+            )
+        ctx = ref()
+        if ctx is None:
+            raise WorkflowRuntimeError(
+                "Context.get_step_context() may only be called from within a step function"
+            )
+        return ctx
 
     @property
     def is_running(self) -> bool:

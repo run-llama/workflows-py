@@ -14,12 +14,13 @@ from llama_agents.cli.options import (
     native_tls_option,
 )
 from llama_agents.cli.styles import WARNING
+from llama_agents.cli.utils.capabilities import probe_organizations_support
 from llama_agents.cli.utils.redact import redact_api_key
 from llama_agents.core.config import DEFAULT_DEPLOYMENT_FILE_PATH
 from llama_agents.core.deployment_config import (
     read_deployment_config_from_git_root_or_cwd,
 )
-from llama_agents.core.schema.projects import ProjectSummary
+from llama_agents.core.schema.projects import OrgSummary, ProjectSummary
 from rich import print as rprint
 
 from ..app import app
@@ -317,17 +318,31 @@ def _maybe_select_project_for_env_key() -> None:
     if not api_key:
         return
     try:
+        supports_organizations = probe_organizations_support()
 
-        async def _run() -> list[ProjectSummary]:
+        async def _run() -> tuple[OrgSummary | None, list[ProjectSummary]]:
             async with ControlPlaneClient.ctx(base_url, api_key, None) as client:
-                return await client.list_projects()
+                org: OrgSummary | None = None
+                if supports_organizations:
+                    organizations = await client.list_organizations()
+                    org = next(
+                        (o for o in organizations if o.is_default),
+                        organizations[0] if organizations else None,
+                    )
+                org_id = org.org_id if org is not None else None
+                projects = await client.list_projects(org_id=org_id)
+                return org, projects
 
-        projects = asyncio.run(_run())
+        org, projects = asyncio.run(_run())
         if not projects:
             return
         if len(projects) == 1:
             os.environ["LLAMA_DEPLOY_PROJECT_ID"] = projects[0].project_id
             return
+
+        if org is not None:
+            rprint(f"Projects for organization [bold]{org.org_name}[/]")
+
         # Multiple: prompt selection
         choice = questionary.select(
             "Select a project",

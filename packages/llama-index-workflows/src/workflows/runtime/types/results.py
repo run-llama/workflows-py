@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import dataclasses
+import weakref
 from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import (
@@ -106,6 +107,13 @@ class WaitingForEvent(Exception, Generic[EventType]):
 
 
 StepWorkerStateContextVar = ContextVar[StepWorkerContext]("step_worker")
+
+# Holds a weakref to the Context (in internal-face state) for the currently
+# executing step.  A weakref is used so that asyncio timer-handle context
+# snapshots do not pin the Workflow in memory (see RunContextContainer for
+# the analogous fix at the run level).  The strong reference lives as a local
+# variable in as_step_worker_function(); the weakref here is only a lookup handle.
+InternalContextVar: ContextVar[weakref.ref[Any]] = ContextVar("internal_context")
 
 
 ###################################

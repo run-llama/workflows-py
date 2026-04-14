@@ -25,7 +25,12 @@ from llama_agents.core.schema.git_validation import (
     RepositoryValidationRequest,
     RepositoryValidationResponse,
 )
-from llama_agents.core.schema.projects import ProjectsListResponse, ProjectSummary
+from llama_agents.core.schema.projects import (
+    OrganizationsListResponse,
+    OrgSummary,
+    ProjectsListResponse,
+    ProjectSummary,
+)
 from llama_agents.core.schema.public import VersionResponse
 
 
@@ -115,11 +120,22 @@ class ControlPlaneClient(BaseClient):
         _raise_for_status(response)
         return RestoreResponse.model_validate(response.json())
 
-    async def list_projects(self) -> List[ProjectSummary]:
-        response = await self.client.get("/api/v1beta1/deployments/list-projects")
+    async def list_organizations(self) -> List[OrgSummary]:
+        response = await self.client.get("/api/v1beta1/deployments/organizations")
+        _raise_for_status(response)
+        orgs_response = OrganizationsListResponse.model_validate(response.json())
+        return list(orgs_response.organizations)
+
+    async def list_projects(self, org_id: str | None = None) -> List[ProjectSummary]:
+        params = {}
+        if org_id is not None:
+            params["org_id"] = org_id
+        response = await self.client.get(
+            "/api/v1beta1/deployments/list-projects", params=params
+        )
         _raise_for_status(response)
         projects_response = ProjectsListResponse.model_validate(response.json())
-        return [project for project in projects_response.projects]
+        return list(projects_response.projects)
 
 
 def _raise_for_status(response: httpx.Response) -> None:
