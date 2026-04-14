@@ -76,6 +76,6 @@ jobs:
           event-type: workflows-sdk-update
           client-payload: >-
             {"version": "${{ steps.metadata.outputs.semver }}",
-             "openapi_url": "https://github.com/run-llama/workflows-py/releases/download/${{ env.TARGET_TAG }}/openapi.json",
+             "openapi_url": "https://github.com/run-llama/llama-agents/releases/download/${{ env.TARGET_TAG }}/openapi.json",
              "change_type": "${{ steps.metadata.outputs.change_type }}",
              "change_description": "${{ steps.metadata.outputs.change_description }}"}

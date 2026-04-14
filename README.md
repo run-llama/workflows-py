@@ -24,7 +24,7 @@ Start as a function you call from a script. Wrap it in a server when you need an
 
 And because it's a library at its core, the same workflow code drops into wherever the work has to actually run: a notebook for prototyping, a FastAPI app for your product, or a customer's locked-down environment when their documents can't leave it.
 
-For more ideas of what it can do, take a look at [the examples](https://github.com/run-llama/workflows-py/tree/main/examples).
+For more ideas of what it can do, take a look at [the examples](https://github.com/run-llama/llama-agents/tree/main/examples).
 
 ## Use it as a library
 
@@ -40,7 +40,7 @@ class HelloWorkflow(Workflow):
         return StopEvent(result=f"Hello, {ev.name}")
 ```
 
-See the [`llama-index-workflows` package](https://github.com/run-llama/workflows-py/tree/main/packages/llama-index-workflows) for more details.
+See the [`llama-index-workflows` package](https://github.com/run-llama/llama-agents/tree/main/packages/llama-index-workflows) for more details.
 
 ## Mount it inside an app you already have
 
@@ -53,7 +53,7 @@ server = WorkflowServer()
 server.add_workflow("greet", HelloWorkflow())
 ```
 
-See the [`llama-agents-server` package](https://github.com/run-llama/workflows-py/tree/main/packages/llama-agents-server) and the [`llama-agents-client` package](https://github.com/run-llama/workflows-py/tree/main/packages/llama-agents-client) for more details.
+See the [`llama-agents-server` package](https://github.com/run-llama/llama-agents/tree/main/packages/llama-agents-server) and the [`llama-agents-client` package](https://github.com/run-llama/llama-agents/tree/main/packages/llama-agents-client) for more details.
 
 ## Or ship it as a deployable agent
 
@@ -66,7 +66,7 @@ llamactl serve
 llamactl deployments create
 ```
 
-See the [`llamactl` package](https://github.com/run-llama/workflows-py/tree/main/packages/llamactl) for more details.
+See the [`llamactl` package](https://github.com/run-llama/llama-agents/tree/main/packages/llamactl) for more details.
 
 ## Works with [LlamaParse](https://developers.llamaindex.ai/python/cloud/)
 

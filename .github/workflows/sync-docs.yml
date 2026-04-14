@@ -42,5 +42,5 @@ jobs:
           fi
 
           SOURCE_SHA="${GITHUB_SHA::8}"
-          git commit -m "sync: workflows-py docs from run-llama/workflows-py@${SOURCE_SHA}"
+          git commit -m "sync: llama-agents docs from run-llama/llama-agents@${SOURCE_SHA}"
           git push
