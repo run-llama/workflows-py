@@ -131,7 +131,7 @@ jobs:
   coveralls-finish:
     needs: [test, test-docker]
     runs-on: ubuntu-latest
-    if: github.repository == 'run-llama/workflows-py'
+    if: github.repository == 'run-llama/llama-agents'
     steps:
       - name: Finalize Coveralls parallel jobs
         continue-on-error: true
