@@ -113,6 +113,7 @@ helm upgrade llama-agents oci://docker.io/llamaindex/llama-agents
 | controlPlane.objectStorage.s3.endpointUrl | string | `""` | S3 endpoint URL (leave empty for AWS) |
 | controlPlane.objectStorage.s3.bucket | string | `""` | S3 bucket name (**required**) |
 | controlPlane.objectStorage.s3.region | string | `""` | S3 region |
+| controlPlane.objectStorage.s3.unsigned | bool | `false` | Send S3 requests unsigned (no Authorization header). Enable for authless backends like s3proxy/LocalStack or public-read buckets. Leave `false` for real AWS, MinIO, or any auth-requiring backend. |
 | controlPlane.objectStorage.secretRef | string | `""` | K8s Secret name containing `S3_ACCESS_KEY` and `S3_SECRET_KEY` |
 | controlPlane.objectStorage.buildKeyPrefix | string | `"builds"` | Key prefix for build artifacts in the bucket |
 | controlPlane.objectStorage.backupKeyPrefix | string | `"backups"` | Key prefix for backup archives in the bucket |

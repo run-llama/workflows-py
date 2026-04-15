@@ -34,6 +34,11 @@ tests:
       - contains:
           path: spec.template.spec.containers[0].env
           content:
+            name: S3_UNSIGNED
+            value: "false"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
             name: BACKUP_S3_KEY_PREFIX
             value: "backups"
       - contains:
@@ -41,6 +46,20 @@ tests:
           content:
             name: CODE_REPO_S3_KEY_PREFIX
             value: "git"
+
+  - it: sets S3_UNSIGNED to true when unsigned is enabled
+    set:
+      controlPlane:
+        objectStorage:
+          s3:
+            bucket: "my-bucket"
+            unsigned: true
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: S3_UNSIGNED
+            value: "true"
 
   - it: sets envFrom with objectStorage secretRef
     set:

@@ -32,6 +32,7 @@ class S3BackupStorage(S3ObjectStorage):
         access_key: str | None = None,
         secret_key: str | None = None,
         key_prefix: str = "backups",
+        unsigned: bool = False,
     ) -> None:
         super().__init__(
             bucket=bucket,
@@ -40,6 +41,7 @@ class S3BackupStorage(S3ObjectStorage):
             access_key=access_key,
             secret_key=secret_key,
             key_prefix=key_prefix,
+            unsigned=unsigned,
         )
 
     def _key(self, backup_id: str) -> str:

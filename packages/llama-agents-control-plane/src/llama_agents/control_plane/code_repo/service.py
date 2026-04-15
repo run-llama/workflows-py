@@ -18,6 +18,7 @@ def create_code_repo_storage() -> CodeRepoStorage | None:
         access_key=settings.s3_access_key,
         secret_key=settings.s3_secret_key,
         key_prefix=settings.code_repo_s3_key_prefix,
+        unsigned=settings.s3_unsigned,
     )
 
 
