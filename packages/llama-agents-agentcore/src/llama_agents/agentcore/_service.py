@@ -2,7 +2,6 @@ from bedrock_agentcore.runtime import BedrockAgentCoreApp
 from llama_agents.client import HandlerData
 from llama_agents.server._runtime.idle_release_runtime import IdleReleaseDecorator
 from llama_agents.server._runtime.persistence_runtime import PersistenceDecorator
-from llama_agents.server._runtime.server_runtime import ServerRuntimeDecorator
 from llama_agents.server._service import _WorkflowService as WorkflowService
 from llama_agents.server._store.abstract_workflow_store import (
     AbstractWorkflowStore,
@@ -51,13 +50,8 @@ class AgentCoreService:
             store=self._workflow_store,
             idle_timeout=idle_timeout,
         )
-        server: ServerRuntimeDecorator = ServerRuntimeDecorator(
-            inner,
-            store=self._workflow_store,
-            persistence_backoff=persistence_backoff,
-        )
         self._runtime: AgentCoreRuntimeDecorator = AgentCoreRuntimeDecorator(
-            decorated=server,
+            decorated=inner,
             store=self._workflow_store,
             app=app,
             persistence_backoff=persistence_backoff,
