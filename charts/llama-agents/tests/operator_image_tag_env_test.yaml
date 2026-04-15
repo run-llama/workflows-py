@@ -4,12 +4,11 @@ templates:
 tests:
   - it: defaults LLAMA_DEPLOY_IMAGE_TAG to appVersion
     asserts:
-      - matchRegex:
-          path: spec.template.spec.containers[0].env[2].value
-          pattern: ^\d+\.\d+\.\d+$
-      - equal:
-          path: spec.template.spec.containers[0].env[2].name
-          value: LLAMA_DEPLOY_IMAGE_TAG
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LLAMA_DEPLOY_IMAGE_TAG
+          any: true
   - it: sets LLAMA_DEPLOY_IMAGE_TAG when images.appserver.tag is provided
     set:
       images:

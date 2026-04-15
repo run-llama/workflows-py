@@ -1,10 +1,24 @@
 {{- if .Values.rbac.create }}
+{{- $appsNs := include "llama-agents.apps.namespace" . -}}
+{{- $releaseNs := .Release.Namespace -}}
+{{- $split := include "llama-agents.apps.splitNamespace" . -}}
+{{- $saName := include "llama-agents.serviceAccountName" . -}}
+{{- /*
+When apps and release namespaces differ, the RBAC is split:
+  - A Role in the apps namespace carrying every rule except leader-election
+    leases. The operator needs these permissions wherever app resources live.
+  - A Role in the release namespace carrying only the leases rule, because
+    controller-runtime places the leader-election Lease in the operator pod's
+    own namespace.
+When the two namespaces collapse to the same value (legacy mode) we emit a
+single combined Role so small installs don't grow extra objects.
+*/ -}}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: {{ include "llama-agents.serviceAccountName" . }}
-  namespace: {{ .Release.Namespace }}
+  name: {{ $saName }}
+  namespace: {{ $appsNs }}
   {{- with .Values.rbac.roleAnnotations }}
   annotations:
     {{- toYaml . | nindent 4 }}
@@ -31,9 +45,11 @@ rules:
 - apiGroups: ['batch']
   resources: ['jobs']
   verbs: ['create', 'delete', 'get', 'list', 'patch', 'update', 'watch']
+{{- if not $split }}
 - apiGroups: ['coordination.k8s.io']
   resources: ['leases']
   verbs: ['create', 'delete', 'get', 'list', 'patch', 'update', 'watch']
+{{- end }}
 - apiGroups: ['deploy.llamaindex.ai']
   resources: ['llamadeployments']
   verbs: ['create', 'delete', 'get', 'list', 'patch', 'update', 'watch']
@@ -53,8 +69,8 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: {{ include "llama-agents.serviceAccountName" . }}
-  namespace: {{ .Release.Namespace }}
+  name: {{ $saName }}
+  namespace: {{ $appsNs }}
   {{- with .Values.rbac.roleBindingAnnotations }}
   annotations:
     {{- toYaml . | nindent 4 }}
@@ -62,9 +78,46 @@ metadata:
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: {{ include "llama-agents.serviceAccountName" . }}
+  name: {{ $saName }}
 subjects:
 - kind: ServiceAccount
-  name: {{ include "llama-agents.serviceAccountName" . }}
-  namespace: {{ .Release.Namespace }}
+  name: {{ $saName }}
+  namespace: {{ $releaseNs }}
+{{- if $split }}
+---
+# Release-namespace Role carrying only leader-election Lease permissions.
+# controller-runtime places the leader-election Lease in the pod's own
+# namespace (the release namespace), so this Role must live there.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $saName }}-leader-election
+  namespace: {{ $releaseNs }}
+  {{- with .Values.rbac.roleAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+rules:
+- apiGroups: ['coordination.k8s.io']
+  resources: ['leases']
+  verbs: ['create', 'delete', 'get', 'list', 'patch', 'update', 'watch']
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $saName }}-leader-election
+  namespace: {{ $releaseNs }}
+  {{- with .Values.rbac.roleBindingAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $saName }}-leader-election
+subjects:
+- kind: ServiceAccount
+  name: {{ $saName }}
+  namespace: {{ $releaseNs }}
+{{- end }}
 {{- end }}

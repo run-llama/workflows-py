@@ -23,3 +23,17 @@ Test patterns:
 
 Local run:
 - `make -C operator operator-run` (requires kubeconfig)
+
+### Apps namespace mode
+
+The Helm chart supports an optional "apps namespace" split via
+`operator.apps.namespace` — when set, `LlamaDeployment` CRs and all
+operator-managed child resources live in that namespace while the operator +
+control plane stay in the release namespace. The operator itself is unchanged;
+only its `WATCH_NAMESPACE` (and the control plane's `KUBERNETES_NAMESPACE`)
+move. See `architecture-docs/overall-architecture.md` for the full layout.
+
+Integration coverage for this mode lives in
+`internal/controller/apps_namespace_test.go` — it reconciles a CR in a
+non-default namespace and asserts children land there with working owner
+references. Run with `make -C operator operator-test`.

@@ -131,3 +131,32 @@ sequenceDiagram
 - **Control Plane**: Communicates with K8s via client libraries
 - **CLI**: HTTP calls to Control Plane API
 - **Workflow APIs**: Direct HTTP/WebSocket to API Server pods
+
+## Namespace Layout
+
+By default, the control plane, operator, and all app resources live in a single
+namespace (the Helm release namespace). The Helm chart also supports an "apps
+namespace" mode via `operator.apps.namespace`, which splits resources as
+follows:
+
+- **System namespace** (release namespace): operator, control plane, build API,
+  leader-election Lease, operator-side Services.
+- **Apps namespace** (`operator.apps.namespace`): `LlamaDeployment` and
+  `LlamaDeploymentTemplate` CRs, per-app Deployments, Pods, Services, Secrets,
+  ServiceAccounts, ConfigMaps, Ingresses, NetworkPolicies, and build Jobs.
+
+CRs live with their child resources because Kubernetes does not permit
+cross-namespace owner references — co-locating them keeps ownership,
+finalizers, and garbage collection working unchanged. Only the operator's
+`WATCH_NAMESPACE` and the control plane's `KUBERNETES_NAMESPACE` move; the
+reconciler logic is untouched.
+
+The chart emits a split RBAC in this mode: a Role in the apps namespace for
+every rule except leader-election, and a smaller Role in the release namespace
+for the `coordination.k8s.io/leases` rule (Leases are placed in the operator
+pod's own namespace by controller-runtime). When the two namespaces collapse
+to the same value, the chart falls back to a single combined Role.
+
+`imagePullSecrets` referenced by appserver pods are **not** mirrored by the
+chart. In split mode users must provision the pull secret in the apps
+namespace themselves (or use node-level pull credentials).

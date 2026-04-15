@@ -169,6 +169,16 @@ operator:
   # -- Annotations for the operator pod template
   # @section -- Operator
   podAnnotations: {}
+  apps:
+    # -- Namespace where LlamaDeployment CRs and their child resources (Deployments,
+    # Pods, Services, Jobs, Secrets, ServiceAccounts, ConfigMaps, Ingresses,
+    # NetworkPolicies) live. Empty = same as the release namespace (legacy
+    # single-namespace mode). When set, the operator watches this namespace and
+    # the control plane targets it for CR and Secret operations. CRs still live
+    # with their child resources (cross-namespace owner references are not
+    # allowed in Kubernetes).
+    # @section -- Operator
+    namespace: ""
   defaultAppRequests:
     # -- Default CPU request for managed app containers
     # @section -- Operator

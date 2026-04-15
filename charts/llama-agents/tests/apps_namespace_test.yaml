@@ -1,0 +1,211 @@
+suite: apps namespace — legacy (single namespace) and split modes
+templates:
+  - templates/operator-deployment.yaml
+  - templates/deployment.yaml
+  - templates/rbac.yaml
+  - templates/networkpolicy.yaml
+  - templates/operator-deployment-template.yaml
+set:
+  controlPlane:
+    objectStorage:
+      s3:
+        bucket: "test-bucket"
+tests:
+  # ---------- Legacy mode (operator.apps.namespace empty) ----------
+  - it: legacy WATCH_NAMESPACE points at release namespace
+    release:
+      namespace: llama-agents
+    template: templates/operator-deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: WATCH_NAMESPACE
+            value: "llama-agents"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LLAMA_DEPLOY_SYSTEM_NAMESPACE
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.namespace
+
+  - it: legacy control plane KUBERNETES_NAMESPACE points at release namespace
+    release:
+      namespace: llama-agents
+    template: templates/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KUBERNETES_NAMESPACE
+            value: "llama-agents"
+
+  - it: legacy renders single combined Role in release namespace
+    release:
+      namespace: llama-agents
+    template: templates/rbac.yaml
+    asserts:
+      - hasDocuments:
+          count: 2  # Role + RoleBinding only
+      - documentIndex: 0
+        equal:
+          path: kind
+          value: Role
+      - documentIndex: 0
+        equal:
+          path: metadata.namespace
+          value: llama-agents
+      - documentIndex: 0
+        contains:
+          path: rules
+          content:
+            apiGroups: ['coordination.k8s.io']
+            resources: ['leases']
+            verbs: ['create', 'delete', 'get', 'list', 'patch', 'update', 'watch']
+
+  - it: legacy NetworkPolicy lives in release namespace
+    release:
+      namespace: llama-agents
+    template: templates/networkpolicy.yaml
+    asserts:
+      - equal:
+          path: metadata.namespace
+          value: llama-agents
+
+  # ---------- Split mode (operator.apps.namespace set) ----------
+  - it: split WATCH_NAMESPACE points at apps namespace
+    release:
+      namespace: llama-agents
+    set:
+      operator:
+        apps:
+          namespace: llama-agents-apps
+    template: templates/operator-deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: WATCH_NAMESPACE
+            value: "llama-agents-apps"
+
+  - it: split control plane KUBERNETES_NAMESPACE points at apps namespace
+    release:
+      namespace: llama-agents
+    set:
+      operator:
+        apps:
+          namespace: llama-agents-apps
+    template: templates/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: KUBERNETES_NAMESPACE
+            value: "llama-agents-apps"
+
+  - it: split renders two Roles — apps Role sans leases, release Role with only leases
+    release:
+      namespace: llama-agents
+    set:
+      operator:
+        apps:
+          namespace: llama-agents-apps
+    template: templates/rbac.yaml
+    asserts:
+      - hasDocuments:
+          count: 4  # apps Role + RB, leader-election Role + RB
+      - documentIndex: 0
+        equal:
+          path: kind
+          value: Role
+      - documentIndex: 0
+        equal:
+          path: metadata.namespace
+          value: llama-agents-apps
+      - documentIndex: 0
+        notContains:
+          path: rules
+          content:
+            apiGroups: ['coordination.k8s.io']
+            resources: ['leases']
+            verbs: ['create', 'delete', 'get', 'list', 'patch', 'update', 'watch']
+      - documentIndex: 1
+        equal:
+          path: kind
+          value: RoleBinding
+      - documentIndex: 1
+        equal:
+          path: metadata.namespace
+          value: llama-agents-apps
+      - documentIndex: 1
+        equal:
+          path: subjects[0].namespace
+          value: llama-agents
+      - documentIndex: 2
+        equal:
+          path: kind
+          value: Role
+      - documentIndex: 2
+        equal:
+          path: metadata.namespace
+          value: llama-agents
+      - documentIndex: 2
+        contains:
+          path: rules
+          content:
+            apiGroups: ['coordination.k8s.io']
+            resources: ['leases']
+            verbs: ['create', 'delete', 'get', 'list', 'patch', 'update', 'watch']
+      - documentIndex: 3
+        equal:
+          path: kind
+          value: RoleBinding
+      - documentIndex: 3
+        equal:
+          path: metadata.namespace
+          value: llama-agents
+
+  - it: split NetworkPolicy lives in apps namespace with namespaceSelector to release ns
+    release:
+      namespace: llama-agents
+    set:
+      operator:
+        apps:
+          namespace: llama-agents-apps
+    template: templates/networkpolicy.yaml
+    asserts:
+      - equal:
+          path: metadata.namespace
+          value: llama-agents-apps
+      - equal:
+          path: spec.egress[0].to[0].namespaceSelector.matchLabels["kubernetes.io/metadata.name"]
+          value: llama-agents
+
+  - it: split LlamaDeploymentTemplate lands in apps namespace
+    release:
+      namespace: llama-agents
+    set:
+      operator:
+        apps:
+          namespace: llama-agents-apps
+        llamaDeploymentTemplate:
+          enabled: true
+    template: templates/operator-deployment-template.yaml
+    asserts:
+      - equal:
+          path: metadata.namespace
+          value: llama-agents-apps
+
+  # ---------- Collapse: apps namespace equal to release namespace ----------
+  - it: apps namespace equal to release namespace collapses to single Role
+    release:
+      namespace: llama-agents
+    set:
+      operator:
+        apps:
+          namespace: llama-agents
+    template: templates/rbac.yaml
+    asserts:
+      - hasDocuments:
+          count: 2

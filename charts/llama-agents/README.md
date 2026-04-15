@@ -54,6 +54,35 @@ helm upgrade --install llama-agents-crds oci://docker.io/llamaindex/llama-agents
 helm upgrade llama-agents oci://docker.io/llamaindex/llama-agents
 ```
 
+## Apps namespace mode
+
+By default the operator, control plane, and every `LlamaDeployment` they manage
+share the release namespace. Setting `operator.apps.namespace` switches to a
+split layout: the operator + control plane stay in the release namespace, while
+`LlamaDeployment` CRs and all their child resources (Deployments, Pods,
+Services, Jobs, Secrets, ServiceAccounts, ConfigMaps, Ingresses, NetworkPolicies)
+live in the apps namespace.
+
+```bash
+kubectl create namespace llama-agents-apps
+helm install llama-agents oci://docker.io/llamaindex/llama-agents \
+  --namespace llama-agents \
+  --set operator.apps.namespace=llama-agents-apps \
+  --set controlPlane.objectStorage.s3.bucket=my-bucket
+```
+
+CRs always live with their child resources — Kubernetes does not permit
+cross-namespace owner references, so co-locating them keeps the reconciler's
+ownership model unchanged.
+
+**`imagePullSecrets`** are **not** mirrored into the apps namespace. If your
+appserver image requires a pull secret, create it in the apps namespace
+yourself (`kubectl create secret docker-registry ...`) or rely on node-level
+pull credentials.
+
+Switching an existing install between single- and split-namespace modes
+requires draining and recreating `LlamaDeployment` CRs.
+
 ## Values
 
 ### Metrics
@@ -127,6 +156,7 @@ helm upgrade llama-agents oci://docker.io/llamaindex/llama-agents
 | operator.replicas | int | `1` | Number of operator replicas |
 | operator.annotations | object | `{}` | Annotations for the operator Deployment |
 | operator.podAnnotations | object | `{}` | Annotations for the operator pod template |
+| operator.apps.namespace | string | `""` | Namespace where LlamaDeployment CRs and their child resources (Deployments, Pods, Services, Jobs, Secrets, ServiceAccounts, ConfigMaps, Ingresses, NetworkPolicies) live. Empty = same as the release namespace (legacy single-namespace mode). When set, the operator watches this namespace and the control plane targets it for CR and Secret operations. CRs still live with their child resources (cross-namespace owner references are not allowed in Kubernetes). |
 | operator.defaultAppRequests.cpu | string | `"750m"` | Default CPU request for managed app containers |
 | operator.defaultAppRequests.memory | string | `"2Gi"` | Default memory request for managed app containers |
 | operator.defaultAppLimits.cpu | string | `""` | Default CPU limit for managed app containers (empty = no limit) |
