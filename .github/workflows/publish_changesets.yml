@@ -250,30 +250,22 @@ jobs:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: publish-plan
-      - name: Create and push git tags
+      # Use changesets/action in publish mode to (1) tag each package
+      # at its current version, (2) push the tags, and (3) create a
+      # GitHub Release per tag with the CHANGELOG entry as the body.
+      # The ``publish`` script is a no-op beyond ``changeset tag`` —
+      # the fan-out jobs above handle the actual PyPI / Docker / Helm
+      # publishing. The action only parses ``New tag: ...`` lines from
+      # the publish script output to decide which packages to release.
+      - name: Create tags and GitHub releases
+        uses: changesets/action@6a0a831ff30acef54f2c6aa1cbbc1096b066edaf # v1
+        with:
+          publish: pnpm exec changeset tag
+          setupGitUser: false
+          createGithubReleases: true
         env:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
-        run: |
-          set -euo pipefail
-          echo "Existing tags at HEAD before changeset tag:"
-          git tag --points-at HEAD | sort || true
-
-          pnpm exec changeset tag
-
-          echo "Tags at HEAD after changeset tag:"
-          NEW_TAGS=$(git tag --points-at HEAD | sort)
-          echo "$NEW_TAGS"
-
-          if [ -z "$NEW_TAGS" ]; then
-            echo "No tags to push."
-            exit 0
-          fi
-
-          # Push each tag explicitly so failures surface instead of being
-          # hidden behind ``git push --tags`` silently reporting
-          # "Everything up-to-date" when the default push refspec drops
-          # tags that aren't reachable from tracked branches.
-          echo "$NEW_TAGS" | xargs -r git push --verbose origin
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
 
       - name: Extract published llama-agents-server version
         if: github.ref == 'refs/heads/main'
