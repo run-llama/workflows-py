@@ -107,6 +107,12 @@ class DockerConfig(BaseModel):
     imageName: str
     target: str | None = None
     platforms: list[Platform] = Field(default_factory=list)
+    # GHA buildx cache mode. ``max`` caches every intermediate stage
+    # (expensive to upload but best reuse); ``min`` only caches the
+    # final layers. Use ``min`` for small/static binary builds (e.g.
+    # the operator) where uploading the base image + builder layers
+    # to GHA cache costs more than a clean rebuild.
+    cacheMode: Literal["min", "max"] = "max"
 
 
 class HelmConfig(BaseModel):
@@ -477,6 +483,7 @@ class DockerBuildAction(BaseModel):
     version: str
     build_tag: str  # full registry/repo:version-<arch>
     cache_scope: str  # GHA buildx cache scope (per package + arch)
+    cache_mode: Literal["min", "max"] = "max"  # GHA buildx cache-to mode
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -599,6 +606,7 @@ def plan_docker(
                     version=version,
                     build_tag=build_tag,
                     cache_scope=f"{pkg.name}-{suffix}",
+                    cache_mode=image.cacheMode,
                 )
             )
         manifests.append(
@@ -721,13 +729,19 @@ def _execute_docker_build(action: DockerBuildAction, dry_run: bool) -> None:
         cmd.extend(["--target", action.target])
     # GHA buildx cache. Only emits cache directives under GitHub Actions
     # with the runtime token exposed (see ``crazy-max/ghaction-github-runtime``).
+    # ``compression=zstd`` shrinks the exported cache blobs, and
+    # ``ignore-error=true`` keeps a flaky cache push from failing the
+    # whole job (the image is already pushed to the registry by then).
     if os.environ.get("ACTIONS_RUNTIME_TOKEN") and os.environ.get("ACTIONS_CACHE_URL"):
         cmd.extend(
             [
                 "--cache-from",
                 f"type=gha,scope={action.cache_scope}",
                 "--cache-to",
-                f"type=gha,mode=max,scope={action.cache_scope}",
+                (
+                    f"type=gha,mode={action.cache_mode},scope={action.cache_scope}"
+                    ",compression=zstd,ignore-error=true"
+                ),
             ]
         )
     cmd.append(".")
