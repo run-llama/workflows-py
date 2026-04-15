@@ -54,34 +54,23 @@ helm upgrade --install llama-agents-crds oci://docker.io/llamaindex/llama-agents
 helm upgrade llama-agents oci://docker.io/llamaindex/llama-agents
 ```
 
-## Apps namespace mode
+## Apps namespace
 
-By default the operator, control plane, and every `LlamaDeployment` they manage
-share the release namespace. Setting `operator.apps.namespace` switches to a
-split layout: the operator + control plane stay in the release namespace, while
-`LlamaDeployment` CRs and all their child resources (Deployments, Pods,
-Services, Jobs, Secrets, ServiceAccounts, ConfigMaps, Ingresses, NetworkPolicies)
-live in the apps namespace.
+Set `apps.namespace` to isolate `LlamaDeployment` CRs and their child resources
+in a separate namespace. The operator + control plane stay in the release
+namespace and target the apps namespace for all app resources.
 
 ```bash
 kubectl create namespace llama-agents-apps
 helm install llama-agents oci://docker.io/llamaindex/llama-agents \
   --namespace llama-agents \
-  --set operator.apps.namespace=llama-agents-apps \
+  --set apps.namespace=llama-agents-apps \
   --set controlPlane.objectStorage.s3.bucket=my-bucket
 ```
 
-CRs always live with their child resources — Kubernetes does not permit
-cross-namespace owner references, so co-locating them keeps the reconciler's
-ownership model unchanged.
-
-**`imagePullSecrets`** are **not** mirrored into the apps namespace. If your
-appserver image requires a pull secret, create it in the apps namespace
-yourself (`kubectl create secret docker-registry ...`) or rely on node-level
-pull credentials.
-
-Switching an existing install between single- and split-namespace modes
-requires draining and recreating `LlamaDeployment` CRs.
+`imagePullSecrets` are not mirrored — provision them in the apps namespace
+yourself, or use node-level pull credentials. Switching modes on an existing
+install requires draining and recreating `LlamaDeployment` CRs.
 
 {{ template "chart.valuesSection" . }}
 

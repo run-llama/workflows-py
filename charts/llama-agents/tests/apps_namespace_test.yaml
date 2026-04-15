@@ -1,4 +1,4 @@
-suite: apps namespace — legacy (single namespace) and split modes
+suite: apps.namespace — single- and split-namespace modes
 templates:
   - templates/operator-deployment.yaml
   - templates/deployment.yaml
@@ -11,8 +11,8 @@ set:
       s3:
         bucket: "test-bucket"
 tests:
-  # ---------- Legacy mode (operator.apps.namespace empty) ----------
-  - it: legacy WATCH_NAMESPACE points at release namespace
+  # ---------- Unset apps.namespace — single-namespace mode ----------
+  - it: WATCH_NAMESPACE defaults to release namespace
     release:
       namespace: llama-agents
     template: templates/operator-deployment.yaml
@@ -30,7 +30,7 @@ tests:
               fieldRef:
                 fieldPath: metadata.namespace
 
-  - it: legacy control plane KUBERNETES_NAMESPACE points at release namespace
+  - it: control plane KUBERNETES_NAMESPACE defaults to release namespace
     release:
       namespace: llama-agents
     template: templates/deployment.yaml
@@ -41,7 +41,7 @@ tests:
             name: KUBERNETES_NAMESPACE
             value: "llama-agents"
 
-  - it: legacy renders single combined Role in release namespace
+  - it: single combined Role in release namespace
     release:
       namespace: llama-agents
     template: templates/rbac.yaml
@@ -64,7 +64,7 @@ tests:
             resources: ['leases']
             verbs: ['create', 'delete', 'get', 'list', 'patch', 'update', 'watch']
 
-  - it: legacy NetworkPolicy lives in release namespace
+  - it: NetworkPolicy lives in release namespace
     release:
       namespace: llama-agents
     template: templates/networkpolicy.yaml
@@ -73,14 +73,13 @@ tests:
           path: metadata.namespace
           value: llama-agents
 
-  # ---------- Split mode (operator.apps.namespace set) ----------
+  # ---------- apps.namespace set — split mode ----------
   - it: split WATCH_NAMESPACE points at apps namespace
     release:
       namespace: llama-agents
     set:
-      operator:
-        apps:
-          namespace: llama-agents-apps
+      apps:
+        namespace: llama-agents-apps
     template: templates/operator-deployment.yaml
     asserts:
       - contains:
@@ -93,9 +92,8 @@ tests:
     release:
       namespace: llama-agents
     set:
-      operator:
-        apps:
-          namespace: llama-agents-apps
+      apps:
+        namespace: llama-agents-apps
     template: templates/deployment.yaml
     asserts:
       - contains:
@@ -108,9 +106,8 @@ tests:
     release:
       namespace: llama-agents
     set:
-      operator:
-        apps:
-          namespace: llama-agents-apps
+      apps:
+        namespace: llama-agents-apps
     template: templates/rbac.yaml
     asserts:
       - hasDocuments:
@@ -170,9 +167,8 @@ tests:
     release:
       namespace: llama-agents
     set:
-      operator:
-        apps:
-          namespace: llama-agents-apps
+      apps:
+        namespace: llama-agents-apps
     template: templates/networkpolicy.yaml
     asserts:
       - equal:
@@ -186,9 +182,9 @@ tests:
     release:
       namespace: llama-agents
     set:
+      apps:
+        namespace: llama-agents-apps
       operator:
-        apps:
-          namespace: llama-agents-apps
         llamaDeploymentTemplate:
           enabled: true
     template: templates/operator-deployment-template.yaml
@@ -197,14 +193,13 @@ tests:
           path: metadata.namespace
           value: llama-agents-apps
 
-  # ---------- Collapse: apps namespace equal to release namespace ----------
-  - it: apps namespace equal to release namespace collapses to single Role
+  # ---------- apps.namespace equal to release namespace — single-ns output ----------
+  - it: apps.namespace equal to release namespace collapses to single Role
     release:
       namespace: llama-agents
     set:
-      operator:
-        apps:
-          namespace: llama-agents
+      apps:
+        namespace: llama-agents
     template: templates/rbac.yaml
     asserts:
       - hasDocuments:

@@ -51,8 +51,6 @@ spec:
         env:
         - name: WATCH_NAMESPACE
           value: {{ include "llama-agents.apps.namespace" . | quote }}
-        # Release namespace — exposed so the operator can emit cross-namespace
-        # NetworkPolicy selectors when apps and system namespaces differ.
         - name: LLAMA_DEPLOY_SYSTEM_NAMESPACE
           valueFrom:
             fieldRef:

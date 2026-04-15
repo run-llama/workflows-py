@@ -4,14 +4,9 @@
 {{- $split := include "llama-agents.apps.splitNamespace" . -}}
 {{- $saName := include "llama-agents.serviceAccountName" . -}}
 {{- /*
-When apps and release namespaces differ, the RBAC is split:
-  - A Role in the apps namespace carrying every rule except leader-election
-    leases. The operator needs these permissions wherever app resources live.
-  - A Role in the release namespace carrying only the leases rule, because
-    controller-runtime places the leader-election Lease in the operator pod's
-    own namespace.
-When the two namespaces collapse to the same value (legacy mode) we emit a
-single combined Role so small installs don't grow extra objects.
+Split mode (apps != release): apps-ns Role with everything except leases,
+release-ns Role with only leases (leader-election Lease lives in the
+operator pod's namespace). Single-namespace mode: one combined Role.
 */ -}}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -85,9 +80,7 @@ subjects:
   namespace: {{ $releaseNs }}
 {{- if $split }}
 ---
-# Release-namespace Role carrying only leader-election Lease permissions.
-# controller-runtime places the leader-election Lease in the pod's own
-# namespace (the release namespace), so this Role must live there.
+# Leader-election Lease lives in the operator pod's namespace.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:

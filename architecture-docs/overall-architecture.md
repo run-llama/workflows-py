@@ -134,29 +134,18 @@ sequenceDiagram
 
 ## Namespace Layout
 
-By default, the control plane, operator, and all app resources live in a single
-namespace (the Helm release namespace). The Helm chart also supports an "apps
-namespace" mode via `operator.apps.namespace`, which splits resources as
-follows:
+Set `apps.namespace` to run the control plane + operator in the release
+namespace and put `LlamaDeployment` CRs and their child resources (Deployments,
+Pods, Services, Secrets, ServiceAccounts, ConfigMaps, Ingresses, NetworkPolicies,
+build Jobs) in a separate namespace. Unset = everything in the release namespace.
 
-- **System namespace** (release namespace): operator, control plane, build API,
-  leader-election Lease, operator-side Services.
-- **Apps namespace** (`operator.apps.namespace`): `LlamaDeployment` and
-  `LlamaDeploymentTemplate` CRs, per-app Deployments, Pods, Services, Secrets,
-  ServiceAccounts, ConfigMaps, Ingresses, NetworkPolicies, and build Jobs.
+CRs stay co-located with their children (cross-namespace owner references are
+not allowed). Only `WATCH_NAMESPACE` (operator) and `KUBERNETES_NAMESPACE`
+(control plane) point at the apps namespace; reconciler code is unchanged.
 
-CRs live with their child resources because Kubernetes does not permit
-cross-namespace owner references — co-locating them keeps ownership,
-finalizers, and garbage collection working unchanged. Only the operator's
-`WATCH_NAMESPACE` and the control plane's `KUBERNETES_NAMESPACE` move; the
-reconciler logic is untouched.
+RBAC in split mode: apps-namespace Role with every rule except
+`coordination.k8s.io/leases`, release-namespace Role with just that rule for
+leader election. Unset collapses to one Role.
 
-The chart emits a split RBAC in this mode: a Role in the apps namespace for
-every rule except leader-election, and a smaller Role in the release namespace
-for the `coordination.k8s.io/leases` rule (Leases are placed in the operator
-pod's own namespace by controller-runtime). When the two namespaces collapse
-to the same value, the chart falls back to a single combined Role.
-
-`imagePullSecrets` referenced by appserver pods are **not** mirrored by the
-chart. In split mode users must provision the pull secret in the apps
-namespace themselves (or use node-level pull credentials).
+`imagePullSecrets` are not mirrored — provision them in the apps namespace, or
+use node-level pull credentials.
