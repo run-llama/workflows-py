@@ -73,7 +73,7 @@ helm upgrade llama-agents oci://docker.io/llamaindex/llama-agents
 | images.controlPlane.tag | string | `"0.11.0"` | Control plane image tag |
 | images.controlPlane.pullPolicy | string | `"IfNotPresent"` | Control plane image pull policy |
 | images.operator.repository | string | `"llamaindex/llama-agents-operator"` | Operator image repository |
-| images.operator.tag | string | `"0.11.0"` | Operator image tag |
+| images.operator.tag | string | `"0.11.1"` | Operator image tag |
 | images.operator.pullPolicy | string | `"IfNotPresent"` | Operator image pull policy |
 | images.appserver.repository | string | `"llamaindex/llama-agents-appserver"` | Appserver image repository (used by operator for managed pods) |
 | images.appserver.tag | string | `"0.10.5"` | Appserver image tag |

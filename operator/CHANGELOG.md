@@ -1,5 +1,11 @@
 # llama-agents-operator
 
+## 0.11.1
+
+### Patch Changes
+
+- fdc1c48: Publish llama-agents-operator arm images
+
 ## 0.11.0
 
 ### Minor Changes

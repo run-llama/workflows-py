@@ -1,5 +1,12 @@
 # llama-agents
 
+## 0.10.12
+
+### Patch Changes
+
+- Updated dependencies [fdc1c48]
+  - llama-agents-operator@0.11.1
+
 ## 0.10.11
 
 ### Patch Changes
