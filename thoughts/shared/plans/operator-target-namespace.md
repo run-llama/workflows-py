@@ -60,7 +60,6 @@ bloating the informer caches used by the control plane.
                  │ - control plane + build API    │
                  │ - LlamaDeployment CRs          │
                  │ - LlamaDeploymentTemplate CRs  │
-                 │ - user-provided Secret (src)   │
                  │ - Events, Leases               │
                  └────────────┬───────────────────┘
                               │ reconciles
@@ -72,7 +71,8 @@ bloating the informer caches used by the control plane.
                  │ - app Deployment + Pods        │
                  │ - Service / Ingress            │
                  │ - ConfigMap (nginx)            │
-                 │ - mirrored Secret (app copy)   │
+                 │ - user-provided Secret         │
+                 │   (written by control plane)   │
                  │ - ServiceAccount               │
                  │ - NetworkPolicy                │
                  │ - build Job + Pods             │
@@ -98,11 +98,11 @@ CR's own namespace.
   - If non-empty → `cache.Options.DefaultNamespaces` has both
     `watchNamespace` and `targetNamespace` keys, **plus** per-type
     restrictions in `ByObject`:
-    - `LlamaDeployment`, `LlamaDeploymentTemplate`, `Event`, `Lease`,
-      user-provided `Secret`: watched only in `watchNamespace`.
+    - `LlamaDeployment`, `LlamaDeploymentTemplate`, `Event`, `Lease`:
+      watched only in `watchNamespace`.
     - `Deployment`, `ReplicaSet`, `Pod`, `Service`, `Ingress`,
-      `NetworkPolicy`, `ConfigMap`, `ServiceAccount`, `Job`, mirrored
-      `Secret`: watched only in `targetNamespace`.
+      `NetworkPolicy`, `ConfigMap`, `ServiceAccount`, `Job`, `Secret`:
+      watched only in `targetNamespace`.
   - This is important: a naked `DefaultNamespaces` map would cause the
     operator to watch Pods in the system namespace too, which we want to
     avoid for memory reasons.
@@ -145,11 +145,13 @@ Keep `ld.Namespace` for:
 
 - Listing sibling `LlamaDeployment`s for capacity gates
   (`lifecycle.go:47`, `lifecycle.go:91`).
-- Reading the user-provided Secret referenced by `spec.secretName` — source
-  lives with the CR (`resources.go:849`).
 - Looking up `LlamaDeploymentTemplate` (`resources.go:668`,
   `resources.go:1287`).
 - Updating the CR's own status.
+
+The user-provided Secret referenced by `spec.secretName` lives in the
+**target** namespace in split mode (see §4), so its lookup uses
+`r.targetNamespaceFor(ld)`.
 
 ### 3. Ownership + cleanup
 
@@ -180,25 +182,39 @@ Cross-namespace owner references are rejected by the API server, so:
   - Block finalizer removal until no labelled children remain (to avoid
     orphan resources).
 
-### 4. Secret mirroring
+### 4. Secret placement (control plane writes to target namespace)
 
-The app pod's `envFrom: secretRef` must resolve to a Secret in the same
-namespace as the pod (target namespace), but the user supplies the Secret in
-the system namespace via the control plane.
+The app pod's `envFrom: secretRef` only resolves to a Secret in the same
+namespace as the pod, so the user-provided Secret must live in the target
+namespace.
 
-Add a `reconcileMirroredSecret` step in `resources.go`:
+Rather than having the operator mirror it from the system namespace, the
+**control plane writes it directly to the target namespace** in split mode:
 
-- Read the source Secret from `ld.Namespace` (existing
-  `checkSecretGate` logic stays).
-- Maintain a child Secret in the target namespace named
-  `<ld.Name>-secret` (or equivalent). Copy `Data` and `StringData` 1:1.
-- Labels as above + an annotation
-  `deploy.llamaindex.ai/source-secret: <ld.Namespace>/<spec.secretName>`
-  for traceability.
-- Watch the source Secret via the existing watch on `watchNamespace` — a
-  change triggers reconciliation, which updates the mirror.
-- App Deployment's `envFrom` is changed to reference the mirrored secret
-  when split mode is active (still `spec.secretName` in legacy mode).
+- `K8sClient` (Python) gains a `target_namespace` field (see §6). All
+  Secret create/update/delete calls for `spec.secretName` use
+  `target_namespace`. In legacy mode `target_namespace == cr_namespace`,
+  so the existing behaviour is preserved.
+- The operator's secret-gate check (`checkSecretGate` in `lifecycle.go:157`)
+  reads the Secret from `r.targetNamespaceFor(ld)` rather than
+  `ld.Namespace`. The gate semantics ("CR sits in `AwaitingCode` until the
+  Secret exists") are unchanged.
+- The control plane stamps the same ownership labels onto the Secret as
+  the operator stamps onto its own children
+  (`deploy.llamaindex.ai/deployment=<ld.Name>`,
+  `deploy.llamaindex.ai/cr-namespace=<ld.Namespace>`) so the finalizer's
+  label-based cleanup walker (§3) deletes it alongside everything else.
+- The operator's child Deployment continues to reference the Secret by
+  `spec.secretName` via `envFrom: secretRef` — same name, just resolved
+  in the target namespace where the pod runs.
+- Secret lifecycle stays a control-plane responsibility: no operator-side
+  copy, no drift handling, no mirror cleanup. If a user manually deletes
+  the Secret, the gate trips and the deployment goes to `AwaitingCode`.
+
+This keeps the operator focused on K8s objects it owns and removes a
+whole reconcile path. The cost is that the control plane needs RBAC for
+Secrets in the target namespace — which it already needs for pod / log /
+service reads as part of this plan.
 
 ### 5. Service account
 
@@ -215,9 +231,11 @@ File: `packages/llama-agents-control-plane/src/llama_agents/control_plane/`.
   `KUBERNETES_TARGET_NAMESPACE`), defaulting to empty = "same as
   `kubernetes_namespace`".
 - `k8s_client.py`: split into `cr_namespace` (existing `self.namespace`)
-  and `target_namespace`. All pod / log / service / ingress queries use
-  `target_namespace`; all `LlamaDeployment` CR operations use
-  `cr_namespace`.
+  and `target_namespace`. All pod / log / service / ingress / **Secret**
+  reads and writes use `target_namespace`; all `LlamaDeployment` CR
+  operations use `cr_namespace`. The Secret create/update path that
+  backs `spec.secretName` (deployment env vars, PAT, etc.) writes into
+  `target_namespace`.
 - Helm chart: plumb `operator.targetNamespace` into the control plane's
   `KUBERNETES_TARGET_NAMESPACE` env var too (both the deployment and the
   build API container).
@@ -245,13 +263,14 @@ Template updates:
 - `templates/rbac.yaml`: split into two Roles + two RoleBindings when
   `operator.targetNamespace` is set and not equal to `.Release.Namespace`:
   - **System Role** (release namespace): `llamadeployments*`,
-    `llamadeploymenttemplates`, `events`, `leases`, `secrets` (get/list/watch
-    only, for reading user secrets).
+    `llamadeploymenttemplates`, `events`, `leases`.
   - **Target Role** (target namespace): `deployments`, `replicasets`,
     `services`, `ingresses`, `networkpolicies`, `configmaps`, `secrets`
-    (full), `serviceaccounts`, `pods`, `pods/log`, `jobs`, `events`.
-  - Each RoleBinding points at the operator ServiceAccount in the release
-    namespace.
+    (full — both operator reads and control-plane writes use this),
+    `serviceaccounts`, `pods`, `pods/log`, `jobs`, `events`.
+  - Each RoleBinding points at the operator and control-plane
+    ServiceAccount(s) in the release namespace. (Today both share the
+    `llama-agents` SA; if that changes, bind both.)
 - New optional template `templates/target-namespace.yaml` (only rendered
   when `createTargetNamespace: true`) that emits a `Namespace` resource
   with matching labels.
@@ -278,11 +297,12 @@ Unit (`operator/internal/controller/`):
     land in `apps` and carry the `cr-namespace` label.
   - `SetControllerReference` is **not** called when namespaces differ.
 - `lifecycle_namespace_test.go`: finalizer cleanup deletes labelled
-  children in the target namespace and blocks finalizer removal while any
+  children in the target namespace (including the user-provided Secret
+  that the control plane wrote) and blocks finalizer removal while any
   remain.
-- `resources_secret_mirror_test.go`: source secret in CR namespace; mirror
-  appears in target namespace with matching Data; updating source updates
-  mirror.
+- `lifecycle_secret_gate_test.go`: with `TargetNamespace = "apps"`,
+  `checkSecretGate` reads the Secret from `apps`, not from the CR's
+  namespace.
 
 Integration (`//go:build integration`):
 
@@ -337,13 +357,12 @@ integration phase).
    on same-namespace; add labels; replace `.Owns` with `.Watches`.
 3. **Finalizer cleanup**: add label-based deletion walker in
    `handleDeletion`.
-4. **Secret mirroring**: add `reconcileMirroredSecret` and flip
-   `envFrom` to mirror in split mode.
-5. **Control plane**: add `target_namespace` setting and route pod/log
-   queries through it.
-6. **Helm chart**: values, env plumbing, split RBAC, optional namespace
+4. **Control plane**: add `target_namespace` setting; route pod/log
+   queries **and** Secret writes for `spec.secretName` through it; flip
+   the operator's `checkSecretGate` to read from the target namespace.
+5. **Helm chart**: values, env plumbing, split RBAC, optional namespace
    creation, tests.
-7. **Docs + changeset**.
+6. **Docs + changeset**.
 
 ## Open Questions
 
@@ -354,10 +373,11 @@ integration phase).
   or in a dedicated `*-builds` namespace? Plan keeps them in the target
   namespace for simplicity. A future follow-up could split them out behind
   another env var.
-- User-provided Secret lifecycle: do we delete the mirrored copy eagerly
-  when the source is deleted? Plan says yes — the source Secret being
-  missing flips the CR into `AwaitingCode` / a failure state, at which
-  point the reconciler can drop the mirror.
+- User-provided Secret lifecycle: with the control plane writing the
+  Secret directly into the target namespace there is no mirror to keep
+  in sync. The Secret is deleted alongside the CR by the operator's
+  finalizer (label-matched). Manual deletion of the Secret trips the
+  existing `AwaitingCode` gate.
 - Do we need a ValidatingAdmissionWebhook to reject CRs in namespaces
   other than the configured `WATCH_NAMESPACE`? Out of scope; the cache
   already filters them out, so such CRs simply go unreconciled.
@@ -369,6 +389,6 @@ integration phase).
 | Existing users unaware of new env var get different behaviour | Empty `TargetNamespace` preserves legacy path verbatim. |
 | Informer memory blows up watching Pods in two namespaces | Per-type `ByObject` namespace selectors; Pods only watched in target. |
 | Stale children left behind after CR deletion | Finalizer explicitly walks target namespace via labels before clearing itself. |
-| Secret drift between source and mirror | Mirror reconciled on every pass; source Secret watched for change events. |
+| Control plane needs Secret RBAC in target namespace | Helm chart's target-namespace Role grants it; the same SA already needs read access there for pods/logs. |
 | Operator can't set owner refs → orphans on crash-deletion | Label selectors + finalizer. A `kubectl delete ns` on the system namespace without draining CRs still leaks target-namespace children; document this as a known limitation. |
 | Switching modes on a live system breaks in-place apps | Documented as destructive: drain + recreate LlamaDeployments. |
