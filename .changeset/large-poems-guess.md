@@ -2,4 +2,4 @@
 "llama-agents-operator": patch
 ---
 
-Publish llama-agents-operator docker image from the release pipeline.
+Publish llama-agents-operator arm images
