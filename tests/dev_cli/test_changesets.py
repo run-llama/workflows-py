@@ -751,6 +751,70 @@ def test_execute_docker_build_action_invokes_buildx() -> None:
     assert "--tag" in cmd and "docker.io/llamaindex/test:1.0.0-amd64" in cmd
 
 
+def test_execute_docker_build_action_emits_gha_cache_flags(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ACTIONS_RUNTIME_TOKEN", "token")
+    monkeypatch.setenv("ACTIONS_CACHE_URL", "https://cache.example.com")
+    with patch("dev_cli.changesets.run_command") as mock_run:
+        execute_action(_docker_build_action(), dry_run=False)
+    cmd = mock_run.call_args[0][0]
+    assert "--cache-from" in cmd
+    cache_to = cmd[cmd.index("--cache-to") + 1]
+    # Default cache_mode is "max"; zstd + ignore-error are always set under GHA.
+    assert "mode=max" in cache_to
+    assert "scope=pkg-amd64" in cache_to
+    assert "compression=zstd" in cache_to
+    assert "ignore-error=true" in cache_to
+
+
+def test_execute_docker_build_action_respects_cache_mode_min(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("ACTIONS_RUNTIME_TOKEN", "token")
+    monkeypatch.setenv("ACTIONS_CACHE_URL", "https://cache.example.com")
+    action = _docker_build_action().model_copy(update={"cache_mode": "min"})
+    with patch("dev_cli.changesets.run_command") as mock_run:
+        execute_action(action, dry_run=False)
+    cmd = mock_run.call_args[0][0]
+    cache_to = cmd[cmd.index("--cache-to") + 1]
+    assert "mode=min" in cache_to
+    assert "mode=max" not in cache_to
+
+
+def test_plan_docker_propagates_cache_mode() -> None:
+    packages = [
+        PackageJson(
+            name="pkg-min",
+            path=Path("/tmp/pkg-min"),
+            version="1.0.0",
+            private=False,
+            docker=DockerConfig(
+                dockerfile="docker/Dockerfile",
+                imageName="llamaindex/pkg-min",
+                platforms=["linux/amd64"],
+                cacheMode="min",
+            ),
+        ),
+        PackageJson(
+            name="pkg-default",
+            path=Path("/tmp/pkg-default"),
+            version="1.0.0",
+            private=False,
+            docker=DockerConfig(
+                dockerfile="docker/Dockerfile",
+                imageName="llamaindex/pkg-default",
+                platforms=["linux/amd64"],
+            ),
+        ),
+    ]
+    with patch("dev_cli.changesets.is_docker_image_published", return_value=False):
+        builds, _ = plan_docker(packages)
+    by_pkg = {b.package: b for b in builds}
+    assert by_pkg["pkg-min"].cache_mode == "min"
+    assert by_pkg["pkg-default"].cache_mode == "max"
+
+
 def test_execute_docker_manifest_action_combines_source_tags() -> None:
     action = DockerManifestAction(
         package="pkg",
