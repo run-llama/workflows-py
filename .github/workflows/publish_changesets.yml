@@ -254,8 +254,26 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
+          set -euo pipefail
+          echo "Existing tags at HEAD before changeset tag:"
+          git tag --points-at HEAD | sort || true
+
           pnpm exec changeset tag
-          git push --tags
+
+          echo "Tags at HEAD after changeset tag:"
+          NEW_TAGS=$(git tag --points-at HEAD | sort)
+          echo "$NEW_TAGS"
+
+          if [ -z "$NEW_TAGS" ]; then
+            echo "No tags to push."
+            exit 0
+          fi
+
+          # Push each tag explicitly so failures surface instead of being
+          # hidden behind ``git push --tags`` silently reporting
+          # "Everything up-to-date" when the default push refspec drops
+          # tags that aren't reachable from tracked branches.
+          echo "$NEW_TAGS" | xargs -r git push --verbose origin
 
       - name: Extract published llama-agents-server version
         if: github.ref == 'refs/heads/main'
