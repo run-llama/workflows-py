@@ -262,6 +262,7 @@ jobs:
         with:
           publish: pnpm exec changeset tag
           setupGitUser: false
+          commitMode: github-api
           createGithubReleases: true
         env:
           GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
