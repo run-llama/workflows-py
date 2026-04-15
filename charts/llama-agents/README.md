@@ -54,6 +54,24 @@ helm upgrade --install llama-agents-crds oci://docker.io/llamaindex/llama-agents
 helm upgrade llama-agents oci://docker.io/llamaindex/llama-agents
 ```
 
+## Apps namespace
+
+Set `apps.namespace` to isolate `LlamaDeployment` CRs and their child resources
+in a separate namespace. The operator + control plane stay in the release
+namespace and target the apps namespace for all app resources.
+
+```bash
+kubectl create namespace llama-agents-apps
+helm install llama-agents oci://docker.io/llamaindex/llama-agents \
+  --namespace llama-agents \
+  --set apps.namespace=llama-agents-apps \
+  --set controlPlane.objectStorage.s3.bucket=my-bucket
+```
+
+`imagePullSecrets` are not mirrored — provision them in the apps namespace
+yourself, or use node-level pull credentials. Switching modes on an existing
+install requires draining and recreating `LlamaDeployment` CRs.
+
 ## Values
 
 ### Metrics
@@ -119,6 +137,12 @@ helm upgrade llama-agents oci://docker.io/llamaindex/llama-agents
 | controlPlane.objectStorage.backupKeyPrefix | string | `"backups"` | Key prefix for backup archives in the bucket |
 | controlPlane.objectStorage.codeRepoKeyPrefix | string | `"git"` | Key prefix for code repositories in the bucket |
 | controlPlane.objectStorage.backupEncryptionSecretRef | string | `""` | K8s Secret name containing `BACKUP_ENCRYPTION_PASSWORD` |
+
+### Apps
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| apps.namespace | string | `""` | Namespace where LlamaDeployment CRs and all operator-managed child resources live. Empty = release namespace. When set, the operator + control plane stay in the release namespace and target this namespace for all app resources. |
 
 ### Operator
 

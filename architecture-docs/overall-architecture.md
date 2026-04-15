@@ -131,3 +131,21 @@ sequenceDiagram
 - **Control Plane**: Communicates with K8s via client libraries
 - **CLI**: HTTP calls to Control Plane API
 - **Workflow APIs**: Direct HTTP/WebSocket to API Server pods
+
+## Namespace Layout
+
+Set `apps.namespace` to run the control plane + operator in the release
+namespace and put `LlamaDeployment` CRs and their child resources (Deployments,
+Pods, Services, Secrets, ServiceAccounts, ConfigMaps, Ingresses, NetworkPolicies,
+build Jobs) in a separate namespace. Unset = everything in the release namespace.
+
+CRs stay co-located with their children (cross-namespace owner references are
+not allowed). Only `WATCH_NAMESPACE` (operator) and `KUBERNETES_NAMESPACE`
+(control plane) point at the apps namespace; reconciler code is unchanged.
+
+RBAC in split mode: apps-namespace Role with every rule except
+`coordination.k8s.io/leases`, release-namespace Role with just that rule for
+leader election. Unset collapses to one Role.
+
+`imagePullSecrets` are not mirrored — provision them in the apps namespace, or
+use node-level pull credentials.

@@ -1,10 +1,11 @@
 {{- if .Values.networkPolicy.enabled }}
-# Network policy for deployment pods - restrict egress to only necessary services
+# Egress restrictions for app pods. Lives in the apps namespace (NetworkPolicy
+# can only select pods in its own namespace).
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: llama-deployment-pods
-  namespace: {{ .Release.Namespace }}
+  namespace: {{ include "llama-agents.apps.namespace" . }}
   labels:
     app: {{ include "llama-agents.controlplane.name" . }}
     component: deployment-pods
@@ -19,9 +20,12 @@ spec:
   policyTypes:
   - Egress
   egress:
-  # Allow access to control plane build API
+  # Control plane build API (in the release namespace).
   - to:
-    - podSelector:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: {{ .Release.Namespace }}
+      podSelector:
         matchLabels:
           app: {{ include "llama-agents.controlplane.name" . }}
     ports:

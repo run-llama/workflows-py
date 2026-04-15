@@ -159,6 +159,14 @@ controlPlane:
     # @section -- Control Plane
     # targetMemoryUtilizationPercentage: 80
 
+apps:
+  # -- Namespace where LlamaDeployment CRs and all operator-managed child
+  # resources live. Empty = release namespace. When set, the operator + control
+  # plane stay in the release namespace and target this namespace for all app
+  # resources.
+  # @section -- Apps
+  namespace: ""
+
 operator:
   # -- Deploy the operator
   # @section -- Operator

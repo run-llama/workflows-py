@@ -50,6 +50,8 @@ spec:
         {{- end }}
         env:
         - name: WATCH_NAMESPACE
+          value: {{ include "llama-agents.apps.namespace" . | quote }}
+        - name: LLAMA_DEPLOY_SYSTEM_NAMESPACE
           valueFrom:
             fieldRef:
               fieldPath: metadata.namespace

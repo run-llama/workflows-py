@@ -48,6 +48,8 @@ spec:
         - containerPort: {{ .Values.controlPlane.buildApi.port }}
           name: build-api
         env:
+        - name: KUBERNETES_NAMESPACE
+          value: {{ include "llama-agents.apps.namespace" . | quote }}
         - name: DEFAULT_APPSERVER_IMAGE_TAG
           value: {{ .Values.controlPlane.defaultAppserverImageTag | default .Values.images.appserver.tag | quote }}
         - name: S3_ENDPOINT_URL

@@ -3,8 +3,10 @@
 # Pass target via: tilt up -- --target=docker-desktop
 
 config.define_string('target', args=True, usage='Cluster target: kind or docker-desktop')
+config.define_string('apps-namespace', args=False, usage='Namespace for LlamaDeployment CRs and app resources. Unset = release namespace.')
 cfg = config.parse()
 target = cfg.get('target', 'kind')
+apps_namespace = cfg.get('apps-namespace', '')
 
 K8S_CONTEXTS = {
     'kind': 'kind-kind',
@@ -102,25 +104,29 @@ local(
 # Helm deployment
 # ---------------------------------------------------------------------------
 
+helm_sets = [
+    # Controlplane + operator: repos match docker_build names so Tilt
+    # auto-replaces the image: field with its content-addressed ref.
+    'images.controlPlane.repository=llama-agents-control-plane',
+    'images.controlPlane.tag=unused-tilt-will-replace',
+    'images.operator.repository=llama-agents-operator',
+    'images.operator.tag=unused-tilt-will-replace',
+    # Appserver: operator reads these as env vars at runtime.
+    # Fixed tag matches what local_resource loads into kind.
+    'images.appserver.repository=llama-agents-appserver',
+    'images.appserver.tag=%s' % APPSERVER_TAG,
+    'images.appserver.pullPolicy=Never',
+]
+if apps_namespace:
+    helm_sets.append('apps.namespace=%s' % apps_namespace)
+
 k8s_yaml(
     helm(
         '../charts/llama-agents',
         name='llama-agents',
         namespace='llama-agents',
         values=['tilt/helm/values-dev.yaml'],
-        set=[
-            # Controlplane + operator: repos match docker_build names so Tilt
-            # auto-replaces the image: field with its content-addressed ref.
-            'images.controlPlane.repository=llama-agents-control-plane',
-            'images.controlPlane.tag=unused-tilt-will-replace',
-            'images.operator.repository=llama-agents-operator',
-            'images.operator.tag=unused-tilt-will-replace',
-            # Appserver: operator reads these as env vars at runtime.
-            # Fixed tag matches what local_resource loads into kind.
-            'images.appserver.repository=llama-agents-appserver',
-            'images.appserver.tag=%s' % APPSERVER_TAG,
-            'images.appserver.pullPolicy=Never',
-        ],
+        set=helm_sets,
     ),
 )
 

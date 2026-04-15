@@ -36,3 +36,19 @@ llama-agents-build
 {{ include "llama-agents.name" . }}
 {{- end -}}
 {{- end -}}
+
+{{/* Namespace for LlamaDeployment CRs and child resources. Defaults to release namespace. */}}
+{{- define "llama-agents.apps.namespace" -}}
+{{- if and .Values.apps .Values.apps.namespace -}}
+{{ .Values.apps.namespace }}
+{{- else -}}
+{{ .Release.Namespace }}
+{{- end -}}
+{{- end -}}
+
+{{/* True when apps namespace differs from release namespace. */}}
+{{- define "llama-agents.apps.splitNamespace" -}}
+{{- if ne (include "llama-agents.apps.namespace" .) .Release.Namespace -}}
+true
+{{- end -}}
+{{- end -}}

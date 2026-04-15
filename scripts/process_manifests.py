@@ -30,15 +30,27 @@ def process_rbac() -> bool:
         print(f"Error: Expected ClusterRole, got {rbac.get('kind')}")
         return False
 
-    # Create Helm template with conditional and proper metadata
-    # Generate Role (namespace-scoped) instead of ClusterRole
+    # Create Helm template with conditional and proper metadata.
+    # Split mode (apps namespace != release namespace): apps-ns Role carries
+    # every rule except leader-election leases, release-ns Role carries only
+    # the leases rule (controller-runtime places the Lease in the operator
+    # pod's own namespace). Single-namespace mode collapses to one Role.
     template = """{{- if .Values.rbac.create }}
+{{- $appsNs := include "llama-agents.apps.namespace" . -}}
+{{- $releaseNs := .Release.Namespace -}}
+{{- $split := include "llama-agents.apps.splitNamespace" . -}}
+{{- $saName := include "llama-agents.serviceAccountName" . -}}
+{{- /*
+Split mode (apps != release): apps-ns Role with everything except leases,
+release-ns Role with only leases (leader-election Lease lives in the
+operator pod's namespace). Single-namespace mode: one combined Role.
+*/ -}}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: {{ include "llama-agents.serviceAccountName" . }}
-  namespace: {{ .Release.Namespace }}
+  name: {{ $saName }}
+  namespace: {{ $appsNs }}
   {{- with .Values.rbac.roleAnnotations }}
   annotations:
     {{- toYaml . | nindent 4 }}
@@ -46,23 +58,29 @@ metadata:
 rules:
 """
 
-    # Add the generated rules
+    # Add the generated rules. The leader-election leases rule is conditional:
+    # in split mode it moves to a separate release-ns Role below.
     for rule in rbac.get("rules", []):
         api_groups = rule.get("apiGroups", [])
         resources = rule.get("resources", [])
         verbs = rule.get("verbs", [])
 
+        is_leases = api_groups == ["coordination.k8s.io"] and resources == ["leases"]
+        if is_leases:
+            template += "{{- if not $split }}\n"
         template += f"- apiGroups: {api_groups}\n"
         template += f"  resources: {resources}\n"
         template += f"  verbs: {verbs}\n"
+        if is_leases:
+            template += "{{- end }}\n"
 
     # Add RoleBinding (namespace-scoped) instead of ClusterRoleBinding
     template += """---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: {{ include "llama-agents.serviceAccountName" . }}
-  namespace: {{ .Release.Namespace }}
+  name: {{ $saName }}
+  namespace: {{ $appsNs }}
   {{- with .Values.rbac.roleBindingAnnotations }}
   annotations:
     {{- toYaml . | nindent 4 }}
@@ -70,11 +88,46 @@ metadata:
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: {{ include "llama-agents.serviceAccountName" . }}
+  name: {{ $saName }}
 subjects:
 - kind: ServiceAccount
-  name: {{ include "llama-agents.serviceAccountName" . }}
-  namespace: {{ .Release.Namespace }}
+  name: {{ $saName }}
+  namespace: {{ $releaseNs }}
+{{- if $split }}
+---
+# Leader-election Lease lives in the operator pod's namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $saName }}-leader-election
+  namespace: {{ $releaseNs }}
+  {{- with .Values.rbac.roleAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+rules:
+- apiGroups: ['coordination.k8s.io']
+  resources: ['leases']
+  verbs: ['create', 'delete', 'get', 'list', 'patch', 'update', 'watch']
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $saName }}-leader-election
+  namespace: {{ $releaseNs }}
+  {{- with .Values.rbac.roleBindingAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $saName }}-leader-election
+subjects:
+- kind: ServiceAccount
+  name: {{ $saName }}
+  namespace: {{ $releaseNs }}
+{{- end }}
 {{- end }}
 """
 

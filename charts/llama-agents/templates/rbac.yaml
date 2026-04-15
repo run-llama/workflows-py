@@ -1,10 +1,19 @@
 {{- if .Values.rbac.create }}
+{{- $appsNs := include "llama-agents.apps.namespace" . -}}
+{{- $releaseNs := .Release.Namespace -}}
+{{- $split := include "llama-agents.apps.splitNamespace" . -}}
+{{- $saName := include "llama-agents.serviceAccountName" . -}}
+{{- /*
+Split mode (apps != release): apps-ns Role with everything except leases,
+release-ns Role with only leases (leader-election Lease lives in the
+operator pod's namespace). Single-namespace mode: one combined Role.
+*/ -}}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: {{ include "llama-agents.serviceAccountName" . }}
-  namespace: {{ .Release.Namespace }}
+  name: {{ $saName }}
+  namespace: {{ $appsNs }}
   {{- with .Values.rbac.roleAnnotations }}
   annotations:
     {{- toYaml . | nindent 4 }}
@@ -31,9 +40,11 @@ rules:
 - apiGroups: ['batch']
   resources: ['jobs']
   verbs: ['create', 'delete', 'get', 'list', 'patch', 'update', 'watch']
+{{- if not $split }}
 - apiGroups: ['coordination.k8s.io']
   resources: ['leases']
   verbs: ['create', 'delete', 'get', 'list', 'patch', 'update', 'watch']
+{{- end }}
 - apiGroups: ['deploy.llamaindex.ai']
   resources: ['llamadeployments']
   verbs: ['create', 'delete', 'get', 'list', 'patch', 'update', 'watch']
@@ -53,8 +64,8 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: {{ include "llama-agents.serviceAccountName" . }}
-  namespace: {{ .Release.Namespace }}
+  name: {{ $saName }}
+  namespace: {{ $appsNs }}
   {{- with .Values.rbac.roleBindingAnnotations }}
   annotations:
     {{- toYaml . | nindent 4 }}
@@ -62,9 +73,44 @@ metadata:
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: {{ include "llama-agents.serviceAccountName" . }}
+  name: {{ $saName }}
 subjects:
 - kind: ServiceAccount
-  name: {{ include "llama-agents.serviceAccountName" . }}
-  namespace: {{ .Release.Namespace }}
+  name: {{ $saName }}
+  namespace: {{ $releaseNs }}
+{{- if $split }}
+---
+# Leader-election Lease lives in the operator pod's namespace.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $saName }}-leader-election
+  namespace: {{ $releaseNs }}
+  {{- with .Values.rbac.roleAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+rules:
+- apiGroups: ['coordination.k8s.io']
+  resources: ['leases']
+  verbs: ['create', 'delete', 'get', 'list', 'patch', 'update', 'watch']
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $saName }}-leader-election
+  namespace: {{ $releaseNs }}
+  {{- with .Values.rbac.roleBindingAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $saName }}-leader-election
+subjects:
+- kind: ServiceAccount
+  name: {{ $saName }}
+  namespace: {{ $releaseNs }}
+{{- end }}
 {{- end }}
