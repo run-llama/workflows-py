@@ -74,12 +74,6 @@ install requires draining and recreating `LlamaDeployment` CRs.
 
 ## Values
 
-### Apps
-
-| Key | Type | Default | Description |
-|-----|------|---------|-------------|
-| apps.namespace | string | `""` | Namespace where LlamaDeployment CRs and all operator-managed child resources live. Empty = release namespace. When set, the operator + control plane stay in the release namespace and target this namespace for all app resources. |
-
 ### Metrics
 
 | Key | Type | Default | Description |
@@ -142,6 +136,12 @@ install requires draining and recreating `LlamaDeployment` CRs.
 | controlPlane.objectStorage.backupKeyPrefix | string | `"backups"` | Key prefix for backup archives in the bucket |
 | controlPlane.objectStorage.codeRepoKeyPrefix | string | `"git"` | Key prefix for code repositories in the bucket |
 | controlPlane.objectStorage.backupEncryptionSecretRef | string | `""` | K8s Secret name containing `BACKUP_ENCRYPTION_PASSWORD` |
+
+### Apps
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| apps.namespace | string | `""` | Namespace where LlamaDeployment CRs and all operator-managed child resources live. Empty = release namespace. When set, the operator + control plane stay in the release namespace and target this namespace for all app resources. |
 
 ### Operator
 
