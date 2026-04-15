@@ -1,5 +1,11 @@
 # llama-agents-agentcore
 
+## 0.8.18
+
+### Patch Changes
+
+- 7cf1c10: Remove duplicate runtime decorator
+
 ## 0.8.17
 
 ### Patch Changes
