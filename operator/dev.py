@@ -24,6 +24,7 @@ import click
 
 PROJECT_ROOT = Path(__file__).parent.parent.absolute()
 NAMESPACE = "llama-agents"
+APPS_NAMESPACE = "llama-agents-apps"
 
 TARGETS = ("kind", "docker-desktop")
 K8S_CONTEXTS = {
@@ -201,26 +202,50 @@ target_option = click.option(
     help="Kubernetes target cluster. [default: kind]",
 )
 
+apps_ns_option = click.option(
+    "--apps-namespace",
+    "apps_namespace",
+    is_flag=False,
+    flag_value=APPS_NAMESPACE,
+    default=None,
+    envvar="DEV_APPS_NAMESPACE",
+    help=(
+        "Run in split-namespace mode: put LlamaDeployment CRs and app "
+        f"resources in this namespace (default: {APPS_NAMESPACE}). "
+        "Unset = single-namespace mode."
+    ),
+)
+
 
 def resolve_target(ctx: click.Context, target: str | None) -> str:
     return target or ctx.obj.get("target") or "kind"
 
 
+def resolve_apps_namespace(
+    ctx: click.Context, apps_namespace: str | None
+) -> str | None:
+    return apps_namespace or ctx.obj.get("apps_namespace")
+
+
 @click.group()
 @target_option
+@apps_ns_option
 @click.pass_context
-def cli(ctx: click.Context, target: str | None) -> None:
+def cli(ctx: click.Context, target: str | None, apps_namespace: str | None) -> None:
     """Local development environment for cloud_llama_deploy."""
     ctx.ensure_object(dict)
     ctx.obj["target"] = target
+    ctx.obj["apps_namespace"] = apps_namespace
 
 
 @cli.command()
 @target_option
+@apps_ns_option
 @click.pass_context
-def up(ctx: click.Context, target: str | None) -> None:
+def up(ctx: click.Context, target: str | None, apps_namespace: str | None) -> None:
     """Create/ensure cluster and start tilt."""
     target = resolve_target(ctx, target)
+    apps_namespace = resolve_apps_namespace(ctx, apps_namespace)
 
     # Check required tools
     version_cmds: dict[str, list[str]] = {
@@ -241,10 +266,11 @@ def up(ctx: click.Context, target: str | None) -> None:
     else:
         ensure_docker_desktop_cluster()
 
-    # Ensure namespace exists
-    result = run(["kubectl", "get", "namespace", NAMESPACE], check=False, capture=True)
-    if result.returncode != 0:
-        run(["kubectl", "create", "namespace", NAMESPACE])
+    # Ensure namespaces exist
+    for ns in [NAMESPACE] + ([apps_namespace] if apps_namespace else []):
+        result = run(["kubectl", "get", "namespace", ns], check=False, capture=True)
+        if result.returncode != 0:
+            run(["kubectl", "create", "namespace", ns])
 
     if not (PROJECT_ROOT / ".env").exists():
         print(
@@ -256,38 +282,47 @@ def up(ctx: click.Context, target: str | None) -> None:
     print("  API:     http://localhost:8011")
     print("  Tilt UI: http://localhost:10350")
     print(f"  Ingress: *.127.0.0.1.nip.io:{ingress_port}")
-    os.execvp(
+    if apps_namespace:
+        print(f"  Apps namespace: {apps_namespace}")
+    tilt_args = [
         "tilt",
-        [
-            "tilt",
-            "up",
-            "-f",
-            str(PROJECT_ROOT / "operator" / "Tiltfile"),
-            "--",
-            target,
-        ],
-    )
+        "up",
+        "-f",
+        str(PROJECT_ROOT / "operator" / "Tiltfile"),
+        "--",
+        target,
+    ]
+    if apps_namespace:
+        tilt_args += ["--apps-namespace", apps_namespace]
+    os.execvp("tilt", tilt_args)
 
 
 @cli.command()
 @click.option("--delete", is_flag=True, help="Also delete the kind cluster")
 @target_option
+@apps_ns_option
 @click.pass_context
-def down(ctx: click.Context, delete: bool, target: str | None) -> None:
+def down(
+    ctx: click.Context,
+    delete: bool,
+    target: str | None,
+    apps_namespace: str | None,
+) -> None:
     """Tear down tilt resources. Use --delete to also remove the cluster (kind only)."""
     target = resolve_target(ctx, target)
+    apps_namespace = resolve_apps_namespace(ctx, apps_namespace)
 
-    run(
-        [
-            "tilt",
-            "down",
-            "-f",
-            str(PROJECT_ROOT / "operator" / "Tiltfile"),
-            "--",
-            target,
-        ],
-        check=False,
-    )
+    tilt_args = [
+        "tilt",
+        "down",
+        "-f",
+        str(PROJECT_ROOT / "operator" / "Tiltfile"),
+        "--",
+        target,
+    ]
+    if apps_namespace:
+        tilt_args += ["--apps-namespace", apps_namespace]
+    run(tilt_args, check=False)
 
     if delete:
         if target != "kind":
@@ -300,10 +335,12 @@ def down(ctx: click.Context, delete: bool, target: str | None) -> None:
 
 @cli.command()
 @target_option
+@apps_ns_option
 @click.pass_context
-def status(ctx: click.Context, target: str | None) -> None:
+def status(ctx: click.Context, target: str | None, apps_namespace: str | None) -> None:
     """Show cluster and deployment status."""
     target = resolve_target(ctx, target)
+    apps_namespace = resolve_apps_namespace(ctx, apps_namespace)
     context = K8S_CONTEXTS[target]
 
     if target == "kind":
@@ -323,6 +360,9 @@ def status(ctx: click.Context, target: str | None) -> None:
         run(["kubectl", "config", "use-context", context])
 
     run(["kubectl", "get", "pods", "-n", NAMESPACE], check=False)
+    if apps_namespace and apps_namespace != NAMESPACE:
+        print()
+        run(["kubectl", "get", "pods", "-n", apps_namespace], check=False)
 
 
 if __name__ == "__main__":
