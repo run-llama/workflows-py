@@ -84,6 +84,15 @@ class ControlPlaneSettings(BaseSettings):
         description="S3 secret key",
         alias="S3_SECRET_KEY",
     )
+    s3_unsigned: bool = Field(
+        default=False,
+        description=(
+            "Send S3 requests unsigned (no Authorization header). "
+            "Enable for authless S3-compatible backends (s3proxy, LocalStack, "
+            "public buckets). Overrides any configured credentials."
+        ),
+        alias="S3_UNSIGNED",
+    )
 
     # Backup-specific settings
     backup_s3_key_prefix: str = Field(

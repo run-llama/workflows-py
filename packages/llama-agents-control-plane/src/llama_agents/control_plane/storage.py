@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import logging
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, AsyncIterator, TypedDict
+from typing import TYPE_CHECKING, Any, AsyncIterator, TypedDict
 
 import aioboto3
+from botocore import UNSIGNED
+from botocore.client import Config
 
 if TYPE_CHECKING:
     from types_aiobotocore_s3 import S3Client
@@ -19,6 +21,7 @@ class _S3ClientKwargs(TypedDict, total=False):
     region_name: str
     aws_access_key_id: str
     aws_secret_access_key: str
+    config: Any
 
 
 class S3ObjectStorage:
@@ -36,6 +39,7 @@ class S3ObjectStorage:
         access_key: str | None = None,
         secret_key: str | None = None,
         key_prefix: str = "",
+        unsigned: bool = False,
     ) -> None:
         self._bucket = bucket
         self._key_prefix = key_prefix.strip("/")
@@ -45,7 +49,12 @@ class S3ObjectStorage:
             self._client_kwargs["endpoint_url"] = endpoint_url
         if region:
             self._client_kwargs["region_name"] = region
-        if access_key and secret_key:
+        if unsigned:
+            # UNSIGNED bypasses boto's credential chain entirely — any creds
+            # set via env/IRSA/etc. are ignored. Intended for authless
+            # S3-compatible backends (s3proxy, LocalStack, public buckets).
+            self._client_kwargs["config"] = Config(signature_version=UNSIGNED)
+        elif access_key and secret_key:
             self._client_kwargs["aws_access_key_id"] = access_key
             self._client_kwargs["aws_secret_access_key"] = secret_key
 

@@ -38,6 +38,7 @@ class BuildArtifactStorage(S3ObjectStorage):
         access_key: str | None = None,
         secret_key: str | None = None,
         key_prefix: str = "builds",
+        unsigned: bool = False,
     ) -> None:
         super().__init__(
             bucket=bucket,
@@ -46,6 +47,7 @@ class BuildArtifactStorage(S3ObjectStorage):
             access_key=access_key,
             secret_key=secret_key,
             key_prefix=key_prefix,
+            unsigned=unsigned,
         )
 
     def _key(self, deployment_name: str, build_id: str) -> str:

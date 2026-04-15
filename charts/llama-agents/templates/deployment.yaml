@@ -56,6 +56,8 @@ spec:
           value: {{ required "controlPlane.objectStorage.s3.bucket is required" .Values.controlPlane.objectStorage.s3.bucket | quote }}
         - name: S3_REGION
           value: {{ .Values.controlPlane.objectStorage.s3.region | quote }}
+        - name: S3_UNSIGNED
+          value: {{ .Values.controlPlane.objectStorage.s3.unsigned | default false | quote }}
         - name: BUILD_S3_KEY_PREFIX
           value: {{ .Values.controlPlane.objectStorage.buildKeyPrefix | quote }}
         - name: BACKUP_S3_KEY_PREFIX
