@@ -1,7 +1,7 @@
 ---
 sidebar:
   order: 10
-title: Retry steps execution
+title: Error handling
 ---
 
 A step that fails its execution might result in the failure of the entire workflow, but oftentimes errors are
@@ -197,4 +197,105 @@ from workflows.retry_policy import ExponentialBackoffRetryPolicy
 policy = ExponentialBackoffRetryPolicy(
     initial_delay=1, multiplier=2, max_delay=30, maximum_attempts=5,
 )
+```
+
+## Inspecting retry state inside a step
+
+`Context.retry_info()` returns a `RetryInfo` describing the current attempt.
+Use it to adapt behavior between retries — widen a search, shorten a timeout,
+log a warning:
+
+```python
+from workflows import Context, Workflow, step
+from workflows.events import StartEvent, StopEvent
+from workflows.retry_policy import retry_policy, stop_after_attempt
+
+
+class MyWorkflow(Workflow):
+    @step(retry_policy=retry_policy(stop=stop_after_attempt(3)))
+    async def flaky(self, ctx: Context, ev: StartEvent) -> StopEvent:
+        info = ctx.retry_info()
+        if info.last_exception is not None:
+            logger.warning(
+                "retry %d after %s", info.retry_number, info.last_exception.message
+            )
+        ...
+```
+
+`retry_number` is `0` on the first run. `last_exception` and `last_failed_at`
+are `None` until the first failure, then describe the most recent prior failure.
+
+## Recovering when retries are exhausted
+
+When a policy gives up, the exception propagates and fails the workflow — unless
+a `@catch_error` handler is declared. A handler is a step that accepts
+`StepFailedEvent`; it can return a `StopEvent` to end the run gracefully, return
+some other event to re-route the workflow, or raise to fail with a new
+exception. Inspect `ev.step_name` and `ev.exception` to decide; see the
+[`StepFailedEvent` API reference](/python/workflows-api-reference/events/#workflows.events.StepFailedEvent)
+for the full set of fields.
+
+```python
+from workflows import Context, Workflow, catch_error, step
+from workflows.events import StartEvent, StepFailedEvent, StopEvent
+from workflows.retry_policy import retry_policy, stop_after_attempt, wait_fixed
+
+
+class Pipeline(Workflow):
+    @step(retry_policy=retry_policy(wait=wait_fixed(1), stop=stop_after_attempt(3)))
+    async def fetch(self, ev: StartEvent) -> StopEvent:
+        return StopEvent(result=await call_api())
+
+    @catch_error
+    async def on_failure(
+        self, ctx: Context, ev: StepFailedEvent
+    ) -> StopEvent:
+        return StopEvent(
+            result={"failed_step": ev.step_name, "error": ev.exception.message}
+        )
+```
+
+A bare `@catch_error` is a **wildcard** — it catches any step whose retries are
+exhausted and isn't claimed by a more specific handler. Only one wildcard is
+allowed per workflow.
+
+### Scoping to specific steps
+
+Pass `for_steps=[...]` to limit which steps a handler covers. A step name may
+appear in at most one scoped handler; unknown names are rejected at
+construction time.
+
+```python
+class Pipeline(Workflow):
+    @step(retry_policy=...)
+    async def fetch(self, ev: StartEvent) -> FetchedEvent: ...
+
+    @step(retry_policy=...)
+    async def parse(self, ev: FetchedEvent) -> StopEvent: ...
+
+    @catch_error(for_steps=["fetch"])
+    async def on_fetch_failure(
+        self, ctx: Context, ev: StepFailedEvent
+    ) -> StopEvent:
+        return StopEvent(result={"fallback": True})
+
+    @catch_error  # wildcard — covers `parse` and anything else
+    async def on_any_failure(
+        self, ctx: Context, ev: StepFailedEvent
+    ) -> StopEvent:
+        return StopEvent(result={"aborted": ev.step_name})
+```
+
+### Recovery budget
+
+Handlers can themselves emit events that flow back into the graph, so a lineage
+may re-enter the same handler. `max_recoveries` (default `1`) caps how many
+times that can happen per event lineage before the workflow fails instead of
+re-entering. Set it higher for handlers that participate in a bounded retry
+loop; keep it at `1` for terminal handlers.
+
+```python
+@catch_error(for_steps=["fetch", "retry_fetch"], max_recoveries=2)
+async def on_failure(self, ctx: Context, ev: StepFailedEvent) -> RetryFetch:
+    return RetryFetch()
 ```

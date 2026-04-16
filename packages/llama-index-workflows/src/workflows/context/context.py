@@ -34,6 +34,7 @@ from workflows.events import (
     StopEvent,
 )
 from workflows.handler import WorkflowHandler
+from workflows.retry_policy import RetryInfo
 from workflows.runtime.types.internal_state import BrokerState
 from workflows.runtime.types.plugin import (
     ExternalRunAdapter,
@@ -573,6 +574,34 @@ class Context(Generic[MODEL_T]):
         return await self._require_internal(fn="wait_for_event").wait_for_event(
             event_type, waiter_event, waiter_id, requirements, timeout
         )
+
+    def retry_info(self) -> RetryInfo:
+        """Return a snapshot of the currently-executing step's retry state.
+
+        Returns:
+            RetryInfo: 0-based retry number (0 on first run, 1 on first retry),
+            seconds since the first attempt, the most recent prior exception
+            (or `None`), and the timezone-aware UTC datetime of that failure
+            (or `None`).
+
+        Raises:
+            WorkflowRuntimeError: If called outside of a step function.
+
+        Examples:
+            ```python
+            @step(retry_policy=ConstantDelay(maximum_attempts=3, delay=0))
+            async def flaky(self, ctx: Context, ev: StartEvent) -> StopEvent:
+                info = ctx.retry_info()
+                if info.last_exception is not None:
+                    logger.info(
+                        "retry %d: %s",
+                        info.retry_number,
+                        info.last_exception.message,
+                    )
+                ...
+            ```
+        """
+        return self._require_internal(fn="retry_info").retry_info()
 
     def write_event_to_stream(self, ev: Event | None) -> None:
         """Enqueue an event for streaming to [WorkflowHandler]](workflows.handler.WorkflowHandler).

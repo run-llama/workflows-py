@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 LlamaIndex Inc.
 
+from __future__ import annotations
+
 
 class WorkflowValidationError(Exception):
     """Raised when the workflow configuration or step signatures are invalid."""

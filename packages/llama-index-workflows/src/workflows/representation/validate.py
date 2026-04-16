@@ -3,10 +3,26 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
+from typing import Protocol
 
 from workflows.decorators import StepConfig, WorkflowGraphCheck
 from workflows.events import HumanResponseEvent, InputRequiredEvent, StopEvent
+
+
+class CatchErrorHandlerLike(Protocol):
+    """Minimal shape needed for structural catch_error validation."""
+
+    @property
+    def step_name(self) -> str: ...
+
+    @property
+    def for_steps(self) -> list[str] | None: ...
+
+    @property
+    def max_recoveries(self) -> int: ...
+
 
 # Graph nodes: step names (str) for steps, event classes (type) for events.
 GraphNode = str | type
@@ -41,12 +57,14 @@ class StepGraph:
 def build_step_graph(
     steps: dict[str, StepConfig],
     start_event_class: type,
+    catch_error_steps: list[str] | None = None,
 ) -> StepGraph:
     """Build a StepGraph from step configs and a start event class.
 
     Constructs the adjacency list, then computes forward reachability from input
-    events (StartEvent + HumanResponseEvent subclasses) and reverse reachability
-    from output events (StopEvent + InputRequiredEvent).
+    events (StartEvent + HumanResponseEvent subclasses + any catch_error handler
+    step names) and reverse reachability from output events (StopEvent +
+    InputRequiredEvent).
     """
     outgoing: dict[GraphNode, list[GraphNode]] = {}
     event_types: set[type] = set()
@@ -63,11 +81,16 @@ def build_step_graph(
             event_types.add(rt)
             outgoing.setdefault(name, []).append(rt)
 
-    # Forward DFS from StartEvent + HumanResponseEvent subclasses
+    # Forward DFS from StartEvent + HumanResponseEvent subclasses +
+    # catch_error handler step names (their sub-graphs are reachable via
+    # runtime routing of StepFailedEvent, not via any event in the graph).
     seeds: list[GraphNode] = [start_event_class]
     for ev_type in event_types:
         if issubclass(ev_type, HumanResponseEvent) and ev_type not in seeds:
             seeds.append(ev_type)
+    for handler_name in catch_error_steps or []:
+        if handler_name not in seeds:
+            seeds.append(handler_name)
 
     forward_reachable = _dfs(seeds, outgoing)
 
@@ -124,6 +147,7 @@ def validate_graph(
     steps: dict[str, StepConfig],
     start_event_class: type,
     skip_checks: set[WorkflowGraphCheck] | None = None,
+    catch_error_steps: list[str] | None = None,
 ) -> list[GraphValidationError]:
     """Validate the graph structure of a workflow, accumulating all errors.
 
@@ -136,6 +160,9 @@ def validate_graph(
         steps: Mapping of step name to StepConfig.
         start_event_class: The StartEvent subclass for this workflow.
         skip_checks: Workflow-level checks to skip entirely.
+        catch_error_steps: Names of catch_error handler steps; their sub-graphs
+            are forward-reachable via runtime routing rather than by
+            connection to an event in the main graph.
 
     Returns:
         List of GraphValidationError (empty if the graph is valid).
@@ -143,7 +170,7 @@ def validate_graph(
     skip_checks = skip_checks or set()
     errors: list[GraphValidationError] = []
 
-    graph = build_step_graph(steps, start_event_class)
+    graph = build_step_graph(steps, start_event_class, catch_error_steps)
 
     # Check 1: Reachability
     if "reachability" not in skip_checks:
@@ -215,5 +242,54 @@ def validate_graph(
                     step_names=dead_end_steps,
                 )
             )
+
+    return errors
+
+
+def validate_catch_error_handlers(
+    handlers: Iterable[CatchErrorHandlerLike],
+    step_names: set[str],
+) -> list[str]:
+    """Validate structural invariants of ``@catch_error`` handlers.
+
+    Returns a list of error messages; empty when the handler set is valid.
+    Callers are responsible for raising.
+    """
+    errors: list[str] = []
+
+    handlers = list(handlers)
+    wildcard_handlers = [h for h in handlers if h.for_steps is None]
+    if len(wildcard_handlers) > 1:
+        names = ", ".join(sorted(h.step_name for h in wildcard_handlers))
+        errors.append(
+            f"Only one wildcard @catch_error handler is allowed per workflow, "
+            f"found {len(wildcard_handlers)}: {names}"
+        )
+
+    handler_step_names = {h.step_name for h in handlers}
+    claim_owner: dict[str, str] = {}
+    for handler in handlers:
+        if handler.for_steps is None:
+            continue
+        for target in handler.for_steps:
+            if target not in step_names:
+                errors.append(
+                    f"@catch_error handler '{handler.step_name}' lists "
+                    f"unknown step '{target}' in for_steps."
+                )
+                continue
+            if target == handler.step_name or target in handler_step_names:
+                errors.append(
+                    f"@catch_error handler '{handler.step_name}' cannot "
+                    f"cover another handler step '{target}'."
+                )
+                continue
+            if target in claim_owner:
+                errors.append(
+                    f"Step '{target}' is claimed by two @catch_error "
+                    f"handlers: '{claim_owner[target]}' and '{handler.step_name}'."
+                )
+                continue
+            claim_owner[target] = handler.step_name
 
     return errors

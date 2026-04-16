@@ -29,6 +29,7 @@ from .events import (
     HumanResponseEvent,
     InputRequiredEvent,
     StartEvent,
+    StepFailedEvent,
     StopEvent,
 )
 from .handler import WorkflowHandler
@@ -148,6 +149,12 @@ class Workflow(metaclass=WorkflowMeta):
         # Detect StartEvent issues before StopEvent for clearer guidance
         self._start_event_class = self._ensure_start_event_class()
         self._stop_event_class = self._ensure_stop_event_class()
+        # Set by _validate(); see that method for the enforcement rules.
+        # Handler step name -> CatchErrorHandler descriptor.
+        self._catch_error_handlers: dict[str, CatchErrorHandler] = {}
+        # Step name -> handler step name that owns it (scoped wins, then
+        # wildcard fills). Handler steps themselves are not entries.
+        self._handler_for_step: dict[str, str] = {}
         self._events = self._ensure_events_collected()
         # Resource management
         self._resource_manager = resource_manager or ResourceManager()
@@ -498,6 +505,7 @@ class Workflow(metaclass=WorkflowMeta):
             steps=step_configs,
             start_event_class=self._start_event_class,
             skip_checks=self._skip_graph_checks,
+            catch_error_steps=list(self._catch_error_handlers.keys()),
         )
         if errors:
             detail = "\n".join(
@@ -627,18 +635,40 @@ class Workflow(metaclass=WorkflowMeta):
         produced_events: set[type] = {self._start_event_class}
         consumed_events: set[type] = set()
 
-        # Collect steps that incorrectly accept StopEvent
+        # Check that no user-defined step accepts StopEvent (only _done step should)
         steps_accepting_stop_event: list[str] = []
+        # Collect @catch_error handlers in a single pass.
+        catch_error_handlers: list[CatchErrorHandler] = []
+
+        all_step_names = set(self._get_steps().keys())
 
         for name, step_func in self._get_steps().items():
             step_config: StepConfig = step_func._step_config
 
-            # Check that no user-defined step accepts StopEvent (only _done step should)
             if name != "_done":
                 for event_type in step_config.accepted_events:
                     if issubclass(event_type, StopEvent):
                         steps_accepting_stop_event.append(name)
                         break
+
+            if step_config.role == "catch_error":
+                max_recoveries = step_config.catch_error_max_recoveries
+                if not isinstance(max_recoveries, int) or max_recoveries < 1:
+                    raise WorkflowValidationError(
+                        f"@catch_error handler '{name}' has max_recoveries="
+                        f"{max_recoveries!r}; must be an integer >= 1."
+                    )
+                catch_error_handlers.append(
+                    CatchErrorHandler(
+                        step_name=name,
+                        for_steps=(
+                            list(step_config.catch_error_for_steps)
+                            if step_config.catch_error_for_steps is not None
+                            else None
+                        ),
+                        max_recoveries=max_recoveries,
+                    )
+                )
 
             for event_type in step_config.accepted_events:
                 consumed_events.add(event_type)
@@ -650,12 +680,41 @@ class Workflow(metaclass=WorkflowMeta):
 
                 produced_events.add(event_type)
 
-        # Raise error if any steps incorrectly accept StopEvent
         if steps_accepting_stop_event:
             step_names = "', '".join(steps_accepting_stop_event)
             plural = "" if len(steps_accepting_stop_event) == 1 else "s"
             msg = f"Step{plural} '{step_names}' cannot accept StopEvent. StopEvent signals the end of the workflow. Use a different Event type instead."
             raise WorkflowValidationError(msg)
+
+        from .representation.validate import validate_catch_error_handlers
+
+        handler_errors = validate_catch_error_handlers(
+            catch_error_handlers, all_step_names
+        )
+        if handler_errors:
+            raise WorkflowValidationError("\n".join(handler_errors))
+
+        handler_step_names = {h.step_name for h in catch_error_handlers}
+        handler_for_step: dict[str, str] = {}
+        for handler in catch_error_handlers:
+            if handler.for_steps is None:
+                continue
+            for target in handler.for_steps:
+                handler_for_step[target] = handler.step_name
+        wildcard_handlers = [h for h in catch_error_handlers if h.for_steps is None]
+        wildcard = wildcard_handlers[0] if wildcard_handlers else None
+        if wildcard is not None:
+            for step_name in all_step_names:
+                if step_name in handler_step_names:
+                    continue
+                if step_name in handler_for_step:
+                    continue
+                if step_name == "_done":
+                    continue
+                handler_for_step[step_name] = wildcard.step_name
+
+        self._catch_error_handlers = {h.step_name: h for h in catch_error_handlers}
+        self._handler_for_step = handler_for_step
 
         # Check if no StopEvent is produced
         stop_ok = False
@@ -667,12 +726,17 @@ class Workflow(metaclass=WorkflowMeta):
             msg = "No event of type StopEvent is produced."
             raise WorkflowValidationError(msg)
 
-        # Check if all consumed events are produced (except specific built-in events)
+        # Check if all consumed events are produced. StepFailedEvent, HumanResponseEvent,
+        # and StopEvent are excluded because they cross the workflow boundary
+        # (emitted by the runtime or external consumer rather than by a step).
         unconsumed_events = consumed_events - produced_events
         unconsumed_events = {
             x
             for x in unconsumed_events
-            if not issubclass(x, (InputRequiredEvent, HumanResponseEvent, StopEvent))
+            if not issubclass(
+                x,
+                (InputRequiredEvent, HumanResponseEvent, StopEvent, StepFailedEvent),
+            )
         }
         if unconsumed_events:
             names = ", ".join(ev.__name__ for ev in unconsumed_events)
@@ -721,6 +785,19 @@ class Workflow(metaclass=WorkflowMeta):
         )
         self._validated_version = self.__class__._step_functions_version
         return self._validation_result
+
+
+@dataclass(frozen=True)
+class CatchErrorHandler:
+    """Runtime descriptor for a @catch_error handler.
+
+    Precomputed by ``_validate()``; consumed by the control loop's failure
+    routing branch and by ``BrokerState.from_workflow``.
+    """
+
+    step_name: str
+    for_steps: list[str] | None
+    max_recoveries: int
 
 
 @dataclass

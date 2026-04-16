@@ -9,3 +9,4 @@
         - WorkflowTimedOutEvent
         - WorkflowCancelledEvent
         - WorkflowFailedEvent
+        - StepFailedEvent

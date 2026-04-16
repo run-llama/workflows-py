@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import dataclasses
 import importlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from workflows.context.context_types import (
@@ -17,10 +17,10 @@ from workflows.context.context_types import (
 from workflows.context.serializers import JsonSerializer
 from workflows.decorators import StepConfig
 from workflows.events import Event
-from workflows.retry_policy import RetryPolicy
+from workflows.retry_policy import ExceptionInfo, RetryPolicy
 from workflows.runtime.types.results import StepWorkerState, StepWorkerWaiter
 from workflows.runtime.types.ticks import TickAddEvent, WorkflowTick
-from workflows.workflow import Workflow
+from workflows.workflow import CatchErrorHandler, Workflow
 
 if TYPE_CHECKING:
     from workflows.context.context_types import SerializedContext
@@ -71,6 +71,8 @@ class BrokerState:
                     for name, step_func in workflow._get_steps().items()
                 },
                 timeout=workflow._timeout,
+                catch_error_handlers=dict(workflow._catch_error_handlers),
+                handler_for_step=dict(workflow._handler_for_step),
             ),
             workers={
                 name: InternalStepWorkerState(
@@ -110,6 +112,9 @@ class BrokerState:
                     event=serializer.serialize(attempt.event),
                     attempts=attempt.attempts or 0,
                     first_attempt_at=attempt.first_attempt_at,
+                    last_exception=attempt.last_exception,
+                    last_failed_at=attempt.last_failed_at,
+                    recovery_counts=dict(attempt.recovery_counts),
                 )
                 for attempt in worker_state.queue
             ]
@@ -184,6 +189,9 @@ class BrokerState:
                     event=serializer.deserialize(attempt.event),
                     attempts=attempt.attempts,
                     first_attempt_at=attempt.first_attempt_at,
+                    last_exception=attempt.last_exception,
+                    last_failed_at=attempt.last_failed_at,
+                    recovery_counts=dict(attempt.recovery_counts),
                 )
                 for attempt in worker_data.queue
             ]
@@ -251,10 +259,14 @@ class BrokerConfig:
     Attributes:
         steps: Configuration for each step indexed by step name
         timeout: Maximum seconds before the workflow times out, or None for no timeout
+        catch_error_handlers: handler step name -> CatchErrorHandler descriptor
+        handler_for_step: step name -> handler step name that owns it
     """
 
     steps: dict[str, InternalStepConfig]
     timeout: float | None
+    catch_error_handlers: dict[str, CatchErrorHandler] = field(default_factory=dict)
+    handler_for_step: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass()
@@ -284,11 +296,16 @@ class EventAttempt:
         event: The event to process
         attempts: Number of times this event has been attempted (0 for first attempt), or None if not yet attempted
         first_attempt_at: Unix timestamp of first attempt, or None if not yet attempted
+        last_exception: Most recent exception, if this attempt is a retry.
+        last_failed_at: Unix timestamp of the most recent failure, or None.
     """
 
     event: Event
     attempts: int | None = None
     first_attempt_at: float | None = None
+    last_exception: ExceptionInfo | None = None
+    last_failed_at: float | None = None
+    recovery_counts: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass()
@@ -339,6 +356,8 @@ class InProgressState:
         shared_state: Snapshot of collected_events and collected_waiters at worker start time
         attempts: Number of times this event has been attempted (including current attempt)
         first_attempt_at: Unix timestamp when this event was first attempted
+        last_exception: Most recent exception from the prior attempt, or None if this is the first attempt.
+        last_failed_at: Unix timestamp of the most recent failure, or None.
     """
 
     event: Event
@@ -346,6 +365,9 @@ class InProgressState:
     shared_state: StepWorkerState
     attempts: int
     first_attempt_at: float
+    last_exception: ExceptionInfo | None = None
+    last_failed_at: float | None = None
+    recovery_counts: dict[str, int] = field(default_factory=dict)
 
     def _deepcopy(self) -> InProgressState:
         return InProgressState(
@@ -354,4 +376,7 @@ class InProgressState:
             shared_state=self.shared_state._deepcopy(),
             attempts=self.attempts,
             first_attempt_at=self.first_attempt_at,
+            last_exception=self.last_exception,
+            last_failed_at=self.last_failed_at,
+            recovery_counts=dict(self.recovery_counts),
         )

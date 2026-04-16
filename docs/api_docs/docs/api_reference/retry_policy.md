@@ -40,6 +40,17 @@ policy = retry_policy(
         - retry_policy
         - RetryPolicy
 
+## Retry Introspection
+
+Types exposed to step bodies via `Context.retry_info()` and to `@catch_error`
+handlers via `StepFailedEvent.exception`.
+
+::: workflows.retry_policy
+    options:
+      members:
+        - RetryInfo
+        - ExceptionInfo
+
 ## Retry Conditions
 
 Modeled after [tenacity retry functions](https://tenacity.readthedocs.io/en/latest/api.html#retry-functions).

@@ -7,6 +7,7 @@
         - from_dict
         - get_result
         - is_running
+        - retry_info
         - send_event
         - store
         - to_dict

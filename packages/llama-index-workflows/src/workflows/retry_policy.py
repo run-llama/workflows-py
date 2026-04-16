@@ -5,16 +5,69 @@ from __future__ import annotations
 
 import random
 import re
+import traceback
 import warnings
 from collections.abc import Callable
-from datetime import timedelta
+from dataclasses import dataclass
+from datetime import datetime, timedelta
 from typing import Protocol, cast, runtime_checkable
+
+from pydantic import BaseModel, ConfigDict
 
 time_unit_type = int | float | timedelta
 
 
 def _to_seconds(value: time_unit_type) -> float:
     return float(value.total_seconds() if isinstance(value, timedelta) else value)
+
+
+class ExceptionInfo(BaseModel):
+    """Serialized snapshot of an exception raised by a step.
+
+    This is the single shape used wherever the framework surfaces a failed
+    exception to user code or persists it across retries.
+
+    Attributes:
+        type_name: Fully qualified module + qualname of the exception class.
+        message: ``str(exception)`` of the raised exception.
+        traceback: Joined output of ``traceback.format_exception(...)``.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    type_name: str
+    message: str
+    traceback: str
+
+    @classmethod
+    def from_exception(cls, exc: BaseException) -> ExceptionInfo:
+        exc_type = type(exc)
+        qualname = f"{exc_type.__module__}.{exc_type.__qualname__}"
+        tb = "".join(traceback.format_exception(exc_type, exc, exc.__traceback__))
+        return cls(type_name=qualname, message=str(exc), traceback=tb)
+
+
+@dataclass(frozen=True)
+class RetryInfo:
+    """Snapshot of the currently-executing step's retry state.
+
+    Returned by ``Context.retry_info()``. On the first attempt ``retry_number``
+    is 0, ``elapsed_seconds`` is 0.0, and both ``last_exception`` and
+    ``last_failed_at`` are ``None``. On subsequent retries they describe the
+    most recent prior failure.
+
+    Attributes:
+        retry_number: 0 on the first run, 1 on the first retry, and so on.
+        elapsed_seconds: Seconds since the first attempt began.
+        last_exception: Information about the most recent prior failure, or ``None``.
+        last_failed_at: Timezone-aware UTC datetime of the most recent prior
+            failure, or ``None``.
+    """
+
+    retry_number: int
+    elapsed_seconds: float
+    last_exception: ExceptionInfo | None
+    last_failed_at: datetime | None
 
 
 @runtime_checkable

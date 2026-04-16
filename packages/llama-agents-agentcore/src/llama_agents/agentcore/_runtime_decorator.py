@@ -1,41 +1,41 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Awaitable, Callable, ParamSpec, TypeVar
 
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
 from llama_agents.server._runtime.server_runtime import ServerRuntimeDecorator
 from llama_agents.server._store.abstract_workflow_store import AbstractWorkflowStore
 from workflows import Workflow
-from workflows.events import Event, StartEvent, StopEvent
+from workflows.events import StartEvent, StopEvent
 from workflows.runtime.types.internal_state import BrokerState
 from workflows.runtime.types.plugin import (
     RegisteredWorkflow,
     Runtime,
     WorkflowRunFunction,
 )
-from workflows.runtime.types.results import StepFunctionResult, StepWorkerState
 from workflows.runtime.types.step_function import (
     StepWorkerFunction,
     as_step_worker_functions,
     create_workflow_run_function,
 )
 
+_P = ParamSpec("_P")
+_R = TypeVar("_R")
+
 
 def as_agentcore_async_task(
-    app: BedrockAgentCoreApp, name: str, fn: StepWorkerFunction
-) -> StepWorkerFunction:
-    async def step_worker(
-        state: StepWorkerState,
-        step_name: str,
-        event: Event,
-        workflow: Workflow,
-    ) -> list[StepFunctionResult]:
+    app: BedrockAgentCoreApp,
+    name: str,
+    fn: Callable[_P, Awaitable[_R]],
+) -> Callable[_P, Awaitable[_R]]:
+    # Opaque pass-through typed via ParamSpec so the wrapper matches whatever
+    # signature the underlying step worker exposes.
+    async def step_worker(*args: _P.args, **kwargs: _P.kwargs) -> _R:
         task_id = app.add_async_task(name)
         try:
-            results = await fn(state, step_name, event, workflow)
+            return await fn(*args, **kwargs)
         finally:
             app.complete_async_task(task_id)
-        return results
 
     return step_worker
 

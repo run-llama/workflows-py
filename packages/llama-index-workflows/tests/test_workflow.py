@@ -21,7 +21,7 @@ from llama_index_instrumentation.dispatcher import (
 )
 from pydantic import PrivateAttr
 from workflows.context import Context, PickleSerializer
-from workflows.decorators import step
+from workflows.decorators import catch_error, step
 from workflows.errors import (
     WorkflowConfigurationError,
     WorkflowRuntimeError,
@@ -32,6 +32,7 @@ from workflows.events import (
     HumanResponseEvent,
     InputRequiredEvent,
     StartEvent,
+    StepFailedEvent,
     StopEvent,
 )
 from workflows.handler import WorkflowHandler
@@ -614,6 +615,68 @@ async def test_workflow_validation_steps_cannot_accept_stop_event() -> None:
         match="Step 'bad_step' cannot accept StopEvent. StopEvent signals the end of the workflow. Use a different Event type instead.",
     ):
         await WorkflowTestRunner(InvalidWorkflowSingleStep()).run()
+
+
+class _CatchErrorMarker(Event):
+    pass
+
+
+def test_multiple_wildcard_catch_error_handlers_invalid() -> None:
+    class MultiHandlerFlow(Workflow):
+        @step
+        async def a(self, ev: StartEvent) -> StopEvent:
+            return StopEvent(result="ok")
+
+        @catch_error
+        async def h1(self, ctx: Context, ev: StepFailedEvent) -> StopEvent:
+            return StopEvent(result="one")
+
+        @catch_error
+        async def h2(self, ctx: Context, ev: StepFailedEvent) -> StopEvent:
+            return StopEvent(result="two")
+
+    with pytest.raises(WorkflowValidationError, match="wildcard @catch_error handler"):
+        MultiHandlerFlow().validate()
+
+
+def test_catch_error_unknown_step_invalid() -> None:
+    class BadFlow(Workflow):
+        @step
+        async def a(self, ev: StartEvent) -> StopEvent:
+            return StopEvent(result="ok")
+
+        @catch_error(for_steps=["nonexistent"])
+        async def handler(self, ctx: Context, ev: StepFailedEvent) -> StopEvent:
+            return StopEvent(result="caught")
+
+    with pytest.raises(WorkflowValidationError, match="unknown step"):
+        BadFlow().validate()
+
+
+def test_catch_error_duplicate_scope_invalid() -> None:
+    class BadFlow(Workflow):
+        @step
+        async def a(self, ev: StartEvent) -> StopEvent:
+            return StopEvent(result="ok")
+
+        @catch_error(for_steps=["a"])
+        async def h1(self, ctx: Context, ev: StepFailedEvent) -> StopEvent:
+            return StopEvent(result="one")
+
+        @catch_error(for_steps=["a"])
+        async def h2(self, ctx: Context, ev: StepFailedEvent) -> StopEvent:
+            return StopEvent(result="two")
+
+    with pytest.raises(WorkflowValidationError, match="claimed by two @catch_error"):
+        BadFlow().validate()
+
+
+def test_catch_error_max_recoveries_zero_invalid() -> None:
+    with pytest.raises(WorkflowValidationError, match="max_recoveries"):
+
+        @catch_error(max_recoveries=0)
+        async def bad(self: Any, ctx: Context, ev: StepFailedEvent) -> StopEvent:
+            return StopEvent()
 
 
 def test_get_workflow_events() -> None:

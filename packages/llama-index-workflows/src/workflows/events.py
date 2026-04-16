@@ -4,16 +4,22 @@
 from __future__ import annotations
 
 from _collections_abc import dict_items, dict_keys, dict_values
+from datetime import datetime
 from enum import Enum
-from typing import Any
+from typing import Annotated, Any
 
 from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    PlainSerializer,
+    PlainValidator,
     PrivateAttr,
     model_serializer,
 )
+
+from workflows.context.serializers import JsonSerializer
+from workflows.retry_policy import ExceptionInfo
 
 
 class DictLikeModel(BaseModel):
@@ -146,6 +152,43 @@ class Event(DictLikeModel):
 
     def __init__(self, **params: Any):
         super().__init__(**params)
+
+
+_json_serializer = JsonSerializer()
+
+
+def _serialize_event(event: Event) -> Any:
+    return _json_serializer.serialize_value(event)
+
+
+def _deserialize_event(data: Any) -> Event:
+    return _json_serializer.deserialize_value(data)
+
+
+SerializableEvent = Annotated[
+    Event,
+    PlainSerializer(_serialize_event, return_type=Any),
+    PlainValidator(_deserialize_event),
+]
+
+
+def _serialize_optional_event(event: Event | None) -> Any:
+    if event is None:
+        return None
+    return _json_serializer.serialize_value(event)
+
+
+def _deserialize_optional_event(data: Any) -> Event | None:
+    if data is None:
+        return None
+    return _json_serializer.deserialize_value(data)
+
+
+SerializableOptionalEvent = Annotated[
+    Event | None,
+    PlainSerializer(_serialize_optional_event, return_type=Any),
+    PlainValidator(_deserialize_optional_event),
+]
 
 
 class StartEvent(Event):
@@ -289,6 +332,30 @@ class WorkflowFailedEvent(StopEvent):
     traceback: str
     attempts: int
     elapsed_seconds: float
+
+
+class StepFailedEvent(Event):
+    """Delivered to a `@catch_error` handler when a step exhausts its retries.
+
+    The handler may inspect the fields to decide how to recover. Returning a
+    `StopEvent` completes the workflow successfully; raising from the handler
+    propagates the new exception and fails the workflow.
+
+    Attributes:
+        step_name: The name of the step that failed.
+        input_event: The triggering event instance that caused the failure.
+        exception: Snapshot of the raised exception.
+        attempts: Total number of attempts made before giving up.
+        elapsed_seconds: Seconds from first attempt to final failure.
+        failed_at: Timezone-aware UTC datetime of the final failure.
+    """
+
+    step_name: str
+    input_event: SerializableEvent
+    exception: ExceptionInfo
+    attempts: int
+    elapsed_seconds: float
+    failed_at: datetime
 
 
 class InputRequiredEvent(Event):

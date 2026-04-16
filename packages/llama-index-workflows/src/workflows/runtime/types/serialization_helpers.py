@@ -1,11 +1,11 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 LlamaIndex Inc.
-"""Annotated types for Pydantic serialization of tricky tick/result fields.
+"""Back-compat serialization shims. Do not add new types here.
 
-Provides custom serializers/validators for:
-- Events (polymorphic Pydantic models)
-- Exceptions (not natively serializable)
-- Event types (type[Event] as qualified name strings)
+These Annotated aliases exist only to keep older tick/result models
+serializable; new code should use ``JsonSerializer``/``EventEnvelope``
+directly. The shims will be removed once the remaining call sites are
+migrated.
 """
 
 from __future__ import annotations
@@ -13,46 +13,20 @@ from __future__ import annotations
 from typing import Annotated, Any
 
 from pydantic import PlainSerializer, PlainValidator
-from workflows.context.serializers import JsonSerializer
 from workflows.context.utils import (
     import_module_from_qualified_name,
 )
-from workflows.events import Event
-
-_json_serializer = JsonSerializer()
-
-
-def _serialize_event(event: Event) -> Any:
-    return _json_serializer.serialize_value(event)
-
-
-def _deserialize_event(data: Any) -> Event:
-    return _json_serializer.deserialize_value(data)
-
-
-SerializableEvent = Annotated[
+from workflows.events import (
     Event,
-    PlainSerializer(_serialize_event, return_type=Any),
-    PlainValidator(_deserialize_event),
-]
+    SerializableEvent,
+    SerializableOptionalEvent,
+)
 
-
-def _serialize_optional_event(event: Event | None) -> Any:
-    if event is None:
-        return None
-    return _json_serializer.serialize_value(event)
-
-
-def _deserialize_optional_event(data: Any) -> Event | None:
-    if data is None:
-        return None
-    return _json_serializer.deserialize_value(data)
-
-
-SerializableOptionalEvent = Annotated[
-    Event | None,
-    PlainSerializer(_serialize_optional_event, return_type=Any),
-    PlainValidator(_deserialize_optional_event),
+__all__ = [
+    "SerializableEvent",
+    "SerializableOptionalEvent",
+    "SerializableException",
+    "SerializableEventType",
 ]
 
 

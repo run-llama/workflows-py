@@ -6,6 +6,7 @@ from pydantic.functional_validators import model_validator
 from typing_extensions import TypeVar
 
 from workflows.context.state_store import DictState
+from workflows.retry_policy import ExceptionInfo
 
 MODEL_T = TypeVar("MODEL_T", bound=BaseModel, default=DictState)
 
@@ -69,6 +70,13 @@ class SerializedEventAttempt(BaseModel):
     attempts: int = 0
     # Unix timestamp of first attempt, or None if not yet attempted
     first_attempt_at: float | None = None
+    # Most recent exception when this event is scheduled for retry, if any.
+    last_exception: ExceptionInfo | None = None
+    # Unix timestamp of the most recent failure, or None.
+    last_failed_at: float | None = None
+    # Per-handler recovery counts on this event's lineage. Maps catch_error
+    # handler step name -> invocations so far. Empty on the main graph.
+    recovery_counts: dict[str, int] = Field(default_factory=dict)
 
 
 class SerializedWaiter(BaseModel):

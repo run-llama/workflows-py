@@ -9,9 +9,9 @@ import heapq
 import inspect
 import logging
 import time
-import traceback
 from collections.abc import AsyncIterable
 from dataclasses import dataclass, replace
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
 from workflows.errors import (
@@ -24,6 +24,7 @@ from workflows.events import (
     IdleReleasedEvent,
     InputRequiredEvent,
     StartEvent,
+    StepFailedEvent,
     StepState,
     StepStateChanged,
     StopEvent,
@@ -33,6 +34,7 @@ from workflows.events import (
     WorkflowIdleEvent,
     WorkflowTimedOutEvent,
 )
+from workflows.retry_policy import ExceptionInfo
 from workflows.runtime.types.commands import (
     CommandCompleteRun,
     CommandFailWorkflow,
@@ -68,6 +70,8 @@ from workflows.runtime.types.results import (
     AddWaiter,
     DeleteCollectedEvent,
     DeleteWaiter,
+    RecoveryCountsContextVar,
+    RetryAttempt,
     StepWorkerFailed,
     StepWorkerResult,
     StepWorkerState,
@@ -210,11 +214,18 @@ class _ControlLoopRunner:
                 snapshot = worker.shared_state
                 step_fn: StepWorkerFunction = self.step_workers[command.step_name]
 
+                RecoveryCountsContextVar.set(dict(worker.recovery_counts))
                 result = await step_fn(
                     state=snapshot,
                     step_name=command.step_name,
                     event=command.event,
                     workflow=self.workflow,
+                    retry=RetryAttempt(
+                        retry_number=worker.attempts,
+                        first_attempt_at=worker.first_attempt_at,
+                        last_exception=worker.last_exception,
+                        last_failed_at=worker.last_failed_at,
+                    ),
                 )
                 # Return result for main loop to process
                 return TickStepResult(
@@ -253,6 +264,9 @@ class _ControlLoopRunner:
                 step_name=command.step_name,
                 attempts=command.attempts,
                 first_attempt_at=command.first_attempt_at,
+                last_exception=command.last_exception,
+                last_failed_at=command.last_failed_at,
+                recovery_counts=dict(command.recovery_counts),
             )
             if command.delay is not None and command.delay > 0:
                 now = await self.adapter.get_now()
@@ -677,6 +691,9 @@ def rewind_in_progress(
                     event=in_progress.event,
                     attempts=in_progress.attempts,
                     first_attempt_at=in_progress.first_attempt_at,
+                    last_exception=in_progress.last_exception,
+                    last_failed_at=in_progress.last_failed_at,
+                    recovery_counts=dict(in_progress.recovery_counts),
                 ),
             )
         step_state.in_progress = []
@@ -754,7 +771,12 @@ def _process_step_result_tick(
                 # human input required are automatically published to the stream
                 if isinstance(result.result, InputRequiredEvent):
                     commands.append(CommandPublishEvent(event=result.result))
-                commands.append(CommandQueueEvent(event=result.result))
+                commands.append(
+                    CommandQueueEvent(
+                        event=result.result,
+                        recovery_counts=dict(this_execution.recovery_counts),
+                    )
+                )
             elif result.result is None:
                 # None means skip
                 pass
@@ -787,6 +809,7 @@ def _process_step_result_tick(
             else:
                 delay = None
             if delay is not None:
+                exception_info = ExceptionInfo.from_exception(result.exception)
                 commands.append(
                     CommandQueueEvent(
                         event=tick.event,
@@ -794,37 +817,75 @@ def _process_step_result_tick(
                         step_name=tick.step_name,
                         attempts=this_execution.attempts + 1,
                         first_attempt_at=this_execution.first_attempt_at,
+                        last_exception=exception_info,
+                        last_failed_at=result.failed_at,
+                        recovery_counts=dict(this_execution.recovery_counts),
                     )
                 )
             else:
-                # Publish a WorkflowFailedEvent to inform stream consumers about the failure
-                state.is_running = False
                 exception = result.exception
-                exc_type = type(exception)
-                exc_module = exc_type.__module__
-                exc_qualname = f"{exc_module}.{exc_type.__qualname__}"
-                exc_traceback = "".join(
-                    traceback.format_exception(
-                        exc_type, exception, exception.__traceback__
-                    )
-                )
+                exception_info = ExceptionInfo.from_exception(exception)
                 total_attempts = this_execution.attempts + 1
                 elapsed = result.failed_at - this_execution.first_attempt_at
-                commands.append(
-                    CommandPublishEvent(
-                        event=WorkflowFailedEvent(
-                            step_name=tick.step_name,
-                            exception_type=exc_qualname,
-                            exception_message=str(exception),
-                            traceback=exc_traceback,
-                            attempts=total_attempts,
-                            elapsed_seconds=elapsed,
+
+                handler_name = state.config.handler_for_step.get(tick.step_name)
+                handler = (
+                    state.config.catch_error_handlers.get(handler_name)
+                    if handler_name is not None
+                    else None
+                )
+                current_count = (
+                    this_execution.recovery_counts.get(handler.step_name, 0)
+                    if handler is not None
+                    else 0
+                )
+                new_count = current_count + 1
+                should_route = (
+                    handler is not None and new_count <= handler.max_recoveries
+                )
+                if should_route and handler is not None:
+                    # Route to the catch-error handler. Keep workflow running so
+                    # the handler can produce either a StopEvent or a new failure.
+                    step_failed_event = StepFailedEvent(
+                        step_name=tick.step_name,
+                        input_event=tick.event,
+                        exception=exception_info,
+                        attempts=total_attempts,
+                        elapsed_seconds=elapsed,
+                        failed_at=datetime.fromtimestamp(
+                            result.failed_at, tz=timezone.utc
+                        ),
+                    )
+                    commands.append(
+                        CommandQueueEvent(
+                            event=step_failed_event,
+                            step_name=handler.step_name,
+                            recovery_counts={
+                                **this_execution.recovery_counts,
+                                handler.step_name: new_count,
+                            },
                         )
                     )
-                )
-                commands.append(
-                    CommandFailWorkflow(step_name=tick.step_name, exception=exception)
-                )
+                else:
+                    # Publish a WorkflowFailedEvent to inform stream consumers about the failure
+                    state.is_running = False
+                    commands.append(
+                        CommandPublishEvent(
+                            event=WorkflowFailedEvent(
+                                step_name=tick.step_name,
+                                exception_type=exception_info.type_name,
+                                exception_message=exception_info.message,
+                                traceback=exception_info.traceback,
+                                attempts=total_attempts,
+                                elapsed_seconds=elapsed,
+                            )
+                        )
+                    )
+                    commands.append(
+                        CommandFailWorkflow(
+                            step_name=tick.step_name, exception=exception
+                        )
+                    )
         elif isinstance(result, AddCollectedEvent):
             # The current state of collected events.
             collected_events = state.workers[
@@ -968,6 +1029,9 @@ def _add_or_enqueue_event(
                 shared_state=shared_state,
                 attempts=event.attempts or 0,
                 first_attempt_at=event.first_attempt_at or now_seconds,
+                last_exception=event.last_exception,
+                last_failed_at=event.last_failed_at,
+                recovery_counts=dict(event.recovery_counts),
             )
         )
         commands.append(CommandRunWorker(step_name=step_name, event=event.event, id=id))
@@ -1043,6 +1107,9 @@ def _process_add_event_tick(
                     event=tick.event,
                     attempts=tick.attempts,
                     first_attempt_at=tick.first_attempt_at,
+                    last_exception=tick.last_exception,
+                    last_failed_at=tick.last_failed_at,
+                    recovery_counts=dict(tick.recovery_counts),
                 ),
                 step_name,
                 state.workers[step_name],
