@@ -35,23 +35,28 @@ spec:
   - to:
     - namespaceSelector:
         matchLabels:
-          kubernetes.io/metadata.name: kube-system
+          {{- toYaml .Values.networkPolicy.dns.namespaceSelector | nindent 10 }}
       podSelector:
         matchLabels:
-          k8s-app: kube-dns
+          {{- toYaml .Values.networkPolicy.dns.podSelector | nindent 10 }}
     ports:
     - protocol: UDP
       port: 53
     - protocol: TCP
       port: 53
-  # Allow Internet access but block private ranges and IMDS
+  # Allow Internet access
   - to:
     - ipBlock:
         cidr: 0.0.0.0/0
+        {{- if .Values.networkPolicy.blockPrivateRanges }}
         except:
         - 169.254.169.254/32  # AWS IMDS
         - 10.0.0.0/8          # Private ranges
         - 172.16.0.0/12
         - 192.168.0.0/16
         - 100.64.0.0/10       # Carrier-grade NAT
+        {{- end }}
+  {{- with .Values.networkPolicy.extraEgressRules }}
+  {{- toYaml . | nindent 2 }}
+  {{- end }}
 {{- end }}

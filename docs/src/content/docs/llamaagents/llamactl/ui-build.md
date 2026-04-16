@@ -136,6 +136,18 @@ export default function Logo() {
 }
 ```
 
+## `PUBLIC_*` env var overrides
+
+Set `PUBLIC_X` to override `X` in the UI build env only. The backend keeps the original value. `PUBLIC_*` keys are stripped from the build environment.
+
+```yaml
+env:
+  API_URL: "http://internal.svc:8000"
+  PUBLIC_API_URL: "https://api.example.com"  # UI build sees API_URL=https://api.example.com
+```
+
+Your vite/next config can then map the overridden value into framework-specific vars (e.g. `VITE_API_URL` via a `define` block) as usual.
+
 ## Configure the UI output directory
 
 Your UI must output static assets that the platform can locate. Configure `ui.directory` and `ui.build_output_dir` as described in the [Deployment Config Reference](/python/llamaagents/llamactl/configuration-reference#uiconfig-fields). Default: `${ui.directory}/dist`.
