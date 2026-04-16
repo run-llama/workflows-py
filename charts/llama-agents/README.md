@@ -199,6 +199,10 @@ install requires draining and recreating `LlamaDeployment` CRs.
 |-----|------|---------|-------------|
 | networkPolicy.enabled | bool | `true` | Enable egress NetworkPolicy for operator-managed pods |
 | networkPolicy.extraMatchExpressions | list | `[]` | Additional pod selector matchExpressions |
+| networkPolicy.extraEgressRules | list | `[]` | Extra egress rules appended to the NetworkPolicy |
+| networkPolicy.blockPrivateRanges | bool | `true` | Block private IP ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16) in internet egress rule |
+| networkPolicy.dns.namespaceSelector | object | `{"kubernetes.io/metadata.name":"kube-system"}` | Namespace selector for DNS pods. Defaults to kube-system |
+| networkPolicy.dns.podSelector | object | `{"k8s-app":"kube-dns"}` | Pod selector for DNS pods. Defaults to kube-dns |
 
 ## Uninstalling
 
