@@ -533,6 +533,13 @@ def _ui_env(config: DeploymentConfig, settings: ApiserverSettings) -> dict[str, 
     if config.ui is not None:
         env["PORT"] = str(settings.proxy_ui_port)
     env["LLAMA_DEPLOY_SERVER_PORT"] = str(settings.port)
+    # Apply PUBLIC_* overlays: PUBLIC_X overrides X in the UI build env
+    public_prefix = "PUBLIC_"
+    public_keys = [k for k in env if k.startswith(public_prefix)]
+    for key in public_keys:
+        base_key = key[len(public_prefix) :]
+        env[base_key] = env[key]
+        del env[key]
     return env
 
 

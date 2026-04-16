@@ -7,6 +7,7 @@ from unittest import mock
 import pytest
 from llama_agents.appserver.settings import ApiserverSettings
 from llama_agents.appserver.workflow_loader import (
+    _ui_env,
     build_ui,
     load_environment_variables,
     load_workflows,
@@ -74,3 +75,32 @@ def test_build_ui_sets_env_and_calls_pnpm(
         assert env["LLAMA_DEPLOY_DEPLOYMENT_NAME"] == "n"
         assert env["LLAMA_DEPLOY_DEPLOYMENT_BASE_PATH"] == "/deployments/n/ui"
         assert env["PORT"] == "4503"
+
+
+def test_ui_env_public_overrides_base(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LLAMA_CLOUD_BASE_URL", "https://original.example.com")
+    monkeypatch.setenv("PUBLIC_LLAMA_CLOUD_BASE_URL", "https://public.example.com")
+    cfg = DeploymentConfig(name="n", ui=UIConfig(directory="ui"))
+    settings = ApiserverSettings()
+    env = _ui_env(cfg, settings)
+    assert env["LLAMA_CLOUD_BASE_URL"] == "https://public.example.com"
+    assert "PUBLIC_LLAMA_CLOUD_BASE_URL" not in env
+
+
+def test_ui_env_public_without_base_creates_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("FOO", raising=False)
+    monkeypatch.setenv("PUBLIC_FOO", "bar")
+    cfg = DeploymentConfig(name="n", ui=UIConfig(directory="ui"))
+    settings = ApiserverSettings()
+    env = _ui_env(cfg, settings)
+    assert env["FOO"] == "bar"
+    assert "PUBLIC_FOO" not in env
+
+
+def test_ui_env_no_public_leaves_base_alone(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LLAMA_CLOUD_BASE_URL", "https://original.example.com")
+    monkeypatch.delenv("PUBLIC_LLAMA_CLOUD_BASE_URL", raising=False)
+    cfg = DeploymentConfig(name="n", ui=UIConfig(directory="ui"))
+    settings = ApiserverSettings()
+    env = _ui_env(cfg, settings)
+    assert env["LLAMA_CLOUD_BASE_URL"] == "https://original.example.com"

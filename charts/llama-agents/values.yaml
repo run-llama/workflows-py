@@ -286,3 +286,18 @@ networkPolicy:
   # -- Additional pod selector matchExpressions
   # @section -- Network Policy
   extraMatchExpressions: []
+  # -- Extra egress rules appended to the NetworkPolicy
+  # @section -- Network Policy
+  extraEgressRules: []
+  # -- Block private IP ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16) in internet egress rule
+  # @section -- Network Policy
+  blockPrivateRanges: true
+  dns:
+    # -- Namespace selector for DNS pods. Defaults to kube-system
+    # @section -- Network Policy
+    namespaceSelector:
+      kubernetes.io/metadata.name: kube-system
+    # -- Pod selector for DNS pods. Defaults to kube-dns
+    # @section -- Network Policy
+    podSelector:
+      k8s-app: kube-dns
