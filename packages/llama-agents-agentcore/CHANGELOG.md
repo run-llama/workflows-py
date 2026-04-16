@@ -1,5 +1,12 @@
 # llama-agents-agentcore
 
+## 0.8.19
+
+### Patch Changes
+
+- Updated dependencies [facbac4]
+  - llama-agents-appserver@0.11.0
+
 ## 0.8.18
 
 ### Patch Changes

@@ -1,5 +1,19 @@
 # llama-agents
 
+## 0.11.0
+
+### Minor Changes
+
+- de5bedc: Add `apps.namespace` to run `LlamaDeployment` CRs and their child resources in a separate namespace from the operator + control plane. Unset = everything in the release namespace.
+
+### Patch Changes
+
+- facbac4: New network policy values: `extraEgressRules`, configurable DNS selectors, and `blockPrivateRanges` toggle for reaching in-cluster services without disabling the policy.
+- Updated dependencies [facbac4]
+- Updated dependencies [64579a9]
+  - llama-agents-appserver@0.11.0
+  - llama-agents-control-plane@0.11.1
+
 ## 0.10.12
 
 ### Patch Changes

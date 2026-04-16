@@ -1,5 +1,13 @@
 # llamactl
 
+## 0.7.1
+
+### Patch Changes
+
+- facbac4: `PUBLIC_*` env var overlay for UI builds: `PUBLIC_X` overrides `X` in the build env so backend and frontend can use different URLs for the same service. Removes dead `VITE_`/`NEXT_PUBLIC_` injection from `llamactl serve`. Helm network policy gains `extraEgressRules`, DNS selector overrides, and `blockPrivateRanges` toggle.
+- Updated dependencies [facbac4]
+  - llama-agents-appserver@0.11.0
+
 ## 0.7.0
 
 ### Minor Changes

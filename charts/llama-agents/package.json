@@ -1,6 +1,6 @@
 {
   "name": "llama-agents",
-  "version": "0.10.12",
+  "version": "0.11.0",
   "dependencies": {
     "llama-agents-appserver": "workspace:*",
     "llama-agents-control-plane": "workspace:*",
