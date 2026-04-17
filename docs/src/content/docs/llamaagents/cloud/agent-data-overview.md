@@ -86,7 +86,7 @@ extracted = ExtractedData.from_extract_job(
     schema=Invoice,
 )
 
-await client.beta.agent_data.agent_data(
+await client.beta.agent_data.create(
     data=extracted.model_dump(),
     deployment_name=deployment_name,
     collection="invoices",
