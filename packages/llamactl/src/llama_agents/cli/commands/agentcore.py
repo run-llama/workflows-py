@@ -27,7 +27,7 @@ def run():
 
 @agentcore.command(
     "test",
-    help="Run AgentCore server locally with in-memory store (no AWS required). "
+    help="Run AgentCore server locally with a local SQLite store (no AWS required). "
     "Send requests to POST http://localhost:8080/invocations",
 )
 def test():

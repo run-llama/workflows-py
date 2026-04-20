@@ -14,7 +14,7 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--local",
-        help="Run in local mode with in-memory store (no AWS required)",
+        help="Run in local mode with a local SQLite store (no AWS required)",
         action="store_true",
         default=False,
     )
@@ -28,7 +28,7 @@ if __name__ == "__main__":
         print(f"Starting app on {AGENTCORE_HOST}:{AGENTCORE_PORT}")  # noqa
         if args.local:
             print(  # noqa
-                "Local mode: using in-memory store, no AWS credentials needed.\n"
+                "Local mode: using a local SQLite store, no AWS credentials needed.\n"
                 "Send requests to POST http://localhost:8080/invocations"
             )
         app.run(port=AGENTCORE_PORT, host=AGENTCORE_HOST)
