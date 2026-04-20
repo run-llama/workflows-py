@@ -441,6 +441,40 @@ class PostgresWorkflowStore(AbstractWorkflowStore):
             for row in rows
         ]
 
+    async def query_ticks(
+        self,
+        run_id: str,
+        *,
+        after_sequence: int | None = None,
+        limit: int | None = None,
+    ) -> list[StoredTick]:
+        pool = await self._ensure_pool()
+        sql = (
+            f"SELECT run_id, sequence, timestamp, tick_data FROM {self._ticks_ref} "
+            "WHERE run_id = $1"
+        )
+        params: list[Any] = [run_id]
+        if after_sequence is not None:
+            sql += f" AND sequence > ${len(params) + 1}"
+            params.append(after_sequence)
+        sql += " ORDER BY sequence"
+        if limit is not None:
+            sql += f" LIMIT ${len(params) + 1}"
+            params.append(limit)
+        async with pool.acquire() as conn:
+            rows = await conn.fetch(sql, *params)
+        return [
+            StoredTick(
+                run_id=row["run_id"],
+                sequence=row["sequence"],
+                timestamp=row["timestamp"],
+                tick_data=json.loads(row["tick_data"])
+                if isinstance(row["tick_data"], str)
+                else row["tick_data"],
+            )
+            for row in rows
+        ]
+
     # ── Helpers ─────────────────────────────────────────────────────────
 
     def _build_filters(self, query: HandlerQuery) -> tuple[list[str], list[Any]] | None:

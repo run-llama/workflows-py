@@ -13,7 +13,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import sqlite3
-from collections.abc import Coroutine
+from collections.abc import AsyncIterator, Coroutine
 from datetime import datetime, timezone
 from typing import Any
 
@@ -22,7 +22,7 @@ from workflows import Context
 from workflows.context.context_types import SerializedContext
 from workflows.context.serializers import BaseSerializer, JsonSerializer
 from workflows.events import StartEvent
-from workflows.runtime.control_loop import rebuild_state_from_ticks
+from workflows.runtime.control_loop import rebuild_state_from_ticks_stream
 from workflows.runtime.runtime_decorators import (
     BaseInternalRunAdapterDecorator,
     BaseRuntimeDecorator,
@@ -49,6 +49,10 @@ from .._store.abstract_workflow_store import (
 from .._store.sqlite.sqlite_state_store import SqliteStateStore
 
 logger = logging.getLogger(__name__)
+
+
+TICK_REPLAY_BATCH_SIZE = 25
+"""Max ticks held in memory at once during persistence-runtime replay."""
 
 
 class _PersistenceInternalRunAdapter(BaseInternalRunAdapterDecorator):
@@ -148,13 +152,19 @@ class TickPersistenceDecorator(BaseRuntimeDecorator):
     async def context_from_ticks(
         self, workflow: Workflow, run_id: str
     ) -> Context | None:
-        """Rebuild a Context from persisted ticks (and legacy ctx if available)."""
-        stored_ticks = await self._store.get_ticks(run_id)
-        serializer = JsonSerializer()
+        """Rebuild a Context from persisted ticks (and legacy ctx if available).
 
+        Ticks are replayed via :meth:`stream_ticks` so peak memory is bounded
+        by ``TICK_REPLAY_BATCH_SIZE`` rather than the full tick history.
+        """
+        serializer = JsonSerializer()
         legacy_ctx = self._get_legacy_ctx(run_id)
 
-        if not stored_ticks and not legacy_ctx:
+        # Probe for tick existence without materializing everything.
+        first_page = await self._store.query_ticks(run_id, limit=1)
+        has_ticks = len(first_page) > 0
+
+        if not has_ticks and not legacy_ctx:
             return None
 
         if legacy_ctx:
@@ -164,11 +174,15 @@ class TickPersistenceDecorator(BaseRuntimeDecorator):
         else:
             init_state = BrokerState.from_workflow(workflow)
 
-        if stored_ticks:
-            ticks = [
-                WorkflowTickAdapter.validate_python(st.tick_data) for st in stored_ticks
-            ]
-            init_state = rebuild_state_from_ticks(init_state, ticks)
+        if has_ticks:
+
+            async def _stream() -> AsyncIterator[WorkflowTick]:
+                async for stored in self._store.stream_ticks(
+                    run_id, batch_size=TICK_REPLAY_BATCH_SIZE
+                ):
+                    yield WorkflowTickAdapter.validate_python(stored.tick_data)
+
+            init_state = await rebuild_state_from_ticks_stream(init_state, _stream())
 
         serialized = init_state.to_serialized(serializer)
         return Context.from_dict(

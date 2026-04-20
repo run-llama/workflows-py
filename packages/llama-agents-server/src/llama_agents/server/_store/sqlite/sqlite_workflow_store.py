@@ -282,6 +282,38 @@ class SqliteWorkflowStore(AbstractWorkflowStore):
             for row in rows
         ]
 
+    async def query_ticks(
+        self,
+        run_id: str,
+        *,
+        after_sequence: int | None = None,
+        limit: int | None = None,
+    ) -> list[StoredTick]:
+        sql = (
+            "SELECT run_id, sequence, timestamp, tick_data FROM ticks WHERE run_id = ?"
+        )
+        params: list[Any] = [run_id]
+        if after_sequence is not None:
+            sql += " AND sequence > ?"
+            params.append(after_sequence)
+        sql += " ORDER BY sequence"
+        if limit is not None:
+            sql += " LIMIT ?"
+            params.append(limit)
+        with self._connect() as conn:
+            cursor = conn.cursor()
+            cursor.execute(sql, params)
+            rows = cursor.fetchall()
+        return [
+            StoredTick(
+                run_id=row[0],
+                sequence=row[1],
+                timestamp=datetime.fromisoformat(row[2]),
+                tick_data=json.loads(row[3]),
+            )
+            for row in rows
+        ]
+
     def get_legacy_ctx(self, run_id: str) -> dict[str, Any] | None:
         """Read the old ctx column for a run_id, if present."""
         with self._connect() as conn:

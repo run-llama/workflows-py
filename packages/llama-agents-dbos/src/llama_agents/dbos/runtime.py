@@ -14,7 +14,7 @@ import logging
 import sqlite3
 import threading
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any, AsyncGenerator, TypedDict, cast
 
 import asyncpg
@@ -166,6 +166,22 @@ class DBOSWorkflowStore(AbstractWorkflowStore):
 
     async def get_ticks(self, run_id: str) -> list[StoredTick]:
         return await self._resolve().get_ticks(run_id)
+
+    async def query_ticks(
+        self,
+        run_id: str,
+        *,
+        after_sequence: int | None = None,
+        limit: int | None = None,
+    ) -> list[StoredTick]:
+        return await self._resolve().query_ticks(
+            run_id, after_sequence=after_sequence, limit=limit
+        )
+
+    def stream_ticks(
+        self, run_id: str, *, batch_size: int = 100
+    ) -> AsyncIterator[StoredTick]:
+        return self._resolve().stream_ticks(run_id, batch_size=batch_size)
 
 
 class ExecutorLeaseConfig(TypedDict, total=False):
