@@ -51,7 +51,7 @@ from .._store.sqlite.sqlite_state_store import SqliteStateStore
 logger = logging.getLogger(__name__)
 
 
-TICK_REPLAY_BATCH_SIZE = 25
+TICK_REPLAY_BATCH_SIZE = 100
 """Max ticks held in memory at once during persistence-runtime replay."""
 
 

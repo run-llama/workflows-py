@@ -53,7 +53,7 @@ from dbos import DBOS
 logger = logging.getLogger(__name__)
 
 
-TICK_REPLAY_BATCH_SIZE = 25
+TICK_REPLAY_BATCH_SIZE = 100
 """Max ticks held in memory at once during idle-release resume replay.
 
 Bounds peak memory when rebuilding state for a resumed workflow with a

@@ -17,7 +17,6 @@ from datetime import datetime, timezone
 
 import pytest
 from llama_agents.server._store.abstract_workflow_store import (
-    AbstractWorkflowStore,
     StoredTick,
 )
 from workflows.events import Event
@@ -159,4 +158,3 @@ async def test_stream_replay_memory_bound_detects_full_materialization() -> None
         f"If this assertion fires, the memory bound is too loose — the "
         f"streaming test is not actually exercising the bound."
     )
-
