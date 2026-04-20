@@ -344,6 +344,11 @@ def change_project(
     auth_svc = _get_service().current_auth_service()
     profile = validate_authenticated_profile(interactive)
 
+    if project_id is None and not interactive:
+        raise click.ClickException(
+            "No --project-id provided. Run `llamactl auth project --help` for more information."
+        )
+
     # Discover org if not explicitly provided (profile exists, credentials available)
     org = None
     if org_id is None:
@@ -364,10 +369,6 @@ def change_project(
         auth_svc.set_project(profile.name, project_id)
         rprint(f"Set active project to [bold green]{project_id}[/]")
         return
-    if not interactive:
-        raise click.ClickException(
-            "No --project-id provided. Run `llamactl auth project --help` for more information."
-        )
     try:
         projects = _list_projects(auth_svc, org_id=org_id)
 
