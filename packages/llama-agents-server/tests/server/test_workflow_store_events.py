@@ -262,3 +262,80 @@ async def test_subscribe_events_already_terminated(
 
     assert len(collected) == 2
     assert collected[-1].event.type == "StopEvent"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Tick query / stream
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "seed_count, after_sequence, limit, expected_sequences",
+    [
+        pytest.param(5, 2, None, [3, 4], id="after_sequence_only"),
+        pytest.param(5, None, 3, [0, 1, 2], id="limit_only"),
+        pytest.param(10, 3, 2, [4, 5], id="after_sequence_and_limit"),
+        pytest.param(5, None, None, [0, 1, 2, 3, 4], id="unbounded"),
+    ],
+)
+async def test_query_ticks_paginates(
+    store: AbstractWorkflowStore,
+    seed_count: int,
+    after_sequence: int | None,
+    limit: int | None,
+    expected_sequences: list[int],
+) -> None:
+    for i in range(seed_count):
+        await store.append_tick("run-1", {"type": "TickSendEvent", "i": i})
+
+    result = await store.query_ticks(
+        "run-1", after_sequence=after_sequence, limit=limit
+    )
+    assert [t.sequence for t in result] == expected_sequences
+
+
+@pytest.mark.asyncio
+async def test_stream_ticks_yields_all_rows_in_order(
+    store: AbstractWorkflowStore,
+) -> None:
+    for i in range(10):
+        await store.append_tick("run-1", {"type": "TickSendEvent", "i": i})
+
+    yielded: list[int] = []
+    async for tick in store.stream_ticks("run-1", batch_size=3):
+        yielded.append(tick.sequence)
+
+    assert yielded == list(range(10))
+
+
+@pytest.mark.asyncio
+async def test_stream_ticks_empty_history(
+    store: AbstractWorkflowStore,
+) -> None:
+    yielded: list[object] = []
+    async for tick in store.stream_ticks("empty-run", batch_size=10):
+        yielded.append(tick)
+    assert yielded == []
+
+
+@pytest.mark.asyncio
+async def test_stream_ticks_batch_size_larger_than_total(
+    store: AbstractWorkflowStore,
+) -> None:
+    for i in range(3):
+        await store.append_tick("run-1", {"type": "TickSendEvent", "i": i})
+
+    yielded = [t.sequence async for t in store.stream_ticks("run-1", batch_size=100)]
+    assert yielded == [0, 1, 2]
+
+
+@pytest.mark.asyncio
+async def test_stream_ticks_batch_size_one(
+    store: AbstractWorkflowStore,
+) -> None:
+    for i in range(4):
+        await store.append_tick("run-1", {"type": "TickSendEvent", "i": i})
+
+    yielded = [t.sequence async for t in store.stream_ticks("run-1", batch_size=1)]
+    assert yielded == [0, 1, 2, 3]

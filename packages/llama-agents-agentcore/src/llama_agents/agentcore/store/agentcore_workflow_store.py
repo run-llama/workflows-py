@@ -431,3 +431,19 @@ class AgentCoreWorkflowStore(AbstractWorkflowStore):
                 stored_ticks.append(cast(StoredTick, _b64_str_to_model(data)))
         sorted_ticks = sorted(stored_ticks, key=lambda x: x.sequence)
         return sorted_ticks
+
+    async def query_ticks(
+        self,
+        run_id: str,
+        *,
+        after_sequence: int | None = None,
+        limit: int | None = None,
+    ) -> list[StoredTick]:
+        # The underlying AgentCore API fetches the full tick set per call;
+        # paginate in memory to keep the public contract consistent.
+        all_ticks = await self.get_ticks(run_id)
+        if after_sequence is not None:
+            all_ticks = [t for t in all_ticks if t.sequence > after_sequence]
+        if limit is not None:
+            all_ticks = all_ticks[:limit]
+        return all_ticks

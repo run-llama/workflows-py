@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Awaitable, Callable, Coroutine
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
 from datetime import datetime, timezone
 from typing import Any
 
@@ -25,7 +25,10 @@ from typing_extensions import override
 from workflows.context.serializers import JsonSerializer
 from workflows.context.state_store import infer_state_type
 from workflows.events import Event, WorkflowIdleEvent
-from workflows.runtime.control_loop import rebuild_state_from_ticks
+from workflows.runtime.control_loop import (
+    rebuild_state_from_ticks,
+    rebuild_state_from_ticks_stream,
+)
 from workflows.runtime.runtime_decorators import (
     BaseExternalRunAdapterDecorator,
     BaseInternalRunAdapterDecorator,
@@ -48,6 +51,14 @@ from workflows.workflow import Workflow
 from dbos import DBOS
 
 logger = logging.getLogger(__name__)
+
+
+TICK_REPLAY_BATCH_SIZE = 25
+"""Max ticks held in memory at once during idle-release resume replay.
+
+Bounds peak memory when rebuilding state for a resumed workflow with a
+long tick history. Not a user-facing config knob.
+"""
 
 # How long to wait before declaring a "releasing" state as crashed
 CRASH_TIMEOUT_SECONDS = 120.0
@@ -254,17 +265,20 @@ class DBOSIdleReleaseDecorator(BaseRuntimeDecorator):
     async def _broker_state_from_ticks(
         self, workflow: Workflow, run_id: str
     ) -> BrokerState:
-        """Rebuild BrokerState from persisted ticks."""
-        stored_ticks = await self._store.get_ticks(run_id)
+        """Rebuild BrokerState from persisted ticks.
+
+        Streams ticks from the store so peak memory during replay is bounded
+        by ``TICK_REPLAY_BATCH_SIZE`` rather than by total tick history size.
+        """
         init_state = BrokerState.from_workflow(workflow)
 
-        if stored_ticks:
-            ticks = [
-                WorkflowTickAdapter.validate_python(st.tick_data) for st in stored_ticks
-            ]
-            init_state = rebuild_state_from_ticks(init_state, ticks)
+        async def _stream() -> AsyncIterator[WorkflowTick]:
+            async for stored in self._store.stream_ticks(
+                run_id, batch_size=TICK_REPLAY_BATCH_SIZE
+            ):
+                yield WorkflowTickAdapter.validate_python(stored.tick_data)
 
-        return init_state
+        return await rebuild_state_from_ticks_stream(init_state, _stream())
 
     async def _do_resume(
         self,

@@ -10,6 +10,7 @@ import inspect
 import logging
 import time
 import traceback
+from collections.abc import AsyncIterable
 from dataclasses import replace
 from typing import TYPE_CHECKING
 
@@ -566,6 +567,27 @@ def rebuild_state_from_ticks(
         state, _ = _reduce_tick(
             tick, state, time.time()
         )  # somewhat broken kludge on the timestamps, need to move these to ticks
+    return state
+
+
+async def rebuild_state_from_ticks_stream(
+    state: BrokerState,
+    ticks: AsyncIterable[WorkflowTick],
+) -> BrokerState:
+    """Streaming variant of rebuild_state_from_ticks.
+
+    Consumes ticks from an async iterable so the full tick history does not
+    need to be materialized in memory. Peak memory during replay is bounded
+    by the caller's iterator, not by the total number of ticks on disk.
+
+    Semantics match rebuild_state_from_ticks: rewind_in_progress is applied
+    exactly once before any ticks are consumed, then _reduce_tick runs once
+    per yielded tick.
+    """
+    state, _ = rewind_in_progress(state, time.time())
+
+    async for tick in ticks:
+        state, _ = _reduce_tick(tick, state, time.time())
     return state
 
 

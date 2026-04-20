@@ -420,28 +420,39 @@ class AgentDataStore(AbstractWorkflowStore):
         )
 
     async def get_ticks(self, run_id: str) -> list[StoredTick]:
-        await self._regroup_ticks(run_id)
         page_size = 100
-        all_items: list[dict[str, Any]] = []
-        last_sequence = -1
+        all_ticks: list[StoredTick] = []
+        last_sequence: int | None = None
 
         while True:
-            filters: dict[str, Any] = {
-                "run_id": {"eq": run_id},
-                "sequence": {"gt": last_sequence},
-            }
-            page = await self._client.search(
-                self._ticks_collection,
-                filters,
-                page_size=page_size,
-                order_by="sequence",
+            page = await self.query_ticks(
+                run_id, after_sequence=last_sequence, limit=page_size
             )
-            all_items.extend(page)
+            all_ticks.extend(page)
             if len(page) < page_size:
                 break
-            last_sequence = page[-1]["data"]["sequence"]
+            last_sequence = page[-1].sequence
 
-        return [StoredTick.model_validate(item["data"]) for item in all_items]
+        return all_ticks
+
+    async def query_ticks(
+        self,
+        run_id: str,
+        *,
+        after_sequence: int | None = None,
+        limit: int | None = None,
+    ) -> list[StoredTick]:
+        await self._regroup_ticks(run_id)
+        filters: dict[str, Any] = {"run_id": {"eq": run_id}}
+        if after_sequence is not None:
+            filters["sequence"] = {"gt": after_sequence}
+        page = await self._client.search(
+            self._ticks_collection,
+            filters,
+            page_size=limit or 1000,
+            order_by="sequence",
+        )
+        return [StoredTick.model_validate(item["data"]) for item in page]
 
     # ------------------------------------------------------------------
     # State store

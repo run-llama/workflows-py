@@ -148,6 +148,55 @@ class AbstractWorkflowStore(ABC):
     @abstractmethod
     async def get_ticks(self, run_id: str) -> list[StoredTick]: ...
 
+    async def query_ticks(
+        self,
+        run_id: str,
+        *,
+        after_sequence: int | None = None,
+        limit: int | None = None,
+    ) -> list[StoredTick]:
+        """Return a page of stored ticks for *run_id*.
+
+        Returns ticks with ``sequence > after_sequence`` (or from the
+        beginning if ``after_sequence`` is ``None``/``-1``), ordered by
+        sequence, up to ``limit`` rows.
+
+        The default implementation filters the output of :meth:`get_ticks`
+        in memory. Backends should override with a true paginated query so
+        that :meth:`stream_ticks` bounds peak memory at replay time.
+        """
+        all_ticks = await self.get_ticks(run_id)
+        if after_sequence is not None:
+            all_ticks = [t for t in all_ticks if t.sequence > after_sequence]
+        if limit is not None:
+            all_ticks = all_ticks[:limit]
+        return all_ticks
+
+    async def stream_ticks(
+        self, run_id: str, *, batch_size: int = 100
+    ) -> AsyncIterator[StoredTick]:
+        """Async-iterate stored ticks for *run_id* in sequence order.
+
+        Reads one page of ``batch_size`` ticks at a time via
+        :meth:`query_ticks`, yielding them individually. Peak in-memory tick
+        count for the consumer is bounded by ``batch_size``.
+
+        Iteration terminates when a page returns fewer than ``batch_size``
+        rows. Concurrent writers appending ticks while this runs are not
+        serialized with it; the stream sees at least the rows committed
+        before each page query.
+        """
+        cursor: int | None = None
+        while True:
+            batch = await self.query_ticks(
+                run_id, after_sequence=cursor, limit=batch_size
+            )
+            for tick in batch:
+                yield tick
+                cursor = tick.sequence
+            if len(batch) < batch_size:
+                return
+
     async def after_tick(self, run_id: str, tick_data: dict[str, Any]) -> None:
         """Called after a tick's commands have been processed.
 
