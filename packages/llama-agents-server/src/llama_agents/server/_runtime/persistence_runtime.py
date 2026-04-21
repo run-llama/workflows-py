@@ -13,7 +13,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import sqlite3
-from collections.abc import Coroutine
+from collections.abc import AsyncIterator, Coroutine
 from datetime import datetime, timezone
 from typing import Any
 
@@ -22,7 +22,7 @@ from workflows import Context
 from workflows.context.context_types import SerializedContext
 from workflows.context.serializers import BaseSerializer, JsonSerializer
 from workflows.events import StartEvent
-from workflows.runtime.control_loop import rebuild_state_from_ticks
+from workflows.runtime.control_loop import rebuild_state_from_ticks_stream
 from workflows.runtime.runtime_decorators import (
     BaseInternalRunAdapterDecorator,
     BaseRuntimeDecorator,
@@ -45,6 +45,7 @@ from .._store.abstract_workflow_store import (
     HandlerQuery,
     PersistentHandler,
     as_legacy_context_store,
+    stream_workflow_ticks,
 )
 from .._store.sqlite.sqlite_state_store import SqliteStateStore
 
@@ -149,12 +150,16 @@ class TickPersistenceDecorator(BaseRuntimeDecorator):
         self, workflow: Workflow, run_id: str
     ) -> Context | None:
         """Rebuild a Context from persisted ticks (and legacy ctx if available)."""
-        stored_ticks = await self._store.get_ticks(run_id)
         serializer = JsonSerializer()
-
         legacy_ctx = self._get_legacy_ctx(run_id)
 
-        if not stored_ticks and not legacy_ctx:
+        tick_stream = stream_workflow_ticks(self._store, run_id)
+        try:
+            first_tick = await tick_stream.__anext__()
+        except StopAsyncIteration:
+            first_tick = None
+
+        if first_tick is None and not legacy_ctx:
             return None
 
         if legacy_ctx:
@@ -164,11 +169,16 @@ class TickPersistenceDecorator(BaseRuntimeDecorator):
         else:
             init_state = BrokerState.from_workflow(workflow)
 
-        if stored_ticks:
-            ticks = [
-                WorkflowTickAdapter.validate_python(st.tick_data) for st in stored_ticks
-            ]
-            init_state = rebuild_state_from_ticks(init_state, ticks)
+        if first_tick is not None:
+
+            async def _with_first() -> AsyncIterator[WorkflowTick]:
+                yield first_tick
+                async for tick in tick_stream:
+                    yield tick
+
+            init_state = await rebuild_state_from_ticks_stream(
+                init_state, _with_first()
+            )
 
         serialized = init_state.to_serialized(serializer)
         return Context.from_dict(

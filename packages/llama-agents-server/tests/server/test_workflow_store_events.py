@@ -262,3 +262,27 @@ async def test_subscribe_events_already_terminated(
 
     assert len(collected) == 2
     assert collected[-1].event.type == "StopEvent"
+
+
+@pytest.mark.asyncio
+async def test_stream_ticks_yields_all_rows_in_order(
+    store: AbstractWorkflowStore,
+) -> None:
+    for i in range(13):
+        await store.append_tick("run-1", {"type": "TickSendEvent", "i": i})
+
+    yielded: list[int] = []
+    async for tick in store.stream_ticks("run-1"):
+        yielded.append(tick.sequence)
+
+    assert yielded == list(range(13))
+
+
+@pytest.mark.asyncio
+async def test_stream_ticks_empty_history(
+    store: AbstractWorkflowStore,
+) -> None:
+    yielded: list[object] = []
+    async for tick in store.stream_ticks("empty-run"):
+        yielded.append(tick)
+    assert yielded == []

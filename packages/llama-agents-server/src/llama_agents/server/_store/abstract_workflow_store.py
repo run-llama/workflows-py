@@ -23,6 +23,7 @@ from workflows.context import JsonSerializer
 from workflows.context.serializers import BaseSerializer
 from workflows.context.state_store import StateStore
 from workflows.events import StopEvent
+from workflows.runtime.types.ticks import WorkflowTick, WorkflowTickAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -148,6 +149,15 @@ class AbstractWorkflowStore(ABC):
     @abstractmethod
     async def get_ticks(self, run_id: str) -> list[StoredTick]: ...
 
+    async def stream_ticks(self, run_id: str) -> AsyncIterator[StoredTick]:
+        """Async-iterate stored ticks in sequence order (ascending).
+
+        Default loads all ticks via :meth:`get_ticks`. Override for true
+        streaming (e.g. cursor-based pagination).
+        """
+        for tick in await self.get_ticks(run_id):
+            yield tick
+
     async def after_tick(self, run_id: str, tick_data: dict[str, Any]) -> None:
         """Called after a tick's commands have been processed.
 
@@ -235,3 +245,12 @@ def as_legacy_context_store(store: AbstractWorkflowStore) -> LegacyContextStore 
     if isinstance(store, LegacyContextStore):
         return store
     return None
+
+
+async def stream_workflow_ticks(
+    store: AbstractWorkflowStore,
+    run_id: str,
+) -> AsyncIterator[WorkflowTick]:
+    """Stream validated WorkflowTick objects for *run_id* from *store*."""
+    async for stored in store.stream_ticks(run_id):
+        yield WorkflowTickAdapter.validate_python(stored.tick_data)

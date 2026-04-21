@@ -28,6 +28,8 @@ from .agent_data_state_store import AgentDataStateStore
 
 logger = logging.getLogger(__name__)
 
+_TICK_PAGE_SIZE = 100
+
 
 class AgentDataStore(AbstractWorkflowStore):
     """Workflow store backed by the LlamaCloud Agent Data API.
@@ -420,28 +422,27 @@ class AgentDataStore(AbstractWorkflowStore):
         )
 
     async def get_ticks(self, run_id: str) -> list[StoredTick]:
-        await self._regroup_ticks(run_id)
-        page_size = 100
-        all_items: list[dict[str, Any]] = []
-        last_sequence = -1
+        return [t async for t in self.stream_ticks(run_id)]
 
+    async def stream_ticks(self, run_id: str) -> AsyncIterator[StoredTick]:
+        await self._regroup_ticks(run_id)
+        cursor: int | None = None
         while True:
-            filters: dict[str, Any] = {
-                "run_id": {"eq": run_id},
-                "sequence": {"gt": last_sequence},
-            }
+            filters: dict[str, Any] = {"run_id": {"eq": run_id}}
+            if cursor is not None:
+                filters["sequence"] = {"gt": cursor}
             page = await self._client.search(
                 self._ticks_collection,
                 filters,
-                page_size=page_size,
+                page_size=_TICK_PAGE_SIZE,
                 order_by="sequence",
             )
-            all_items.extend(page)
-            if len(page) < page_size:
-                break
-            last_sequence = page[-1]["data"]["sequence"]
-
-        return [StoredTick.model_validate(item["data"]) for item in all_items]
+            for item in page:
+                tick = StoredTick.model_validate(item["data"])
+                yield tick
+                cursor = tick.sequence
+            if len(page) < _TICK_PAGE_SIZE:
+                return
 
     # ------------------------------------------------------------------
     # State store

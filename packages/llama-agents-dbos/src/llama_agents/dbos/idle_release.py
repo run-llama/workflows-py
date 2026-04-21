@@ -20,12 +20,16 @@ from llama_agents.dbos.journal.lifecycle import RunLifecycleLock, RunLifecycleSt
 from llama_agents.server._store.abstract_workflow_store import (
     AbstractWorkflowStore,
     HandlerQuery,
+    stream_workflow_ticks,
 )
 from typing_extensions import override
 from workflows.context.serializers import JsonSerializer
 from workflows.context.state_store import infer_state_type
 from workflows.events import Event, WorkflowIdleEvent
-from workflows.runtime.control_loop import rebuild_state_from_ticks
+from workflows.runtime.control_loop import (
+    rebuild_state_from_ticks,
+    rebuild_state_from_ticks_stream,
+)
 from workflows.runtime.runtime_decorators import (
     BaseExternalRunAdapterDecorator,
     BaseInternalRunAdapterDecorator,
@@ -41,13 +45,13 @@ from workflows.runtime.types.plugin import (
 from workflows.runtime.types.ticks import (
     TickIdleRelease,
     WorkflowTick,
-    WorkflowTickAdapter,
 )
 from workflows.workflow import Workflow
 
 from dbos import DBOS
 
 logger = logging.getLogger(__name__)
+
 
 # How long to wait before declaring a "releasing" state as crashed
 CRASH_TIMEOUT_SECONDS = 120.0
@@ -255,16 +259,10 @@ class DBOSIdleReleaseDecorator(BaseRuntimeDecorator):
         self, workflow: Workflow, run_id: str
     ) -> BrokerState:
         """Rebuild BrokerState from persisted ticks."""
-        stored_ticks = await self._store.get_ticks(run_id)
         init_state = BrokerState.from_workflow(workflow)
-
-        if stored_ticks:
-            ticks = [
-                WorkflowTickAdapter.validate_python(st.tick_data) for st in stored_ticks
-            ]
-            init_state = rebuild_state_from_ticks(init_state, ticks)
-
-        return init_state
+        return await rebuild_state_from_ticks_stream(
+            init_state, stream_workflow_ticks(self._store, run_id)
+        )
 
     async def _do_resume(
         self,

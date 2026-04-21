@@ -29,6 +29,8 @@ from .postgres_state_store import PostgresStateStore
 
 logger = logging.getLogger(__name__)
 
+_TICK_PAGE_SIZE = 100
+
 
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
@@ -440,6 +442,40 @@ class PostgresWorkflowStore(AbstractWorkflowStore):
             )
             for row in rows
         ]
+
+    async def stream_ticks(self, run_id: str) -> AsyncIterator[StoredTick]:
+        pool = await self._ensure_pool()
+        cursor: int | None = None
+        while True:
+            if cursor is None:
+                sql = (
+                    f"SELECT run_id, sequence, timestamp, tick_data "
+                    f"FROM {self._ticks_ref} WHERE run_id = $1 "
+                    f"ORDER BY sequence LIMIT $2"
+                )
+                params: list[Any] = [run_id, _TICK_PAGE_SIZE]
+            else:
+                sql = (
+                    f"SELECT run_id, sequence, timestamp, tick_data "
+                    f"FROM {self._ticks_ref} WHERE run_id = $1 AND sequence > $2 "
+                    f"ORDER BY sequence LIMIT $3"
+                )
+                params = [run_id, cursor, _TICK_PAGE_SIZE]
+            async with pool.acquire() as conn:
+                rows = await conn.fetch(sql, *params)
+            for row in rows:
+                tick = StoredTick(
+                    run_id=row["run_id"],
+                    sequence=row["sequence"],
+                    timestamp=row["timestamp"],
+                    tick_data=json.loads(row["tick_data"])
+                    if isinstance(row["tick_data"], str)
+                    else row["tick_data"],
+                )
+                yield tick
+                cursor = tick.sequence
+            if len(rows) < _TICK_PAGE_SIZE:
+                return
 
     # ── Helpers ─────────────────────────────────────────────────────────
 

@@ -10,6 +10,7 @@ testing them in isolation without running the full async control loop.
 from __future__ import annotations
 
 import hashlib
+from collections.abc import AsyncIterator
 from typing import cast
 
 import pytest
@@ -40,6 +41,7 @@ from workflows.runtime.control_loop import (
     _process_timeout_tick,
     _reduce_tick,
     rebuild_state_from_ticks,
+    rebuild_state_from_ticks_stream,
     rewind_in_progress,
 )
 from workflows.runtime.types.commands import (
@@ -1091,3 +1093,139 @@ def test_rebuild_state_from_ticks_preserves_queue_order(
     # Queue should have event2 (since num_workers=1, only 1 can be in_progress)
     assert len(result.workers["test_step"].queue) == 1
     assert result.workers["test_step"].queue[0].event == event2
+
+
+async def _aiter(ticks: list[WorkflowTick]) -> AsyncIterator[WorkflowTick]:
+    for t in ticks:
+        yield t
+
+
+def _simple_step_tick_sequence() -> list[WorkflowTick]:
+    event1 = MyTestEvent(value=1)
+    event2 = MyTestEvent(value=2)
+    return [
+        TickAddEvent(event=event1),
+        TickStepResult(
+            step_name="test_step",
+            worker_id=0,
+            event=event1,
+            result=[StepWorkerResult(result=OtherEvent(data="done1"))],
+        ),
+        TickAddEvent(event=event2),
+        TickStepResult(
+            step_name="test_step",
+            worker_id=0,
+            event=event2,
+            result=[StepWorkerResult(result=StopEvent(result="done2"))],
+        ),
+    ]
+
+
+async def test_rebuild_state_from_ticks_stream_empty(base_state: BrokerState) -> None:
+    shared_state = StepWorkerState(
+        step_name="test_step", collected_events={}, collected_waiters=[]
+    )
+    event1 = MyTestEvent(value=1)
+    base_state.workers["test_step"].in_progress = [
+        InProgressState(
+            event=event1,
+            worker_id=0,
+            shared_state=shared_state,
+            attempts=1,
+            first_attempt_at=100.0,
+        ),
+    ]
+
+    streamed = await rebuild_state_from_ticks_stream(base_state, _aiter([]))
+
+    # rewind_in_progress re-assigns worker_id=0 starting fresh; in_progress preserved.
+    assert len(streamed.workers["test_step"].in_progress) == 1
+    assert streamed.workers["test_step"].in_progress[0].worker_id == 0
+    assert streamed.workers["test_step"].in_progress[0].event == event1
+
+
+async def test_rebuild_state_from_ticks_stream_single_tick(
+    base_state: BrokerState, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Freeze time so timestamp kludges don't diverge between paths.
+    monkeypatch.setattr("workflows.runtime.control_loop.time.time", lambda: 12345.0)
+    ticks: list[WorkflowTick] = [TickAddEvent(event=MyTestEvent(value=42))]
+    streamed = await rebuild_state_from_ticks_stream(
+        base_state.deepcopy(), _aiter(ticks)
+    )
+    listed = rebuild_state_from_ticks(base_state.deepcopy(), ticks)
+    assert streamed == listed
+
+
+async def test_rebuild_state_from_ticks_stream_multi_tick_equivalence(
+    base_state: BrokerState, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("workflows.runtime.control_loop.time.time", lambda: 12345.0)
+    ticks = _simple_step_tick_sequence()
+    streamed = await rebuild_state_from_ticks_stream(
+        base_state.deepcopy(), _aiter(list(ticks))
+    )
+    listed = rebuild_state_from_ticks(base_state.deepcopy(), list(ticks))
+    assert streamed == listed
+    assert streamed.is_running is False
+
+
+async def test_rebuild_state_from_ticks_stream_large_history_equivalence(
+    base_state: BrokerState, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr("workflows.runtime.control_loop.time.time", lambda: 12345.0)
+    ticks: list[WorkflowTick] = [
+        TickAddEvent(event=MyTestEvent(value=i)) for i in range(500)
+    ]
+    streamed = await rebuild_state_from_ticks_stream(
+        base_state.deepcopy(), _aiter(list(ticks))
+    )
+    listed = rebuild_state_from_ticks(base_state.deepcopy(), list(ticks))
+    assert streamed == listed
+
+
+async def test_rebuild_state_from_ticks_stream_clears_in_progress(
+    base_state: BrokerState,
+) -> None:
+    event1 = MyTestEvent(value=1)
+    event2 = MyTestEvent(value=2)
+    shared_state = StepWorkerState(
+        step_name="test_step", collected_events={}, collected_waiters=[]
+    )
+    base_state.workers["test_step"].in_progress = [
+        InProgressState(
+            event=event1,
+            worker_id=1,
+            shared_state=shared_state,
+            attempts=0,
+            first_attempt_at=100.0,
+        ),
+        InProgressState(
+            event=event2,
+            worker_id=2,
+            shared_state=shared_state,
+            attempts=0,
+            first_attempt_at=100.0,
+        ),
+    ]
+    ticks: list[WorkflowTick] = [
+        TickAddEvent(event=event1),
+        TickStepResult(
+            step_name="test_step",
+            worker_id=0,
+            event=event1,
+            result=[StepWorkerResult(result=OtherEvent(data="done1"))],
+        ),
+        TickAddEvent(event=event2),
+        TickStepResult(
+            step_name="test_step",
+            worker_id=0,
+            event=event2,
+            result=[StepWorkerResult(result=StopEvent(result="done2"))],
+        ),
+    ]
+
+    final_state = await rebuild_state_from_ticks_stream(base_state, _aiter(ticks))
+
+    assert final_state.is_running is False
+    assert len(final_state.workers["test_step"].in_progress) == 0
