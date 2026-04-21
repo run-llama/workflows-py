@@ -22,7 +22,7 @@ from pydantic import (
 from workflows.context import JsonSerializer
 from workflows.context.serializers import BaseSerializer
 from workflows.context.state_store import StateStore
-from workflows.events import StopEvent
+from workflows.events import StopEvent, WorkflowIdleEvent
 from workflows.runtime.types.ticks import WorkflowTick, WorkflowTickAdapter
 
 logger = logging.getLogger(__name__)
@@ -205,6 +205,29 @@ class AbstractWorkflowStore(ABC):
 
         types = (event.event.types or []) + [event.event.type]
         return StopEvent.__name__ in types
+
+    @staticmethod
+    def _is_idle_event(event: StoredEvent) -> bool:
+        types = (event.event.types or []) + [event.event.type]
+        return WorkflowIdleEvent.__name__ in types
+
+    @staticmethod
+    def _rewind_to_current_pause(events: list[StoredEvent]) -> int:
+        """Exclusive cursor positioned just before the current idle segment.
+
+        Returned sequence is used as ``after_sequence`` to replay the events
+        between the previous ``WorkflowIdleEvent`` and the current one (so
+        late SSE subscribers receive the HITL events that triggered the
+        pause). Returns -1 when the current pause is the first one, or when
+        ``events`` contains no ``WorkflowIdleEvent``.
+        """
+        latest_idle = prev_idle = None
+        for i, stored in enumerate(events):
+            if AbstractWorkflowStore._is_idle_event(stored):
+                prev_idle, latest_idle = latest_idle, i
+        if latest_idle is None or prev_idle is None:
+            return -1
+        return events[prev_idle].sequence
 
     async def subscribe_events(
         self, run_id: str, after_sequence: int = -1

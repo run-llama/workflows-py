@@ -644,10 +644,25 @@ class _WorkflowAPI:
         if run_id is None:
             raise HTTPException(detail="Handler has no associated run", status_code=404)
 
-        # Resolve "now" cursor to current max sequence
+        # An implicit "now" cursor on an idle handler must rewind to the
+        # current pause segment, otherwise a late subscriber drops the HITL
+        # events that triggered the pause and hangs.
+        #
+        # `idle_since` alone is not sufficient: DBOSIdleReleaseDecorator
+        # defers that column until its idle_timeout expires, so the event log
+        # tail is used as a second signal.
         if after_sequence is None:
             all_current = await store.query_events(run_id)
-            after_sequence = all_current[-1].sequence if all_current else -1
+            is_idle = persistent.idle_since is not None or (
+                bool(all_current)
+                and AbstractWorkflowStore._is_idle_event(all_current[-1])
+            )
+            if is_idle:
+                after_sequence = AbstractWorkflowStore._rewind_to_current_pause(
+                    all_current
+                )
+            else:
+                after_sequence = all_current[-1].sequence if all_current else -1
 
         # Check if already fully consumed
         remaining_events = await store.query_events(
