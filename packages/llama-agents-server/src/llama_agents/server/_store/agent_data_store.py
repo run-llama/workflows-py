@@ -28,6 +28,8 @@ from .agent_data_state_store import AgentDataStateStore
 
 logger = logging.getLogger(__name__)
 
+_TICK_PAGE_SIZE = 100
+
 
 class AgentDataStore(AbstractWorkflowStore):
     """Workflow store backed by the LlamaCloud Agent Data API.
@@ -422,53 +424,24 @@ class AgentDataStore(AbstractWorkflowStore):
     async def get_ticks(self, run_id: str) -> list[StoredTick]:
         return [t async for t in self.stream_ticks(run_id)]
 
-    async def query_ticks(
-        self,
-        run_id: str,
-        *,
-        after_sequence: int | None = None,
-        limit: int | None = None,
-    ) -> list[StoredTick]:
+    async def stream_ticks(self, run_id: str) -> AsyncIterator[StoredTick]:
         await self._regroup_ticks(run_id)
-        # When unbounded, page through results to avoid silently truncating at
-        # the API's default page cap.
-        if limit is None:
-            return [
-                t
-                async for t in self._iter_ticks(
-                    run_id, after_sequence=after_sequence, page_size=100
-                )
-            ]
-        return await self._fetch_ticks_page(
-            run_id, after_sequence=after_sequence, page_size=limit
-        )
-
-    async def _fetch_ticks_page(
-        self, run_id: str, *, after_sequence: int | None, page_size: int
-    ) -> list[StoredTick]:
-        filters: dict[str, Any] = {"run_id": {"eq": run_id}}
-        if after_sequence is not None:
-            filters["sequence"] = {"gt": after_sequence}
-        page = await self._client.search(
-            self._ticks_collection,
-            filters,
-            page_size=page_size,
-            order_by="sequence",
-        )
-        return [StoredTick.model_validate(item["data"]) for item in page]
-
-    async def _iter_ticks(
-        self, run_id: str, *, after_sequence: int | None, page_size: int
-    ) -> AsyncIterator[StoredTick]:
-        cursor = after_sequence
+        cursor: int | None = None
         while True:
-            page = await self._fetch_ticks_page(
-                run_id, after_sequence=cursor, page_size=page_size
+            filters: dict[str, Any] = {"run_id": {"eq": run_id}}
+            if cursor is not None:
+                filters["sequence"] = {"gt": cursor}
+            page = await self._client.search(
+                self._ticks_collection,
+                filters,
+                page_size=_TICK_PAGE_SIZE,
+                order_by="sequence",
             )
-            for tick in page:
+            for item in page:
+                tick = StoredTick.model_validate(item["data"])
                 yield tick
                 cursor = tick.sequence
-            if len(page) < page_size:
+            if len(page) < _TICK_PAGE_SIZE:
                 return
 
     # ------------------------------------------------------------------

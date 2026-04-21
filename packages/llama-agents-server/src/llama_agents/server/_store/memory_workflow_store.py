@@ -200,20 +200,6 @@ class MemoryWorkflowStore(AbstractWorkflowStore):
     async def get_ticks(self, run_id: str) -> list[StoredTick]:
         return list(self.ticks.get(run_id, []))
 
-    async def query_ticks(
-        self,
-        run_id: str,
-        *,
-        after_sequence: int | None = None,
-        limit: int | None = None,
-    ) -> list[StoredTick]:
-        ticks = self.ticks.get(run_id, [])
-        if after_sequence is not None:
-            ticks = [t for t in ticks if t.sequence > after_sequence]
-        if limit is not None:
-            ticks = ticks[:limit]
-        return list(ticks)
-
     async def subscribe_events(
         self, run_id: str, after_sequence: int = -1
     ) -> AsyncIterator[StoredEvent]:

@@ -26,6 +26,8 @@ from ..abstract_workflow_store import (
 from .migrate import run_migrations as _run_migrations
 from .sqlite_state_store import SqliteStateStore
 
+_TICK_PAGE_SIZE = 100
+
 
 class SqliteWorkflowStore(AbstractWorkflowStore):
     def __init__(
@@ -282,37 +284,36 @@ class SqliteWorkflowStore(AbstractWorkflowStore):
             for row in rows
         ]
 
-    async def query_ticks(
-        self,
-        run_id: str,
-        *,
-        after_sequence: int | None = None,
-        limit: int | None = None,
-    ) -> list[StoredTick]:
-        sql = (
-            "SELECT run_id, sequence, timestamp, tick_data FROM ticks WHERE run_id = ?"
-        )
-        params: list[Any] = [run_id]
-        if after_sequence is not None:
-            sql += " AND sequence > ?"
-            params.append(after_sequence)
-        sql += " ORDER BY sequence"
-        if limit is not None:
-            sql += " LIMIT ?"
-            params.append(limit)
-        with self._connect() as conn:
-            cursor = conn.cursor()
-            cursor.execute(sql, params)
-            rows = cursor.fetchall()
-        return [
-            StoredTick(
-                run_id=row[0],
-                sequence=row[1],
-                timestamp=datetime.fromisoformat(row[2]),
-                tick_data=json.loads(row[3]),
-            )
-            for row in rows
-        ]
+    async def stream_ticks(self, run_id: str) -> AsyncIterator[StoredTick]:
+        seq_cursor: int | None = None
+        while True:
+            if seq_cursor is None:
+                sql = (
+                    "SELECT run_id, sequence, timestamp, tick_data FROM ticks "
+                    "WHERE run_id = ? ORDER BY sequence LIMIT ?"
+                )
+                params: list[Any] = [run_id, _TICK_PAGE_SIZE]
+            else:
+                sql = (
+                    "SELECT run_id, sequence, timestamp, tick_data FROM ticks "
+                    "WHERE run_id = ? AND sequence > ? ORDER BY sequence LIMIT ?"
+                )
+                params = [run_id, seq_cursor, _TICK_PAGE_SIZE]
+            with self._connect() as conn:
+                cursor = conn.cursor()
+                cursor.execute(sql, params)
+                rows = cursor.fetchall()
+            for row in rows:
+                tick = StoredTick(
+                    run_id=row[0],
+                    sequence=row[1],
+                    timestamp=datetime.fromisoformat(row[2]),
+                    tick_data=json.loads(row[3]),
+                )
+                yield tick
+                seq_cursor = tick.sequence
+            if len(rows) < _TICK_PAGE_SIZE:
+                return
 
     def get_legacy_ctx(self, run_id: str) -> dict[str, Any] | None:
         """Read the old ctx column for a run_id, if present."""

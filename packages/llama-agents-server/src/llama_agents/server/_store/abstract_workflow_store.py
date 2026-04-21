@@ -31,8 +31,6 @@ Status = Literal["running", "completed", "failed", "cancelled"]
 
 TERMINAL_STATUSES: frozenset[Status] = frozenset(("completed", "failed", "cancelled"))
 
-TICK_REPLAY_BATCH_SIZE = 100
-
 
 def is_terminal_status(status: Status) -> bool:
     return status in TERMINAL_STATUSES
@@ -151,39 +149,14 @@ class AbstractWorkflowStore(ABC):
     @abstractmethod
     async def get_ticks(self, run_id: str) -> list[StoredTick]: ...
 
-    async def query_ticks(
-        self,
-        run_id: str,
-        *,
-        after_sequence: int | None = None,
-        limit: int | None = None,
-    ) -> list[StoredTick]:
-        """Return ticks with ``sequence > after_sequence``, ordered by sequence, up to ``limit``.
+    async def stream_ticks(self, run_id: str) -> AsyncIterator[StoredTick]:
+        """Async-iterate stored ticks in sequence order (ascending).
 
-        Backends should override with a paginated query; the default
-        materializes all ticks via :meth:`get_ticks`.
+        Default loads all ticks via :meth:`get_ticks`. Override for true
+        streaming (e.g. cursor-based pagination).
         """
-        all_ticks = await self.get_ticks(run_id)
-        if after_sequence is not None:
-            all_ticks = [t for t in all_ticks if t.sequence > after_sequence]
-        if limit is not None:
-            all_ticks = all_ticks[:limit]
-        return all_ticks
-
-    async def stream_ticks(
-        self, run_id: str, *, batch_size: int = TICK_REPLAY_BATCH_SIZE
-    ) -> AsyncIterator[StoredTick]:
-        """Async-iterate stored ticks for *run_id* in sequence order, ``batch_size`` per page."""
-        cursor: int | None = None
-        while True:
-            batch = await self.query_ticks(
-                run_id, after_sequence=cursor, limit=batch_size
-            )
-            for tick in batch:
-                yield tick
-                cursor = tick.sequence
-            if len(batch) < batch_size:
-                return
+        for tick in await self.get_ticks(run_id):
+            yield tick
 
     async def after_tick(self, run_id: str, tick_data: dict[str, Any]) -> None:
         """Called after a tick's commands have been processed.
@@ -277,9 +250,7 @@ def as_legacy_context_store(store: AbstractWorkflowStore) -> LegacyContextStore 
 async def stream_workflow_ticks(
     store: AbstractWorkflowStore,
     run_id: str,
-    *,
-    batch_size: int = TICK_REPLAY_BATCH_SIZE,
 ) -> AsyncIterator[WorkflowTick]:
     """Stream validated WorkflowTick objects for *run_id* from *store*."""
-    async for stored in store.stream_ticks(run_id, batch_size=batch_size):
+    async for stored in store.stream_ticks(run_id):
         yield WorkflowTickAdapter.validate_python(stored.tick_data)
