@@ -45,14 +45,11 @@ from .._store.abstract_workflow_store import (
     HandlerQuery,
     PersistentHandler,
     as_legacy_context_store,
+    stream_workflow_ticks,
 )
 from .._store.sqlite.sqlite_state_store import SqliteStateStore
 
 logger = logging.getLogger(__name__)
-
-
-TICK_REPLAY_BATCH_SIZE = 100
-"""Max ticks held in memory at once during persistence-runtime replay."""
 
 
 class _PersistenceInternalRunAdapter(BaseInternalRunAdapterDecorator):
@@ -152,19 +149,17 @@ class TickPersistenceDecorator(BaseRuntimeDecorator):
     async def context_from_ticks(
         self, workflow: Workflow, run_id: str
     ) -> Context | None:
-        """Rebuild a Context from persisted ticks (and legacy ctx if available).
-
-        Ticks are replayed via :meth:`stream_ticks` so peak memory is bounded
-        by ``TICK_REPLAY_BATCH_SIZE`` rather than the full tick history.
-        """
+        """Rebuild a Context from persisted ticks (and legacy ctx if available)."""
         serializer = JsonSerializer()
         legacy_ctx = self._get_legacy_ctx(run_id)
 
-        # Probe for tick existence without materializing everything.
-        first_page = await self._store.query_ticks(run_id, limit=1)
-        has_ticks = len(first_page) > 0
+        tick_stream = stream_workflow_ticks(self._store, run_id)
+        try:
+            first_tick = await tick_stream.__anext__()
+        except StopAsyncIteration:
+            first_tick = None
 
-        if not has_ticks and not legacy_ctx:
+        if first_tick is None and not legacy_ctx:
             return None
 
         if legacy_ctx:
@@ -174,15 +169,16 @@ class TickPersistenceDecorator(BaseRuntimeDecorator):
         else:
             init_state = BrokerState.from_workflow(workflow)
 
-        if has_ticks:
+        if first_tick is not None:
 
-            async def _stream() -> AsyncIterator[WorkflowTick]:
-                async for stored in self._store.stream_ticks(
-                    run_id, batch_size=TICK_REPLAY_BATCH_SIZE
-                ):
-                    yield WorkflowTickAdapter.validate_python(stored.tick_data)
+            async def _with_first() -> AsyncIterator[WorkflowTick]:
+                yield first_tick
+                async for tick in tick_stream:
+                    yield tick
 
-            init_state = await rebuild_state_from_ticks_stream(init_state, _stream())
+            init_state = await rebuild_state_from_ticks_stream(
+                init_state, _with_first()
+            )
 
         serialized = init_state.to_serialized(serializer)
         return Context.from_dict(

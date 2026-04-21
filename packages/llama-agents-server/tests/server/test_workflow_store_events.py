@@ -264,11 +264,6 @@ async def test_subscribe_events_already_terminated(
     assert collected[-1].event.type == "StopEvent"
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Tick query / stream
-# ─────────────────────────────────────────────────────────────────────────────
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "seed_count, after_sequence, limit, expected_sequences",

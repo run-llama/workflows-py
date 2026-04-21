@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
+from collections.abc import Awaitable, Callable, Coroutine
 from datetime import datetime, timezone
 from typing import Any
 
@@ -20,6 +20,7 @@ from llama_agents.dbos.journal.lifecycle import RunLifecycleLock, RunLifecycleSt
 from llama_agents.server._store.abstract_workflow_store import (
     AbstractWorkflowStore,
     HandlerQuery,
+    stream_workflow_ticks,
 )
 from typing_extensions import override
 from workflows.context.serializers import JsonSerializer
@@ -44,7 +45,6 @@ from workflows.runtime.types.plugin import (
 from workflows.runtime.types.ticks import (
     TickIdleRelease,
     WorkflowTick,
-    WorkflowTickAdapter,
 )
 from workflows.workflow import Workflow
 
@@ -52,13 +52,6 @@ from dbos import DBOS
 
 logger = logging.getLogger(__name__)
 
-
-TICK_REPLAY_BATCH_SIZE = 100
-"""Max ticks held in memory at once during idle-release resume replay.
-
-Bounds peak memory when rebuilding state for a resumed workflow with a
-long tick history. Not a user-facing config knob.
-"""
 
 # How long to wait before declaring a "releasing" state as crashed
 CRASH_TIMEOUT_SECONDS = 120.0
@@ -265,20 +258,11 @@ class DBOSIdleReleaseDecorator(BaseRuntimeDecorator):
     async def _broker_state_from_ticks(
         self, workflow: Workflow, run_id: str
     ) -> BrokerState:
-        """Rebuild BrokerState from persisted ticks.
-
-        Streams ticks from the store so peak memory during replay is bounded
-        by ``TICK_REPLAY_BATCH_SIZE`` rather than by total tick history size.
-        """
+        """Rebuild BrokerState from persisted ticks."""
         init_state = BrokerState.from_workflow(workflow)
-
-        async def _stream() -> AsyncIterator[WorkflowTick]:
-            async for stored in self._store.stream_ticks(
-                run_id, batch_size=TICK_REPLAY_BATCH_SIZE
-            ):
-                yield WorkflowTickAdapter.validate_python(stored.tick_data)
-
-        return await rebuild_state_from_ticks_stream(init_state, _stream())
+        return await rebuild_state_from_ticks_stream(
+            init_state, stream_workflow_ticks(self._store, run_id)
+        )
 
     async def _do_resume(
         self,

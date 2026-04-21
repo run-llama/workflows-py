@@ -1095,11 +1095,6 @@ def test_rebuild_state_from_ticks_preserves_queue_order(
     assert result.workers["test_step"].queue[0].event == event2
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Tests for rebuild_state_from_ticks_stream
-# ─────────────────────────────────────────────────────────────────────────────
-
-
 async def _aiter(ticks: list[WorkflowTick]) -> AsyncIterator[WorkflowTick]:
     for t in ticks:
         yield t
@@ -1127,7 +1122,6 @@ def _simple_step_tick_sequence() -> list[WorkflowTick]:
 
 
 async def test_rebuild_state_from_ticks_stream_empty(base_state: BrokerState) -> None:
-    """Empty stream still applies rewind_in_progress like the list variant."""
     shared_state = StepWorkerState(
         step_name="test_step", collected_events={}, collected_waiters=[]
     )
@@ -1179,7 +1173,6 @@ async def test_rebuild_state_from_ticks_stream_multi_tick_equivalence(
 async def test_rebuild_state_from_ticks_stream_large_history_equivalence(
     base_state: BrokerState, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """500-tick replay parity: streaming and list paths must agree."""
     monkeypatch.setattr("workflows.runtime.control_loop.time.time", lambda: 12345.0)
     ticks: list[WorkflowTick] = [
         TickAddEvent(event=MyTestEvent(value=i)) for i in range(500)
@@ -1194,7 +1187,6 @@ async def test_rebuild_state_from_ticks_stream_large_history_equivalence(
 async def test_rebuild_state_from_ticks_stream_clears_in_progress(
     base_state: BrokerState,
 ) -> None:
-    """Mirror of test_rebuild_state_from_ticks_clears_in_progress via stream."""
     event1 = MyTestEvent(value=1)
     event2 = MyTestEvent(value=2)
     shared_state = StepWorkerState(

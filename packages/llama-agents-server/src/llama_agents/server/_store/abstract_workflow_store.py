@@ -23,12 +23,15 @@ from workflows.context import JsonSerializer
 from workflows.context.serializers import BaseSerializer
 from workflows.context.state_store import StateStore
 from workflows.events import StopEvent
+from workflows.runtime.types.ticks import WorkflowTick, WorkflowTickAdapter
 
 logger = logging.getLogger(__name__)
 
 Status = Literal["running", "completed", "failed", "cancelled"]
 
 TERMINAL_STATUSES: frozenset[Status] = frozenset(("completed", "failed", "cancelled"))
+
+TICK_REPLAY_BATCH_SIZE = 100
 
 
 def is_terminal_status(status: Status) -> bool:
@@ -155,15 +158,10 @@ class AbstractWorkflowStore(ABC):
         after_sequence: int | None = None,
         limit: int | None = None,
     ) -> list[StoredTick]:
-        """Return a page of stored ticks for *run_id*.
+        """Return ticks with ``sequence > after_sequence``, ordered by sequence, up to ``limit``.
 
-        Returns ticks with ``sequence > after_sequence`` (or from the
-        beginning if ``after_sequence`` is ``None``/``-1``), ordered by
-        sequence, up to ``limit`` rows.
-
-        The default implementation filters the output of :meth:`get_ticks`
-        in memory. Backends should override with a true paginated query so
-        that :meth:`stream_ticks` bounds peak memory at replay time.
+        Backends should override with a paginated query; the default
+        materializes all ticks via :meth:`get_ticks`.
         """
         all_ticks = await self.get_ticks(run_id)
         if after_sequence is not None:
@@ -173,19 +171,9 @@ class AbstractWorkflowStore(ABC):
         return all_ticks
 
     async def stream_ticks(
-        self, run_id: str, *, batch_size: int = 100
+        self, run_id: str, *, batch_size: int = TICK_REPLAY_BATCH_SIZE
     ) -> AsyncIterator[StoredTick]:
-        """Async-iterate stored ticks for *run_id* in sequence order.
-
-        Reads one page of ``batch_size`` ticks at a time via
-        :meth:`query_ticks`, yielding them individually. Peak in-memory tick
-        count for the consumer is bounded by ``batch_size``.
-
-        Iteration terminates when a page returns fewer than ``batch_size``
-        rows. Concurrent writers appending ticks while this runs are not
-        serialized with it; the stream sees at least the rows committed
-        before each page query.
-        """
+        """Async-iterate stored ticks for *run_id* in sequence order, ``batch_size`` per page."""
         cursor: int | None = None
         while True:
             batch = await self.query_ticks(
@@ -284,3 +272,14 @@ def as_legacy_context_store(store: AbstractWorkflowStore) -> LegacyContextStore 
     if isinstance(store, LegacyContextStore):
         return store
     return None
+
+
+async def stream_workflow_ticks(
+    store: AbstractWorkflowStore,
+    run_id: str,
+    *,
+    batch_size: int = TICK_REPLAY_BATCH_SIZE,
+) -> AsyncIterator[WorkflowTick]:
+    """Stream validated WorkflowTick objects for *run_id* from *store*."""
+    async for stored in store.stream_ticks(run_id, batch_size=batch_size):
+        yield WorkflowTickAdapter.validate_python(stored.tick_data)
