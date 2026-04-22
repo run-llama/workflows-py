@@ -14,14 +14,13 @@ import asyncio
 import logging
 import sqlite3
 from collections.abc import AsyncIterator, Coroutine
-from datetime import datetime, timezone
 from typing import Any
 
 from typing_extensions import override
 from workflows import Context
 from workflows.context.context_types import SerializedContext
 from workflows.context.serializers import BaseSerializer, JsonSerializer
-from workflows.events import StartEvent
+from workflows.events import StartEvent, StopEvent
 from workflows.runtime.control_loop import rebuild_state_from_ticks_stream
 from workflows.runtime.runtime_decorators import (
     BaseInternalRunAdapterDecorator,
@@ -33,8 +32,11 @@ from workflows.runtime.types.plugin import (
     InternalRunAdapter,
     Runtime,
 )
+from workflows.runtime.types.results import StepWorkerFailed, StepWorkerResult
 from workflows.runtime.types.ticks import (
+    TickCancelRun,
     TickStepResult,
+    TickTimeout,
     WorkflowTick,
     WorkflowTickAdapter,
 )
@@ -43,7 +45,7 @@ from workflows.workflow import Workflow
 from .._store.abstract_workflow_store import (
     AbstractWorkflowStore,
     HandlerQuery,
-    PersistentHandler,
+    Status,
     as_legacy_context_store,
     stream_workflow_ticks,
 )
@@ -276,29 +278,91 @@ class PersistenceDecorator(TickPersistenceDecorator):
                 continue
             try:
                 context = await self.context_from_ticks(workflow, run_id)
+
+                if context is None:
+                    # No ticks and no legacy ctx: the handler crashed before
+                    # any state landed. A fresh-start attempt would try to
+                    # build a StartEvent from empty kwargs and loop forever.
+                    logger.warning(
+                        "No replayable state for handler %s (workflow %s); "
+                        "marking as failed",
+                        persistent.handler_id,
+                        persistent.workflow_name,
+                    )
+                    await self._store.update_handler_status(
+                        run_id,
+                        status="failed",
+                        error="no ticks to replay on resume — handler was never persisted past creation",
+                    )
+                    continue
+
+                if not context.is_running:
+                    # Replay ended in a terminal transition. Classify from the
+                    # tick stream and finalize the handler.
+                    (
+                        status,
+                        result,
+                        error,
+                    ) = await self._classify_terminal_from_ticks(run_id)
+                    logger.warning(
+                        "Replay for handler %s (workflow %s) terminated as %s; "
+                        "finalizing without resume",
+                        persistent.handler_id,
+                        persistent.workflow_name,
+                        status,
+                    )
+                    await self._store.update_handler_status(
+                        run_id, status=status, result=result, error=error
+                    )
+                    continue
+
                 workflow.run(ctx=context, run_id=run_id)
             except Exception as e:
                 logger.error(
                     f"Failed to resume handler {persistent.handler_id} for workflow {persistent.workflow_name}: {e}"
                 )
                 try:
-                    now = datetime.now(timezone.utc)
-                    await self._store.update(
-                        PersistentHandler(
-                            handler_id=persistent.handler_id,
-                            workflow_name=persistent.workflow_name,
-                            status="failed",
-                            run_id=persistent.run_id,
-                            error=str(e),
-                            result=None,
-                            started_at=persistent.started_at,
-                            updated_at=now,
-                            completed_at=now,
-                        )
+                    await self._store.update_handler_status(
+                        run_id, status="failed", error=str(e)
                     )
                 except Exception:
                     pass
                 continue
+
+    async def _classify_terminal_from_ticks(
+        self, run_id: str
+    ) -> tuple[Status, StopEvent | None, str | None]:
+        """Walk ticks to extract the most recent terminal transition.
+
+        Returns (status, result, error). The last terminal-looking tick wins;
+        retries produce earlier StepWorkerFailed entries that are superseded
+        by later successful results.
+        """
+        status: Status = "failed"
+        result: StopEvent | None = None
+        error: str | None = "workflow terminated without a recognizable terminal event"
+        async for tick in stream_workflow_ticks(self._store, run_id):
+            if isinstance(tick, TickStepResult):
+                for step_result in tick.result:
+                    if isinstance(step_result, StepWorkerResult) and isinstance(
+                        step_result.result, StopEvent
+                    ):
+                        status = "completed"
+                        result = step_result.result
+                        error = None
+                    elif isinstance(step_result, StepWorkerFailed):
+                        status = "failed"
+                        result = None
+                        error = str(step_result.exception)
+            elif isinstance(tick, TickTimeout):
+                status = "failed"
+                result = None
+                error = f"Workflow timed out after {tick.timeout}s"
+            elif isinstance(tick, TickCancelRun):
+                status = "cancelled"
+                result = None
+                error = None
+        return status, result, error
 
     @override
     async def destroy(self) -> None:

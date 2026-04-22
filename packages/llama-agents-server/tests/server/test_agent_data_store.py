@@ -176,6 +176,65 @@ async def test_delete_invalidates_cache(store: AgentDataStore) -> None:
     assert store._id_cache.get("h1") is None
 
 
+def _seed_raw_handler(
+    backend: FakeAgentDataBackend,
+    *,
+    handler_id: str,
+    run_id: str | None,
+    status: Status = "running",
+    workflow_name: str = "wf",
+) -> str:
+    """Insert a raw handler row into the fake backend, bypassing update()."""
+    handler = PersistentHandler(
+        handler_id=handler_id,
+        workflow_name=workflow_name,
+        status=status,
+        run_id=run_id,
+    )
+    item = backend.create("test-deploy", "handlers", handler.model_dump(mode="json"))
+    return item["id"]
+
+
+@pytest.mark.asyncio
+async def test_update_collapses_duplicates_with_matching_run_id(
+    store: AgentDataStore, backend: FakeAgentDataBackend
+) -> None:
+    """Duplicate rows for the same handler_id/run_id collapse to one row."""
+    # Seed two rows for the same handler with identical run_id
+    _seed_raw_handler(backend, handler_id="dup-1", run_id="run-dup", status="running")
+    _seed_raw_handler(backend, handler_id="dup-1", run_id="run-dup", status="failed")
+
+    await store.update(
+        make_handler(handler_id="dup-1", run_id="run-dup", status="completed")
+    )
+
+    rows = backend._get_items("test-deploy", "handlers")
+    handler_rows = [r for r in rows if r["data"].get("handler_id") == "dup-1"]
+    assert len(handler_rows) == 1
+    assert handler_rows[0]["data"]["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_update_preserves_duplicates_with_mismatched_run_id(
+    store: AgentDataStore,
+    backend: FakeAgentDataBackend,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Rows for the same handler_id but different run_ids must not be collapsed."""
+    _seed_raw_handler(backend, handler_id="dup-2", run_id="run-a", status="running")
+    _seed_raw_handler(backend, handler_id="dup-2", run_id="run-b", status="running")
+
+    with caplog.at_level("WARNING"):
+        await store.update(
+            make_handler(handler_id="dup-2", run_id="run-b", status="completed")
+        )
+
+    rows = backend._get_items("test-deploy", "handlers")
+    handler_rows = [r for r in rows if r["data"].get("handler_id") == "dup-2"]
+    assert len(handler_rows) == 2
+    assert any("mismatched run_ids" in rec.message for rec in caplog.records)
+
+
 @pytest.mark.asyncio
 async def test_query_multiple_run_ids(store: AgentDataStore) -> None:
     await store.update(make_handler(handler_id="h1", run_id="run-1"))

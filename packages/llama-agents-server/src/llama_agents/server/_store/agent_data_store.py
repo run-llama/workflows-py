@@ -263,13 +263,48 @@ class AgentDataStore(AbstractWorkflowStore):
                 self._collection,
                 {"handler_id": {"eq": handler_id}},
             )
-            if items:
+            if not items:
+                result = await self._client.create(self._collection, data)
+                self._id_cache.put(handler_id, result["id"])
+                return
+
+            if len(items) == 1:
                 item_id = items[0]["id"]
                 self._id_cache.put(handler_id, item_id)
                 await self._client.update_item(item_id, data)
-            else:
-                result = await self._client.create(self._collection, data)
-                self._id_cache.put(handler_id, result["id"])
+                return
+
+            # Duplicate handler rows — converge to one survivor.
+            # Only dedupe when every sibling shares the handler's run_id;
+            # mismatching run_ids are a different class of duplicate (client
+            # retry with a reused handler_id) that we must not collapse.
+            run_id = handler.run_id
+            sibling_run_ids = {item["data"].get("run_id") for item in items}
+            if run_id is None or sibling_run_ids != {run_id}:
+                logger.warning(
+                    "Duplicate rows for handler %s have mismatched run_ids %s; "
+                    "falling back to newest-wins without dedupe",
+                    handler_id,
+                    sibling_run_ids,
+                )
+                item_id = items[0]["id"]
+                self._id_cache.put(handler_id, item_id)
+                await self._client.update_item(item_id, data)
+                return
+
+            # Oldest survivor preserves the row created at handler submission.
+            # Default search order is created_at DESC, so items[-1] is oldest.
+            survivor_id = items[-1]["id"]
+            victim_ids = [item["id"] for item in items[:-1]]
+            logger.warning(
+                "Collapsing %d duplicate rows for handler %s; survivor=%s",
+                len(items),
+                handler_id,
+                survivor_id,
+            )
+            await asyncio.gather(*(self._client.delete_item(vid) for vid in victim_ids))
+            self._id_cache.put(handler_id, survivor_id)
+            await self._client.update_item(survivor_id, data)
 
     async def delete(self, query: HandlerQuery) -> int:
         filters = self._build_handler_filters(query)

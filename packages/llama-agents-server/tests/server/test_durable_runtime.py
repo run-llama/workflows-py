@@ -223,33 +223,16 @@ class FailingResumeWorkflow(Workflow):
 
 
 @pytest.mark.asyncio
-async def test_on_server_start_resumes_running_handlers(
+async def test_on_server_start_marks_no_ticks_handler_as_failed(
     memory_store: MemoryWorkflowStore, simple_test_workflow: Workflow
 ) -> None:
-    """Seed store with a running handler; after server start it should complete."""
-    handler_id = "resume-1"
-    run_id = "run-resume-1"
-    await memory_store.update(
-        PersistentHandler(
-            handler_id=handler_id,
-            workflow_name="test",
-            status="running",
-            run_id=run_id,
-        )
-    )
+    """A handler with no persisted ticks cannot safely fresh-start.
 
-    server = WorkflowServer(workflow_store=memory_store, idle_timeout=0.01)
-    server.add_workflow("test", simple_test_workflow)
-
-    async with server.contextmanager():
-        await wait_handler_status(memory_store, handler_id, "completed")
-
-
-@pytest.mark.asyncio
-async def test_on_server_start_resumes_handler_with_no_ticks_as_fresh(
-    memory_store: MemoryWorkflowStore, simple_test_workflow: Workflow
-) -> None:
-    """A handler with no persisted ticks should run fresh from StartEvent."""
+    Such a row represents a zombie: the handler crashed before its first
+    tick landed. Attempting a fresh run builds a StartEvent from empty
+    kwargs, which fails for any workflow with required fields. Mark the
+    handler as failed so it is not retried on every boot.
+    """
     handler_id = "no-ticks-1"
     run_id = "run-no-ticks-1"
     await memory_store.update(
@@ -265,14 +248,89 @@ async def test_on_server_start_resumes_handler_with_no_ticks_as_fresh(
     server.add_workflow("test", simple_test_workflow)
 
     async with server.contextmanager():
+        handler = await wait_handler_status(memory_store, handler_id, "failed")
+        assert handler.error is not None
+        assert "no ticks" in handler.error
+
+
+@pytest.mark.asyncio
+async def test_on_server_start_finalizes_terminal_replay_as_completed(
+    memory_store: MemoryWorkflowStore,
+) -> None:
+    """A handler whose ticks replay to a terminal StopEvent is marked completed."""
+    from server_test_fixtures import SimpleTestWorkflow  # type: ignore[import]
+
+    handler_id = "terminal-replay-1"
+
+    # Phase 1: run the workflow to completion so ticks are persisted.
+    server1 = WorkflowServer(workflow_store=memory_store, idle_timeout=0.01)
+    server1.add_workflow("test", SimpleTestWorkflow())
+    async with server1.contextmanager():
+        wf1 = server1._service._runtime.get_workflow("test")
+        assert wf1 is not None
+        await server1._service.start_workflow(wf1, handler_id)
         await wait_handler_status(memory_store, handler_id, "completed")
+
+    # Phase 2: force the handler back to 'running' so the resume loop picks it
+    # up on next boot — simulates the zombie-row scenario where ticks reached a
+    # terminal state but the handler row was never updated.
+    found = await memory_store.query(HandlerQuery(handler_id_in=[handler_id]))
+    zombie = found[0]
+    zombie.status = "running"
+    zombie.result = None
+    zombie.completed_at = None
+    await memory_store.update(zombie)
+
+    server2 = WorkflowServer(workflow_store=memory_store, idle_timeout=0.01)
+    server2.add_workflow("test", SimpleTestWorkflow())
+    async with server2.contextmanager():
+        handler = await wait_handler_status(memory_store, handler_id, "completed")
+        assert handler.result is not None
+        assert handler.result.result == "processed: default"
+
+
+@pytest.mark.asyncio
+async def test_on_server_start_finalizes_terminal_replay_as_failed(
+    memory_store: MemoryWorkflowStore,
+) -> None:
+    """A handler whose ticks replay to a terminal failure is marked failed."""
+    from server_test_fixtures import ErrorWorkflow  # type: ignore[import]
+
+    handler_id = "terminal-replay-fail-1"
+
+    server1 = WorkflowServer(workflow_store=memory_store, idle_timeout=0.01)
+    server1.add_workflow("failing", ErrorWorkflow())
+    async with server1.contextmanager():
+        wf1 = server1._service._runtime.get_workflow("failing")
+        assert wf1 is not None
+        await server1._service.start_workflow(wf1, handler_id)
+        await wait_handler_status(memory_store, handler_id, "failed")
+
+    # Force back to running to simulate the zombie state.
+    found = await memory_store.query(HandlerQuery(handler_id_in=[handler_id]))
+    zombie = found[0]
+    zombie.status = "running"
+    zombie.error = None
+    zombie.completed_at = None
+    await memory_store.update(zombie)
+
+    server2 = WorkflowServer(workflow_store=memory_store, idle_timeout=0.01)
+    server2.add_workflow("failing", ErrorWorkflow())
+    async with server2.contextmanager():
+        handler = await wait_handler_status(memory_store, handler_id, "failed")
+        assert handler.error is not None
 
 
 @pytest.mark.asyncio
 async def test_on_server_start_ignores_unregistered_workflows(
     memory_store: MemoryWorkflowStore, simple_test_workflow: Workflow
 ) -> None:
-    """Only handlers for registered workflows should be resumed."""
+    """Only handlers for registered workflows should be touched by resume.
+
+    Both handlers have no ticks. The known-workflow handler gets classified
+    and marked failed by the resume loop; the unknown-workflow handler is
+    skipped entirely and stays untouched.
+    """
 
     # Seed handlers for both registered and unregistered workflow
     await memory_store.update(
@@ -298,11 +356,15 @@ async def test_on_server_start_ignores_unregistered_workflows(
     async with server.contextmanager():
         idle_release = _get_idle_release(server)
 
-        # Known handler should resume and complete
-        await wait_handler_status(memory_store, "known-1", "completed")
+        # Known handler is classified and marked failed (no ticks → zombie)
+        await wait_handler_status(memory_store, "known-1", "failed")
 
         # Unknown handler's run_id should NOT be in active runs
         assert "run-unknown-1" not in idle_release._active_run_ids
+
+        # Unknown handler is untouched — still reports running
+        unknown = await memory_store.query(HandlerQuery(handler_id_in=["unknown-1"]))
+        assert unknown[0].status == "running"
 
 
 @pytest.mark.asyncio
@@ -619,10 +681,10 @@ async def test_legacy_ctx_seeds_user_state(
 
 
 @pytest.mark.asyncio
-async def test_no_legacy_ctx_no_ticks_fresh_start(
+async def test_no_legacy_ctx_no_ticks_marked_failed(
     sqlite_store: SqliteWorkflowStore, simple_test_workflow: Workflow
 ) -> None:
-    """Handler with no ctx and no ticks runs fresh (regression test)."""
+    """Handler with no ctx and no ticks is a zombie; mark it failed on resume."""
     _insert_handler_with_ctx(
         sqlite_store.db_path, "fresh-1", "run-fresh-1", "test", None
     )
@@ -631,7 +693,9 @@ async def test_no_legacy_ctx_no_ticks_fresh_start(
     server.add_workflow("test", simple_test_workflow)
 
     async with server.contextmanager():
-        await wait_handler_status(sqlite_store, "fresh-1", "completed")
+        handler = await wait_handler_status(sqlite_store, "fresh-1", "failed")
+        assert handler.error is not None
+        assert "no ticks" in handler.error
 
 
 @pytest.mark.asyncio
