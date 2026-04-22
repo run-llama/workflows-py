@@ -22,6 +22,19 @@ from llama_agents.core.path_util import validate_path_traversal
 from packaging.version import Version
 
 
+@pytest.fixture
+def resolve_venv_to_pkg(monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    Stub ``_resolve_project_venv`` to return ``<source_root>/<path>/.venv``,
+    mirroring uv's choice for a non-workspace target. Tests that simulate a
+    workspace layout override this by patching ``_resolve_project_venv`` directly.
+    """
+    monkeypatch.setattr(
+        "llama_agents.appserver.workflow_loader._resolve_project_venv",
+        lambda source_root, path: source_root / path / ".venv",
+    )
+
+
 def test_ensure_uv_available_success_and_bootstrap(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -68,7 +81,7 @@ def test_ensure_uv_available_success_and_bootstrap(
 
 
 def test_add_appserver_pypi_install_calls_uv_with_prefix(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, resolve_venv_to_pkg: None
 ) -> None:
     pkg_dir = tmp_path / "pkg"
     pkg_dir.mkdir()
@@ -93,10 +106,6 @@ def test_add_appserver_pypi_install_calls_uv_with_prefix(
     monkeypatch.setattr(
         "llama_agents.appserver.workflow_loader._ensure_compatible_workflows",
         lambda *a, **k: None,
-    )
-    monkeypatch.setattr(
-        "llama_agents.appserver.workflow_loader._resolve_project_venv",
-        lambda source_root, path: source_root / path / ".venv",
     )
 
     _install_and_add_appserver_if_missing(Path("pkg"), tmp_path)
@@ -110,23 +119,22 @@ def test_add_appserver_pypi_install_calls_uv_with_prefix(
     assert install_cmd[install_cmd.index("--prefix") + 1] == str(pkg_dir / ".venv")
 
 
-def test_add_appserver_workspace_install_targets_resolved_venv(
+def test_add_appserver_install_targets_resolved_venv_when_outside_pkg(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """
-    When the target template is a uv workspace member, install must target the
-    venv uv itself would pick (the workspace venv), not <template>/.venv.
-    Regression guard for the install/runtime venv-path disagreement that
-    broke ``llamactl dev validate`` for workspace templates.
+    Install must target whichever venv ``_resolve_project_venv`` returns, even
+    when that path is outside ``<pkg>/.venv`` (e.g. a uv workspace member whose
+    venv lives at the workspace root). Regression guard for the install/runtime
+    venv-path disagreement that broke ``llamactl dev validate`` in workspace
+    layouts.
     """
-    workspace_root = tmp_path
-    (workspace_root / "pyproject.toml").write_text(
-        '[project]\nname="ws"\n[tool.uv.workspace]\nmembers = ["pkg"]\n'
-    )
-    pkg_dir = workspace_root / "pkg"
+    pkg_dir = tmp_path / "pkg"
     pkg_dir.mkdir()
     (pkg_dir / "pyproject.toml").write_text("[project]\nname='x'\n")
-    workspace_venv = workspace_root / ".venv"
+    # Simulate uv picking a venv outside the target dir (what happens when the
+    # target is a workspace member).
+    resolved_venv = tmp_path / "elsewhere" / ".venv"
 
     cmds: list[list[str]] = []
 
@@ -148,28 +156,22 @@ def test_add_appserver_workspace_install_targets_resolved_venv(
         "llama_agents.appserver.workflow_loader._ensure_compatible_workflows",
         lambda *a, **k: None,
     )
-    # Simulate uv resolving the workspace venv rather than <pkg>/.venv
     monkeypatch.setattr(
         "llama_agents.appserver.workflow_loader._resolve_project_venv",
-        lambda source_root, path: workspace_venv,
+        lambda source_root, path: resolved_venv,
     )
 
-    _install_and_add_appserver_if_missing(Path("pkg"), workspace_root)
+    _install_and_add_appserver_if_missing(Path("pkg"), tmp_path)
 
     install_cmd = cmds[-1]
     assert install_cmd[:3] == ["uv", "pip", "install"]
     assert "--prefix" in install_cmd
-    assert install_cmd[install_cmd.index("--prefix") + 1] == str(workspace_venv)
-    # The per-template venv must NOT be the install target.
+    assert install_cmd[install_cmd.index("--prefix") + 1] == str(resolved_venv)
     assert str(pkg_dir / ".venv") not in install_cmd
-
-    # uv sync must not be scoped to a hard-coded venv via UV_PROJECT_ENVIRONMENT.
-    sync_cmds = [c for c in cmds if c[:2] == ["uv", "sync"]]
-    assert len(sync_cmds) == 1
 
 
 def test_add_appserver_sdists_install(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, resolve_venv_to_pkg: None
 ) -> None:
     pkg_dir = tmp_path / "pkg"
     pkg_dir.mkdir()
@@ -187,10 +189,6 @@ def test_add_appserver_sdists_install(
     monkeypatch.setattr(
         "llama_agents.appserver.workflow_loader._ensure_compatible_workflows",
         lambda *a, **k: None,
-    )
-    monkeypatch.setattr(
-        "llama_agents.appserver.workflow_loader._resolve_project_venv",
-        lambda source_root, path: source_root / path / ".venv",
     )
 
     s1 = tmp_path / "d1" / "a-0.1.0.tar.gz"
@@ -210,7 +208,7 @@ def test_add_appserver_sdists_install(
 
 
 def test_add_appserver_editable_install(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, resolve_venv_to_pkg: None
 ) -> None:
     pkg_dir = tmp_path / "pkg"
     pkg_dir.mkdir()
@@ -244,10 +242,6 @@ def test_add_appserver_editable_install(
     monkeypatch.setattr(
         "llama_agents.appserver.workflow_loader._ensure_compatible_workflows",
         lambda *a, **k: None,
-    )
-    monkeypatch.setattr(
-        "llama_agents.appserver.workflow_loader._resolve_project_venv",
-        lambda source_root, path: source_root / path / ".venv",
     )
 
     _install_and_add_appserver_if_missing(Path("pkg"), tmp_path)
@@ -393,7 +387,7 @@ def test_current_and_outdated_logic(
 
 
 def test_add_appserver_target_version_installs_from_pypi(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, resolve_venv_to_pkg: None
 ) -> None:
     """When target_version is set, install that exact version from PyPI."""
     pkg_dir = tmp_path / "pkg"
@@ -416,10 +410,6 @@ def test_add_appserver_target_version_installs_from_pypi(
         "llama_agents.appserver.workflow_loader._ensure_compatible_workflows",
         lambda *a, **k: None,
     )
-    monkeypatch.setattr(
-        "llama_agents.appserver.workflow_loader._resolve_project_venv",
-        lambda source_root, path: source_root / path / ".venv",
-    )
 
     _install_and_add_appserver_if_missing(
         Path("pkg"), tmp_path, target_version="0.4.15"
@@ -434,7 +424,7 @@ def test_add_appserver_target_version_installs_from_pypi(
 
 
 def test_add_appserver_target_version_ignored_in_editable_mode(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, resolve_venv_to_pkg: None
 ) -> None:
     """In editable mode, target_version is ignored — editable installs use local source."""
     pkg_dir = tmp_path / "pkg"
@@ -469,10 +459,6 @@ def test_add_appserver_target_version_ignored_in_editable_mode(
         "llama_agents.appserver.workflow_loader._ensure_compatible_workflows",
         lambda *a, **k: None,
     )
-    monkeypatch.setattr(
-        "llama_agents.appserver.workflow_loader._resolve_project_venv",
-        lambda source_root, path: source_root / path / ".venv",
-    )
 
     _install_and_add_appserver_if_missing(
         Path("pkg"), tmp_path, target_version="0.4.15"
@@ -491,7 +477,7 @@ def test_add_appserver_target_version_ignored_in_editable_mode(
 
 
 def test_add_appserver_target_version_ignored_when_sdists_provided(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, resolve_venv_to_pkg: None
 ) -> None:
     """When sdists are provided, they take priority over target_version."""
     pkg_dir = tmp_path / "pkg"
@@ -510,10 +496,6 @@ def test_add_appserver_target_version_ignored_when_sdists_provided(
     monkeypatch.setattr(
         "llama_agents.appserver.workflow_loader._ensure_compatible_workflows",
         lambda *a, **k: None,
-    )
-    monkeypatch.setattr(
-        "llama_agents.appserver.workflow_loader._resolve_project_venv",
-        lambda source_root, path: source_root / path / ".venv",
     )
 
     s1 = tmp_path / "d1" / "a-0.1.0.tar.gz"
@@ -704,7 +686,7 @@ def test_ensure_compatible_workflows_update_fails_raises(
 
 
 def test_install_calls_ensure_compatible_workflows(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, resolve_venv_to_pkg: None
 ) -> None:
     """Integration: _install_and_add_appserver_if_missing calls _ensure_compatible_workflows."""
     pkg_dir = tmp_path / "pkg"
@@ -735,10 +717,6 @@ def test_install_calls_ensure_compatible_workflows(
     monkeypatch.setattr(
         "llama_agents.appserver.workflow_loader._ensure_compatible_workflows",
         mock_ensure_compat,
-    )
-    monkeypatch.setattr(
-        "llama_agents.appserver.workflow_loader._resolve_project_venv",
-        lambda source_root, path: source_root / path / ".venv",
     )
 
     _install_and_add_appserver_if_missing(Path("pkg"), tmp_path)

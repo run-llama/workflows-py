@@ -193,31 +193,40 @@ def inject_appserver_into_target(
     )
 
 
+def _uv_run_python(cwd: Path, snippet: str, *, stderr: int | None = None) -> str:
+    """
+    Run a python snippet via ``uv run`` inside the project venv uv resolves for
+    ``cwd``. Returns stripped stdout. Use this anywhere we need to probe the
+    target venv (installed version, ``sys.prefix``, etc.) so all probes agree
+    with what the start-time runners see.
+    """
+    result = subprocess.check_output(
+        ["uv", "run", "--no-progress", "python", "-c", snippet],
+        cwd=cwd,
+        stderr=stderr,
+    )
+    return result.decode("utf-8").strip()
+
+
 def _get_installed_version_within_target(
     path: Path, package: str = "llama-agents-appserver"
 ) -> Version | None:
     packages = [package, _OLD_DIST_NAME] if package == _NEW_DIST_NAME else [package]
     for pkg_name in packages:
         try:
-            result = subprocess.check_output(
-                [
-                    "uv",
-                    "run",
-                    "python",
-                    "-c",
-                    dedent(f"""
-                            from importlib.metadata import version
-                            try:
-                                print(version("{pkg_name}"))
-                            except Exception:
-                                pass
-                           """),
-                ],
-                cwd=path,
+            output = _uv_run_python(
+                path,
+                dedent(f"""
+                        from importlib.metadata import version
+                        try:
+                            print(version("{pkg_name}"))
+                        except Exception:
+                            pass
+                       """),
                 stderr=subprocess.DEVNULL,
             )
             try:
-                return Version(result.decode("utf-8").strip())
+                return Version(output)
             except InvalidVersion:
                 continue
         except subprocess.CalledProcessError:
@@ -324,22 +333,10 @@ def _resolve_project_venv(source_root: Path, path: Path) -> Path:
     Return the venv path uv would use for this project.
 
     Must be called after ``uv sync`` so the venv is guaranteed to exist. Asks uv
-    itself (via ``uv run``) rather than reimplementing uv's workspace / project
-    resolution. This keeps the install side aligned with ``start_*_in_target_venv``,
-    which also uses bare ``uv run`` and so targets the same venv uv picks here.
+    itself rather than reimplementing uv's workspace / project resolution, so the
+    install side stays aligned with ``start_*_in_target_venv`` (also bare ``uv run``).
     """
-    result = subprocess.check_output(
-        [
-            "uv",
-            "run",
-            "--no-progress",
-            "python",
-            "-c",
-            "import sys; print(sys.prefix)",
-        ],
-        cwd=source_root / path,
-    )
-    return Path(result.decode("utf-8").strip())
+    return Path(_uv_run_python(source_root / path, "import sys; print(sys.prefix)"))
 
 
 def _install_and_add_appserver_if_missing(
@@ -386,18 +383,17 @@ def _install_and_add_appserver_if_missing(
     elif editable:
         same_python_version = _same_python_version(venv_path)
         if not same_python_version.is_same:
-            logger.error(
-                f"Python version mismatch at {venv_path}: runtime "
-                f"{same_python_version.current_version} != venv "
-                f"{same_python_version.target_version}. In editable-appserver mode the "
-                f"target venv must run the same Python as the appserver process, "
-                f"otherwise the appserver cannot be installed."
-            )
-            raise RuntimeError(
+            msg = (
                 f"Python version mismatch at {venv_path}: runtime "
                 f"{same_python_version.current_version} != venv "
                 f"{same_python_version.target_version}"
             )
+            logger.error(
+                f"{msg}. In editable-appserver mode the target venv must run "
+                f"the same Python as the appserver process, otherwise the "
+                f"appserver cannot be installed."
+            )
+            raise RuntimeError(msg)
         pyproject = _find_development_pyproject()
         if pyproject is None:
             raise RuntimeError("No pyproject.toml found in llama-agents-appserver")
