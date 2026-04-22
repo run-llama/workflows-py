@@ -254,7 +254,6 @@ def _get_appserver_workflows_requirement() -> SpecifierSet | None:
 def _ensure_compatible_workflows(
     source_root: Path,
     path: Path,
-    venv_path: Path,
 ) -> None:
     """Check if the user's llama-index-workflows version is compatible with the appserver.
 
@@ -289,7 +288,6 @@ def _ensure_compatible_workflows(
             path,
             "add",
             [f"llama-index-workflows{req_str}"],
-            extra_env={"UV_PROJECT_ENVIRONMENT": str(venv_path)},
         )
     except subprocess.CalledProcessError:
         raise RuntimeError(
@@ -321,11 +319,27 @@ def run_uv(
     )
 
 
-def ensure_venv(source_root: Path, path: Path, force: bool = False) -> Path:
-    venv_path = source_root / path / ".venv"
-    if force or not venv_path.exists():
-        run_uv(source_root, path, "venv", [str(venv_path)])
-    return venv_path
+def _resolve_project_venv(source_root: Path, path: Path) -> Path:
+    """
+    Return the venv path uv would use for this project.
+
+    Must be called after ``uv sync`` so the venv is guaranteed to exist. Asks uv
+    itself (via ``uv run``) rather than reimplementing uv's workspace / project
+    resolution. This keeps the install side aligned with ``start_*_in_target_venv``,
+    which also uses bare ``uv run`` and so targets the same venv uv picks here.
+    """
+    result = subprocess.check_output(
+        [
+            "uv",
+            "run",
+            "--no-progress",
+            "python",
+            "-c",
+            "import sys; print(sys.prefix)",
+        ],
+        cwd=source_root / path,
+    )
+    return Path(result.decode("utf-8").strip())
 
 
 def _install_and_add_appserver_if_missing(
@@ -337,7 +351,9 @@ def _install_and_add_appserver_if_missing(
     auto_upgrade: bool = True,
 ) -> None:
     """
-    Ensure venv, install project deps, and add the appserver to the venv if it's missing or outdated
+    Sync project deps (letting uv pick the venv location, so we agree with uv run
+    in workspace and non-workspace layouts) and install the appserver if missing
+    or outdated.
     """
 
     if not (source_root / path / "pyproject.toml").exists():
@@ -347,17 +363,16 @@ def _install_and_add_appserver_if_missing(
         return
 
     editable = are_we_editable_mode()
-    venv_path = ensure_venv(source_root, path, force=editable)
     run_uv(
         source_root,
         path,
         "sync",
         ["--no-dev", "--inexact"],
-        extra_env={"UV_PROJECT_ENVIRONMENT": str(venv_path)},
     )
+    venv_path = _resolve_project_venv(source_root, path)
 
     if auto_upgrade:
-        _ensure_compatible_workflows(source_root, path, venv_path)
+        _ensure_compatible_workflows(source_root, path)
 
     if sdists:
         run_uv(
@@ -368,14 +383,20 @@ def _install_and_add_appserver_if_missing(
             + [str(s.absolute()) for s in sdists]
             + ["--prefix", str(venv_path)],
         )
-    elif are_we_editable_mode():
+    elif editable:
         same_python_version = _same_python_version(venv_path)
         if not same_python_version.is_same:
             logger.error(
-                f"Python version mismatch. Current: {same_python_version.current_version} != Project: {same_python_version.target_version}. During development, the target environment must be running the same Python version, otherwise the appserver cannot be installed."
+                f"Python version mismatch at {venv_path}: runtime "
+                f"{same_python_version.current_version} != venv "
+                f"{same_python_version.target_version}. In editable-appserver mode the "
+                f"target venv must run the same Python as the appserver process, "
+                f"otherwise the appserver cannot be installed."
             )
             raise RuntimeError(
-                f"Python version mismatch. Current: {same_python_version.current_version} != Project: {same_python_version.target_version}"
+                f"Python version mismatch at {venv_path}: runtime "
+                f"{same_python_version.current_version} != venv "
+                f"{same_python_version.target_version}"
             )
         pyproject = _find_development_pyproject()
         if pyproject is None:
