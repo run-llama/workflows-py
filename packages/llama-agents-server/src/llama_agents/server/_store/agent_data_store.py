@@ -258,10 +258,13 @@ class AgentDataStore(AbstractWorkflowStore):
                 await self._client.update_item(cached_id, data)
                 return
 
-            # Search for existing item
+            # Search for existing item. Sort newest-first so that items[-1]
+            # is deterministically the oldest row — relied on by the
+            # dedupe-survivor choice below.
             items = await self._client.search(
                 self._collection,
                 {"handler_id": {"eq": handler_id}},
+                order_by="created_at desc",
             )
             if not items:
                 result = await self._client.create(self._collection, data)
@@ -293,7 +296,6 @@ class AgentDataStore(AbstractWorkflowStore):
                 return
 
             # Oldest survivor preserves the row created at handler submission.
-            # Default search order is created_at DESC, so items[-1] is oldest.
             survivor_id = items[-1]["id"]
             victim_ids = [item["id"] for item in items[:-1]]
             logger.warning(
