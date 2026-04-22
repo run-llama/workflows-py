@@ -1,5 +1,11 @@
 # llama-agents-appserver
 
+## 0.11.1
+
+### Patch Changes
+
+- 916b157: Fix appserver install when the target template is a uv workspace member. Install now targets whichever venv `uv run` resolves to, instead of a hard-coded `<template>/.venv`, so `llamactl dev validate` and `llamactl serve` work in workspace layouts.
+
 ## 0.11.0
 
 ### Minor Changes

@@ -1,5 +1,19 @@
 # llama-agents-server
 
+## 0.4.6
+
+### Patch Changes
+
+- f7e037e: Stream ticks during resume so peak memory is bounded by batch size rather than total tick history.
+- 60cd349: Update debugger assets
+
+  - JavaScript: https://cdn.jsdelivr.net/npm/@llamaindex/workflow-debugger@0.2.39/dist/app.js
+  - CSS: https://cdn.jsdelivr.net/npm/@llamaindex/workflow-debugger@0.2.39/dist/app.css
+
+- Updated dependencies [f7e037e]
+  - llama-index-workflows@2.19.1
+  - llama-agents-client@0.3.6
+
 ## 0.4.5
 
 ### Patch Changes

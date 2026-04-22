@@ -1,5 +1,11 @@
 # llama-agents-dbos
 
+## 0.2.2
+
+### Patch Changes
+
+- f7e037e: Stream ticks during resume so peak memory is bounded by batch size rather than total tick history.
+
 ## 0.2.1
 
 ### Patch Changes
