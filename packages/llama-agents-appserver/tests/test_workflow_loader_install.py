@@ -22,6 +22,19 @@ from llama_agents.core.path_util import validate_path_traversal
 from packaging.version import Version
 
 
+@pytest.fixture
+def resolve_venv_to_pkg(monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    Stub ``_resolve_project_venv`` to return ``<source_root>/<path>/.venv``,
+    mirroring uv's choice for a non-workspace target. Tests that simulate a
+    workspace layout override this by patching ``_resolve_project_venv`` directly.
+    """
+    monkeypatch.setattr(
+        "llama_agents.appserver.workflow_loader._resolve_project_venv",
+        lambda source_root, path: source_root / path / ".venv",
+    )
+
+
 def test_ensure_uv_available_success_and_bootstrap(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -68,7 +81,7 @@ def test_ensure_uv_available_success_and_bootstrap(
 
 
 def test_add_appserver_pypi_install_calls_uv_with_prefix(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, resolve_venv_to_pkg: None
 ) -> None:
     pkg_dir = tmp_path / "pkg"
     pkg_dir.mkdir()
@@ -106,8 +119,59 @@ def test_add_appserver_pypi_install_calls_uv_with_prefix(
     assert install_cmd[install_cmd.index("--prefix") + 1] == str(pkg_dir / ".venv")
 
 
-def test_add_appserver_sdists_install(
+def test_add_appserver_install_targets_resolved_venv_when_outside_pkg(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """
+    Install must target whichever venv ``_resolve_project_venv`` returns, even
+    when that path is outside ``<pkg>/.venv`` (e.g. a uv workspace member whose
+    venv lives at the workspace root). Regression guard for the install/runtime
+    venv-path disagreement that broke ``llamactl dev validate`` in workspace
+    layouts.
+    """
+    pkg_dir = tmp_path / "pkg"
+    pkg_dir.mkdir()
+    (pkg_dir / "pyproject.toml").write_text("[project]\nname='x'\n")
+    # Simulate uv picking a venv outside the target dir (what happens when the
+    # target is a workspace member).
+    resolved_venv = tmp_path / "elsewhere" / ".venv"
+
+    cmds: list[list[str]] = []
+
+    def run_capture(cmd: list[str], **kwargs: Any) -> None:
+        cmds.append(cmd)
+        return None
+
+    monkeypatch.setattr(
+        "llama_agents.appserver.workflow_loader.run_process", run_capture
+    )
+    monkeypatch.setattr(
+        "llama_agents.appserver.workflow_loader.are_we_editable_mode", lambda: False
+    )
+    monkeypatch.setattr(
+        "llama_agents.appserver.workflow_loader._is_missing_or_outdated",
+        lambda p: Version("1.2.3"),
+    )
+    monkeypatch.setattr(
+        "llama_agents.appserver.workflow_loader._ensure_compatible_workflows",
+        lambda *a, **k: None,
+    )
+    monkeypatch.setattr(
+        "llama_agents.appserver.workflow_loader._resolve_project_venv",
+        lambda source_root, path: resolved_venv,
+    )
+
+    _install_and_add_appserver_if_missing(Path("pkg"), tmp_path)
+
+    install_cmd = cmds[-1]
+    assert install_cmd[:3] == ["uv", "pip", "install"]
+    assert "--prefix" in install_cmd
+    assert install_cmd[install_cmd.index("--prefix") + 1] == str(resolved_venv)
+    assert str(pkg_dir / ".venv") not in install_cmd
+
+
+def test_add_appserver_sdists_install(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, resolve_venv_to_pkg: None
 ) -> None:
     pkg_dir = tmp_path / "pkg"
     pkg_dir.mkdir()
@@ -144,7 +208,7 @@ def test_add_appserver_sdists_install(
 
 
 def test_add_appserver_editable_install(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, resolve_venv_to_pkg: None
 ) -> None:
     pkg_dir = tmp_path / "pkg"
     pkg_dir.mkdir()
@@ -323,7 +387,7 @@ def test_current_and_outdated_logic(
 
 
 def test_add_appserver_target_version_installs_from_pypi(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, resolve_venv_to_pkg: None
 ) -> None:
     """When target_version is set, install that exact version from PyPI."""
     pkg_dir = tmp_path / "pkg"
@@ -360,7 +424,7 @@ def test_add_appserver_target_version_installs_from_pypi(
 
 
 def test_add_appserver_target_version_ignored_in_editable_mode(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, resolve_venv_to_pkg: None
 ) -> None:
     """In editable mode, target_version is ignored — editable installs use local source."""
     pkg_dir = tmp_path / "pkg"
@@ -413,7 +477,7 @@ def test_add_appserver_target_version_ignored_in_editable_mode(
 
 
 def test_add_appserver_target_version_ignored_when_sdists_provided(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, resolve_venv_to_pkg: None
 ) -> None:
     """When sdists are provided, they take priority over target_version."""
     pkg_dir = tmp_path / "pkg"
@@ -533,7 +597,7 @@ def test_ensure_compatible_workflows_compatible_noop(
 
     monkeypatch.setattr("llama_agents.appserver.workflow_loader.run_uv", track_run_uv)
 
-    _ensure_compatible_workflows(tmp_path, Path("."), tmp_path / ".venv")
+    _ensure_compatible_workflows(tmp_path, Path("."))
     assert len(uv_calls) == 0
 
 
@@ -565,7 +629,7 @@ def test_ensure_compatible_workflows_incompatible_auto_updates(
 
     monkeypatch.setattr("llama_agents.appserver.workflow_loader.run_uv", track_run_uv)
 
-    _ensure_compatible_workflows(tmp_path, Path("."), tmp_path / ".venv")
+    _ensure_compatible_workflows(tmp_path, Path("."))
     assert len(uv_calls) == 1
     cmd, args = uv_calls[0]
     assert cmd == "add"
@@ -593,7 +657,7 @@ def test_ensure_compatible_workflows_not_installed_noop(
         lambda *a, **k: uv_calls.append(1),
     )
 
-    _ensure_compatible_workflows(tmp_path, Path("."), tmp_path / ".venv")
+    _ensure_compatible_workflows(tmp_path, Path("."))
     assert len(uv_calls) == 0
 
 
@@ -618,11 +682,11 @@ def test_ensure_compatible_workflows_update_fails_raises(
     monkeypatch.setattr("llama_agents.appserver.workflow_loader.run_uv", fail_run_uv)
 
     with pytest.raises(RuntimeError, match="conflicting constraints"):
-        _ensure_compatible_workflows(tmp_path, Path("."), tmp_path / ".venv")
+        _ensure_compatible_workflows(tmp_path, Path("."))
 
 
 def test_install_calls_ensure_compatible_workflows(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, resolve_venv_to_pkg: None
 ) -> None:
     """Integration: _install_and_add_appserver_if_missing calls _ensure_compatible_workflows."""
     pkg_dir = tmp_path / "pkg"
@@ -647,7 +711,7 @@ def test_install_calls_ensure_compatible_workflows(
 
     compat_called = {"called": False}
 
-    def mock_ensure_compat(source_root: Path, path: Path, venv_path: Path) -> None:
+    def mock_ensure_compat(source_root: Path, path: Path) -> None:
         compat_called["called"] = True
 
     monkeypatch.setattr(
