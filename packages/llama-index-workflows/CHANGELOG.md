@@ -1,5 +1,11 @@
 # llama-index-workflows
 
+## 2.19.1
+
+### Patch Changes
+
+- f7e037e: Stream ticks during resume so peak memory is bounded by batch size rather than total tick history.
+
 ## 2.19.0
 
 ### Minor Changes
