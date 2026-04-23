@@ -7,7 +7,16 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 
 from workflows.decorators import CatchErrorHandler, StepConfig, WorkflowGraphCheck
-from workflows.events import HumanResponseEvent, InputRequiredEvent, StopEvent
+from workflows.errors import WorkflowConfigurationError, WorkflowValidationError
+from workflows.events import (
+    Event,
+    HumanResponseEvent,
+    InputRequiredEvent,
+    StartEvent,
+    StepFailedEvent,
+    StopEvent,
+)
+from workflows.resource import ResourceDescriptor, ResourceManager, _ResourceConfig
 
 # Graph nodes: step names (str) for steps, event classes (type) for events.
 GraphNode = str | type
@@ -278,3 +287,360 @@ def validate_catch_error_handlers(
             claim_owner[target] = handler.step_name
 
     return errors
+
+
+def _ensure_start_event_class(
+    steps: dict[str, StepConfig], workflow_cls_name: str
+) -> type[StartEvent]:
+    """Infer and validate the single StartEvent subclass accepted by a workflow.
+
+    Inspects every step's accepted events and returns the unique StartEvent
+    subclass. Raises ``WorkflowConfigurationError`` if zero or more than one
+    are found.
+    """
+    start_events_found: set[type[StartEvent]] = set()
+    for cfg in steps.values():
+        for event_type in cfg.accepted_events:
+            if issubclass(event_type, StartEvent):
+                start_events_found.add(event_type)
+
+    num_found = len(start_events_found)
+    if num_found == 0:
+        raise WorkflowConfigurationError(
+            "At least one Event of type StartEvent must be received by any step. "
+            f"(Workflow '{workflow_cls_name}' has no @step that accepts StartEvent.)"
+        )
+    if num_found > 1:
+        raise WorkflowConfigurationError(
+            f"Only one type of StartEvent is allowed per workflow, found {num_found}: "
+            f"{start_events_found} in workflow '{workflow_cls_name}'."
+        )
+    return start_events_found.pop()
+
+
+def _ensure_stop_event_class(
+    steps: dict[str, StepConfig], workflow_cls_name: str
+) -> type[StopEvent]:
+    """Infer and validate the single StopEvent subclass produced by a workflow.
+
+    Inspects every step's return types and returns the unique StopEvent
+    subclass. Raises ``WorkflowConfigurationError`` if zero or more than one
+    are found.
+    """
+    stop_events_found: set[type[StopEvent]] = set()
+    for cfg in steps.values():
+        for event_type in cfg.return_types:
+            if issubclass(event_type, StopEvent):
+                stop_events_found.add(event_type)
+
+    num_found = len(stop_events_found)
+    if num_found == 0:
+        raise WorkflowConfigurationError(
+            "At least one Event of type StopEvent must be returned by any step. "
+            f"(Workflow '{workflow_cls_name}' has no @step that returns StopEvent.)"
+        )
+    if num_found > 1:
+        raise WorkflowConfigurationError(
+            f"Only one type of StopEvent is allowed per workflow, found {num_found}: "
+            f"{stop_events_found} in workflow '{workflow_cls_name}'."
+        )
+    return stop_events_found.pop()
+
+
+def _collect_events(steps: dict[str, StepConfig]) -> list[type[Event]]:
+    """Return every ``Event`` subclass touched by the workflow's steps.
+
+    Skips the runtime-injected ``_done`` step so only user-facing events are
+    reported. Walks both accepted and returned types of each step.
+    """
+    events_found: set[type[Event]] = set()
+    for cfg in steps.values():
+        for event_type in cfg.return_types:
+            if issubclass(event_type, Event):
+                events_found.add(event_type)
+        for event_type in cfg.accepted_events:
+            if issubclass(event_type, Event):
+                events_found.add(event_type)
+    return list(events_found)
+
+
+def _collect_catch_error_handlers(
+    steps: dict[str, StepConfig],
+) -> tuple[dict[str, CatchErrorHandler], dict[str, str]]:
+    """Discover ``@catch_error`` handlers and build the step->handler routing table.
+
+    Validates the handler set (via :func:`validate_catch_error_handlers`) and
+    each handler's ``max_recoveries``; raises ``WorkflowValidationError`` on
+    any problem.
+
+    Returns ``(catch_error_handlers, handler_for_step)`` where
+    ``catch_error_handlers`` maps handler step name to its descriptor and
+    ``handler_for_step`` maps each covered step name to the handler that owns
+    it (scoped claims first, then the wildcard fills).
+    """
+    all_step_names = set(steps.keys())
+    handlers: list[CatchErrorHandler] = []
+    for name, cfg in steps.items():
+        if cfg.role != "catch_error":
+            continue
+        max_recoveries = cfg.catch_error_max_recoveries
+        if not isinstance(max_recoveries, int) or max_recoveries < 1:
+            raise WorkflowValidationError(
+                f"@catch_error handler '{name}' has max_recoveries="
+                f"{max_recoveries!r}; must be an integer >= 1."
+            )
+        handlers.append(
+            CatchErrorHandler(
+                step_name=name,
+                for_steps=(
+                    list(cfg.catch_error_for_steps)
+                    if cfg.catch_error_for_steps is not None
+                    else None
+                ),
+                max_recoveries=max_recoveries,
+            )
+        )
+
+    handler_errors = validate_catch_error_handlers(handlers, all_step_names)
+    if handler_errors:
+        raise WorkflowValidationError("\n".join(handler_errors))
+
+    handler_step_names = {h.step_name for h in handlers}
+    handler_for_step: dict[str, str] = {}
+    for handler in handlers:
+        if handler.for_steps is None:
+            continue
+        for target in handler.for_steps:
+            handler_for_step[target] = handler.step_name
+
+    wildcards = [h for h in handlers if h.for_steps is None]
+    wildcard = wildcards[0] if wildcards else None
+    if wildcard is not None:
+        for step_name in all_step_names:
+            if step_name in handler_step_names:
+                continue
+            if step_name in handler_for_step:
+                continue
+            handler_for_step[step_name] = wildcard.step_name
+
+    return {h.step_name: h for h in handlers}, handler_for_step
+
+
+def _validate_event_connectivity(
+    steps: dict[str, StepConfig],
+    start_event_class: type[StartEvent],
+) -> bool:
+    """Validate event production/consumption across the step graph.
+
+    Checks that:
+    - No user step accepts ``StopEvent``.
+    - Every consumed event is either produced or crosses the workflow
+      boundary (``InputRequiredEvent``/``HumanResponseEvent``/``StopEvent``/
+      ``StepFailedEvent``).
+    - Every produced event is consumed, except for
+      ``InputRequiredEvent``/``HumanResponseEvent``/``StopEvent`` subclasses.
+
+    Returns ``True`` if the workflow uses human-in-the-loop
+    (``InputRequiredEvent`` produced or ``HumanResponseEvent`` consumed).
+    Raises ``WorkflowValidationError`` on any violation.
+    """
+    produced_events: set[type] = {start_event_class}
+    consumed_events: set[type] = set()
+    steps_accepting_stop_event: list[str] = []
+
+    for name, cfg in steps.items():
+        for event_type in cfg.accepted_events:
+            if issubclass(event_type, StopEvent):
+                steps_accepting_stop_event.append(name)
+                break
+        for event_type in cfg.accepted_events:
+            consumed_events.add(event_type)
+        for event_type in cfg.return_types:
+            if event_type is type(None):
+                continue
+            produced_events.add(event_type)
+
+    if steps_accepting_stop_event:
+        step_names = "', '".join(steps_accepting_stop_event)
+        plural = "" if len(steps_accepting_stop_event) == 1 else "s"
+        raise WorkflowValidationError(
+            f"Step{plural} '{step_names}' cannot accept StopEvent. "
+            "StopEvent signals the end of the workflow. "
+            "Use a different Event type instead."
+        )
+
+    unconsumed_events = {
+        x
+        for x in consumed_events - produced_events
+        if not issubclass(
+            x,
+            (InputRequiredEvent, HumanResponseEvent, StopEvent, StepFailedEvent),
+        )
+    }
+    if unconsumed_events:
+        names = ", ".join(ev.__name__ for ev in unconsumed_events)
+        raise WorkflowValidationError(
+            f"The following events are consumed but never produced: {names}"
+        )
+
+    unused_events = {
+        x
+        for x in produced_events - consumed_events
+        if not issubclass(x, (InputRequiredEvent, HumanResponseEvent, StopEvent))
+    }
+    if unused_events:
+        names = ", ".join(ev.__name__ for ev in unused_events)
+        raise WorkflowValidationError(
+            f"The following events are produced but never consumed: {names}"
+        )
+
+    return (
+        InputRequiredEvent in produced_events or HumanResponseEvent in consumed_events
+    )
+
+
+@dataclass
+class _ResourceValidationContext:
+    """Tracks context for resource validation to provide clear error messages."""
+
+    resource: ResourceDescriptor
+    step_name: str
+    param_name: str
+    resource_chain: list[str] = field(default_factory=list)
+
+    def format_location(self) -> str:
+        if len(self.resource_chain) > 1:
+            chain_str = " -> ".join(self.resource_chain)
+            return (
+                f"step '{self.step_name}', parameter '{self.param_name}' ({chain_str})"
+            )
+        return f"step '{self.step_name}', parameter '{self.param_name}'"
+
+    def with_dependency(self, dep: ResourceDescriptor) -> _ResourceValidationContext:
+        return _ResourceValidationContext(
+            resource=dep,
+            step_name=self.step_name,
+            param_name=self.param_name,
+            resource_chain=[*self.resource_chain, dep.name],
+        )
+
+
+def _validate_resource_configs(steps: dict[str, StepConfig]) -> list[str]:
+    """Validate every resource config (and nested configs) by loading it.
+
+    Returns a list of human-readable error messages; empty if all configs load
+    cleanly. Callers decide whether to raise.
+    """
+    errors: list[str] = []
+    seen: set[str] = set()
+
+    stack: list[_ResourceValidationContext] = []
+    for step_name, cfg in steps.items():
+        for res_def in cfg.resources:
+            res_def.resource.set_type_annotation(res_def.type_annotation)
+            stack.append(
+                _ResourceValidationContext(
+                    resource=res_def.resource,
+                    step_name=step_name,
+                    param_name=res_def.name,
+                    resource_chain=[res_def.resource.name],
+                )
+            )
+
+    while stack:
+        ctx = stack.pop()
+        if ctx.resource.name in seen:
+            continue
+        seen.add(ctx.resource.name)
+
+        for _dep_param, dep, type_ann in ctx.resource.get_dependencies():
+            dep.set_type_annotation(type_ann)
+            stack.append(ctx.with_dependency(dep))
+
+        if isinstance(ctx.resource, _ResourceConfig):
+            try:
+                ctx.resource.call()
+            except Exception as e:
+                errors.append(f"In {ctx.format_location()}: {e}")
+
+    return errors
+
+
+async def _validate_resources(
+    steps: dict[str, StepConfig], resource_manager: ResourceManager
+) -> list[str]:
+    """Resolve every resource via ``resource_manager``.
+
+    Surfaces circular dependencies and factory-time failures. Returns a list of
+    error messages; empty if all resources resolve.
+    """
+    errors: list[str] = []
+    for step_name, cfg in steps.items():
+        for res_def in cfg.resources:
+            res_def.resource.set_type_annotation(res_def.type_annotation)
+            try:
+                await resource_manager.get(res_def.resource)
+            except Exception as e:
+                errors.append(f"In step '{step_name}', parameter '{res_def.name}': {e}")
+    return errors
+
+
+@dataclass
+class _WorkflowValidationResult:
+    """Derived workflow state produced by :func:`_validate_workflow`."""
+
+    start_event_class: type[StartEvent]
+    stop_event_class: type[StopEvent]
+    catch_error_handlers: dict[str, CatchErrorHandler]
+    handler_for_step: dict[str, str]
+    uses_hitl: bool
+
+
+def _validate_workflow(
+    steps: dict[str, StepConfig],
+    workflow_cls_name: str,
+    skip_graph_checks: set[WorkflowGraphCheck],
+) -> _WorkflowValidationResult:
+    """Run every structural check on a workflow's step set.
+
+    Orders checks so the most actionable errors surface first (missing steps,
+    then StartEvent, then StopEvent, then event connectivity, then catch_error
+    handlers, then graph reachability/dead-ends).
+
+    Raises ``WorkflowConfigurationError`` or ``WorkflowValidationError`` on any
+    violation. Resource validation is handled separately via
+    :func:`_validate_resource_configs` and :func:`_validate_resources`.
+    """
+    if not steps:
+        raise WorkflowConfigurationError(
+            f"Workflow '{workflow_cls_name}' has no configured steps. "
+            "Did you forget to annotate methods with @step or to register "
+            "free-function steps via @step(workflow=...)?"
+        )
+
+    start_event_class = _ensure_start_event_class(steps, workflow_cls_name)
+    stop_event_class = _ensure_stop_event_class(steps, workflow_cls_name)
+
+    uses_hitl = _validate_event_connectivity(steps, start_event_class)
+
+    catch_error_handlers, handler_for_step = _collect_catch_error_handlers(steps)
+
+    graph_errors = validate_graph(
+        steps=steps,
+        start_event_class=start_event_class,
+        skip_checks=skip_graph_checks,
+        catch_error_steps=list(catch_error_handlers.keys()),
+    )
+    if graph_errors:
+        detail = "\n".join(
+            f"  - [{e.check}] {e.message}\n    {e.hint}" for e in graph_errors
+        )
+        raise WorkflowValidationError(f"Graph validation failed:\n{detail}")
+
+    return _WorkflowValidationResult(
+        start_event_class=start_event_class,
+        stop_event_class=stop_event_class,
+        catch_error_handlers=catch_error_handlers,
+        handler_for_step=handler_for_step,
+        uses_hitl=uses_hitl,
+    )

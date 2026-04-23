@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass, field
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -20,24 +19,12 @@ if TYPE_CHECKING:  # pragma: no cover
     from .runtime.types.plugin import Runtime
 from .decorators import CatchErrorHandler, StepConfig, StepFunction, WorkflowGraphCheck
 from .errors import (
-    WorkflowConfigurationError,
     WorkflowRuntimeError,
     WorkflowValidationError,
 )
-from .events import (
-    Event,
-    HumanResponseEvent,
-    InputRequiredEvent,
-    StartEvent,
-    StepFailedEvent,
-    StopEvent,
-)
+from .events import Event, StartEvent
 from .handler import WorkflowHandler
-from .resource import (
-    ResourceDescriptor,
-    ResourceManager,
-    _ResourceConfig,
-)
+from .resource import ResourceManager
 from .types import RunResultT
 from .utils import get_steps_from_class, get_steps_from_instance
 
@@ -139,6 +126,17 @@ class Workflow(metaclass=WorkflowMeta):
                 checks to skip (e.g. "reachability", "terminal_event"). Use to
                 allow intentional patterns that would otherwise fail validation.
         """
+        # Inline imports: every module below imports ``Workflow`` transitively,
+        # so deferring to call time breaks the cycle.
+        from workflows.plugins._context import get_current_runtime
+        from workflows.runtime.verbose import VerboseDecorator
+
+        from .representation.validate import (
+            _collect_events,
+            _ensure_start_event_class,
+            _ensure_stop_event_class,
+        )
+
         # Configuration
         self._timeout = timeout
         self._verbose = verbose
@@ -146,16 +144,16 @@ class Workflow(metaclass=WorkflowMeta):
         self._num_concurrent_runs = num_concurrent_runs
         # Store explicit name (None means use computed name)
         self._workflow_name = workflow_name
+
+        step_configs = self._step_configs()
+        cls_name = self.__class__.__name__
         # Detect StartEvent issues before StopEvent for clearer guidance
-        self._start_event_class = self._ensure_start_event_class()
-        self._stop_event_class = self._ensure_stop_event_class()
-        # Set by _validate(); see that method for the enforcement rules.
-        # Handler step name -> CatchErrorHandler descriptor.
+        self._start_event_class = _ensure_start_event_class(step_configs, cls_name)
+        self._stop_event_class = _ensure_stop_event_class(step_configs, cls_name)
+        # Populated by _validate(); empty until a successful validation runs.
         self._catch_error_handlers: dict[str, CatchErrorHandler] = {}
-        # Step name -> handler step name that owns it (scoped wins, then
-        # wildcard fills). Handler steps themselves are not entries.
         self._handler_for_step: dict[str, str] = {}
-        self._events = self._ensure_events_collected()
+        self._events = _collect_events(step_configs)
         # Resource management
         self._resource_manager = resource_manager or ResourceManager()
         # Instrumentation
@@ -176,20 +174,9 @@ class Workflow(metaclass=WorkflowMeta):
         self._skip_graph_checks: set[WorkflowGraphCheck] = checks
 
         # Runtime registration: explicit > context-scoped > basic_runtime
-        from workflows.plugins._context import get_current_runtime
-
-        if runtime is not None:
-            self._runtime = runtime
-        else:
-            # get_current_runtime() falls back to basic_runtime
-            self._runtime = get_current_runtime()
-
-        # Wrap with verbose decorator if requested
+        self._runtime = runtime if runtime is not None else get_current_runtime()
         if self._verbose:
-            from workflows.runtime.verbose import VerboseDecorator
-
             self._runtime = VerboseDecorator(self._runtime)
-
         # Register with runtime for tracking (no-op for BasicRuntime)
         self._runtime.track_workflow(self)
 
@@ -249,36 +236,9 @@ class Workflow(metaclass=WorkflowMeta):
             )
         self._workflow_name = name
 
-    def _ensure_start_event_class(self) -> type[StartEvent]:
-        """
-        Returns the StartEvent type used in this workflow.
-
-        It works by inspecting the events received by the step methods.
-        """
-        start_events_found: set[type[StartEvent]] = set()
-        for step_func in self._get_steps().values():
-            step_config: StepConfig = step_func._step_config
-            for event_type in step_config.accepted_events:
-                if issubclass(event_type, StartEvent):
-                    start_events_found.add(event_type)
-
-        num_found = len(start_events_found)
-        if num_found == 0:
-            cls_name = self.__class__.__name__
-            msg = (
-                "At least one Event of type StartEvent must be received by any step. "
-                f"(Workflow '{cls_name}' has no @step that accepts StartEvent.)"
-            )
-            raise WorkflowConfigurationError(msg)
-        elif num_found > 1:
-            cls_name = self.__class__.__name__
-            msg = (
-                f"Only one type of StartEvent is allowed per workflow, found {num_found}: {start_events_found} "
-                f"in workflow '{cls_name}'."
-            )
-            raise WorkflowConfigurationError(msg)
-        else:
-            return start_events_found.pop()
+    def _step_configs(self) -> dict[str, StepConfig]:
+        """Return ``{step_name: StepConfig}`` for every registered step."""
+        return {name: func._step_config for name, func in self._get_steps().items()}
 
     @property
     def start_event_class(self) -> type[StartEvent]:
@@ -295,59 +255,6 @@ class Workflow(metaclass=WorkflowMeta):
         Determined by inspecting step input/output types.
         """
         return self._events
-
-    def _ensure_events_collected(self) -> list[type[Event]]:
-        """Returns all known events emitted by this workflow.
-
-        Determined by inspecting step input/output types.
-        """
-        events_found: set[type[Event]] = set()
-        for step_func in self._get_steps().values():
-            step_config: StepConfig = step_func._step_config
-
-            # Do not collect events from the done step
-            if step_func.__name__ == "_done":
-                continue
-
-            for event_type in step_config.return_types:
-                if issubclass(event_type, Event):
-                    events_found.add(event_type)
-            for event_type in step_config.accepted_events:
-                if issubclass(event_type, Event):
-                    events_found.add(event_type)
-
-        return list(events_found)
-
-    def _ensure_stop_event_class(self) -> type[RunResultT]:
-        """
-        Returns the StopEvent type used in this workflow.
-
-        It works by inspecting the events returned.
-        """
-        stop_events_found: set[type[StopEvent]] = set()
-        for step_func in self._get_steps().values():
-            step_config: StepConfig = step_func._step_config
-            for event_type in step_config.return_types:
-                if issubclass(event_type, StopEvent):
-                    stop_events_found.add(event_type)
-
-        num_found = len(stop_events_found)
-        if num_found == 0:
-            cls_name = self.__class__.__name__
-            msg = (
-                "At least one Event of type StopEvent must be returned by any step. "
-                f"(Workflow '{cls_name}' has no @step that returns StopEvent.)"
-            )
-            raise WorkflowConfigurationError(msg)
-        elif num_found > 1:
-            cls_name = self.__class__.__name__
-            msg = (
-                f"Only one type of StopEvent is allowed per workflow, found {num_found}: {stop_events_found} "
-                f"in workflow '{cls_name}'."
-            )
-            raise WorkflowConfigurationError(msg)
-        else:
-            return stop_events_found.pop()
 
     @property
     def stop_event_class(self) -> type[RunResultT]:
@@ -489,151 +396,6 @@ class Workflow(metaclass=WorkflowMeta):
             workflow=self, start_event=start_event_instance, run_id=run_id
         )
 
-    def _validate_graph_structure(self) -> None:
-        """Check that all steps are reachable from input events and only output events are terminal.
-
-        Delegates to the pure ``validate_graph`` function in the representation
-        package and raises a single ``WorkflowValidationError`` listing every
-        problem found.
-        """
-        # Inline import: ``workflow.py`` is the bootstrap chokepoint — the
-        # ``representation`` package imports ``workflows.Workflow`` transitively
-        # (representation/__init__ -> build -> Workflow), so importing it here
-        # at module load time would re-enter a partially-loaded ``workflows``
-        # package. Deferring to call time breaks the cycle.
-        from .representation.validate import validate_graph
-
-        step_configs = {
-            name: func._step_config for name, func in self._get_steps().items()
-        }
-        errors = validate_graph(
-            steps=step_configs,
-            start_event_class=self._start_event_class,
-            skip_checks=self._skip_graph_checks,
-            catch_error_steps=list(self._catch_error_handlers.keys()),
-        )
-        if errors:
-            detail = "\n".join(
-                f"  - [{e.check}] {e.message}\n    {e.hint}" for e in errors
-            )
-            raise WorkflowValidationError(f"Graph validation failed:\n{detail}")
-
-    def _collect_catch_error_handlers(
-        self,
-    ) -> tuple[dict[str, CatchErrorHandler], dict[str, str]]:
-        """Discover ``@catch_error`` handlers and build the step->handler routing table.
-
-        Returns:
-            ``(catch_error_handlers, handler_for_step)`` where
-            ``catch_error_handlers`` maps handler step name to its descriptor
-            and ``handler_for_step`` maps each covered step name to the handler
-            that owns it (scoped claims first, then the wildcard fills).
-        """
-        all_step_names = set(self._get_steps().keys())
-        handlers: list[CatchErrorHandler] = []
-        for name, step_func in self._get_steps().items():
-            step_config: StepConfig = step_func._step_config
-            if step_config.role != "catch_error":
-                continue
-            max_recoveries = step_config.catch_error_max_recoveries
-            if not isinstance(max_recoveries, int) or max_recoveries < 1:
-                raise WorkflowValidationError(
-                    f"@catch_error handler '{name}' has max_recoveries="
-                    f"{max_recoveries!r}; must be an integer >= 1."
-                )
-            handlers.append(
-                CatchErrorHandler(
-                    step_name=name,
-                    for_steps=(
-                        list(step_config.catch_error_for_steps)
-                        if step_config.catch_error_for_steps is not None
-                        else None
-                    ),
-                    max_recoveries=max_recoveries,
-                )
-            )
-
-        # Inline import: see _validate_graph_structure for the cycle rationale.
-        from .representation.validate import validate_catch_error_handlers
-
-        handler_errors = validate_catch_error_handlers(handlers, all_step_names)
-        if handler_errors:
-            raise WorkflowValidationError("\n".join(handler_errors))
-
-        handler_step_names = {h.step_name for h in handlers}
-        handler_for_step: dict[str, str] = {}
-        for handler in handlers:
-            if handler.for_steps is None:
-                continue
-            for target in handler.for_steps:
-                handler_for_step[target] = handler.step_name
-
-        wildcards = [h for h in handlers if h.for_steps is None]
-        wildcard = wildcards[0] if wildcards else None
-        if wildcard is not None:
-            for step_name in all_step_names:
-                if step_name in handler_step_names or step_name == "_done":
-                    continue
-                if step_name in handler_for_step:
-                    continue
-                handler_for_step[step_name] = wildcard.step_name
-
-        return {h.step_name: h for h in handlers}, handler_for_step
-
-    def _validate_resource_configs(self) -> list[str]:
-        """Validate all resource configs (including nested ones) by loading them."""
-        errors: list[str] = []
-        seen: set[str] = set()
-
-        # Stack-based traversal of all resources and their dependencies
-        stack: list[_ResourceValidationContext] = []
-        for step_func in self._get_steps().values():
-            step_name = step_func.__name__
-            for res_def in step_func._step_config.resources:
-                res_def.resource.set_type_annotation(res_def.type_annotation)
-                stack.append(
-                    _ResourceValidationContext(
-                        resource=res_def.resource,
-                        step_name=step_name,
-                        param_name=res_def.name,
-                        resource_chain=[res_def.resource.name],
-                    )
-                )
-
-        while stack:
-            ctx = stack.pop()
-            if ctx.resource.name in seen:
-                continue
-            seen.add(ctx.resource.name)
-
-            # Add dependencies to stack
-            for _dep_param, dep, type_ann in ctx.resource.get_dependencies():
-                dep.set_type_annotation(type_ann)
-                stack.append(ctx.with_dependency(dep))
-
-            # Validate if it's a config
-            if isinstance(ctx.resource, _ResourceConfig):
-                try:
-                    ctx.resource.call()
-                except Exception as e:
-                    errors.append(f"In {ctx.format_location()}: {e}")
-
-        return errors
-
-    async def _validate_resources(self) -> list[str]:
-        """Validate all resources by resolving them (catches circular deps)."""
-        errors: list[str] = []
-        for step_func in self._get_steps().values():
-            step_name = step_func.__name__
-            for res_def in step_func._step_config.resources:
-                res_def.resource.set_type_annotation(res_def.type_annotation)
-                try:
-                    await self._resource_manager.get(res_def.resource)
-                except Exception as e:
-                    location = f"step '{step_name}', parameter '{res_def.name}'"
-                    errors.append(f"In {location}: {e}")
-        return errors
-
     def validate(
         self,
         *,
@@ -684,150 +446,39 @@ class Workflow(metaclass=WorkflowMeta):
         if not force and not stale and self._validation_result is not None:
             return self._validation_result
 
-        # Ensure at least one step is configured before inspecting events
-        if not self._get_steps():
-            cls_name = self.__class__.__name__
-            msg = (
-                f"Workflow '{cls_name}' has no configured steps. "
-                "Did you forget to annotate methods with @step or to register "
-                "free-function steps via @step(workflow=...)?"
-            )
-            raise WorkflowConfigurationError(msg)
-
-        # Recompute StartEvent and StopEvent classes here to support dynamic changes
-        # and to surface StartEvent errors before StopEvent during validation.
-        self._start_event_class = self._ensure_start_event_class()
-        self._stop_event_class = self._ensure_stop_event_class()
-
-        produced_events: set[type] = {self._start_event_class}
-        consumed_events: set[type] = set()
-
-        # Check that no user-defined step accepts StopEvent (only _done step should)
-        steps_accepting_stop_event: list[str] = []
-
-        for name, step_func in self._get_steps().items():
-            step_config: StepConfig = step_func._step_config
-
-            if name != "_done":
-                for event_type in step_config.accepted_events:
-                    if issubclass(event_type, StopEvent):
-                        steps_accepting_stop_event.append(name)
-                        break
-
-            for event_type in step_config.accepted_events:
-                consumed_events.add(event_type)
-
-            for event_type in step_config.return_types:
-                if event_type is type(None):
-                    # some events may not trigger other events
-                    continue
-
-                produced_events.add(event_type)
-
-        if steps_accepting_stop_event:
-            step_names = "', '".join(steps_accepting_stop_event)
-            plural = "" if len(steps_accepting_stop_event) == 1 else "s"
-            msg = f"Step{plural} '{step_names}' cannot accept StopEvent. StopEvent signals the end of the workflow. Use a different Event type instead."
-            raise WorkflowValidationError(msg)
-
-        self._catch_error_handlers, self._handler_for_step = (
-            self._collect_catch_error_handlers()
+        # Inline import: ``representation`` transitively imports ``Workflow``.
+        from .representation.validate import (
+            _validate_resource_configs,
+            _validate_resources,
+            _validate_workflow,
         )
 
-        # Check if no StopEvent is produced
-        stop_ok = False
-        for ev in produced_events:
-            if issubclass(ev, StopEvent):
-                stop_ok = True
-                break
-        if not stop_ok:
-            msg = "No event of type StopEvent is produced."
-            raise WorkflowValidationError(msg)
+        step_configs = self._step_configs()
+        result = _validate_workflow(
+            step_configs, self.__class__.__name__, self._skip_graph_checks
+        )
+        self._start_event_class = result.start_event_class
+        self._stop_event_class = result.stop_event_class
+        self._catch_error_handlers = result.catch_error_handlers
+        self._handler_for_step = result.handler_for_step
 
-        # Check if all consumed events are produced. StepFailedEvent, HumanResponseEvent,
-        # and StopEvent are excluded because they cross the workflow boundary
-        # (emitted by the runtime or external consumer rather than by a step).
-        unconsumed_events = consumed_events - produced_events
-        unconsumed_events = {
-            x
-            for x in unconsumed_events
-            if not issubclass(
-                x,
-                (InputRequiredEvent, HumanResponseEvent, StopEvent, StepFailedEvent),
-            )
-        }
-        if unconsumed_events:
-            names = ", ".join(ev.__name__ for ev in unconsumed_events)
-            raise WorkflowValidationError(
-                f"The following events are consumed but never produced: {names}"
-            )
-
-        # Check if there are any unused produced events (except specific built-in events)
-        unused_events = produced_events - consumed_events
-        unused_events = {
-            x
-            for x in unused_events
-            if not issubclass(
-                x, (InputRequiredEvent, HumanResponseEvent, self._stop_event_class)
-            )
-        }
-        if unused_events:
-            names = ", ".join(ev.__name__ for ev in unused_events)
-            raise WorkflowValidationError(
-                f"The following events are produced but never consumed: {names}"
-            )
-
-        # Graph structural checks: reachability from input events, terminal events
-        self._validate_graph_structure()
-
-        # Resource validation
         if validate_resource_configs:
-            if errors := self._validate_resource_configs():
+            if errors := _validate_resource_configs(step_configs):
                 raise WorkflowValidationError(
                     "Resource config validation failed:\n"
                     + "\n".join(f"  - {e}" for e in errors)
                 )
 
         if validate_resources:
-            errors = asyncio.run(self._validate_resources())
+            errors = asyncio.run(
+                _validate_resources(step_configs, self._resource_manager)
+            )
             if errors:
                 raise WorkflowValidationError(
                     "Resource validation failed:\n"
                     + "\n".join(f"  - {e}" for e in errors)
                 )
 
-        # Check if the workflow uses human-in-the-loop; cache result for subsequent run() calls
-        self._validation_result = (
-            InputRequiredEvent in produced_events
-            or HumanResponseEvent in consumed_events
-        )
+        self._validation_result = result.uses_hitl
         self._validated_version = self.__class__._step_functions_version
         return self._validation_result
-
-
-@dataclass
-class _ResourceValidationContext:
-    """Tracks context for resource validation to provide clear error messages."""
-
-    resource: ResourceDescriptor
-    step_name: str
-    param_name: str
-    resource_chain: list[str] = field(default_factory=list)
-
-    def format_location(self) -> str:
-        """Format the location string for error messages."""
-        if len(self.resource_chain) > 1:
-            chain_str = " -> ".join(self.resource_chain)
-            return (
-                f"step '{self.step_name}', parameter '{self.param_name}' ({chain_str})"
-            )
-        return f"step '{self.step_name}', parameter '{self.param_name}'"
-
-    def with_dependency(self, dep: ResourceDescriptor) -> _ResourceValidationContext:
-        """Create a new context for a dependency resource."""
-        return _ResourceValidationContext(
-            resource=dep,
-            step_name=self.step_name,
-            param_name=self.param_name,
-            resource_chain=[*self.resource_chain, dep.name],
-        )
