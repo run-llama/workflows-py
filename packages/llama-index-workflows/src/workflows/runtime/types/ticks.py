@@ -18,9 +18,9 @@ from __future__ import annotations
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Discriminator, Field, TypeAdapter
+from workflows.events import SerializableEvent
 from workflows.retry_policy import ExceptionInfo
 from workflows.runtime.types.results import StepFunctionResult
-from workflows.runtime.types.serialization_helpers import SerializableEvent
 
 
 class TickStepResult(BaseModel):
