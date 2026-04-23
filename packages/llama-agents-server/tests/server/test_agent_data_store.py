@@ -199,9 +199,15 @@ def _seed_raw_handler(
 async def test_update_collapses_duplicates_with_matching_run_id(
     store: AgentDataStore, backend: FakeAgentDataBackend
 ) -> None:
-    """Duplicate rows for the same handler_id/run_id collapse to one row."""
-    # Seed two rows for the same handler with identical run_id
-    _seed_raw_handler(backend, handler_id="dup-1", run_id="run-dup", status="running")
+    """Duplicate rows for the same handler_id/run_id collapse to one row.
+
+    The survivor is the oldest row, so its created_at is preserved.
+    """
+    # Seed two rows for the same handler with identical run_id. The first
+    # insert gets the smaller row-level created_at and should be the survivor.
+    oldest_id = _seed_raw_handler(
+        backend, handler_id="dup-1", run_id="run-dup", status="running"
+    )
     _seed_raw_handler(backend, handler_id="dup-1", run_id="run-dup", status="failed")
 
     await store.update(
@@ -211,6 +217,7 @@ async def test_update_collapses_duplicates_with_matching_run_id(
     rows = backend._get_items("test-deploy", "handlers")
     handler_rows = [r for r in rows if r["data"].get("handler_id") == "dup-1"]
     assert len(handler_rows) == 1
+    assert handler_rows[0]["id"] == oldest_id
     assert handler_rows[0]["data"]["status"] == "completed"
 
 
@@ -218,8 +225,14 @@ async def test_update_collapses_duplicates_with_matching_run_id(
 async def test_update_collapses_duplicates_with_mismatched_run_id(
     store: AgentDataStore, backend: FakeAgentDataBackend
 ) -> None:
-    """Duplicates collapse regardless of run_id — one row per handler_id."""
-    _seed_raw_handler(backend, handler_id="dup-2", run_id="run-a", status="running")
+    """Duplicates collapse regardless of run_id — one row per handler_id.
+
+    The survivor is the oldest row; the latest write's run_id and status are
+    what ends up persisted on it.
+    """
+    oldest_id = _seed_raw_handler(
+        backend, handler_id="dup-2", run_id="run-a", status="running"
+    )
     _seed_raw_handler(backend, handler_id="dup-2", run_id="run-b", status="running")
 
     await store.update(
@@ -229,6 +242,7 @@ async def test_update_collapses_duplicates_with_mismatched_run_id(
     rows = backend._get_items("test-deploy", "handlers")
     handler_rows = [r for r in rows if r["data"].get("handler_id") == "dup-2"]
     assert len(handler_rows) == 1
+    assert handler_rows[0]["id"] == oldest_id
     assert handler_rows[0]["data"]["run_id"] == "run-b"
     assert handler_rows[0]["data"]["status"] == "completed"
 
