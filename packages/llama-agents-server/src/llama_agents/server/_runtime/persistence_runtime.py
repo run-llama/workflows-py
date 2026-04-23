@@ -23,7 +23,7 @@ from workflows.context.context_types import SerializedContext
 from workflows.context.serializers import BaseSerializer, JsonSerializer
 from workflows.errors import WorkflowCancelledByUser
 from workflows.events import IdleReleasedEvent, StartEvent, StopEvent
-from workflows.runtime.control_loop import rebuild_state_from_ticks_stream
+from workflows.runtime.control_loop import replay_ticks_stream
 from workflows.runtime.runtime_decorators import (
     BaseInternalRunAdapterDecorator,
     BaseRuntimeDecorator,
@@ -230,7 +230,7 @@ class TickPersistenceDecorator(BaseRuntimeDecorator):
                 async for tick in tick_stream:
                     yield tick
 
-            replay = await rebuild_state_from_ticks_stream(init_state, _with_first())
+            replay = await replay_ticks_stream(init_state, _with_first())
             init_state = replay.state
             if replay.exit_command is not None:
                 terminal = _terminal_from_exit_command(replay.exit_command)

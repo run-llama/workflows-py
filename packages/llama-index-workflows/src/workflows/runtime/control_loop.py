@@ -590,15 +590,16 @@ class ReplayResult:
     exit_command: ExitCommand | None = None
 
 
-async def rebuild_state_from_ticks_stream(
+async def replay_ticks_stream(
     state: BrokerState,
     ticks: AsyncIterable[WorkflowTick],
 ) -> ReplayResult:
-    """Streaming variant of :func:`rebuild_state_from_ticks`.
+    """Replay a tick stream, returning state plus the last exit-indicating command.
 
-    Returns state plus the last exit-indicating command (if any). The reducer
-    already emits CommandCompleteRun / CommandFailWorkflow / CommandHalt when
-    it processes terminal ticks; we just surface them instead of discarding.
+    The reducer already emits CommandCompleteRun / CommandFailWorkflow /
+    CommandHalt when it processes terminal ticks; this surfaces them instead
+    of discarding, so callers can classify terminal outcome (success /
+    failure / cancel / timeout) without a second pass over the ticks.
     """
     state, _ = rewind_in_progress(state, time.time())
     exit_command: ExitCommand | None = None
@@ -611,6 +612,18 @@ async def rebuild_state_from_ticks_stream(
                 # Last wins: a successful retry supersedes earlier failures.
                 exit_command = command
     return ReplayResult(state=state, exit_command=exit_command)
+
+
+async def rebuild_state_from_ticks_stream(
+    state: BrokerState,
+    ticks: AsyncIterable[WorkflowTick],
+) -> BrokerState:
+    """Streaming variant of :func:`rebuild_state_from_ticks`.
+
+    Thin wrapper over :func:`replay_ticks_stream` that discards the exit
+    command. Prefer ``replay_ticks_stream`` when you need terminal info.
+    """
+    return (await replay_ticks_stream(state, ticks)).state
 
 
 def _reduce_tick(
