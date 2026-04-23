@@ -1,11 +1,12 @@
 import json
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from pydantic.functional_validators import model_validator
 from typing_extensions import TypeVar
 
 from workflows.context.state_store import DictState
+from workflows.events import SerializableOptionalException
 
 MODEL_T = TypeVar("MODEL_T", bound=BaseModel, default=DictState)
 
@@ -63,12 +64,21 @@ class SerializedContextV0(BaseModel):
 class SerializedEventAttempt(BaseModel):
     """Serialized representation of an EventAttempt with retry information."""
 
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     # The event being processed (as serializer-encoded string)
     event: str
     # Number of times this event has been attempted (0 for first attempt)
     attempts: int = 0
     # Unix timestamp of first attempt, or None if not yet attempted
     first_attempt_at: float | None = None
+    # Most recent exception when this event is scheduled for retry, if any.
+    last_exception: SerializableOptionalException = None
+    # Unix timestamp of the most recent failure, or None.
+    last_failed_at: float | None = None
+    # Per-handler recovery counts on this event's lineage. Maps catch_error
+    # handler step name -> invocations so far. Empty on the main graph.
+    recovery_counts: dict[str, int] = Field(default_factory=dict)
 
 
 class SerializedWaiter(BaseModel):

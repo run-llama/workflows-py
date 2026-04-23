@@ -151,4 +151,6 @@ We use **pytest** with idiomatic pytest patterns. Follow these guidelines:
   - **Never use inline imports**
   - **Never use `if TYPE_CHECKING` imports**
   - Exceptions to these rules are made only when there are A) Acceptable circular imports or B) real startup performance issues
+  - When an inline import is warranted, it **must** carry a short comment explaining the deferral reason (which cycle it breaks, or what startup cost it avoids). No naked inline imports.
+  - **Put the inline import at the chokepoint, not in the leaf.** When a cycle exists, defer the import in the high-level module that orchestrates things (e.g. `workflow.py`), not via a `TYPE_CHECKING` / late-import hack in the low-level module the cycle passes through. The low-level module stays clean; the high-level module owns the deferral with a one-line rationale. Example: `workflows/workflow.py` imports `workflows.representation.validate` inline inside `_validate_graph_structure` because the `representation` package transitively imports `Workflow`; the leaf modules under `representation/` keep their normal top-level imports.
 - Only add `__init__.py` `__all__` exports when a file is legitimately needed for public library consumption. Module level imports should not be used internally. For the most part you should never do this unless explicitly requested to do so

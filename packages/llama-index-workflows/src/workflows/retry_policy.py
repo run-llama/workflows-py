@@ -7,7 +7,8 @@ import random
 import re
 import warnings
 from collections.abc import Callable
-from datetime import timedelta
+from dataclasses import dataclass
+from datetime import datetime, timedelta
 from typing import Protocol, cast, runtime_checkable
 
 time_unit_type = int | float | timedelta
@@ -15,6 +16,31 @@ time_unit_type = int | float | timedelta
 
 def _to_seconds(value: time_unit_type) -> float:
     return float(value.total_seconds() if isinstance(value, timedelta) else value)
+
+
+@dataclass(frozen=True)
+class RetryInfo:
+    """Snapshot of the currently-executing step's retry state.
+
+    Returned by ``Context.retry_info()``. On the first attempt ``retry_number``
+    is 0, ``elapsed_seconds`` is 0.0, and both ``last_exception`` and
+    ``last_failed_at`` are ``None``. On subsequent retries they describe the
+    most recent prior failure.
+
+    Attributes:
+        retry_number: 0 on the first run, 1 on the first retry, and so on.
+        elapsed_seconds: Seconds since the first attempt began.
+        last_exception: The most recent prior exception, or ``None``.
+            ``__traceback__`` is available in-process but is lost after a
+            replay from persisted state.
+        last_failed_at: Timezone-aware UTC datetime of the most recent prior
+            failure, or ``None``.
+    """
+
+    retry_number: int
+    elapsed_seconds: float
+    last_exception: Exception | None
+    last_failed_at: datetime | None
 
 
 @runtime_checkable

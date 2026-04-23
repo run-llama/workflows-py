@@ -4,16 +4,22 @@
 from __future__ import annotations
 
 from _collections_abc import dict_items, dict_keys, dict_values
+from datetime import datetime
 from enum import Enum
-from typing import Any
+from typing import Annotated, Any
 
 from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    PlainSerializer,
+    PlainValidator,
     PrivateAttr,
     model_serializer,
 )
+
+from workflows.context.serializers import JsonSerializer
+from workflows.context.utils import import_module_from_qualified_name
 
 
 class DictLikeModel(BaseModel):
@@ -148,6 +154,106 @@ class Event(DictLikeModel):
         super().__init__(**params)
 
 
+_json_serializer = JsonSerializer()
+
+
+def _serialize_event(event: Event) -> Any:
+    return _json_serializer.serialize_value(event)
+
+
+def _deserialize_event(data: Any) -> Event:
+    return _json_serializer.deserialize_value(data)
+
+
+SerializableEvent = Annotated[
+    Event,
+    PlainSerializer(_serialize_event, return_type=Any),
+    PlainValidator(_deserialize_event),
+]
+
+
+def _serialize_optional_event(event: Event | None) -> Any:
+    if event is None:
+        return None
+    return _json_serializer.serialize_value(event)
+
+
+def _deserialize_optional_event(data: Any) -> Event | None:
+    if data is None:
+        return None
+    return _json_serializer.deserialize_value(data)
+
+
+SerializableOptionalEvent = Annotated[
+    Event | None,
+    PlainSerializer(_serialize_optional_event, return_type=Any),
+    PlainValidator(_deserialize_optional_event),
+]
+
+
+def _serialize_exception(exc: Exception) -> dict[str, Any]:
+    exc_type = type(exc)
+    qualified_name = f"{exc_type.__module__}.{exc_type.__qualname__}"
+    return {
+        "exception_type": qualified_name,
+        "exception_message": str(exc),
+    }
+
+
+def _deserialize_exception(data: Any) -> Exception:
+    if isinstance(data, Exception):
+        return data
+    exc_message = data["exception_message"]
+    try:
+        exc_cls = import_module_from_qualified_name(data["exception_type"])
+        return exc_cls(exc_message)
+    except (ImportError, AttributeError, ValueError):
+        return Exception(exc_message)
+
+
+SerializableException = Annotated[
+    Exception,
+    PlainSerializer(_serialize_exception, return_type=dict[str, Any]),
+    PlainValidator(_deserialize_exception),
+]
+
+
+def _serialize_optional_exception(exc: Exception | None) -> Any:
+    if exc is None:
+        return None
+    return _serialize_exception(exc)
+
+
+def _deserialize_optional_exception(data: Any) -> Exception | None:
+    if data is None:
+        return None
+    return _deserialize_exception(data)
+
+
+SerializableOptionalException = Annotated[
+    Exception | None,
+    PlainSerializer(_serialize_optional_exception, return_type=Any),
+    PlainValidator(_deserialize_optional_exception),
+]
+
+
+def _serialize_event_type(event_type: type[Event]) -> str:
+    return f"{event_type.__module__}.{event_type.__qualname__}"
+
+
+def _deserialize_event_type(data: Any) -> type[Event]:
+    if isinstance(data, type):
+        return data
+    return import_module_from_qualified_name(data)
+
+
+SerializableEventType = Annotated[
+    type[Event],
+    PlainSerializer(_serialize_event_type, return_type=str),
+    PlainValidator(_deserialize_event_type),
+]
+
+
 class StartEvent(Event):
     """Implicit entry event sent to kick off a `Workflow.run()`."""
 
@@ -261,15 +367,13 @@ class IdleReleasedEvent(StopEvent):
 class WorkflowFailedEvent(StopEvent):
     """Published when a workflow step fails permanently.
 
-    This event is published to the event stream when a step fails and all
-    retries are exhausted, allowing consumers to understand why the workflow
-    ended before the exception is raised.
+    Published when a step fails and all retries are exhausted (or no retry
+    policy permits a retry, or a catch_error handler itself raised).
 
     Attributes:
         step_name: The name of the step that failed.
-        exception_type: The fully qualified type name of the exception that caused the failure.
-        exception_message: The string representation of the exception message.
-        traceback: The formatted stack trace of the exception.
+        exception: The raised exception. ``__traceback__`` is present only
+            in-process; ``None`` after a replay.
         attempts: The total number of attempts made before giving up.
         elapsed_seconds: Time in seconds from first attempt to final failure.
 
@@ -278,17 +382,40 @@ class WorkflowFailedEvent(StopEvent):
         async for event in handler.stream_events():
             if isinstance(event, WorkflowFailedEvent):
                 print(f"Step '{event.step_name}' failed after {event.attempts} attempts")
-                print(f"Total time: {event.elapsed_seconds:.2f}s")
-                print(event.traceback)
+                print(f"{type(event.exception).__name__}: {event.exception}")
         ```
     """
 
     step_name: str
-    exception_type: str
-    exception_message: str
-    traceback: str
+    exception: SerializableException
     attempts: int
     elapsed_seconds: float
+
+
+class StepFailedEvent(Event):
+    """Delivered to a `@catch_error` handler when a step exhausts its retries.
+
+    The handler may inspect the fields to decide how to recover. Returning a
+    `StopEvent` completes the workflow successfully; raising from the handler
+    propagates the new exception and fails the workflow.
+
+    Attributes:
+        step_name: The name of the step that failed.
+        input_event: The triggering event instance that caused the failure.
+        exception: The raised exception. ``__traceback__`` is present in-process
+            but ``None`` after the event has crossed a serialization boundary
+            (e.g., a replay).
+        attempts: Total number of attempts made before giving up.
+        elapsed_seconds: Seconds from first attempt to final failure.
+        failed_at: Timezone-aware UTC datetime of the final failure.
+    """
+
+    step_name: str
+    input_event: SerializableEvent
+    exception: SerializableException
+    attempts: int
+    elapsed_seconds: float
+    failed_at: datetime
 
 
 class InputRequiredEvent(Event):

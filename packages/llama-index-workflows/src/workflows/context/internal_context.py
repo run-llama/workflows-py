@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from collections import Counter, defaultdict
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any, Coroutine, Generic, TypeVar, cast
 
 from workflows.context.context_types import MODEL_T
 from workflows.context.state_store import StateStore
 from workflows.errors import WorkflowRuntimeError
+from workflows.retry_policy import RetryInfo
 from workflows.runtime.types.results import (
     AddCollectedEvent,
     AddWaiter,
@@ -154,9 +157,21 @@ class InternalContext(Generic[MODEL_T]):
         if step is not None:
             self._workflow._validate_valid_step_message(step, message)
 
+        recovery_counts: dict[str, int] = {}
+        try:
+            recovery_counts = dict(
+                StepWorkerStateContextVar.get().retry.recovery_counts
+            )
+        except LookupError:
+            pass
+
         self._execute_task(
             self._internal_adapter.send_event(
-                TickAddEvent(event=message, step_name=step)
+                TickAddEvent(
+                    event=message,
+                    step_name=step,
+                    recovery_counts=recovery_counts,
+                )
             )
         )
 
@@ -201,3 +216,32 @@ class InternalContext(Generic[MODEL_T]):
         """Write an event to the published event stream."""
         if ev is not None:
             self._execute_task(self._internal_adapter.write_to_event_stream(ev))
+
+    def retry_info(self) -> RetryInfo:
+        """Snapshot of the currently-executing step's retry state.
+
+        Returns a `RetryInfo(retry_number=0, elapsed_seconds=0.0,
+        last_exception=None, last_failed_at=None)` on the first attempt. After a
+        retry it reflects the current retry number, seconds since the first
+        attempt, and the most recent failure.
+
+        Raises:
+            WorkflowRuntimeError: If called outside of a step function.
+        """
+        step_ctx = self._get_step_ctx(fn="retry_info")
+        retry = step_ctx.retry
+        if retry.retry_number <= 0 or not retry.first_attempt_at:
+            elapsed = 0.0
+        else:
+            elapsed = max(0.0, time.time() - retry.first_attempt_at)
+        last_failed_at: datetime | None = (
+            datetime.fromtimestamp(retry.last_failed_at, tz=timezone.utc)
+            if retry.last_failed_at is not None
+            else None
+        )
+        return RetryInfo(
+            retry_number=retry.retry_number,
+            elapsed_seconds=elapsed,
+            last_exception=retry.last_exception,
+            last_failed_at=last_failed_at,
+        )

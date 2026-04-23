@@ -362,9 +362,7 @@ def test_is_terminal_event_regular_event() -> None:
 def test_is_terminal_event_workflow_failed_event() -> None:
     event = WorkflowFailedEvent(
         step_name="my_step",
-        exception_type="ValueError",
-        exception_message="bad value",
-        traceback="",
+        exception=ValueError("bad value"),
         attempts=1,
         elapsed_seconds=0.1,
     )

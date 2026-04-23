@@ -2,3 +2,4 @@
     options:
       members:
         - step
+        - catch_error

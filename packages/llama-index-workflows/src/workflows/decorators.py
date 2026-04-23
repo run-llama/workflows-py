@@ -21,6 +21,7 @@ from typing import (
 from pydantic import BaseModel
 
 from .errors import WorkflowValidationError
+from .events import StepFailedEvent
 from .resource import ResourceDefinition
 from .utils import (
     inspect_signature,
@@ -36,6 +37,9 @@ WorkflowGraphCheck = Literal["reachability", "terminal_event", "dead_end"]
 StepGraphCheck = Literal["reachability", "dead_end"]
 
 
+StepRole = Literal["step", "catch_error"]
+
+
 @dataclasses.dataclass
 class StepConfig:
     accepted_events: list[Any]
@@ -47,6 +51,25 @@ class StepConfig:
     resources: list[ResourceDefinition]
     context_state_type: type[BaseModel] | None = None
     skip_graph_checks: list[StepGraphCheck] = dataclasses.field(default_factory=list)
+    role: StepRole = "step"
+    # Only meaningful when role == "catch_error".
+    # None means wildcard — covers any step not claimed by a scoped handler.
+    catch_error_for_steps: list[str] | None = None
+    catch_error_max_recoveries: int = 1
+
+
+@dataclasses.dataclass(frozen=True)
+class CatchErrorHandler:
+    """Runtime descriptor for a ``@catch_error`` handler.
+
+    Precomputed by ``Workflow._validate()`` from the handler's ``StepConfig``;
+    consumed by the control loop's failure-routing branch and by
+    ``BrokerState.from_workflow``.
+    """
+
+    step_name: str
+    for_steps: list[str] | None
+    max_recoveries: int
 
 
 P = ParamSpec("P")
@@ -216,6 +239,101 @@ def _apply_step_decorator(
         workflow.add_step(func)
 
     return func
+
+
+@overload
+def catch_error(func: Callable[P, R]) -> StepFunction[P, R]: ...
+
+
+@overload
+def catch_error(
+    *,
+    for_steps: list[str] | None = None,
+    max_recoveries: int = 1,
+) -> Callable[[Callable[P, R]], StepFunction[P, R]]: ...
+
+
+def catch_error(
+    func: Callable[P, R] | None = None,
+    *,
+    for_steps: list[str] | None = None,
+    max_recoveries: int = 1,
+) -> Callable[[Callable[P, R]], StepFunction[P, R]] | StepFunction[P, R]:
+    """Mark a method as a handler for steps that exhaust their retries.
+
+    Handlers can be scoped to specific steps via `for_steps`, or left as
+    wildcards (default) to cover any step not claimed by a scoped handler.
+    Each handler has a per-lineage recovery budget (`max_recoveries`): when the
+    budget is exceeded the workflow fails instead of re-entering the handler.
+
+    A handler may return any event type — the graph validator checks that the
+    handler's sub-graph eventually terminates at a `StopEvent`.
+
+    Args:
+        for_steps: Step names this handler covers. `None` means wildcard.
+        max_recoveries: How many times this handler may be invoked per lineage
+            before the workflow fails. Must be >= 1. Defaults to 1.
+
+    Examples:
+        ```python
+        from workflows import Workflow, catch_error, step, Context
+        from workflows.events import StartEvent, StepFailedEvent, StopEvent
+
+        class MyFlow(Workflow):
+            @step(retry_policy=...)
+            async def fetch(self, ev: StartEvent) -> FetchedEvent: ...
+
+            @catch_error(for_steps=["fetch"], max_recoveries=2)
+            async def handle_fetch(self, ctx: Context, ev: StepFailedEvent) -> FallbackEvent:
+                return FallbackEvent(...)
+
+            @catch_error  # wildcard; covers any step not owned by a scoped handler
+            async def handle_default(self, ctx: Context, ev: StepFailedEvent) -> StopEvent:
+                return StopEvent(result={"failed": ev.step_name})
+        ```
+    """
+
+    if not isinstance(max_recoveries, int) or max_recoveries < 1:
+        raise WorkflowValidationError(
+            "@catch_error max_recoveries must be an integer >= 1"
+        )
+    if for_steps is not None:
+        if not isinstance(for_steps, list) or not all(
+            isinstance(s, str) for s in for_steps
+        ):
+            raise WorkflowValidationError(
+                "@catch_error for_steps must be None or a list of step name strings"
+            )
+
+    def _apply(inner: Callable[P, R], localns: dict[str, Any]) -> StepFunction[P, R]:
+        step_fn = make_step_function(
+            inner,
+            num_workers=1,
+            retry_policy=None,
+            localns=localns,
+        )
+        accepted = step_fn._step_config.accepted_events
+        if len(accepted) != 1 or accepted[0] is not StepFailedEvent:
+            name = getattr(inner, "__name__", repr(inner))
+            raise WorkflowValidationError(
+                f"@catch_error handler '{name}' must accept StepFailedEvent "
+                f"as its event parameter."
+            )
+        step_fn._step_config.role = "catch_error"
+        step_fn._step_config.catch_error_for_steps = (
+            list(for_steps) if for_steps is not None else None
+        )
+        step_fn._step_config.catch_error_max_recoveries = max_recoveries
+        return step_fn
+
+    if func is not None:
+        # bare usage: `@catch_error`
+        return _apply(func, _capture_callsite_localns())
+
+    def decorator(inner: Callable[P, R]) -> StepFunction[P, R]:
+        return _apply(inner, _capture_decorator_localns())
+
+    return decorator
 
 
 def _capture_decorator_localns() -> dict[str, Any]:

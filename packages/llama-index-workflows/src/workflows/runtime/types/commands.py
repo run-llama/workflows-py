@@ -16,7 +16,7 @@ such as starting workers, queuing events, or completing the workflow.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from workflows.events import Event, StopEvent
 
@@ -35,6 +35,9 @@ class CommandQueueEvent:
     delay: float | None = None
     attempts: int | None = None
     first_attempt_at: float | None = None
+    last_exception: Exception | None = None
+    last_failed_at: float | None = None
+    recovery_counts: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

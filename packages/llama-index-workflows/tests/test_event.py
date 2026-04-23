@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 LlamaIndex Inc.
 
+from http.client import HTTPException
 from typing import Any, cast
 
 import pytest
@@ -250,16 +251,13 @@ def test_workflow_failed_event() -> None:
     """Test WorkflowFailedEvent creation and attributes."""
     ev = WorkflowFailedEvent(
         step_name="my_step",
-        exception_type="builtins.ValueError",
-        exception_message="Something went wrong",
-        traceback="Traceback (most recent call last):\n  ...\nValueError: Something went wrong\n",
+        exception=ValueError("Something went wrong"),
         attempts=3,
         elapsed_seconds=1.5,
     )
     assert ev.step_name == "my_step"
-    assert ev.exception_type == "builtins.ValueError"
-    assert ev.exception_message == "Something went wrong"
-    assert "ValueError" in ev.traceback
+    assert isinstance(ev.exception, ValueError)
+    assert str(ev.exception) == "Something went wrong"
     assert ev.attempts == 3
     assert ev.elapsed_seconds == 1.5
     assert isinstance(ev, StopEvent)
@@ -269,18 +267,17 @@ def test_workflow_failed_event_serialization() -> None:
     """Test WorkflowFailedEvent serialization and deserialization."""
     ev = WorkflowFailedEvent(
         step_name="failing_step",
-        exception_type="builtins.RuntimeError",
-        exception_message="Test failure",
-        traceback="Traceback...\nRuntimeError: Test failure\n",
+        exception=RuntimeError("Test failure"),
         attempts=2,
         elapsed_seconds=0.5,
     )
     data_dict = ev.model_dump()
     assert data_dict == {
         "step_name": "failing_step",
-        "exception_type": "builtins.RuntimeError",
-        "exception_message": "Test failure",
-        "traceback": "Traceback...\nRuntimeError: Test failure\n",
+        "exception": {
+            "exception_type": "builtins.RuntimeError",
+            "exception_message": "Test failure",
+        },
         "attempts": 2,
         "elapsed_seconds": 0.5,
     }
@@ -292,9 +289,8 @@ def test_workflow_failed_event_serialization() -> None:
     assert type(deserialized_ev).__name__ == type(ev).__name__
     deserialized_ev = cast(WorkflowFailedEvent, deserialized_ev)
     assert ev.step_name == deserialized_ev.step_name
-    assert ev.exception_type == deserialized_ev.exception_type
-    assert ev.exception_message == deserialized_ev.exception_message
-    assert ev.traceback == deserialized_ev.traceback
+    assert type(ev.exception) is type(deserialized_ev.exception)
+    assert str(ev.exception) == str(deserialized_ev.exception)
     assert ev.attempts == deserialized_ev.attempts
     assert ev.elapsed_seconds == deserialized_ev.elapsed_seconds
 
@@ -303,29 +299,24 @@ def test_workflow_failed_event_repr() -> None:
     """Test WorkflowFailedEvent string representation."""
     ev = WorkflowFailedEvent(
         step_name="my_step",
-        exception_type="builtins.ValueError",
-        exception_message="error msg",
-        traceback="...",
+        exception=ValueError("error msg"),
         attempts=1,
         elapsed_seconds=0.1,
     )
     rep = repr(ev)
     assert "WorkflowFailedEvent" in rep
     assert "step_name='my_step'" in rep
-    assert "exception_type='builtins.ValueError'" in rep
-    assert "exception_message='error msg'" in rep
+    assert "error msg" in rep
 
 
 def test_workflow_failed_event_with_nested_exception_type() -> None:
     """Test WorkflowFailedEvent with a qualified exception type name."""
     ev = WorkflowFailedEvent(
         step_name="api_step",
-        exception_type="http.client.HTTPException",
-        exception_message="Connection refused",
-        traceback="Traceback...",
+        exception=HTTPException("Connection refused"),
         attempts=5,
         elapsed_seconds=10.0,
     )
-    assert ev.exception_type == "http.client.HTTPException"
+    assert isinstance(ev.exception, HTTPException)
     assert ev.attempts == 5
     assert ev.elapsed_seconds == 10.0

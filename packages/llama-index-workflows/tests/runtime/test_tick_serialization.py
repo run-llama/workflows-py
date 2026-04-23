@@ -8,7 +8,17 @@ import time
 
 import pytest
 from pydantic import TypeAdapter
-from workflows.events import Event, StartEvent, StopEvent
+from workflows.events import (
+    Event,
+    StartEvent,
+    StopEvent,
+    _deserialize_event,
+    _deserialize_event_type,
+    _deserialize_exception,
+    _serialize_event,
+    _serialize_event_type,
+    _serialize_exception,
+)
 from workflows.runtime.types.results import (
     AddCollectedEvent,
     AddWaiter,
@@ -16,14 +26,6 @@ from workflows.runtime.types.results import (
     DeleteWaiter,
     StepWorkerFailed,
     StepWorkerResult,
-)
-from workflows.runtime.types.serialization_helpers import (
-    _deserialize_event,
-    _deserialize_event_type,
-    _deserialize_exception,
-    _serialize_event,
-    _serialize_event_type,
-    _serialize_exception,
 )
 from workflows.runtime.types.ticks import (
     TickAddEvent,

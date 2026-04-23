@@ -273,9 +273,7 @@ class StubInternalAdapterWithId(StubInternalAdapter):
         pytest.param(
             WorkflowFailedEvent(
                 step_name="s",
-                exception_type="E",
-                exception_message="boom",
-                traceback="",
+                exception=RuntimeError("boom"),
                 attempts=1,
                 elapsed_seconds=0.0,
             ),

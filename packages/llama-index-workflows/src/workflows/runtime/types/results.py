@@ -15,8 +15,8 @@ from typing import (
 )
 
 from pydantic import BaseModel, ConfigDict, model_serializer, model_validator
-from workflows.events import Event
-from workflows.runtime.types.serialization_helpers import (
+from workflows.events import (
+    Event,
     SerializableEvent,
     SerializableEventType,
     SerializableException,
@@ -31,6 +31,26 @@ EventType = TypeVar("EventType", bound=Event)
 
 
 @dataclass(frozen=True)
+class RetryAttempt:
+    """Per-invocation state handed to a step worker for the currently-processed event.
+
+    Bundles the counters the runtime needs to surface via ``Context.retry_info()``
+    and to reconstruct :class:`workflows.retry_policy.RetryInfo`. ``retry_number``
+    is 0-based (0 = first run, 1 = first retry). ``last_exception`` /
+    ``last_failed_at`` are ``None`` on the first attempt. ``recovery_counts``
+    carries the per-``@catch_error``-handler invocation counts on the running
+    event's lineage so ``ctx.send_event`` can tag emitted events and nested
+    failures route to the same handlers.
+    """
+
+    retry_number: int = 0
+    first_attempt_at: float = 0.0
+    last_exception: Exception | None = None
+    last_failed_at: float | None = None
+    recovery_counts: dict[str, int] = dataclasses.field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class StepWorkerContext:
     """
     Base state passed to step functions and returned by step functions.
@@ -40,6 +60,7 @@ class StepWorkerContext:
     state: StepWorkerState
     # add commands here to mutate the internal worker state after step execution
     returns: Returns
+    retry: RetryAttempt = dataclasses.field(default_factory=RetryAttempt)
 
 
 @dataclass(frozen=True)
