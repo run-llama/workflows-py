@@ -24,8 +24,11 @@ class FakeAgentDataBackend:
     """
 
     def __init__(self) -> None:
-        # (deployment_name, collection) → list[{id, deployment_name, collection, data}]
+        # (deployment_name, collection) → list[{id, deployment_name, collection, data, created_at}]
         self._items: dict[tuple[str, str], list[dict[str, Any]]] = {}
+        # Monotonic counter used to synthesize row-level created_at, matching
+        # how the real backend auto-assigns a created_at column per row.
+        self._create_counter: int = 0
 
     def _key(self, deployment_name: str, collection: str) -> tuple[str, str]:
         return (deployment_name, collection)
@@ -51,7 +54,12 @@ class FakeAgentDataBackend:
             parts = order_by.split()
             field = parts[0]
             reverse = len(parts) > 1 and parts[1].lower() == "desc"
-            matched.sort(key=lambda item: item["data"].get(field, 0), reverse=reverse)
+            # Row-level fields (e.g. created_at) live on the item itself, not
+            # in data. Fall back to data for user fields.
+            matched.sort(
+                key=lambda item: item.get(field, item["data"].get(field, 0)),
+                reverse=reverse,
+            )
 
         return matched[:page_size]
 
@@ -76,11 +84,13 @@ class FakeAgentDataBackend:
         self, deployment_name: str, collection: str, data: dict[str, Any]
     ) -> dict[str, Any]:
         items = self._get_items(deployment_name, collection)
+        self._create_counter += 1
         item = {
             "id": str(uuid.uuid4()),
             "deployment_name": deployment_name,
             "collection": collection,
             "data": data,
+            "created_at": self._create_counter,
         }
         items.append(item)
         return item

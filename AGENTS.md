@@ -89,7 +89,7 @@ npx changeset              # Add a changeset
 npx changeset status       # Check pending changes
 ```
 
-Changeset descriptions should be a single line. Keep it short and simple.
+Changeset descriptions should be a single line in plain English. Keep it short and simple. Do not use conventional-commit prefixes (no `fix(scope):`, `feat(scope):`, etc.).
 
 ## Development Environment
 

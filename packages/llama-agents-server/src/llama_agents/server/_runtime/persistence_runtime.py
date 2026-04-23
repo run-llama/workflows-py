@@ -14,18 +14,24 @@ import asyncio
 import logging
 import sqlite3
 from collections.abc import AsyncIterator, Coroutine
-from datetime import datetime, timezone
+from dataclasses import dataclass
 from typing import Any
 
 from typing_extensions import override
 from workflows import Context
 from workflows.context.context_types import SerializedContext
 from workflows.context.serializers import BaseSerializer, JsonSerializer
-from workflows.events import StartEvent
-from workflows.runtime.control_loop import rebuild_state_from_ticks_stream
+from workflows.errors import WorkflowCancelledByUser
+from workflows.events import IdleReleasedEvent, StartEvent, StopEvent
+from workflows.runtime.control_loop import replay_ticks_stream
 from workflows.runtime.runtime_decorators import (
     BaseInternalRunAdapterDecorator,
     BaseRuntimeDecorator,
+)
+from workflows.runtime.types.commands import (
+    CommandCompleteRun,
+    CommandFailWorkflow,
+    CommandHalt,
 )
 from workflows.runtime.types.internal_state import BrokerState
 from workflows.runtime.types.plugin import (
@@ -43,13 +49,48 @@ from workflows.workflow import Workflow
 from .._store.abstract_workflow_store import (
     AbstractWorkflowStore,
     HandlerQuery,
-    PersistentHandler,
+    Status,
     as_legacy_context_store,
     stream_workflow_ticks,
 )
 from .._store.sqlite.sqlite_state_store import SqliteStateStore
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class ReplayedContext:
+    """Result of replaying persisted ticks into a Context.
+
+    Attributes:
+        context: Rebuilt Context ready to be passed to ``workflow.run()``.
+        exit_command: The reducer-emitted terminal command if the tick stream
+            terminated, else None. Callers map this to handler status (see
+            :func:`handler_status_from_exit_command`).
+    """
+
+    context: Context
+    exit_command: CommandCompleteRun | CommandFailWorkflow | CommandHalt | None = None
+
+
+def handler_status_from_exit_command(
+    command: CommandCompleteRun | CommandFailWorkflow | CommandHalt,
+) -> tuple[Status, StopEvent | None, str | None] | None:
+    """Map a reducer exit command to (status, result, error).
+
+    Returns None for CommandCompleteRun(IdleReleasedEvent) — idle release is
+    not a real completion, just how the reducer signals the runner to exit.
+    """
+    if isinstance(command, CommandCompleteRun):
+        if isinstance(command.result, IdleReleasedEvent):
+            return None
+        return ("completed", command.result, None)
+    if isinstance(command, CommandFailWorkflow):
+        return ("failed", None, str(command.exception))
+    # CommandHalt: timeout or cancel (both reach this replay path)
+    if isinstance(command.exception, WorkflowCancelledByUser):
+        return ("cancelled", None, None)
+    return ("failed", None, str(command.exception))
 
 
 class _PersistenceInternalRunAdapter(BaseInternalRunAdapterDecorator):
@@ -148,8 +189,13 @@ class TickPersistenceDecorator(BaseRuntimeDecorator):
 
     async def context_from_ticks(
         self, workflow: Workflow, run_id: str
-    ) -> Context | None:
-        """Rebuild a Context from persisted ticks (and legacy ctx if available)."""
+    ) -> ReplayedContext | None:
+        """Rebuild a Context from persisted ticks (and legacy ctx if available).
+
+        Returns the Context plus the reducer's exit command if the tick
+        stream already terminated. Callers use ``exit_command`` to finalize
+        handlers instead of resuming them.
+        """
         serializer = JsonSerializer()
         legacy_ctx = self._get_legacy_ctx(run_id)
 
@@ -169,6 +215,9 @@ class TickPersistenceDecorator(BaseRuntimeDecorator):
         else:
             init_state = BrokerState.from_workflow(workflow)
 
+        exit_command: CommandCompleteRun | CommandFailWorkflow | CommandHalt | None = (
+            None
+        )
         if first_tick is not None:
 
             async def _with_first() -> AsyncIterator[WorkflowTick]:
@@ -176,14 +225,15 @@ class TickPersistenceDecorator(BaseRuntimeDecorator):
                 async for tick in tick_stream:
                     yield tick
 
-            init_state = await rebuild_state_from_ticks_stream(
-                init_state, _with_first()
-            )
+            replay = await replay_ticks_stream(init_state, _with_first())
+            init_state = replay.state
+            exit_command = replay.exit_command
 
         serialized = init_state.to_serialized(serializer)
-        return Context.from_dict(
+        context = Context.from_dict(
             workflow=workflow, data=serialized.model_dump(), serializer=serializer
         )
+        return ReplayedContext(context=context, exit_command=exit_command)
 
     def _get_legacy_ctx(self, run_id: str) -> dict[str, Any] | None:
         legacy_store = as_legacy_context_store(self._store)
@@ -275,29 +325,62 @@ class PersistenceDecorator(TickPersistenceDecorator):
             if run_id in self._active_run_ids:
                 continue
             try:
-                context = await self.context_from_ticks(workflow, run_id)
-                workflow.run(ctx=context, run_id=run_id)
+                replayed = await self.context_from_ticks(workflow, run_id)
+
+                if replayed is None:
+                    # A fresh-start attempt here would build a StartEvent from
+                    # empty kwargs and loop on every boot for workflows with
+                    # required fields. Mark failed so the handler stops being
+                    # picked up by the next resume query.
+                    logger.warning(
+                        "No replayable state for handler %s (workflow %s); "
+                        "marking as failed",
+                        persistent.handler_id,
+                        persistent.workflow_name,
+                    )
+                    await self._store.update_handler_status(
+                        run_id,
+                        status="failed",
+                        error="handler crashed before persisting any state; cannot resume",
+                    )
+                    continue
+
+                finalize = (
+                    handler_status_from_exit_command(replayed.exit_command)
+                    if replayed.exit_command is not None
+                    else None
+                )
+                if finalize is not None:
+                    status, result, error = finalize
+                    logger.warning(
+                        "Replay for handler %s (workflow %s) terminated as %s; "
+                        "finalizing without resume",
+                        persistent.handler_id,
+                        persistent.workflow_name,
+                        status,
+                    )
+                    await self._store.update_handler_status(
+                        run_id,
+                        status=status,
+                        result=result,
+                        error=error,
+                    )
+                    continue
+
+                workflow.run(ctx=replayed.context, run_id=run_id)
             except Exception as e:
                 logger.error(
                     f"Failed to resume handler {persistent.handler_id} for workflow {persistent.workflow_name}: {e}"
                 )
                 try:
-                    now = datetime.now(timezone.utc)
-                    await self._store.update(
-                        PersistentHandler(
-                            handler_id=persistent.handler_id,
-                            workflow_name=persistent.workflow_name,
-                            status="failed",
-                            run_id=persistent.run_id,
-                            error=str(e),
-                            result=None,
-                            started_at=persistent.started_at,
-                            updated_at=now,
-                            completed_at=now,
-                        )
+                    await self._store.update_handler_status(
+                        run_id, status="failed", error=str(e)
                     )
                 except Exception:
-                    pass
+                    logger.exception(
+                        "Failed to mark resume-failed handler %s as failed",
+                        persistent.handler_id,
+                    )
                 continue
 
     @override

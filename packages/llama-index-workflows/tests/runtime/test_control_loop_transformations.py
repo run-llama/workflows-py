@@ -42,6 +42,7 @@ from workflows.runtime.control_loop import (
     _reduce_tick,
     rebuild_state_from_ticks,
     rebuild_state_from_ticks_stream,
+    replay_ticks_stream,
     rewind_in_progress,
 )
 from workflows.runtime.types.commands import (
@@ -1229,3 +1230,20 @@ async def test_rebuild_state_from_ticks_stream_clears_in_progress(
 
     assert final_state.is_running is False
     assert len(final_state.workers["test_step"].in_progress) == 0
+
+
+async def test_replay_ticks_stream_surfaces_stop_event(base_state: BrokerState) -> None:
+    ticks = _simple_step_tick_sequence()
+    replay = await replay_ticks_stream(base_state, _aiter(list(ticks)))
+    assert replay.state.is_running is False
+    assert isinstance(replay.exit_command, CommandCompleteRun)
+    assert isinstance(replay.exit_command.result, StopEvent)
+    assert replay.exit_command.result.result == "done2"
+
+
+async def test_replay_ticks_stream_no_exit_command_when_running(
+    base_state: BrokerState,
+) -> None:
+    ticks: list[WorkflowTick] = [TickAddEvent(event=MyTestEvent(value=1))]
+    replay = await replay_ticks_stream(base_state, _aiter(ticks))
+    assert replay.exit_command is None

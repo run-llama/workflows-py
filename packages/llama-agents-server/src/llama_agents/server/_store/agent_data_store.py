@@ -258,18 +258,56 @@ class AgentDataStore(AbstractWorkflowStore):
                 await self._client.update_item(cached_id, data)
                 return
 
-            # Search for existing item
+            # Search for existing item. Sort newest-first so that items[-1]
+            # is deterministically the oldest row — relied on by the
+            # dedupe-survivor choice below.
             items = await self._client.search(
                 self._collection,
                 {"handler_id": {"eq": handler_id}},
+                order_by="created_at desc",
             )
-            if items:
+            if not items:
+                result = await self._client.create(self._collection, data)
+                self._id_cache.put(handler_id, result["id"])
+                return
+
+            if len(items) == 1:
                 item_id = items[0]["id"]
                 self._id_cache.put(handler_id, item_id)
                 await self._client.update_item(item_id, data)
-            else:
-                result = await self._client.create(self._collection, data)
-                self._id_cache.put(handler_id, result["id"])
+                return
+
+            # Duplicate handler rows — converge to one survivor. The
+            # invariant is one row per handler_id; run_id is a mutable field
+            # on the row, so mismatched run_ids just mean an earlier run was
+            # superseded. Collapse regardless. Oldest survivor preserves the
+            # row's original created_at.
+            survivor_id = items[-1]["id"]
+            victim_ids = [item["id"] for item in items[:-1]]
+            logger.warning(
+                "Collapsing %d duplicate rows for handler %s; survivor=%s",
+                len(items),
+                handler_id,
+                survivor_id,
+            )
+            # Tolerate partial delete failures. The next update() will see
+            # whatever duplicates remain and retry; letting one failed delete
+            # abort the whole operation would also skip the survivor write,
+            # leaving the row stale.
+            results = await asyncio.gather(
+                *(self._client.delete_item(vid) for vid in victim_ids),
+                return_exceptions=True,
+            )
+            for vid, outcome in zip(victim_ids, results):
+                if isinstance(outcome, BaseException):
+                    logger.warning(
+                        "Failed to delete duplicate handler row %s for %s: %s",
+                        vid,
+                        handler_id,
+                        outcome,
+                    )
+            self._id_cache.put(handler_id, survivor_id)
+            await self._client.update_item(survivor_id, data)
 
     async def delete(self, query: HandlerQuery) -> int:
         filters = self._build_handler_filters(query)
