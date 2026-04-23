@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 LlamaIndex Inc.
 
+from http.client import HTTPException
 from typing import Any, cast
 
 import pytest
@@ -310,8 +311,6 @@ def test_workflow_failed_event_repr() -> None:
 
 def test_workflow_failed_event_with_nested_exception_type() -> None:
     """Test WorkflowFailedEvent with a qualified exception type name."""
-    from http.client import HTTPException
-
     ev = WorkflowFailedEvent(
         step_name="api_step",
         exception=HTTPException("Connection refused"),
