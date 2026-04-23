@@ -126,6 +126,16 @@ class Workflow(metaclass=WorkflowMeta):
                 checks to skip (e.g. "reachability", "terminal_event"). Use to
                 allow intentional patterns that would otherwise fail validation.
         """
+        # Inline imports: every module below imports ``Workflow`` transitively,
+        # so deferring to call time breaks the cycle.
+        from .representation.validate import (
+            collect_events,
+            ensure_start_event_class,
+            ensure_stop_event_class,
+        )
+        from workflows.plugins._context import get_current_runtime
+        from workflows.runtime.verbose import VerboseDecorator
+
         # Configuration
         self._timeout = timeout
         self._verbose = verbose
@@ -133,16 +143,6 @@ class Workflow(metaclass=WorkflowMeta):
         self._num_concurrent_runs = num_concurrent_runs
         # Store explicit name (None means use computed name)
         self._workflow_name = workflow_name
-        # Inline import: ``workflow.py`` is the bootstrap chokepoint — the
-        # ``representation`` package imports ``workflows.Workflow`` transitively
-        # (representation/__init__ -> build -> Workflow), so importing it at
-        # module load time would re-enter a partially-loaded ``workflows``
-        # package. Deferring to call time breaks the cycle.
-        from .representation.validate import (
-            collect_events,
-            ensure_start_event_class,
-            ensure_stop_event_class,
-        )
 
         step_configs = self._step_configs()
         cls_name = self.__class__.__name__
@@ -173,20 +173,9 @@ class Workflow(metaclass=WorkflowMeta):
         self._skip_graph_checks: set[WorkflowGraphCheck] = checks
 
         # Runtime registration: explicit > context-scoped > basic_runtime
-        from workflows.plugins._context import get_current_runtime
-
-        if runtime is not None:
-            self._runtime = runtime
-        else:
-            # get_current_runtime() falls back to basic_runtime
-            self._runtime = get_current_runtime()
-
-        # Wrap with verbose decorator if requested
+        self._runtime = runtime if runtime is not None else get_current_runtime()
         if self._verbose:
-            from workflows.runtime.verbose import VerboseDecorator
-
             self._runtime = VerboseDecorator(self._runtime)
-
         # Register with runtime for tracking (no-op for BasicRuntime)
         self._runtime.track_workflow(self)
 
@@ -456,7 +445,7 @@ class Workflow(metaclass=WorkflowMeta):
         if not force and not stale and self._validation_result is not None:
             return self._validation_result
 
-        # Inline import: see __init__ for the cycle rationale.
+        # Inline import: ``representation`` transitively imports ``Workflow``.
         from .representation.validate import (
             validate_resource_configs as _validate_resource_configs,
             validate_resources as _validate_resources,

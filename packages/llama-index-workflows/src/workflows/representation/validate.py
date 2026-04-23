@@ -431,18 +431,16 @@ def collect_catch_error_handlers(
 def validate_event_connectivity(
     steps: dict[str, StepConfig],
     start_event_class: type[StartEvent],
-    stop_event_class: type[StopEvent],
 ) -> bool:
     """Validate event production/consumption across the step graph.
 
     Checks that:
     - No user step accepts ``StopEvent``.
-    - At least one ``StopEvent`` is produced.
     - Every consumed event is either produced or crosses the workflow
       boundary (``InputRequiredEvent``/``HumanResponseEvent``/``StopEvent``/
       ``StepFailedEvent``).
-    - Every produced event is consumed, except for the workflow's own
-      ``InputRequiredEvent``/``HumanResponseEvent``/configured stop event.
+    - Every produced event is consumed, except for
+      ``InputRequiredEvent``/``HumanResponseEvent``/``StopEvent`` subclasses.
 
     Returns ``True`` if the workflow uses human-in-the-loop
     (``InputRequiredEvent`` produced or ``HumanResponseEvent`` consumed).
@@ -474,9 +472,6 @@ def validate_event_connectivity(
             "Use a different Event type instead."
         )
 
-    if not any(issubclass(ev, StopEvent) for ev in produced_events):
-        raise WorkflowValidationError("No event of type StopEvent is produced.")
-
     unconsumed_events = {
         x
         for x in consumed_events - produced_events
@@ -494,7 +489,7 @@ def validate_event_connectivity(
     unused_events = {
         x
         for x in produced_events - consumed_events
-        if not issubclass(x, (InputRequiredEvent, HumanResponseEvent, stop_event_class))
+        if not issubclass(x, (InputRequiredEvent, HumanResponseEvent, StopEvent))
     }
     if unused_events:
         names = ", ".join(ev.__name__ for ev in unused_events)
@@ -505,28 +500,6 @@ def validate_event_connectivity(
     return (
         InputRequiredEvent in produced_events or HumanResponseEvent in consumed_events
     )
-
-
-def run_graph_validation(
-    steps: dict[str, StepConfig],
-    start_event_class: type[StartEvent],
-    skip_checks: set[WorkflowGraphCheck],
-    catch_error_steps: list[str],
-) -> None:
-    """Run structural graph checks and raise a combined ``WorkflowValidationError``.
-
-    Thin wrapper over :func:`validate_graph` that joins every
-    :class:`GraphValidationError` into a single message.
-    """
-    errors = validate_graph(
-        steps=steps,
-        start_event_class=start_event_class,
-        skip_checks=skip_checks,
-        catch_error_steps=catch_error_steps,
-    )
-    if errors:
-        detail = "\n".join(f"  - [{e.check}] {e.message}\n    {e.hint}" for e in errors)
-        raise WorkflowValidationError(f"Graph validation failed:\n{detail}")
 
 
 @dataclass
@@ -653,16 +626,21 @@ def validate_workflow(
     start_event_class = ensure_start_event_class(steps, workflow_cls_name)
     stop_event_class = ensure_stop_event_class(steps, workflow_cls_name)
 
-    uses_hitl = validate_event_connectivity(steps, start_event_class, stop_event_class)
+    uses_hitl = validate_event_connectivity(steps, start_event_class)
 
     catch_error_handlers, handler_for_step = collect_catch_error_handlers(steps)
 
-    run_graph_validation(
+    graph_errors = validate_graph(
         steps=steps,
         start_event_class=start_event_class,
         skip_checks=skip_graph_checks,
         catch_error_steps=list(catch_error_handlers.keys()),
     )
+    if graph_errors:
+        detail = "\n".join(
+            f"  - [{e.check}] {e.message}\n    {e.hint}" for e in graph_errors
+        )
+        raise WorkflowValidationError(f"Graph validation failed:\n{detail}")
 
     return WorkflowValidationResult(
         start_event_class=start_event_class,
