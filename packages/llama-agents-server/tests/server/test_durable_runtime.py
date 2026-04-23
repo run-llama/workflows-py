@@ -250,7 +250,7 @@ async def test_on_server_start_marks_no_ticks_handler_as_failed(
     async with server.contextmanager():
         handler = await wait_handler_status(memory_store, handler_id, "failed")
         assert handler.error is not None
-        assert "no ticks" in handler.error
+        assert "crashed before persisting any state" in handler.error
 
 
 @pytest.mark.asyncio
@@ -695,7 +695,7 @@ async def test_no_legacy_ctx_no_ticks_marked_failed(
     async with server.contextmanager():
         handler = await wait_handler_status(sqlite_store, "fresh-1", "failed")
         assert handler.error is not None
-        assert "no ticks" in handler.error
+        assert "crashed before persisting any state" in handler.error
 
 
 @pytest.mark.asyncio

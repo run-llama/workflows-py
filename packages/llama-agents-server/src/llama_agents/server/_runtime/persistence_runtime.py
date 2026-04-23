@@ -341,7 +341,7 @@ class PersistenceDecorator(TickPersistenceDecorator):
                     await self._store.update_handler_status(
                         run_id,
                         status="failed",
-                        error="no ticks to replay on resume — handler was never persisted past creation",
+                        error="handler crashed before persisting any state; cannot resume",
                     )
                     continue
 
