@@ -215,7 +215,8 @@ class IdleReleaseDecorator(BaseRuntimeDecorator):
         workflow = self._persistence.get_tracked_workflow(handler.workflow_name)
         if workflow is None:
             raise ValueError(f"Workflow {handler.workflow_name} not found")
-        context = await self._persistence.context_from_ticks(workflow, run_id)
+        replayed = await self._persistence.context_from_ticks(workflow, run_id)
+        context = replayed.context if replayed is not None else None
         workflow.run(ctx=context, run_id=run_id)
         self._active_run_ids.add(run_id)
         await self._store.update_handler_status(run_id, idle_since=None)

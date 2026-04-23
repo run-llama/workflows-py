@@ -15,17 +15,23 @@ import logging
 import sqlite3
 from collections.abc import AsyncIterator, Coroutine
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
 
 from typing_extensions import override
 from workflows import Context
 from workflows.context.context_types import SerializedContext
 from workflows.context.serializers import BaseSerializer, JsonSerializer
-from workflows.events import StartEvent, StopEvent
+from workflows.errors import WorkflowCancelledByUser
+from workflows.events import IdleReleasedEvent, StartEvent, StopEvent
 from workflows.runtime.control_loop import rebuild_state_from_ticks_stream
 from workflows.runtime.runtime_decorators import (
     BaseInternalRunAdapterDecorator,
     BaseRuntimeDecorator,
+)
+from workflows.runtime.types.commands import (
+    CommandCompleteRun,
+    CommandFailWorkflow,
+    CommandHalt,
 )
 from workflows.runtime.types.internal_state import BrokerState
 from workflows.runtime.types.plugin import (
@@ -33,11 +39,8 @@ from workflows.runtime.types.plugin import (
     InternalRunAdapter,
     Runtime,
 )
-from workflows.runtime.types.results import StepWorkerFailed, StepWorkerResult
 from workflows.runtime.types.ticks import (
-    TickCancelRun,
     TickStepResult,
-    TickTimeout,
     WorkflowTick,
     WorkflowTickAdapter,
 )
@@ -56,35 +59,45 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
+class ReplayedContext:
+    """Result of replaying persisted ticks into a Context.
+
+    Attributes:
+        context: Rebuilt Context ready to be passed to ``workflow.run()``.
+        terminal: Resolved terminal info if the tick stream terminated, else
+            None. Derived from the reducer's own exit commands so it matches
+            runtime semantics exactly.
+    """
+
+    context: Context
+    terminal: _TerminalInfo | None = None
+
+
+@dataclass
 class _TerminalInfo:
     status: Status
     result: StopEvent | None = None
     error: str | None = None
 
 
-def _classify_tick(
-    tick: WorkflowTick, current: _TerminalInfo | None
+def _terminal_from_exit_command(
+    command: CommandCompleteRun | CommandFailWorkflow | CommandHalt,
 ) -> _TerminalInfo | None:
-    """Return updated terminal info if *tick* is a terminal transition.
+    """Map a reducer exit command to handler-status terminal info.
 
-    The last terminal-looking tick wins; retries produce earlier
-    StepWorkerFailed entries that are superseded by later successful results.
+    Returns None for CommandCompleteRun(IdleReleasedEvent) — idle release is
+    not a real completion, just how the reducer signals the runner to exit.
     """
-    if isinstance(tick, TickStepResult):
-        for step_result in tick.result:
-            if isinstance(step_result, StepWorkerResult) and isinstance(
-                step_result.result, StopEvent
-            ):
-                return _TerminalInfo(status="completed", result=step_result.result)
-            if isinstance(step_result, StepWorkerFailed):
-                return _TerminalInfo(status="failed", error=str(step_result.exception))
-    elif isinstance(tick, TickTimeout):
-        return _TerminalInfo(
-            status="failed", error=f"Workflow timed out after {tick.timeout}s"
-        )
-    elif isinstance(tick, TickCancelRun):
+    if isinstance(command, CommandCompleteRun):
+        if isinstance(command.result, IdleReleasedEvent):
+            return None
+        return _TerminalInfo(status="completed", result=command.result)
+    if isinstance(command, CommandFailWorkflow):
+        return _TerminalInfo(status="failed", error=str(command.exception))
+    # CommandHalt: timeout or cancel (both reach this replay path)
+    if isinstance(command.exception, WorkflowCancelledByUser):
         return _TerminalInfo(status="cancelled")
-    return current
+    return _TerminalInfo(status="failed", error=str(command.exception))
 
 
 class _PersistenceInternalRunAdapter(BaseInternalRunAdapterDecorator):
@@ -182,17 +195,13 @@ class TickPersistenceDecorator(BaseRuntimeDecorator):
         return self._workflows_by_name.get(name)
 
     async def context_from_ticks(
-        self,
-        workflow: Workflow,
-        run_id: str,
-        *,
-        on_tick: Callable[[WorkflowTick], None] | None = None,
-    ) -> Context | None:
+        self, workflow: Workflow, run_id: str
+    ) -> ReplayedContext | None:
         """Rebuild a Context from persisted ticks (and legacy ctx if available).
 
-        If *on_tick* is provided, it is called once per tick as the stream is
-        consumed — lets callers classify terminal transitions in the same
-        pass that rebuilds state.
+        Returns the Context plus any terminal info surfaced by the reducer
+        during replay. Callers use ``terminal`` to finalize handlers whose
+        tick stream already reached a terminal state.
         """
         serializer = JsonSerializer()
         legacy_ctx = self._get_legacy_ctx(run_id)
@@ -213,25 +222,24 @@ class TickPersistenceDecorator(BaseRuntimeDecorator):
         else:
             init_state = BrokerState.from_workflow(workflow)
 
+        terminal: _TerminalInfo | None = None
         if first_tick is not None:
 
             async def _with_first() -> AsyncIterator[WorkflowTick]:
-                if on_tick is not None:
-                    on_tick(first_tick)
                 yield first_tick
                 async for tick in tick_stream:
-                    if on_tick is not None:
-                        on_tick(tick)
                     yield tick
 
-            init_state = await rebuild_state_from_ticks_stream(
-                init_state, _with_first()
-            )
+            replay = await rebuild_state_from_ticks_stream(init_state, _with_first())
+            init_state = replay.state
+            if replay.exit_command is not None:
+                terminal = _terminal_from_exit_command(replay.exit_command)
 
         serialized = init_state.to_serialized(serializer)
-        return Context.from_dict(
+        context = Context.from_dict(
             workflow=workflow, data=serialized.model_dump(), serializer=serializer
         )
+        return ReplayedContext(context=context, terminal=terminal)
 
     def _get_legacy_ctx(self, run_id: str) -> dict[str, Any] | None:
         legacy_store = as_legacy_context_store(self._store)
@@ -323,17 +331,9 @@ class PersistenceDecorator(TickPersistenceDecorator):
             if run_id in self._active_run_ids:
                 continue
             try:
-                terminal: _TerminalInfo | None = None
+                replayed = await self.context_from_ticks(workflow, run_id)
 
-                def _observe(tick: WorkflowTick) -> None:
-                    nonlocal terminal
-                    terminal = _classify_tick(tick, terminal)
-
-                context = await self.context_from_ticks(
-                    workflow, run_id, on_tick=_observe
-                )
-
-                if context is None:
+                if replayed is None:
                     # A fresh-start attempt here would build a StartEvent from
                     # empty kwargs and loop on every boot for workflows with
                     # required fields. Mark failed so the handler stops being
@@ -351,11 +351,8 @@ class PersistenceDecorator(TickPersistenceDecorator):
                     )
                     continue
 
-                if not context.is_running:
-                    info = terminal or _TerminalInfo(
-                        status="failed",
-                        error="workflow terminated without a recognizable terminal event",
-                    )
+                if replayed.terminal is not None:
+                    info = replayed.terminal
                     logger.warning(
                         "Replay for handler %s (workflow %s) terminated as %s; "
                         "finalizing without resume",
@@ -371,7 +368,7 @@ class PersistenceDecorator(TickPersistenceDecorator):
                     )
                     continue
 
-                workflow.run(ctx=context, run_id=run_id)
+                workflow.run(ctx=replayed.context, run_id=run_id)
             except Exception as e:
                 logger.error(
                     f"Failed to resume handler {persistent.handler_id} for workflow {persistent.workflow_name}: {e}"

@@ -11,7 +11,7 @@ import logging
 import time
 import traceback
 from collections.abc import AsyncIterable
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
 from workflows.errors import (
@@ -570,15 +570,47 @@ def rebuild_state_from_ticks(
     return state
 
 
+ExitCommand = CommandCompleteRun | CommandFailWorkflow | CommandHalt
+
+
+@dataclass
+class ReplayResult:
+    """Result of replaying a tick stream.
+
+    Attributes:
+        state: Rebuilt broker state after applying all ticks.
+        exit_command: The last exit-indicating command emitted during replay,
+            or None if the stream never terminated. Lets callers classify
+            terminal outcome (success / failure / cancel / timeout) using the
+            same command the runtime would have produced, without a second
+            pass over the ticks.
+    """
+
+    state: BrokerState
+    exit_command: ExitCommand | None = None
+
+
 async def rebuild_state_from_ticks_stream(
     state: BrokerState,
     ticks: AsyncIterable[WorkflowTick],
-) -> BrokerState:
-    """Streaming variant of :func:`rebuild_state_from_ticks`."""
+) -> ReplayResult:
+    """Streaming variant of :func:`rebuild_state_from_ticks`.
+
+    Returns state plus the last exit-indicating command (if any). The reducer
+    already emits CommandCompleteRun / CommandFailWorkflow / CommandHalt when
+    it processes terminal ticks; we just surface them instead of discarding.
+    """
     state, _ = rewind_in_progress(state, time.time())
+    exit_command: ExitCommand | None = None
     async for tick in ticks:
-        state, _ = _reduce_tick(tick, state, time.time())
-    return state
+        state, commands = _reduce_tick(tick, state, time.time())
+        for command in commands:
+            if isinstance(
+                command, (CommandCompleteRun, CommandFailWorkflow, CommandHalt)
+            ):
+                # Last wins: a successful retry supersedes earlier failures.
+                exit_command = command
+    return ReplayResult(state=state, exit_command=exit_command)
 
 
 def _reduce_tick(

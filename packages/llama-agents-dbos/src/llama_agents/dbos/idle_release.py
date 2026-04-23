@@ -260,9 +260,10 @@ class DBOSIdleReleaseDecorator(BaseRuntimeDecorator):
     ) -> BrokerState:
         """Rebuild BrokerState from persisted ticks."""
         init_state = BrokerState.from_workflow(workflow)
-        return await rebuild_state_from_ticks_stream(
+        replay = await rebuild_state_from_ticks_stream(
             init_state, stream_workflow_ticks(self._store, run_id)
         )
+        return replay.state
 
     async def _do_resume(
         self,

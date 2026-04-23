@@ -1136,7 +1136,7 @@ async def test_rebuild_state_from_ticks_stream_empty(base_state: BrokerState) ->
         ),
     ]
 
-    streamed = await rebuild_state_from_ticks_stream(base_state, _aiter([]))
+    streamed = (await rebuild_state_from_ticks_stream(base_state, _aiter([]))).state
 
     # rewind_in_progress re-assigns worker_id=0 starting fresh; in_progress preserved.
     assert len(streamed.workers["test_step"].in_progress) == 1
@@ -1150,9 +1150,9 @@ async def test_rebuild_state_from_ticks_stream_single_tick(
     # Freeze time so timestamp kludges don't diverge between paths.
     monkeypatch.setattr("workflows.runtime.control_loop.time.time", lambda: 12345.0)
     ticks: list[WorkflowTick] = [TickAddEvent(event=MyTestEvent(value=42))]
-    streamed = await rebuild_state_from_ticks_stream(
-        base_state.deepcopy(), _aiter(ticks)
-    )
+    streamed = (
+        await rebuild_state_from_ticks_stream(base_state.deepcopy(), _aiter(ticks))
+    ).state
     listed = rebuild_state_from_ticks(base_state.deepcopy(), ticks)
     assert streamed == listed
 
@@ -1162,9 +1162,11 @@ async def test_rebuild_state_from_ticks_stream_multi_tick_equivalence(
 ) -> None:
     monkeypatch.setattr("workflows.runtime.control_loop.time.time", lambda: 12345.0)
     ticks = _simple_step_tick_sequence()
-    streamed = await rebuild_state_from_ticks_stream(
-        base_state.deepcopy(), _aiter(list(ticks))
-    )
+    streamed = (
+        await rebuild_state_from_ticks_stream(
+            base_state.deepcopy(), _aiter(list(ticks))
+        )
+    ).state
     listed = rebuild_state_from_ticks(base_state.deepcopy(), list(ticks))
     assert streamed == listed
     assert streamed.is_running is False
@@ -1177,9 +1179,11 @@ async def test_rebuild_state_from_ticks_stream_large_history_equivalence(
     ticks: list[WorkflowTick] = [
         TickAddEvent(event=MyTestEvent(value=i)) for i in range(500)
     ]
-    streamed = await rebuild_state_from_ticks_stream(
-        base_state.deepcopy(), _aiter(list(ticks))
-    )
+    streamed = (
+        await rebuild_state_from_ticks_stream(
+            base_state.deepcopy(), _aiter(list(ticks))
+        )
+    ).state
     listed = rebuild_state_from_ticks(base_state.deepcopy(), list(ticks))
     assert streamed == listed
 
@@ -1225,7 +1229,8 @@ async def test_rebuild_state_from_ticks_stream_clears_in_progress(
         ),
     ]
 
-    final_state = await rebuild_state_from_ticks_stream(base_state, _aiter(ticks))
+    replay = await rebuild_state_from_ticks_stream(base_state, _aiter(ticks))
+    final_state = replay.state
 
     assert final_state.is_running is False
     assert len(final_state.workers["test_step"].in_progress) == 0
