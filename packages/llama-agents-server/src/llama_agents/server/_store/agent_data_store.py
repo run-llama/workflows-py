@@ -290,7 +290,22 @@ class AgentDataStore(AbstractWorkflowStore):
                 handler_id,
                 survivor_id,
             )
-            await asyncio.gather(*(self._client.delete_item(vid) for vid in victim_ids))
+            # Tolerate partial delete failures. The next update() will see
+            # whatever duplicates remain and retry; letting one failed delete
+            # abort the whole operation would also skip the survivor write,
+            # leaving the row stale.
+            results = await asyncio.gather(
+                *(self._client.delete_item(vid) for vid in victim_ids),
+                return_exceptions=True,
+            )
+            for vid, outcome in zip(victim_ids, results):
+                if isinstance(outcome, BaseException):
+                    logger.warning(
+                        "Failed to delete duplicate handler row %s for %s: %s",
+                        vid,
+                        handler_id,
+                        outcome,
+                    )
             self._id_cache.put(handler_id, survivor_id)
             await self._client.update_item(survivor_id, data)
 
