@@ -15,12 +15,14 @@ from typing import (
 )
 
 from pydantic import BaseModel, ConfigDict, model_serializer, model_validator
-from workflows.events import Event, SerializableEvent, SerializableOptionalEvent
-from workflows.retry_policy import ExceptionInfo
-from workflows.runtime.types.serialization_helpers import (
+from workflows.events import (
+    Event,
+    SerializableEvent,
     SerializableEventType,
     SerializableException,
+    SerializableOptionalEvent,
 )
+from workflows.retry_policy import ExceptionInfo
 
 EventType = TypeVar("EventType", bound=Event)
 
