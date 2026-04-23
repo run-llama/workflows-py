@@ -617,6 +617,26 @@ async def test_workflow_validation_steps_cannot_accept_stop_event() -> None:
         await WorkflowTestRunner(InvalidWorkflowSingleStep()).run()
 
 
+class _OrphanEvent(Event):
+    pass
+
+
+def test_workflow_validation_consumed_but_never_produced() -> None:
+    class Flow(Workflow):
+        @step
+        async def a(self, ev: StartEvent) -> StopEvent:
+            return StopEvent(result="ok")
+
+        @step
+        async def b(self, ev: _OrphanEvent) -> StopEvent:
+            return StopEvent(result="never")
+
+    with pytest.raises(
+        WorkflowValidationError, match="consumed but never produced"
+    ):
+        Flow().validate()
+
+
 class _CatchErrorMarker(Event):
     pass
 
@@ -677,6 +697,53 @@ def test_catch_error_max_recoveries_zero_invalid() -> None:
         @catch_error(max_recoveries=0)
         async def bad(self: Any, ctx: Context, ev: StepFailedEvent) -> StopEvent:
             return StopEvent()
+
+
+def test_catch_error_handler_cannot_cover_another_handler() -> None:
+    class BadFlow(Workflow):
+        @step
+        async def a(self, ev: StartEvent) -> StopEvent:
+            return StopEvent(result="ok")
+
+        @catch_error(for_steps=["h2"])
+        async def h1(self, ctx: Context, ev: StepFailedEvent) -> StopEvent:
+            return StopEvent(result="one")
+
+        @catch_error(for_steps=["a"])
+        async def h2(self, ctx: Context, ev: StepFailedEvent) -> StopEvent:
+            return StopEvent(result="two")
+
+    with pytest.raises(
+        WorkflowValidationError, match="cannot cover another handler step"
+    ):
+        BadFlow().validate()
+
+
+def test_catch_error_max_recoveries_invalid_on_step_config() -> None:
+    class Flow(Workflow):
+        @step
+        async def a(self, ev: StartEvent) -> StopEvent:
+            return StopEvent(result="ok")
+
+        @catch_error
+        async def handler(self, ctx: Context, ev: StepFailedEvent) -> StopEvent:
+            return StopEvent(result="caught")
+
+    wf = Flow()
+    # Simulate post-decoration corruption of the step config.
+    wf._get_steps()["handler"]._step_config.catch_error_max_recoveries = 0
+    with pytest.raises(WorkflowValidationError, match="max_recoveries"):
+        wf.validate()
+
+
+def test_unknown_skip_graph_check_name_invalid() -> None:
+    class Flow(Workflow):
+        @step
+        async def a(self, ev: StartEvent) -> StopEvent:
+            return StopEvent(result="ok")
+
+    with pytest.raises(WorkflowValidationError, match="Unknown graph check names"):
+        Flow(skip_graph_checks={"not_a_real_check"})  # type: ignore[arg-type]
 
 
 def test_get_workflow_events() -> None:

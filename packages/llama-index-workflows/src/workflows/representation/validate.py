@@ -354,9 +354,7 @@ def _collect_events(steps: dict[str, StepConfig]) -> list[type[Event]]:
     reported. Walks both accepted and returned types of each step.
     """
     events_found: set[type[Event]] = set()
-    for name, cfg in steps.items():
-        if name == "_done":
-            continue
+    for cfg in steps.values():
         for event_type in cfg.return_types:
             if issubclass(event_type, Event):
                 events_found.add(event_type)
@@ -419,7 +417,7 @@ def _collect_catch_error_handlers(
     wildcard = wildcards[0] if wildcards else None
     if wildcard is not None:
         for step_name in all_step_names:
-            if step_name in handler_step_names or step_name == "_done":
+            if step_name in handler_step_names:
                 continue
             if step_name in handler_for_step:
                 continue
@@ -451,11 +449,10 @@ def _validate_event_connectivity(
     steps_accepting_stop_event: list[str] = []
 
     for name, cfg in steps.items():
-        if name != "_done":
-            for event_type in cfg.accepted_events:
-                if issubclass(event_type, StopEvent):
-                    steps_accepting_stop_event.append(name)
-                    break
+        for event_type in cfg.accepted_events:
+            if issubclass(event_type, StopEvent):
+                steps_accepting_stop_event.append(name)
+                break
         for event_type in cfg.accepted_events:
             consumed_events.add(event_type)
         for event_type in cfg.return_types:
