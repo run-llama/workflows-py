@@ -225,13 +225,29 @@ class IdleReleaseDecorator(BaseRuntimeDecorator):
 
     @override
     async def destroy(self) -> None:
+        # Cancel outstanding deferred-release / reload background tasks first
+        # so they don't race with the inner-runtime teardown or leak across
+        # tests that share an event loop.
+        pending = [t for t in self._background_tasks if not t.done()]
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+        self._background_tasks.clear()
+
         await super().destroy()
-        if self.stop_task is not None:
+
+        if self.stop_task is not None and not self.stop_task.done():
+            self.stop_task.cancel()
             try:
-                self.stop_task.cancel()
-            except Exception:
+                await self.stop_task
+            except (asyncio.CancelledError, Exception):
                 pass
-        self.stop_task = self._spawn_task(self._on_server_stop())
+        self.stop_task = asyncio.create_task(self._on_server_stop())
+        try:
+            await self.stop_task
+        except Exception:
+            logger.exception("Error during server stop")
 
     async def _on_server_stop(self) -> None:
         """Cancel all active runs."""

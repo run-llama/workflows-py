@@ -91,8 +91,12 @@ async def wait_handler_idle(
 
     async def check() -> None:
         found = await store.query(HandlerQuery(handler_id_in=[handler_id]))
-        assert len(found) == 1
-        assert found[0].idle_since is not None
+        assert len(found) == 1, f"Expected 1 handler, got {len(found)}"
+        handler = found[0]
+        assert handler.idle_since is not None, (
+            f"Handler {handler_id} not idle: status={handler.status} "
+            f"run_id={handler.run_id} error={handler.error}"
+        )
 
     await wait_for_passing(check, max_duration=max_duration, interval=interval)
 
@@ -374,9 +378,7 @@ async def test_destroy_cancels_resume_task(
         persistence = _get_persistence(server)
         assert persistence.resume_task is not None
 
-    # After contextmanager exits, destroy() was called.
-    # Give the event loop a chance to finalize the cancellation.
-    await asyncio.sleep(0.05)
+    # destroy() awaits cleanup, so resume_task must be done by now
     assert persistence.resume_task.cancelled() or persistence.resume_task.done()
 
 
@@ -399,9 +401,40 @@ async def test_destroy_aborts_active_runs(
 
         await wait_for_passing(run_is_active, max_duration=2.0, interval=0.01)
 
-    # After exit, active runs should be cleared
-    await asyncio.sleep(0.05)
+    # destroy() awaits stop_task, so active runs must be cleared by now
     assert len(idle_release._active_run_ids) == 0
+
+
+@pytest.mark.asyncio
+async def test_destroy_cancels_pending_background_tasks(
+    memory_store: MemoryWorkflowStore, waiting_workflow: WaitingWorkflow
+) -> None:
+    """destroy() should cancel pending deferred-release tasks.
+
+    Regression test: orphaned _deferred_release tasks could otherwise run
+    on a shared event loop after the server shut down, polluting the
+    state of subsequent tests/servers.
+    """
+    # Use a long idle_timeout so _deferred_release sleeps through destroy.
+    server = WorkflowServer(workflow_store=memory_store, idle_timeout=60.0)
+    server.add_workflow("test", waiting_workflow)
+
+    async with server.contextmanager():
+        idle_release = _get_idle_release(server)
+        await server._service.start_workflow(waiting_workflow, "cleanup-1")
+
+        async def deferred_task_pending() -> None:
+            tasks = list(idle_release._background_tasks)
+            assert any(not t.done() for t in tasks), (
+                f"Expected a pending deferred-release task, got {tasks}"
+            )
+
+        await wait_for_passing(deferred_task_pending, max_duration=2.0, interval=0.01)
+        snapshot = list(idle_release._background_tasks)
+
+    # After destroy(), every previously-pending background task is done.
+    for task in snapshot:
+        assert task.done()
 
 
 @pytest.mark.asyncio

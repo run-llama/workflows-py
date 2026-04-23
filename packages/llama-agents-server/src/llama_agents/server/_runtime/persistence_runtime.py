@@ -303,8 +303,15 @@ class PersistenceDecorator(TickPersistenceDecorator):
     @override
     async def destroy(self) -> None:
         await super().destroy()
-        if self.resume_task is not None:
+        if self.resume_task is not None and not self.resume_task.done():
+            self.resume_task.cancel()
             try:
-                self.resume_task.cancel()
-            except Exception:
+                await self.resume_task
+            except (asyncio.CancelledError, Exception):
                 pass
+        pending = [t for t in self._background_tasks if not t.done()]
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+        self._background_tasks.clear()
