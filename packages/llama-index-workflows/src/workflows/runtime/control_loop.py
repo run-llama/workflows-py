@@ -9,7 +9,6 @@ import heapq
 import inspect
 import logging
 import time
-import traceback
 from collections.abc import AsyncIterable
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
@@ -866,20 +865,11 @@ def _process_step_result_tick(
                 else:
                     # Publish a WorkflowFailedEvent to inform stream consumers about the failure
                     state.is_running = False
-                    exc_type = type(exception)
-                    exc_qualname = f"{exc_type.__module__}.{exc_type.__qualname__}"
-                    exc_traceback = "".join(
-                        traceback.format_exception(
-                            exc_type, exception, exception.__traceback__
-                        )
-                    )
                     commands.append(
                         CommandPublishEvent(
                             event=WorkflowFailedEvent(
                                 step_name=tick.step_name,
-                                exception_type=exc_qualname,
-                                exception_message=str(exception),
-                                traceback=exc_traceback,
+                                exception=exception,
                                 attempts=total_attempts,
                                 elapsed_seconds=elapsed,
                             )

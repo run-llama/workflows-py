@@ -193,7 +193,7 @@ async def test_catch_error_raising_fails_workflow() -> None:
     failed_events = [ev for ev in events if isinstance(ev, WorkflowFailedEvent)]
     assert len(failed_events) == 1
     assert failed_events[0].step_name == "handler"
-    assert failed_events[0].exception_message == "handler-failed"
+    assert str(failed_events[0].exception) == "handler-failed"
 
 
 @pytest.mark.asyncio

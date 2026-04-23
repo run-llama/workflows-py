@@ -105,17 +105,19 @@ class _ServerInternalRunAdapter(BaseInternalRunAdapterDecorator):
 
             if not replaying:
                 if isinstance(event, WorkflowFailedEvent):
+                    exc_type = type(event.exception)
                     logger.error(
-                        "Workflow step %s failed (run=%s): [%s] %s",
+                        "Workflow step %s failed (run=%s): [%s.%s] %s",
                         event.step_name,
                         self.run_id,
-                        event.exception_type,
-                        event.exception_message,
+                        exc_type.__module__,
+                        exc_type.__qualname__,
+                        event.exception,
                     )
                     await self._runtime._handle_status_update(
                         run_id=self.run_id,
                         status="failed",
-                        error=event.exception_message,
+                        error=str(event.exception),
                     )
                 elif isinstance(event, WorkflowTimedOutEvent):
                     logger.error(

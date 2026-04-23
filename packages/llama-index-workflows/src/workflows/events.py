@@ -367,15 +367,13 @@ class IdleReleasedEvent(StopEvent):
 class WorkflowFailedEvent(StopEvent):
     """Published when a workflow step fails permanently.
 
-    This event is published to the event stream when a step fails and all
-    retries are exhausted, allowing consumers to understand why the workflow
-    ended before the exception is raised.
+    Published when a step fails and all retries are exhausted (or no retry
+    policy permits a retry, or a catch_error handler itself raised).
 
     Attributes:
         step_name: The name of the step that failed.
-        exception_type: The fully qualified type name of the exception that caused the failure.
-        exception_message: The string representation of the exception message.
-        traceback: The formatted stack trace of the exception.
+        exception: The raised exception. ``__traceback__`` is present only
+            in-process; ``None`` after a replay.
         attempts: The total number of attempts made before giving up.
         elapsed_seconds: Time in seconds from first attempt to final failure.
 
@@ -384,15 +382,12 @@ class WorkflowFailedEvent(StopEvent):
         async for event in handler.stream_events():
             if isinstance(event, WorkflowFailedEvent):
                 print(f"Step '{event.step_name}' failed after {event.attempts} attempts")
-                print(f"Total time: {event.elapsed_seconds:.2f}s")
-                print(event.traceback)
+                print(f"{type(event.exception).__name__}: {event.exception}")
         ```
     """
 
     step_name: str
-    exception_type: str
-    exception_message: str
-    traceback: str
+    exception: SerializableException
     attempts: int
     elapsed_seconds: float
 

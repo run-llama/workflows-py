@@ -106,7 +106,7 @@ When a workflow ends abnormally (timeout, cancellation, or step failure), a spec
 
 - **`WorkflowTimedOutEvent`** - Published when the workflow exceeds its timeout. Contains `timeout` (seconds) and `active_steps` (list of step names that were running).
 - **`WorkflowCancelledEvent`** - Published when the workflow is cancelled by the user.
-- **`WorkflowFailedEvent`** - Published when a step fails permanently after exhausting retries. Contains `step_name`, `exception_type`, `exception_message`, `traceback`, `attempts`, and `elapsed_seconds`.
+- **`WorkflowFailedEvent`** - Published when a step fails permanently after exhausting retries. Contains `step_name`, `exception` (the live `Exception`; `__traceback__` is present in-process, `None` after a replay), `attempts`, and `elapsed_seconds`.
 
 ```python
 from workflows.events import (
@@ -121,5 +121,5 @@ async for ev in handler.stream_events():
     elif isinstance(ev, WorkflowCancelledEvent):
         print("Workflow was cancelled")
     elif isinstance(ev, WorkflowFailedEvent):
-        print(f"Step '{ev.step_name}' failed after {ev.attempts} attempts: {ev.exception_message}")
+        print(f"Step '{ev.step_name}' failed after {ev.attempts} attempts: {ev.exception}")
 ```

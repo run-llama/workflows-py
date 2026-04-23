@@ -427,14 +427,11 @@ async def test_control_loop_step_failure_publishes_stop_event(
     assert stop_event.step_name == "always_fails", (
         "Failed event should contain the step name"
     )
-    assert stop_event.exception_type == "builtins.ValueError", (
-        "Failed event should contain the fully qualified exception type"
+    assert isinstance(stop_event.exception, ValueError), (
+        "Failed event should carry the live exception"
     )
-    assert stop_event.exception_message == "intentional failure", (
-        "Failed event should contain the exception message"
-    )
-    assert "ValueError: intentional failure" in stop_event.traceback, (
-        "Failed event should contain the traceback"
+    assert str(stop_event.exception) == "intentional failure", (
+        "Failed event exception should carry the message"
     )
     assert stop_event.attempts == 1, "Failed event should contain the attempt count"
     assert stop_event.elapsed_seconds >= 0, "Failed event should contain elapsed time"

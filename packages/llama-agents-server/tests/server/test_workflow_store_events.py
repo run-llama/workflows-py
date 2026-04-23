@@ -43,9 +43,7 @@ def _stop(seq_label: int = 0) -> StopEvent:
 def _failed() -> WorkflowFailedEvent:
     return WorkflowFailedEvent(
         step_name="test_step",
-        exception_type="ValueError",
-        exception_message="boom",
-        traceback="",
+        exception=ValueError("boom"),
         attempts=1,
         elapsed_seconds=0.0,
     )
