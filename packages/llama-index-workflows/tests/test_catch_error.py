@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
 from typing import Any
 
@@ -17,6 +18,7 @@ from workflows.context.serializers import JsonSerializer
 from workflows.errors import (
     ContextStateError,
     WorkflowRuntimeError,
+    WorkflowTimeoutError,
     WorkflowValidationError,
 )
 from workflows.events import (
@@ -255,8 +257,6 @@ async def test_step_failed_event_fields() -> None:
 
 @pytest.mark.asyncio
 async def test_catch_error_not_invoked_on_timeout() -> None:
-    import asyncio
-
     handler_invoked: list[bool] = []
 
     class Flow(Workflow):
@@ -269,8 +269,6 @@ async def test_catch_error_not_invoked_on_timeout() -> None:
         async def handler(self, ctx: Context, ev: StepFailedEvent) -> StopEvent:
             handler_invoked.append(True)
             return StopEvent(result="caught")
-
-    from workflows.errors import WorkflowTimeoutError
 
     with pytest.raises(WorkflowTimeoutError):
         await Flow(timeout=0.1).run()

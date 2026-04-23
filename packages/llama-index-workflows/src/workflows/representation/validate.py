@@ -5,23 +5,22 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass, field
-from typing import Protocol
 
 from workflows.decorators import StepConfig, WorkflowGraphCheck
 from workflows.events import HumanResponseEvent, InputRequiredEvent, StopEvent
 
 
-class CatchErrorHandlerLike(Protocol):
-    """Minimal shape needed for structural catch_error validation."""
+@dataclass(frozen=True)
+class CatchErrorHandler:
+    """Runtime descriptor for a ``@catch_error`` handler.
 
-    @property
-    def step_name(self) -> str: ...
+    Precomputed by ``Workflow._validate()``; consumed by the control loop's
+    failure-routing branch and by ``BrokerState.from_workflow``.
+    """
 
-    @property
-    def for_steps(self) -> list[str] | None: ...
-
-    @property
-    def max_recoveries(self) -> int: ...
+    step_name: str
+    for_steps: list[str] | None
+    max_recoveries: int
 
 
 # Graph nodes: step names (str) for steps, event classes (type) for events.
@@ -247,7 +246,7 @@ def validate_graph(
 
 
 def validate_catch_error_handlers(
-    handlers: Iterable[CatchErrorHandlerLike],
+    handlers: Iterable[CatchErrorHandler],
     step_names: set[str],
 ) -> list[str]:
     """Validate structural invariants of ``@catch_error`` handlers.

@@ -38,7 +38,6 @@ from workflows.runtime.types.plugin import (
 )
 from workflows.runtime.types.results import (
     InternalContextVar,
-    RecoveryCountsContextVar,
     RetryAttempt,
     Returns,
     StepFunctionResult,
@@ -172,13 +171,11 @@ def as_step_worker_function(
         internal_context = Context._create_internal(workflow=workflow)
         returns = Returns(return_values=[])
 
-        recovery_counts = RecoveryCountsContextVar.get({})
         token = StepWorkerStateContextVar.set(
             StepWorkerContext(
                 state=state,
                 returns=returns,
                 retry=retry,
-                recovery_counts=dict(recovery_counts),
             )
         )
         ctx_token = InternalContextVar.set(weakref.ref(internal_context))

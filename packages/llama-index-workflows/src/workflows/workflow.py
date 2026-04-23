@@ -33,6 +33,11 @@ from .events import (
     StopEvent,
 )
 from .handler import WorkflowHandler
+from .representation.validate import (
+    CatchErrorHandler,
+    validate_catch_error_handlers,
+    validate_graph,
+)
 from .resource import (
     ResourceDescriptor,
     ResourceManager,
@@ -496,8 +501,6 @@ class Workflow(metaclass=WorkflowMeta):
         package and raises a single ``WorkflowValidationError`` listing every
         problem found.
         """
-        from .representation.validate import validate_graph
-
         step_configs = {
             name: func._step_config for name, func in self._get_steps().items()
         }
@@ -512,6 +515,65 @@ class Workflow(metaclass=WorkflowMeta):
                 f"  - [{e.check}] {e.message}\n    {e.hint}" for e in errors
             )
             raise WorkflowValidationError(f"Graph validation failed:\n{detail}")
+
+    def _collect_catch_error_handlers(
+        self,
+    ) -> tuple[dict[str, CatchErrorHandler], dict[str, str]]:
+        """Discover ``@catch_error`` handlers and build the step->handler routing table.
+
+        Returns:
+            ``(catch_error_handlers, handler_for_step)`` where
+            ``catch_error_handlers`` maps handler step name to its descriptor
+            and ``handler_for_step`` maps each covered step name to the handler
+            that owns it (scoped claims first, then the wildcard fills).
+        """
+        all_step_names = set(self._get_steps().keys())
+        handlers: list[CatchErrorHandler] = []
+        for name, step_func in self._get_steps().items():
+            step_config: StepConfig = step_func._step_config
+            if step_config.role != "catch_error":
+                continue
+            max_recoveries = step_config.catch_error_max_recoveries
+            if not isinstance(max_recoveries, int) or max_recoveries < 1:
+                raise WorkflowValidationError(
+                    f"@catch_error handler '{name}' has max_recoveries="
+                    f"{max_recoveries!r}; must be an integer >= 1."
+                )
+            handlers.append(
+                CatchErrorHandler(
+                    step_name=name,
+                    for_steps=(
+                        list(step_config.catch_error_for_steps)
+                        if step_config.catch_error_for_steps is not None
+                        else None
+                    ),
+                    max_recoveries=max_recoveries,
+                )
+            )
+
+        handler_errors = validate_catch_error_handlers(handlers, all_step_names)
+        if handler_errors:
+            raise WorkflowValidationError("\n".join(handler_errors))
+
+        handler_step_names = {h.step_name for h in handlers}
+        handler_for_step: dict[str, str] = {}
+        for handler in handlers:
+            if handler.for_steps is None:
+                continue
+            for target in handler.for_steps:
+                handler_for_step[target] = handler.step_name
+
+        wildcards = [h for h in handlers if h.for_steps is None]
+        wildcard = wildcards[0] if wildcards else None
+        if wildcard is not None:
+            for step_name in all_step_names:
+                if step_name in handler_step_names or step_name == "_done":
+                    continue
+                if step_name in handler_for_step:
+                    continue
+                handler_for_step[step_name] = wildcard.step_name
+
+        return {h.step_name: h for h in handlers}, handler_for_step
 
     def _validate_resource_configs(self) -> list[str]:
         """Validate all resource configs (including nested ones) by loading them."""
@@ -637,10 +699,6 @@ class Workflow(metaclass=WorkflowMeta):
 
         # Check that no user-defined step accepts StopEvent (only _done step should)
         steps_accepting_stop_event: list[str] = []
-        # Collect @catch_error handlers in a single pass.
-        catch_error_handlers: list[CatchErrorHandler] = []
-
-        all_step_names = set(self._get_steps().keys())
 
         for name, step_func in self._get_steps().items():
             step_config: StepConfig = step_func._step_config
@@ -650,25 +708,6 @@ class Workflow(metaclass=WorkflowMeta):
                     if issubclass(event_type, StopEvent):
                         steps_accepting_stop_event.append(name)
                         break
-
-            if step_config.role == "catch_error":
-                max_recoveries = step_config.catch_error_max_recoveries
-                if not isinstance(max_recoveries, int) or max_recoveries < 1:
-                    raise WorkflowValidationError(
-                        f"@catch_error handler '{name}' has max_recoveries="
-                        f"{max_recoveries!r}; must be an integer >= 1."
-                    )
-                catch_error_handlers.append(
-                    CatchErrorHandler(
-                        step_name=name,
-                        for_steps=(
-                            list(step_config.catch_error_for_steps)
-                            if step_config.catch_error_for_steps is not None
-                            else None
-                        ),
-                        max_recoveries=max_recoveries,
-                    )
-                )
 
             for event_type in step_config.accepted_events:
                 consumed_events.add(event_type)
@@ -686,35 +725,9 @@ class Workflow(metaclass=WorkflowMeta):
             msg = f"Step{plural} '{step_names}' cannot accept StopEvent. StopEvent signals the end of the workflow. Use a different Event type instead."
             raise WorkflowValidationError(msg)
 
-        from .representation.validate import validate_catch_error_handlers
-
-        handler_errors = validate_catch_error_handlers(
-            catch_error_handlers, all_step_names
+        self._catch_error_handlers, self._handler_for_step = (
+            self._collect_catch_error_handlers()
         )
-        if handler_errors:
-            raise WorkflowValidationError("\n".join(handler_errors))
-
-        handler_step_names = {h.step_name for h in catch_error_handlers}
-        handler_for_step: dict[str, str] = {}
-        for handler in catch_error_handlers:
-            if handler.for_steps is None:
-                continue
-            for target in handler.for_steps:
-                handler_for_step[target] = handler.step_name
-        wildcard_handlers = [h for h in catch_error_handlers if h.for_steps is None]
-        wildcard = wildcard_handlers[0] if wildcard_handlers else None
-        if wildcard is not None:
-            for step_name in all_step_names:
-                if step_name in handler_step_names:
-                    continue
-                if step_name in handler_for_step:
-                    continue
-                if step_name == "_done":
-                    continue
-                handler_for_step[step_name] = wildcard.step_name
-
-        self._catch_error_handlers = {h.step_name: h for h in catch_error_handlers}
-        self._handler_for_step = handler_for_step
 
         # Check if no StopEvent is produced
         stop_ok = False
@@ -785,19 +798,6 @@ class Workflow(metaclass=WorkflowMeta):
         )
         self._validated_version = self.__class__._step_functions_version
         return self._validation_result
-
-
-@dataclass(frozen=True)
-class CatchErrorHandler:
-    """Runtime descriptor for a @catch_error handler.
-
-    Precomputed by ``_validate()``; consumed by the control loop's failure
-    routing branch and by ``BrokerState.from_workflow``.
-    """
-
-    step_name: str
-    for_steps: list[str] | None
-    max_recoveries: int
 
 
 @dataclass

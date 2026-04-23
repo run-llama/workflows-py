@@ -70,7 +70,6 @@ from workflows.runtime.types.results import (
     AddWaiter,
     DeleteCollectedEvent,
     DeleteWaiter,
-    RecoveryCountsContextVar,
     RetryAttempt,
     StepWorkerFailed,
     StepWorkerResult,
@@ -214,7 +213,6 @@ class _ControlLoopRunner:
                 snapshot = worker.shared_state
                 step_fn: StepWorkerFunction = self.step_workers[command.step_name]
 
-                RecoveryCountsContextVar.set(dict(worker.recovery_counts))
                 result = await step_fn(
                     state=snapshot,
                     step_name=command.step_name,
@@ -225,6 +223,7 @@ class _ControlLoopRunner:
                         first_attempt_at=worker.first_attempt_at,
                         last_exception=worker.last_exception,
                         last_failed_at=worker.last_failed_at,
+                        recovery_counts=dict(worker.recovery_counts),
                     ),
                 )
                 # Return result for main loop to process

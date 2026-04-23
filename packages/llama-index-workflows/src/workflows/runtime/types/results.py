@@ -33,18 +33,22 @@ EventType = TypeVar("EventType", bound=Event)
 
 @dataclass(frozen=True)
 class RetryAttempt:
-    """Retry state handed to a step worker for the currently-processed event.
+    """Per-invocation state handed to a step worker for the currently-processed event.
 
     Bundles the counters the runtime needs to surface via ``Context.retry_info()``
     and to reconstruct :class:`workflows.retry_policy.RetryInfo`. ``retry_number``
     is 0-based (0 = first run, 1 = first retry). ``last_exception`` /
-    ``last_failed_at`` are ``None`` on the first attempt.
+    ``last_failed_at`` are ``None`` on the first attempt. ``recovery_counts``
+    carries the per-``@catch_error``-handler invocation counts on the running
+    event's lineage so ``ctx.send_event`` can tag emitted events and nested
+    failures route to the same handlers.
     """
 
     retry_number: int = 0
     first_attempt_at: float = 0.0
     last_exception: ExceptionInfo | None = None
     last_failed_at: float | None = None
+    recovery_counts: dict[str, int] = dataclasses.field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -58,10 +62,6 @@ class StepWorkerContext:
     # add commands here to mutate the internal worker state after step execution
     returns: Returns
     retry: RetryAttempt = dataclasses.field(default_factory=RetryAttempt)
-    # Per-handler recovery counts on the running event's lineage. Events
-    # emitted from this step (via ctx.send_event or the step's return value)
-    # inherit this dict so nested failures route to the same handlers.
-    recovery_counts: dict[str, int] = dataclasses.field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -129,16 +129,6 @@ class WaitingForEvent(Exception, Generic[EventType]):
 
 
 StepWorkerStateContextVar = ContextVar[StepWorkerContext]("step_worker")
-
-# Set by the control loop's run_worker before invoking the step function wrapper.
-# The wrapper reads it to populate StepWorkerContext.recovery_counts so that
-# ctx.send_event can tag emitted events with the running step's lineage.
-# Kept as its own ContextVar (not a kwarg on StepWorkerFunction) so external
-# step-wrapper implementations (e.g. agentcore) don't need to forward a new
-# parameter.
-RecoveryCountsContextVar: ContextVar[dict[str, int]] = ContextVar(
-    "step_recovery_counts"
-)
 
 # Holds a weakref to the Context (in internal-face state) for the currently
 # executing step.  A weakref is used so that asyncio timer-handle context

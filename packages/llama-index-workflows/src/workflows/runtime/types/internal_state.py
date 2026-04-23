@@ -17,10 +17,11 @@ from workflows.context.context_types import (
 from workflows.context.serializers import JsonSerializer
 from workflows.decorators import StepConfig
 from workflows.events import Event
+from workflows.representation.validate import CatchErrorHandler
 from workflows.retry_policy import ExceptionInfo, RetryPolicy
 from workflows.runtime.types.results import StepWorkerState, StepWorkerWaiter
 from workflows.runtime.types.ticks import TickAddEvent, WorkflowTick
-from workflows.workflow import CatchErrorHandler, Workflow
+from workflows.workflow import Workflow
 
 if TYPE_CHECKING:
     from workflows.context.context_types import SerializedContext
