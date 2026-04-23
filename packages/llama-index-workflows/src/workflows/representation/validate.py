@@ -289,7 +289,7 @@ def validate_catch_error_handlers(
     return errors
 
 
-def ensure_start_event_class(
+def _ensure_start_event_class(
     steps: dict[str, StepConfig], workflow_cls_name: str
 ) -> type[StartEvent]:
     """Infer and validate the single StartEvent subclass accepted by a workflow.
@@ -318,7 +318,7 @@ def ensure_start_event_class(
     return start_events_found.pop()
 
 
-def ensure_stop_event_class(
+def _ensure_stop_event_class(
     steps: dict[str, StepConfig], workflow_cls_name: str
 ) -> type[StopEvent]:
     """Infer and validate the single StopEvent subclass produced by a workflow.
@@ -347,7 +347,7 @@ def ensure_stop_event_class(
     return stop_events_found.pop()
 
 
-def collect_events(steps: dict[str, StepConfig]) -> list[type[Event]]:
+def _collect_events(steps: dict[str, StepConfig]) -> list[type[Event]]:
     """Return every ``Event`` subclass touched by the workflow's steps.
 
     Skips the runtime-injected ``_done`` step so only user-facing events are
@@ -366,7 +366,7 @@ def collect_events(steps: dict[str, StepConfig]) -> list[type[Event]]:
     return list(events_found)
 
 
-def collect_catch_error_handlers(
+def _collect_catch_error_handlers(
     steps: dict[str, StepConfig],
 ) -> tuple[dict[str, CatchErrorHandler], dict[str, str]]:
     """Discover ``@catch_error`` handlers and build the step->handler routing table.
@@ -428,7 +428,7 @@ def collect_catch_error_handlers(
     return {h.step_name: h for h in handlers}, handler_for_step
 
 
-def validate_event_connectivity(
+def _validate_event_connectivity(
     steps: dict[str, StepConfig],
     start_event_class: type[StartEvent],
 ) -> bool:
@@ -528,7 +528,7 @@ class _ResourceValidationContext:
         )
 
 
-def validate_resource_configs(steps: dict[str, StepConfig]) -> list[str]:
+def _validate_resource_configs(steps: dict[str, StepConfig]) -> list[str]:
     """Validate every resource config (and nested configs) by loading it.
 
     Returns a list of human-readable error messages; empty if all configs load
@@ -569,7 +569,7 @@ def validate_resource_configs(steps: dict[str, StepConfig]) -> list[str]:
     return errors
 
 
-async def validate_resources(
+async def _validate_resources(
     steps: dict[str, StepConfig], resource_manager: ResourceManager
 ) -> list[str]:
     """Resolve every resource via ``resource_manager``.
@@ -591,8 +591,8 @@ async def validate_resources(
 
 
 @dataclass
-class WorkflowValidationResult:
-    """Derived workflow state produced by :func:`validate_workflow`."""
+class _WorkflowValidationResult:
+    """Derived workflow state produced by :func:`_validate_workflow`."""
 
     start_event_class: type[StartEvent]
     stop_event_class: type[StopEvent]
@@ -601,11 +601,11 @@ class WorkflowValidationResult:
     uses_hitl: bool
 
 
-def validate_workflow(
+def _validate_workflow(
     steps: dict[str, StepConfig],
     workflow_cls_name: str,
     skip_graph_checks: set[WorkflowGraphCheck],
-) -> WorkflowValidationResult:
+) -> _WorkflowValidationResult:
     """Run every structural check on a workflow's step set.
 
     Orders checks so the most actionable errors surface first (missing steps,
@@ -614,7 +614,7 @@ def validate_workflow(
 
     Raises ``WorkflowConfigurationError`` or ``WorkflowValidationError`` on any
     violation. Resource validation is handled separately via
-    :func:`validate_resource_configs` and :func:`validate_resources`.
+    :func:`_validate_resource_configs` and :func:`_validate_resources`.
     """
     if not steps:
         raise WorkflowConfigurationError(
@@ -623,12 +623,12 @@ def validate_workflow(
             "free-function steps via @step(workflow=...)?"
         )
 
-    start_event_class = ensure_start_event_class(steps, workflow_cls_name)
-    stop_event_class = ensure_stop_event_class(steps, workflow_cls_name)
+    start_event_class = _ensure_start_event_class(steps, workflow_cls_name)
+    stop_event_class = _ensure_stop_event_class(steps, workflow_cls_name)
 
-    uses_hitl = validate_event_connectivity(steps, start_event_class)
+    uses_hitl = _validate_event_connectivity(steps, start_event_class)
 
-    catch_error_handlers, handler_for_step = collect_catch_error_handlers(steps)
+    catch_error_handlers, handler_for_step = _collect_catch_error_handlers(steps)
 
     graph_errors = validate_graph(
         steps=steps,
@@ -642,7 +642,7 @@ def validate_workflow(
         )
         raise WorkflowValidationError(f"Graph validation failed:\n{detail}")
 
-    return WorkflowValidationResult(
+    return _WorkflowValidationResult(
         start_event_class=start_event_class,
         stop_event_class=stop_event_class,
         catch_error_handlers=catch_error_handlers,

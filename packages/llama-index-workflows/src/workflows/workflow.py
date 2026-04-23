@@ -129,9 +129,9 @@ class Workflow(metaclass=WorkflowMeta):
         # Inline imports: every module below imports ``Workflow`` transitively,
         # so deferring to call time breaks the cycle.
         from .representation.validate import (
-            collect_events,
-            ensure_start_event_class,
-            ensure_stop_event_class,
+            _collect_events,
+            _ensure_start_event_class,
+            _ensure_stop_event_class,
         )
         from workflows.plugins._context import get_current_runtime
         from workflows.runtime.verbose import VerboseDecorator
@@ -147,12 +147,12 @@ class Workflow(metaclass=WorkflowMeta):
         step_configs = self._step_configs()
         cls_name = self.__class__.__name__
         # Detect StartEvent issues before StopEvent for clearer guidance
-        self._start_event_class = ensure_start_event_class(step_configs, cls_name)
-        self._stop_event_class = ensure_stop_event_class(step_configs, cls_name)
+        self._start_event_class = _ensure_start_event_class(step_configs, cls_name)
+        self._stop_event_class = _ensure_stop_event_class(step_configs, cls_name)
         # Populated by _validate(); empty until a successful validation runs.
         self._catch_error_handlers: dict[str, CatchErrorHandler] = {}
         self._handler_for_step: dict[str, str] = {}
-        self._events = collect_events(step_configs)
+        self._events = _collect_events(step_configs)
         # Resource management
         self._resource_manager = resource_manager or ResourceManager()
         # Instrumentation
@@ -447,13 +447,13 @@ class Workflow(metaclass=WorkflowMeta):
 
         # Inline import: ``representation`` transitively imports ``Workflow``.
         from .representation.validate import (
-            validate_resource_configs as _validate_resource_configs,
-            validate_resources as _validate_resources,
-            validate_workflow,
+            _validate_resource_configs,
+            _validate_resources,
+            _validate_workflow,
         )
 
         step_configs = self._step_configs()
-        result = validate_workflow(
+        result = _validate_workflow(
             step_configs, self.__class__.__name__, self._skip_graph_checks
         )
         self._start_event_class = result.start_event_class
