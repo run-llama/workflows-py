@@ -64,26 +64,19 @@ class ReplayedContext:
 
     Attributes:
         context: Rebuilt Context ready to be passed to ``workflow.run()``.
-        terminal: Resolved terminal info if the tick stream terminated, else
-            None. Derived from the reducer's own exit commands so it matches
-            runtime semantics exactly.
+        exit_command: The reducer-emitted terminal command if the tick stream
+            terminated, else None. Callers map this to handler status (see
+            :func:`handler_status_from_exit_command`).
     """
 
     context: Context
-    terminal: _TerminalInfo | None = None
+    exit_command: CommandCompleteRun | CommandFailWorkflow | CommandHalt | None = None
 
 
-@dataclass
-class _TerminalInfo:
-    status: Status
-    result: StopEvent | None = None
-    error: str | None = None
-
-
-def _terminal_from_exit_command(
+def handler_status_from_exit_command(
     command: CommandCompleteRun | CommandFailWorkflow | CommandHalt,
-) -> _TerminalInfo | None:
-    """Map a reducer exit command to handler-status terminal info.
+) -> tuple[Status, StopEvent | None, str | None] | None:
+    """Map a reducer exit command to (status, result, error).
 
     Returns None for CommandCompleteRun(IdleReleasedEvent) — idle release is
     not a real completion, just how the reducer signals the runner to exit.
@@ -91,13 +84,13 @@ def _terminal_from_exit_command(
     if isinstance(command, CommandCompleteRun):
         if isinstance(command.result, IdleReleasedEvent):
             return None
-        return _TerminalInfo(status="completed", result=command.result)
+        return ("completed", command.result, None)
     if isinstance(command, CommandFailWorkflow):
-        return _TerminalInfo(status="failed", error=str(command.exception))
+        return ("failed", None, str(command.exception))
     # CommandHalt: timeout or cancel (both reach this replay path)
     if isinstance(command.exception, WorkflowCancelledByUser):
-        return _TerminalInfo(status="cancelled")
-    return _TerminalInfo(status="failed", error=str(command.exception))
+        return ("cancelled", None, None)
+    return ("failed", None, str(command.exception))
 
 
 class _PersistenceInternalRunAdapter(BaseInternalRunAdapterDecorator):
@@ -199,9 +192,9 @@ class TickPersistenceDecorator(BaseRuntimeDecorator):
     ) -> ReplayedContext | None:
         """Rebuild a Context from persisted ticks (and legacy ctx if available).
 
-        Returns the Context plus any terminal info surfaced by the reducer
-        during replay. Callers use ``terminal`` to finalize handlers whose
-        tick stream already reached a terminal state.
+        Returns the Context plus the reducer's exit command if the tick
+        stream already terminated. Callers use ``exit_command`` to finalize
+        handlers instead of resuming them.
         """
         serializer = JsonSerializer()
         legacy_ctx = self._get_legacy_ctx(run_id)
@@ -222,7 +215,9 @@ class TickPersistenceDecorator(BaseRuntimeDecorator):
         else:
             init_state = BrokerState.from_workflow(workflow)
 
-        terminal: _TerminalInfo | None = None
+        exit_command: CommandCompleteRun | CommandFailWorkflow | CommandHalt | None = (
+            None
+        )
         if first_tick is not None:
 
             async def _with_first() -> AsyncIterator[WorkflowTick]:
@@ -232,14 +227,13 @@ class TickPersistenceDecorator(BaseRuntimeDecorator):
 
             replay = await replay_ticks_stream(init_state, _with_first())
             init_state = replay.state
-            if replay.exit_command is not None:
-                terminal = _terminal_from_exit_command(replay.exit_command)
+            exit_command = replay.exit_command
 
         serialized = init_state.to_serialized(serializer)
         context = Context.from_dict(
             workflow=workflow, data=serialized.model_dump(), serializer=serializer
         )
-        return ReplayedContext(context=context, terminal=terminal)
+        return ReplayedContext(context=context, exit_command=exit_command)
 
     def _get_legacy_ctx(self, run_id: str) -> dict[str, Any] | None:
         legacy_store = as_legacy_context_store(self._store)
@@ -351,20 +345,25 @@ class PersistenceDecorator(TickPersistenceDecorator):
                     )
                     continue
 
-                if replayed.terminal is not None:
-                    info = replayed.terminal
+                finalize = (
+                    handler_status_from_exit_command(replayed.exit_command)
+                    if replayed.exit_command is not None
+                    else None
+                )
+                if finalize is not None:
+                    status, result, error = finalize
                     logger.warning(
                         "Replay for handler %s (workflow %s) terminated as %s; "
                         "finalizing without resume",
                         persistent.handler_id,
                         persistent.workflow_name,
-                        info.status,
+                        status,
                     )
                     await self._store.update_handler_status(
                         run_id,
-                        status=info.status,
-                        result=info.result,
-                        error=info.error,
+                        status=status,
+                        result=result,
+                        error=error,
                     )
                     continue
 
