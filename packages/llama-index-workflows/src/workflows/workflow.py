@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass, field
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -20,17 +19,12 @@ if TYPE_CHECKING:  # pragma: no cover
     from .runtime.types.plugin import Runtime
 from .decorators import CatchErrorHandler, StepConfig, StepFunction, WorkflowGraphCheck
 from .errors import (
-    WorkflowConfigurationError,
     WorkflowRuntimeError,
     WorkflowValidationError,
 )
 from .events import Event, StartEvent
 from .handler import WorkflowHandler
-from .resource import (
-    ResourceDescriptor,
-    ResourceManager,
-    _ResourceConfig,
-)
+from .resource import ResourceManager
 from .types import RunResultT
 from .utils import get_steps_from_class, get_steps_from_instance
 
@@ -139,16 +133,26 @@ class Workflow(metaclass=WorkflowMeta):
         self._num_concurrent_runs = num_concurrent_runs
         # Store explicit name (None means use computed name)
         self._workflow_name = workflow_name
+        # Inline import: ``workflow.py`` is the bootstrap chokepoint — the
+        # ``representation`` package imports ``workflows.Workflow`` transitively
+        # (representation/__init__ -> build -> Workflow), so importing it at
+        # module load time would re-enter a partially-loaded ``workflows``
+        # package. Deferring to call time breaks the cycle.
+        from .representation.validate import (
+            collect_events,
+            ensure_start_event_class,
+            ensure_stop_event_class,
+        )
+
+        step_configs = self._step_configs()
+        cls_name = self.__class__.__name__
         # Detect StartEvent issues before StopEvent for clearer guidance
-        self._start_event_class = self._ensure_start_event_class()
-        self._stop_event_class = self._ensure_stop_event_class()
-        # Set by _validate(); see that method for the enforcement rules.
-        # Handler step name -> CatchErrorHandler descriptor.
+        self._start_event_class = ensure_start_event_class(step_configs, cls_name)
+        self._stop_event_class = ensure_stop_event_class(step_configs, cls_name)
+        # Populated by _validate(); empty until a successful validation runs.
         self._catch_error_handlers: dict[str, CatchErrorHandler] = {}
-        # Step name -> handler step name that owns it (scoped wins, then
-        # wildcard fills). Handler steps themselves are not entries.
         self._handler_for_step: dict[str, str] = {}
-        self._events = self._ensure_events_collected()
+        self._events = collect_events(step_configs)
         # Resource management
         self._resource_manager = resource_manager or ResourceManager()
         # Instrumentation
@@ -246,16 +250,6 @@ class Workflow(metaclass=WorkflowMeta):
         """Return ``{step_name: StepConfig}`` for every registered step."""
         return {name: func._step_config for name, func in self._get_steps().items()}
 
-    def _ensure_start_event_class(self) -> type[StartEvent]:
-        # Inline import: ``workflow.py`` is the bootstrap chokepoint — the
-        # ``representation`` package imports ``workflows.Workflow`` transitively
-        # (representation/__init__ -> build -> Workflow), so importing it at
-        # module load time would re-enter a partially-loaded ``workflows``
-        # package. Deferring to call time breaks the cycle.
-        from .representation.validate import ensure_start_event_class
-
-        return ensure_start_event_class(self._step_configs(), self.__class__.__name__)
-
     @property
     def start_event_class(self) -> type[StartEvent]:
         """The `StartEvent` subclass accepted by this workflow.
@@ -271,18 +265,6 @@ class Workflow(metaclass=WorkflowMeta):
         Determined by inspecting step input/output types.
         """
         return self._events
-
-    def _ensure_events_collected(self) -> list[type[Event]]:
-        # Inline import: see _ensure_start_event_class for the cycle rationale.
-        from .representation.validate import collect_events
-
-        return collect_events(self._step_configs())
-
-    def _ensure_stop_event_class(self) -> type[RunResultT]:
-        # Inline import: see _ensure_start_event_class for the cycle rationale.
-        from .representation.validate import ensure_stop_event_class
-
-        return ensure_stop_event_class(self._step_configs(), self.__class__.__name__)
 
     @property
     def stop_event_class(self) -> type[RunResultT]:
@@ -424,60 +406,6 @@ class Workflow(metaclass=WorkflowMeta):
             workflow=self, start_event=start_event_instance, run_id=run_id
         )
 
-    def _validate_resource_configs(self) -> list[str]:
-        """Validate all resource configs (including nested ones) by loading them."""
-        errors: list[str] = []
-        seen: set[str] = set()
-
-        # Stack-based traversal of all resources and their dependencies
-        stack: list[_ResourceValidationContext] = []
-        for step_func in self._get_steps().values():
-            step_name = step_func.__name__
-            for res_def in step_func._step_config.resources:
-                res_def.resource.set_type_annotation(res_def.type_annotation)
-                stack.append(
-                    _ResourceValidationContext(
-                        resource=res_def.resource,
-                        step_name=step_name,
-                        param_name=res_def.name,
-                        resource_chain=[res_def.resource.name],
-                    )
-                )
-
-        while stack:
-            ctx = stack.pop()
-            if ctx.resource.name in seen:
-                continue
-            seen.add(ctx.resource.name)
-
-            # Add dependencies to stack
-            for _dep_param, dep, type_ann in ctx.resource.get_dependencies():
-                dep.set_type_annotation(type_ann)
-                stack.append(ctx.with_dependency(dep))
-
-            # Validate if it's a config
-            if isinstance(ctx.resource, _ResourceConfig):
-                try:
-                    ctx.resource.call()
-                except Exception as e:
-                    errors.append(f"In {ctx.format_location()}: {e}")
-
-        return errors
-
-    async def _validate_resources(self) -> list[str]:
-        """Validate all resources by resolving them (catches circular deps)."""
-        errors: list[str] = []
-        for step_func in self._get_steps().values():
-            step_name = step_func.__name__
-            for res_def in step_func._step_config.resources:
-                res_def.resource.set_type_annotation(res_def.type_annotation)
-                try:
-                    await self._resource_manager.get(res_def.resource)
-                except Exception as e:
-                    location = f"step '{step_name}', parameter '{res_def.name}'"
-                    errors.append(f"In {location}: {e}")
-        return errors
-
     def validate(
         self,
         *,
@@ -528,87 +456,37 @@ class Workflow(metaclass=WorkflowMeta):
         if not force and not stale and self._validation_result is not None:
             return self._validation_result
 
-        # Ensure at least one step is configured before inspecting events
-        if not self._get_steps():
-            cls_name = self.__class__.__name__
-            raise WorkflowConfigurationError(
-                f"Workflow '{cls_name}' has no configured steps. "
-                "Did you forget to annotate methods with @step or to register "
-                "free-function steps via @step(workflow=...)?"
-            )
-
-        # Inline import: see _ensure_start_event_class for the cycle rationale.
+        # Inline import: see __init__ for the cycle rationale.
         from .representation.validate import (
-            collect_catch_error_handlers,
-            run_graph_validation,
-            validate_event_connectivity,
+            validate_resource_configs as _validate_resource_configs,
+            validate_resources as _validate_resources,
+            validate_workflow,
         )
 
         step_configs = self._step_configs()
-
-        # Recompute StartEvent and StopEvent classes here to support dynamic changes
-        # and to surface StartEvent errors before StopEvent during validation.
-        self._start_event_class = self._ensure_start_event_class()
-        self._stop_event_class = self._ensure_stop_event_class()
-
-        uses_hitl = validate_event_connectivity(
-            step_configs, self._start_event_class, self._stop_event_class
+        result = validate_workflow(
+            step_configs, self.__class__.__name__, self._skip_graph_checks
         )
-
-        self._catch_error_handlers, self._handler_for_step = (
-            collect_catch_error_handlers(step_configs)
-        )
-
-        run_graph_validation(
-            steps=step_configs,
-            start_event_class=self._start_event_class,
-            skip_checks=self._skip_graph_checks,
-            catch_error_steps=list(self._catch_error_handlers.keys()),
-        )
+        self._start_event_class = result.start_event_class
+        self._stop_event_class = result.stop_event_class
+        self._catch_error_handlers = result.catch_error_handlers
+        self._handler_for_step = result.handler_for_step
 
         if validate_resource_configs:
-            if errors := self._validate_resource_configs():
+            if errors := _validate_resource_configs(step_configs):
                 raise WorkflowValidationError(
                     "Resource config validation failed:\n"
                     + "\n".join(f"  - {e}" for e in errors)
                 )
 
         if validate_resources:
-            errors = asyncio.run(self._validate_resources())
+            errors = asyncio.run(_validate_resources(step_configs, self._resource_manager))
             if errors:
                 raise WorkflowValidationError(
                     "Resource validation failed:\n"
                     + "\n".join(f"  - {e}" for e in errors)
                 )
 
-        self._validation_result = uses_hitl
+        self._validation_result = result.uses_hitl
         self._validated_version = self.__class__._step_functions_version
         return self._validation_result
-
-
-@dataclass
-class _ResourceValidationContext:
-    """Tracks context for resource validation to provide clear error messages."""
-
-    resource: ResourceDescriptor
-    step_name: str
-    param_name: str
-    resource_chain: list[str] = field(default_factory=list)
-
-    def format_location(self) -> str:
-        """Format the location string for error messages."""
-        if len(self.resource_chain) > 1:
-            chain_str = " -> ".join(self.resource_chain)
-            return (
-                f"step '{self.step_name}', parameter '{self.param_name}' ({chain_str})"
-            )
-        return f"step '{self.step_name}', parameter '{self.param_name}'"
-
-    def with_dependency(self, dep: ResourceDescriptor) -> _ResourceValidationContext:
-        """Create a new context for a dependency resource."""
-        return _ResourceValidationContext(
-            resource=dep,
-            step_name=self.step_name,
-            param_name=self.param_name,
-            resource_chain=[*self.resource_chain, dep.name],
-        )

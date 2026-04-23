@@ -16,6 +16,7 @@ from workflows.events import (
     StepFailedEvent,
     StopEvent,
 )
+from workflows.resource import ResourceDescriptor, ResourceManager, _ResourceConfig
 
 # Graph nodes: step names (str) for steps, event classes (type) for events.
 GraphNode = str | type
@@ -526,3 +527,147 @@ def run_graph_validation(
     if errors:
         detail = "\n".join(f"  - [{e.check}] {e.message}\n    {e.hint}" for e in errors)
         raise WorkflowValidationError(f"Graph validation failed:\n{detail}")
+
+
+@dataclass
+class _ResourceValidationContext:
+    """Tracks context for resource validation to provide clear error messages."""
+
+    resource: ResourceDescriptor
+    step_name: str
+    param_name: str
+    resource_chain: list[str] = field(default_factory=list)
+
+    def format_location(self) -> str:
+        if len(self.resource_chain) > 1:
+            chain_str = " -> ".join(self.resource_chain)
+            return (
+                f"step '{self.step_name}', parameter '{self.param_name}' ({chain_str})"
+            )
+        return f"step '{self.step_name}', parameter '{self.param_name}'"
+
+    def with_dependency(self, dep: ResourceDescriptor) -> _ResourceValidationContext:
+        return _ResourceValidationContext(
+            resource=dep,
+            step_name=self.step_name,
+            param_name=self.param_name,
+            resource_chain=[*self.resource_chain, dep.name],
+        )
+
+
+def validate_resource_configs(steps: dict[str, StepConfig]) -> list[str]:
+    """Validate every resource config (and nested configs) by loading it.
+
+    Returns a list of human-readable error messages; empty if all configs load
+    cleanly. Callers decide whether to raise.
+    """
+    errors: list[str] = []
+    seen: set[str] = set()
+
+    stack: list[_ResourceValidationContext] = []
+    for step_name, cfg in steps.items():
+        for res_def in cfg.resources:
+            res_def.resource.set_type_annotation(res_def.type_annotation)
+            stack.append(
+                _ResourceValidationContext(
+                    resource=res_def.resource,
+                    step_name=step_name,
+                    param_name=res_def.name,
+                    resource_chain=[res_def.resource.name],
+                )
+            )
+
+    while stack:
+        ctx = stack.pop()
+        if ctx.resource.name in seen:
+            continue
+        seen.add(ctx.resource.name)
+
+        for _dep_param, dep, type_ann in ctx.resource.get_dependencies():
+            dep.set_type_annotation(type_ann)
+            stack.append(ctx.with_dependency(dep))
+
+        if isinstance(ctx.resource, _ResourceConfig):
+            try:
+                ctx.resource.call()
+            except Exception as e:
+                errors.append(f"In {ctx.format_location()}: {e}")
+
+    return errors
+
+
+async def validate_resources(
+    steps: dict[str, StepConfig], resource_manager: ResourceManager
+) -> list[str]:
+    """Resolve every resource via ``resource_manager``.
+
+    Surfaces circular dependencies and factory-time failures. Returns a list of
+    error messages; empty if all resources resolve.
+    """
+    errors: list[str] = []
+    for step_name, cfg in steps.items():
+        for res_def in cfg.resources:
+            res_def.resource.set_type_annotation(res_def.type_annotation)
+            try:
+                await resource_manager.get(res_def.resource)
+            except Exception as e:
+                errors.append(
+                    f"In step '{step_name}', parameter '{res_def.name}': {e}"
+                )
+    return errors
+
+
+@dataclass
+class WorkflowValidationResult:
+    """Derived workflow state produced by :func:`validate_workflow`."""
+
+    start_event_class: type[StartEvent]
+    stop_event_class: type[StopEvent]
+    catch_error_handlers: dict[str, CatchErrorHandler]
+    handler_for_step: dict[str, str]
+    uses_hitl: bool
+
+
+def validate_workflow(
+    steps: dict[str, StepConfig],
+    workflow_cls_name: str,
+    skip_graph_checks: set[WorkflowGraphCheck],
+) -> WorkflowValidationResult:
+    """Run every structural check on a workflow's step set.
+
+    Orders checks so the most actionable errors surface first (missing steps,
+    then StartEvent, then StopEvent, then event connectivity, then catch_error
+    handlers, then graph reachability/dead-ends).
+
+    Raises ``WorkflowConfigurationError`` or ``WorkflowValidationError`` on any
+    violation. Resource validation is handled separately via
+    :func:`validate_resource_configs` and :func:`validate_resources`.
+    """
+    if not steps:
+        raise WorkflowConfigurationError(
+            f"Workflow '{workflow_cls_name}' has no configured steps. "
+            "Did you forget to annotate methods with @step or to register "
+            "free-function steps via @step(workflow=...)?"
+        )
+
+    start_event_class = ensure_start_event_class(steps, workflow_cls_name)
+    stop_event_class = ensure_stop_event_class(steps, workflow_cls_name)
+
+    uses_hitl = validate_event_connectivity(steps, start_event_class, stop_event_class)
+
+    catch_error_handlers, handler_for_step = collect_catch_error_handlers(steps)
+
+    run_graph_validation(
+        steps=steps,
+        start_event_class=start_event_class,
+        skip_checks=skip_graph_checks,
+        catch_error_steps=list(catch_error_handlers.keys()),
+    )
+
+    return WorkflowValidationResult(
+        start_event_class=start_event_class,
+        stop_event_class=stop_event_class,
+        catch_error_handlers=catch_error_handlers,
+        handler_for_step=handler_for_step,
+        uses_hitl=uses_hitl,
+    )
