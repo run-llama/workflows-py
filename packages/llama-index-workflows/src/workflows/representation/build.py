@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import inspect
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from pydantic import BaseModel
 
+from workflows import Workflow
 from workflows.decorators import StepFunction
 from workflows.events import (
     Event,
@@ -30,13 +31,6 @@ from workflows.resource import (
     _Resource,
     _ResourceConfig,
 )
-
-# TYPE_CHECKING is used here only to break an import cycle:
-# workflow.py imports from representation.validate, which triggers
-# representation/__init__.py → build.py; importing Workflow here at runtime
-# would re-enter workflow.py while it's still loading.
-if TYPE_CHECKING:
-    from workflows import Workflow
 
 
 def _get_type_name(type_annotation: type | None) -> str | None:

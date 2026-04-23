@@ -18,7 +18,7 @@ from pydantic import ValidationError
 if TYPE_CHECKING:  # pragma: no cover
     from .context import Context
     from .runtime.types.plugin import Runtime
-from .decorators import StepConfig, StepFunction, WorkflowGraphCheck
+from .decorators import CatchErrorHandler, StepConfig, StepFunction, WorkflowGraphCheck
 from .errors import (
     WorkflowConfigurationError,
     WorkflowRuntimeError,
@@ -33,11 +33,6 @@ from .events import (
     StopEvent,
 )
 from .handler import WorkflowHandler
-from .representation.validate import (
-    CatchErrorHandler,
-    validate_catch_error_handlers,
-    validate_graph,
-)
 from .resource import (
     ResourceDescriptor,
     ResourceManager,
@@ -501,6 +496,13 @@ class Workflow(metaclass=WorkflowMeta):
         package and raises a single ``WorkflowValidationError`` listing every
         problem found.
         """
+        # Inline import: ``workflow.py`` is the bootstrap chokepoint — the
+        # ``representation`` package imports ``workflows.Workflow`` transitively
+        # (representation/__init__ -> build -> Workflow), so importing it here
+        # at module load time would re-enter a partially-loaded ``workflows``
+        # package. Deferring to call time breaks the cycle.
+        from .representation.validate import validate_graph
+
         step_configs = {
             name: func._step_config for name, func in self._get_steps().items()
         }
@@ -550,6 +552,9 @@ class Workflow(metaclass=WorkflowMeta):
                     max_recoveries=max_recoveries,
                 )
             )
+
+        # Inline import: see _validate_graph_structure for the cycle rationale.
+        from .representation.validate import validate_catch_error_handlers
 
         handler_errors = validate_catch_error_handlers(handlers, all_step_names)
         if handler_errors:

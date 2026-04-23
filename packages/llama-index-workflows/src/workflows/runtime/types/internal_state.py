@@ -15,9 +15,8 @@ from workflows.context.context_types import (
     SerializedWaiter,
 )
 from workflows.context.serializers import JsonSerializer
-from workflows.decorators import StepConfig
+from workflows.decorators import CatchErrorHandler, StepConfig
 from workflows.events import Event
-from workflows.representation.validate import CatchErrorHandler
 from workflows.retry_policy import ExceptionInfo, RetryPolicy
 from workflows.runtime.types.results import StepWorkerState, StepWorkerWaiter
 from workflows.runtime.types.ticks import TickAddEvent, WorkflowTick

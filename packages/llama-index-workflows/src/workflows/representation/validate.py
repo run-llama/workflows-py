@@ -6,22 +6,8 @@ from __future__ import annotations
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 
-from workflows.decorators import StepConfig, WorkflowGraphCheck
+from workflows.decorators import CatchErrorHandler, StepConfig, WorkflowGraphCheck
 from workflows.events import HumanResponseEvent, InputRequiredEvent, StopEvent
-
-
-@dataclass(frozen=True)
-class CatchErrorHandler:
-    """Runtime descriptor for a ``@catch_error`` handler.
-
-    Precomputed by ``Workflow._validate()``; consumed by the control loop's
-    failure-routing branch and by ``BrokerState.from_workflow``.
-    """
-
-    step_name: str
-    for_steps: list[str] | None
-    max_recoveries: int
-
 
 # Graph nodes: step names (str) for steps, event classes (type) for events.
 GraphNode = str | type

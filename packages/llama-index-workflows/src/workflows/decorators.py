@@ -58,6 +58,20 @@ class StepConfig:
     catch_error_max_recoveries: int = 1
 
 
+@dataclasses.dataclass(frozen=True)
+class CatchErrorHandler:
+    """Runtime descriptor for a ``@catch_error`` handler.
+
+    Precomputed by ``Workflow._validate()`` from the handler's ``StepConfig``;
+    consumed by the control loop's failure-routing branch and by
+    ``BrokerState.from_workflow``.
+    """
+
+    step_name: str
+    for_steps: list[str] | None
+    max_recoveries: int
+
+
 P = ParamSpec("P")
 R = TypeVar("R")
 R_co = TypeVar("R_co", covariant=True)
