@@ -49,7 +49,6 @@ handlers via `StepFailedEvent.exception`.
     options:
       members:
         - RetryInfo
-        - ExceptionInfo
 
 ## Retry Conditions
 

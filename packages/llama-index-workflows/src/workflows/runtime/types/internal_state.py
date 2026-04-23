@@ -17,7 +17,7 @@ from workflows.context.context_types import (
 from workflows.context.serializers import JsonSerializer
 from workflows.decorators import CatchErrorHandler, StepConfig
 from workflows.events import Event
-from workflows.retry_policy import ExceptionInfo, RetryPolicy
+from workflows.retry_policy import RetryPolicy
 from workflows.runtime.types.results import StepWorkerState, StepWorkerWaiter
 from workflows.runtime.types.ticks import TickAddEvent, WorkflowTick
 from workflows.workflow import Workflow
@@ -303,7 +303,7 @@ class EventAttempt:
     event: Event
     attempts: int | None = None
     first_attempt_at: float | None = None
-    last_exception: ExceptionInfo | None = None
+    last_exception: Exception | None = None
     last_failed_at: float | None = None
     recovery_counts: dict[str, int] = field(default_factory=dict)
 
@@ -365,7 +365,7 @@ class InProgressState:
     shared_state: StepWorkerState
     attempts: int
     first_attempt_at: float
-    last_exception: ExceptionInfo | None = None
+    last_exception: Exception | None = None
     last_failed_at: float | None = None
     recovery_counts: dict[str, int] = field(default_factory=dict)
 

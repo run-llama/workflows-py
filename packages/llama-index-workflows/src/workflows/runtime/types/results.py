@@ -22,7 +22,6 @@ from workflows.events import (
     SerializableException,
     SerializableOptionalEvent,
 )
-from workflows.retry_policy import ExceptionInfo
 
 EventType = TypeVar("EventType", bound=Event)
 
@@ -46,7 +45,7 @@ class RetryAttempt:
 
     retry_number: int = 0
     first_attempt_at: float = 0.0
-    last_exception: ExceptionInfo | None = None
+    last_exception: Exception | None = None
     last_failed_at: float | None = None
     recovery_counts: dict[str, int] = dataclasses.field(default_factory=dict)
 

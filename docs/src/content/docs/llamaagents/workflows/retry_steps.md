@@ -217,7 +217,7 @@ class MyWorkflow(Workflow):
         info = ctx.retry_info()
         if info.last_exception is not None:
             logger.warning(
-                "retry %d after %s", info.retry_number, info.last_exception.message
+                "retry %d after %s", info.retry_number, str(info.last_exception)
             )
         ...
 ```
@@ -251,7 +251,7 @@ class Pipeline(Workflow):
         self, ctx: Context, ev: StepFailedEvent
     ) -> StopEvent:
         return StopEvent(
-            result={"failed_step": ev.step_name, "error": ev.exception.message}
+            result={"failed_step": ev.step_name, "error": str(ev.exception)}
         )
 ```
 

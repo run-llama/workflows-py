@@ -20,7 +20,6 @@ from pydantic import (
 
 from workflows.context.serializers import JsonSerializer
 from workflows.context.utils import import_module_from_qualified_name
-from workflows.retry_policy import ExceptionInfo
 
 
 class DictLikeModel(BaseModel):
@@ -219,6 +218,25 @@ SerializableException = Annotated[
 ]
 
 
+def _serialize_optional_exception(exc: Exception | None) -> Any:
+    if exc is None:
+        return None
+    return _serialize_exception(exc)
+
+
+def _deserialize_optional_exception(data: Any) -> Exception | None:
+    if data is None:
+        return None
+    return _deserialize_exception(data)
+
+
+SerializableOptionalException = Annotated[
+    Exception | None,
+    PlainSerializer(_serialize_optional_exception, return_type=Any),
+    PlainValidator(_deserialize_optional_exception),
+]
+
+
 def _serialize_event_type(event_type: type[Event]) -> str:
     return f"{event_type.__module__}.{event_type.__qualname__}"
 
@@ -389,7 +407,9 @@ class StepFailedEvent(Event):
     Attributes:
         step_name: The name of the step that failed.
         input_event: The triggering event instance that caused the failure.
-        exception: Snapshot of the raised exception.
+        exception: The raised exception. ``__traceback__`` is present in-process
+            but ``None`` after the event has crossed a serialization boundary
+            (e.g., a replay).
         attempts: Total number of attempts made before giving up.
         elapsed_seconds: Seconds from first attempt to final failure.
         failed_at: Timezone-aware UTC datetime of the final failure.
@@ -397,7 +417,7 @@ class StepFailedEvent(Event):
 
     step_name: str
     input_event: SerializableEvent
-    exception: ExceptionInfo
+    exception: SerializableException
     attempts: int
     elapsed_seconds: float
     failed_at: datetime

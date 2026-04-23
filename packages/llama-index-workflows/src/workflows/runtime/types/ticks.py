@@ -18,8 +18,7 @@ from __future__ import annotations
 from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Discriminator, Field, TypeAdapter
-from workflows.events import SerializableEvent
-from workflows.retry_policy import ExceptionInfo
+from workflows.events import SerializableEvent, SerializableOptionalException
 from workflows.runtime.types.results import StepFunctionResult
 
 
@@ -43,7 +42,7 @@ class TickAddEvent(BaseModel):
     step_name: str | None = None
     attempts: int | None = None
     first_attempt_at: float | None = None
-    last_exception: ExceptionInfo | None = None
+    last_exception: SerializableOptionalException = None
     last_failed_at: float | None = None
     recovery_counts: dict[str, int] = Field(default_factory=dict)
 

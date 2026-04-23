@@ -9,6 +9,7 @@ import heapq
 import inspect
 import logging
 import time
+import traceback
 from collections.abc import AsyncIterable
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
@@ -34,7 +35,6 @@ from workflows.events import (
     WorkflowIdleEvent,
     WorkflowTimedOutEvent,
 )
-from workflows.retry_policy import ExceptionInfo
 from workflows.runtime.types.commands import (
     CommandCompleteRun,
     CommandFailWorkflow,
@@ -808,7 +808,6 @@ def _process_step_result_tick(
             else:
                 delay = None
             if delay is not None:
-                exception_info = ExceptionInfo.from_exception(result.exception)
                 commands.append(
                     CommandQueueEvent(
                         event=tick.event,
@@ -816,14 +815,13 @@ def _process_step_result_tick(
                         step_name=tick.step_name,
                         attempts=this_execution.attempts + 1,
                         first_attempt_at=this_execution.first_attempt_at,
-                        last_exception=exception_info,
+                        last_exception=result.exception,
                         last_failed_at=result.failed_at,
                         recovery_counts=dict(this_execution.recovery_counts),
                     )
                 )
             else:
                 exception = result.exception
-                exception_info = ExceptionInfo.from_exception(exception)
                 total_attempts = this_execution.attempts + 1
                 elapsed = result.failed_at - this_execution.first_attempt_at
 
@@ -848,7 +846,7 @@ def _process_step_result_tick(
                     step_failed_event = StepFailedEvent(
                         step_name=tick.step_name,
                         input_event=tick.event,
-                        exception=exception_info,
+                        exception=exception,
                         attempts=total_attempts,
                         elapsed_seconds=elapsed,
                         failed_at=datetime.fromtimestamp(
@@ -868,13 +866,20 @@ def _process_step_result_tick(
                 else:
                     # Publish a WorkflowFailedEvent to inform stream consumers about the failure
                     state.is_running = False
+                    exc_type = type(exception)
+                    exc_qualname = f"{exc_type.__module__}.{exc_type.__qualname__}"
+                    exc_traceback = "".join(
+                        traceback.format_exception(
+                            exc_type, exception, exception.__traceback__
+                        )
+                    )
                     commands.append(
                         CommandPublishEvent(
                             event=WorkflowFailedEvent(
                                 step_name=tick.step_name,
-                                exception_type=exception_info.type_name,
-                                exception_message=exception_info.message,
-                                traceback=exception_info.traceback,
+                                exception_type=exc_qualname,
+                                exception_message=str(exception),
+                                traceback=exc_traceback,
                                 attempts=total_attempts,
                                 elapsed_seconds=elapsed,
                             )

@@ -596,7 +596,7 @@ class Context(Generic[MODEL_T]):
                     logger.info(
                         "retry %d: %s",
                         info.retry_number,
-                        info.last_exception.message,
+                        str(info.last_exception),
                     )
                 ...
             ```

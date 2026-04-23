@@ -19,7 +19,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from workflows.events import Event, StopEvent
-from workflows.retry_policy import ExceptionInfo
 
 
 @dataclass(frozen=True)
@@ -36,7 +35,7 @@ class CommandQueueEvent:
     delay: float | None = None
     attempts: int | None = None
     first_attempt_at: float | None = None
-    last_exception: ExceptionInfo | None = None
+    last_exception: Exception | None = None
     last_failed_at: float | None = None
     recovery_counts: dict[str, int] = field(default_factory=dict)
 

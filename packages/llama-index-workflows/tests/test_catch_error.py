@@ -29,7 +29,6 @@ from workflows.events import (
     WorkflowFailedEvent,
 )
 from workflows.retry_policy import (
-    ExceptionInfo,
     RetryInfo,
     retry_always,
     retry_policy,
@@ -94,10 +93,8 @@ async def test_retry_info_after_failure_populated() -> None:
     assert observed[0].last_failed_at is None
     assert observed[1].retry_number == 1
     assert observed[1].elapsed_seconds >= 0.0
-    assert observed[1].last_exception is not None
-    assert observed[1].last_exception.type_name == "builtins.ValueError"
-    assert observed[1].last_exception.message == "boom"
-    assert "ValueError" in observed[1].last_exception.traceback
+    assert isinstance(observed[1].last_exception, ValueError)
+    assert str(observed[1].last_exception) == "boom"
     assert isinstance(observed[1].last_failed_at, datetime)
     assert observed[1].last_failed_at.tzinfo is not None
 
@@ -121,24 +118,20 @@ def test_last_exception_serialization_roundtrip() -> None:
 
     wf = Flow()
     state = BrokerState.from_workflow(wf)
-    exception_info = ExceptionInfo(
-        type_name="builtins.ValueError",
-        message="boom",
-        traceback="Traceback",
-    )
     state.workers["a"].queue.append(
         EventAttempt(
             event=StartEvent(),
             attempts=1,
             first_attempt_at=100.0,
-            last_exception=exception_info,
+            last_exception=ValueError("boom"),
             last_failed_at=123.456,
         )
     )
     serialized = state.to_serialized(JsonSerializer())
     restored = BrokerState.from_serialized(serialized, wf, JsonSerializer())
     restored_attempt = restored.workers["a"].queue[0]
-    assert restored_attempt.last_exception == exception_info
+    assert isinstance(restored_attempt.last_exception, ValueError)
+    assert str(restored_attempt.last_exception) == "boom"
     assert restored_attempt.last_failed_at == 123.456
 
 
@@ -246,9 +239,8 @@ async def test_step_failed_event_fields() -> None:
     assert ev.step_name == "flaky"
     assert isinstance(ev.input_event, _InputStart)
     assert ev.input_event.query == "hello"
-    assert ev.exception.type_name == "builtins.RuntimeError"
-    assert ev.exception.message == "bad:hello"
-    assert "RuntimeError" in ev.exception.traceback
+    assert isinstance(ev.exception, RuntimeError)
+    assert str(ev.exception) == "bad:hello"
     assert ev.attempts == 2
     assert ev.elapsed_seconds >= 0.0
     assert isinstance(ev.failed_at, datetime)
