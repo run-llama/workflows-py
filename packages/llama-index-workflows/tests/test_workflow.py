@@ -631,9 +631,7 @@ def test_workflow_validation_consumed_but_never_produced() -> None:
         async def b(self, ev: _OrphanEvent) -> StopEvent:
             return StopEvent(result="never")
 
-    with pytest.raises(
-        WorkflowValidationError, match="consumed but never produced"
-    ):
+    with pytest.raises(WorkflowValidationError, match="consumed but never produced"):
         Flow().validate()
 
 

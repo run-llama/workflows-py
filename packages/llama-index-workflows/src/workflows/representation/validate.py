@@ -581,9 +581,7 @@ async def _validate_resources(
             try:
                 await resource_manager.get(res_def.resource)
             except Exception as e:
-                errors.append(
-                    f"In step '{step_name}', parameter '{res_def.name}': {e}"
-                )
+                errors.append(f"In step '{step_name}', parameter '{res_def.name}': {e}")
     return errors
 
 

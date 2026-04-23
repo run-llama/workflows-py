@@ -128,13 +128,14 @@ class Workflow(metaclass=WorkflowMeta):
         """
         # Inline imports: every module below imports ``Workflow`` transitively,
         # so deferring to call time breaks the cycle.
+        from workflows.plugins._context import get_current_runtime
+        from workflows.runtime.verbose import VerboseDecorator
+
         from .representation.validate import (
             _collect_events,
             _ensure_start_event_class,
             _ensure_stop_event_class,
         )
-        from workflows.plugins._context import get_current_runtime
-        from workflows.runtime.verbose import VerboseDecorator
 
         # Configuration
         self._timeout = timeout
@@ -469,7 +470,9 @@ class Workflow(metaclass=WorkflowMeta):
                 )
 
         if validate_resources:
-            errors = asyncio.run(_validate_resources(step_configs, self._resource_manager))
+            errors = asyncio.run(
+                _validate_resources(step_configs, self._resource_manager)
+            )
             if errors:
                 raise WorkflowValidationError(
                     "Resource validation failed:\n"
