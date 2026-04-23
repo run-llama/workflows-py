@@ -215,24 +215,22 @@ async def test_update_collapses_duplicates_with_matching_run_id(
 
 
 @pytest.mark.asyncio
-async def test_update_preserves_duplicates_with_mismatched_run_id(
-    store: AgentDataStore,
-    backend: FakeAgentDataBackend,
-    caplog: pytest.LogCaptureFixture,
+async def test_update_collapses_duplicates_with_mismatched_run_id(
+    store: AgentDataStore, backend: FakeAgentDataBackend
 ) -> None:
-    """Rows for the same handler_id but different run_ids must not be collapsed."""
+    """Duplicates collapse regardless of run_id — one row per handler_id."""
     _seed_raw_handler(backend, handler_id="dup-2", run_id="run-a", status="running")
     _seed_raw_handler(backend, handler_id="dup-2", run_id="run-b", status="running")
 
-    with caplog.at_level("WARNING"):
-        await store.update(
-            make_handler(handler_id="dup-2", run_id="run-b", status="completed")
-        )
+    await store.update(
+        make_handler(handler_id="dup-2", run_id="run-b", status="completed")
+    )
 
     rows = backend._get_items("test-deploy", "handlers")
     handler_rows = [r for r in rows if r["data"].get("handler_id") == "dup-2"]
-    assert len(handler_rows) == 2
-    assert any("mismatched run_ids" in rec.message for rec in caplog.records)
+    assert len(handler_rows) == 1
+    assert handler_rows[0]["data"]["run_id"] == "run-b"
+    assert handler_rows[0]["data"]["status"] == "completed"
 
 
 @pytest.mark.asyncio

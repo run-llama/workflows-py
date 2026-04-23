@@ -277,25 +277,11 @@ class AgentDataStore(AbstractWorkflowStore):
                 await self._client.update_item(item_id, data)
                 return
 
-            # Duplicate handler rows — converge to one survivor.
-            # Only dedupe when every sibling shares the handler's run_id;
-            # mismatching run_ids are a different class of duplicate (client
-            # retry with a reused handler_id) that we must not collapse.
-            run_id = handler.run_id
-            sibling_run_ids = {item["data"].get("run_id") for item in items}
-            if run_id is None or sibling_run_ids != {run_id}:
-                logger.warning(
-                    "Duplicate rows for handler %s have mismatched run_ids %s; "
-                    "falling back to newest-wins without dedupe",
-                    handler_id,
-                    sibling_run_ids,
-                )
-                item_id = items[0]["id"]
-                self._id_cache.put(handler_id, item_id)
-                await self._client.update_item(item_id, data)
-                return
-
-            # Oldest survivor preserves the row created at handler submission.
+            # Duplicate handler rows — converge to one survivor. The
+            # invariant is one row per handler_id; run_id is a mutable field
+            # on the row, so mismatched run_ids just mean an earlier run was
+            # superseded. Collapse regardless. Oldest survivor preserves the
+            # row's original created_at.
             survivor_id = items[-1]["id"]
             victim_ids = [item["id"] for item in items[:-1]]
             logger.warning(
