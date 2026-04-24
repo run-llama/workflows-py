@@ -72,6 +72,14 @@ helm install llama-agents oci://docker.io/llamaindex/llama-agents \
 yourself, or use node-level pull credentials. Switching modes on an existing
 install requires draining and recreating `LlamaDeployment` CRs.
 
+## Non-AWS object storage (Azure, GCS, …)
+
+Set `s3proxy.enabled=true` and fill in `s3proxy.config` with the JCLOUDS_*
+credentials for your cloud. A sidecar container runs alongside the control
+plane and translates S3 API calls to the native backend. See
+[`docs/s3-proxy-setup.md`](docs/s3-proxy-setup.md) for Azure Blob and GCS
+examples.
+
 ## Values
 
 ### Metrics
@@ -131,7 +139,7 @@ install requires draining and recreating `LlamaDeployment` CRs.
 | controlPlane.objectStorage.s3.endpointUrl | string | `""` | S3 endpoint URL (leave empty for AWS) |
 | controlPlane.objectStorage.s3.bucket | string | `""` | S3 bucket name (**required**) |
 | controlPlane.objectStorage.s3.region | string | `""` | S3 region |
-| controlPlane.objectStorage.s3.unsigned | bool | `false` | Send S3 requests unsigned (no Authorization header). Enable for authless backends like s3proxy/LocalStack or public-read buckets. Leave `false` for real AWS, MinIO, or any auth-requiring backend. |
+| controlPlane.objectStorage.s3.unsigned | string | `nil` | Send S3 requests unsigned (no Authorization header). Enable for authless backends like s3proxy/LocalStack or public-read buckets. Leave unset/`false` for real AWS, MinIO, or any auth-requiring backend. When `s3proxy.enabled=true` and this value is not explicitly set, it defaults to `true`. |
 | controlPlane.objectStorage.secretRef | string | `""` | K8s Secret name containing `S3_ACCESS_KEY` and `S3_SECRET_KEY` |
 | controlPlane.objectStorage.buildKeyPrefix | string | `"builds"` | Key prefix for build artifacts in the bucket |
 | controlPlane.objectStorage.backupKeyPrefix | string | `"backups"` | Key prefix for backup archives in the bucket |
@@ -192,6 +200,19 @@ install requires draining and recreating `LlamaDeployment` CRs.
 | serviceAccount.create | bool | `true` | Create a ServiceAccount |
 | serviceAccount.name | string | `"llama-agents"` | ServiceAccount name |
 | serviceAccount.annotations | object | `{}` | Annotations for the ServiceAccount |
+
+### s3proxy
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| s3proxy.enabled | bool | `false` | Run an [s3proxy](https://github.com/gaul/s3proxy) sidecar alongside the control plane to translate S3 API calls to non-AWS backends (Azure Blob, GCS, etc.). When enabled, `S3_ENDPOINT_URL` and `S3_UNSIGNED` default to localhost and `true` unless explicitly overridden. Fill in `s3proxy.config` with the JCLOUDS_* environment variables for your cloud. |
+| s3proxy.image | string | `"docker.io/andrewgaul/s3proxy:sha-001d042"` | s3proxy container image |
+| s3proxy.imagePullPolicy | string | `"IfNotPresent"` | s3proxy image pull policy |
+| s3proxy.containerPort | int | `8080` | Port s3proxy listens on inside the pod (control plane reaches it over localhost) |
+| s3proxy.logLevel | string | `"info"` | s3proxy log level (passed as LOG_LEVEL and S3PROXY_LOG_LEVEL) |
+| s3proxy.securityContext | object | `{}` | securityContext for the s3proxy container |
+| s3proxy.resources | object | `{requests: {cpu: 500m, memory: 512Mi}, limits: {cpu: "1", memory: 1Gi}}` | Resource requests/limits for the s3proxy sidecar |
+| s3proxy.config | object | `{}` | Raw passthrough to the s3proxy Secret. Keys become environment variables on the sidecar. Typically `JCLOUDS_PROVIDER`, `JCLOUDS_IDENTITY`, `JCLOUDS_CREDENTIAL`, `JCLOUDS_ENDPOINT`, `JCLOUDS_REGION`. See https://github.com/gaul/s3proxy/wiki/Storage-backend-examples. |
 
 ### Network Policy
 

@@ -28,6 +28,11 @@ llama-agents-service
 llama-agents-build
 {{- end -}}
 
+{{/* s3proxy ConfigMap/Secret name (shared by both resources) */}}
+{{- define "llama-agents.s3proxy.name" -}}
+llama-agents-s3proxy
+{{- end -}}
+
 {{/* Service account name — use value from values.yaml if set, otherwise chart name */}}
 {{- define "llama-agents.serviceAccountName" -}}
 {{- if .Values.serviceAccount.name -}}

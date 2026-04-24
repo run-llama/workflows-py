@@ -1,0 +1,286 @@
+suite: s3proxy sidecar configuration
+templates:
+  - templates/deployment.yaml
+  - templates/s3proxy-configmap.yaml
+  - templates/s3proxy-secret.yaml
+set:
+  controlPlane:
+    objectStorage:
+      s3:
+        bucket: "my-bucket"
+tests:
+  # --- disabled (default) ---
+
+  - it: does not render s3proxy ConfigMap or Secret when disabled
+    asserts:
+      - hasDocuments:
+          count: 0
+        template: templates/s3proxy-configmap.yaml
+      - hasDocuments:
+          count: 0
+        template: templates/s3proxy-secret.yaml
+
+  - it: deployment has a single container and no s3proxy volume when disabled
+    template: templates/deployment.yaml
+    asserts:
+      - lengthEqual:
+          path: spec.template.spec.containers
+          count: 1
+      - equal:
+          path: spec.template.spec.containers[0].name
+          value: app
+      - notExists:
+          path: spec.template.spec.volumes
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: S3_ENDPOINT_URL
+            value: ""
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: S3_UNSIGNED
+            value: "false"
+
+  # --- enabled: ConfigMap / Secret ---
+
+  - it: renders the s3proxy ConfigMap when enabled
+    set:
+      s3proxy:
+        enabled: true
+    template: templates/s3proxy-configmap.yaml
+    asserts:
+      - isKind:
+          of: ConfigMap
+      - equal:
+          path: metadata.name
+          value: llama-agents-s3proxy
+      - equal:
+          path: data.S3PROXY_AUTHORIZATION
+          value: "none"
+      - equal:
+          path: data.S3PROXY_CORS_ALLOW_ORIGINS
+          value: "*"
+      - equal:
+          path: data.S3PROXY_ENDPOINT
+          value: "http://0.0.0.0:8080"
+      - equal:
+          path: data.S3PROXY_IGNORE_UNKNOWN_HEADERS
+          value: "true"
+
+  - it: renders the s3proxy Secret with b64-encoded config entries
+    set:
+      s3proxy:
+        enabled: true
+        config:
+          JCLOUDS_PROVIDER: azureblob
+          JCLOUDS_IDENTITY: my-id
+          JCLOUDS_CREDENTIAL: my-secret
+    template: templates/s3proxy-secret.yaml
+    asserts:
+      - isKind:
+          of: Secret
+      - equal:
+          path: metadata.name
+          value: llama-agents-s3proxy
+      - equal:
+          path: type
+          value: Opaque
+      - equal:
+          path: data.JCLOUDS_PROVIDER
+          value: YXp1cmVibG9i
+      - equal:
+          path: data.JCLOUDS_IDENTITY
+          value: bXktaWQ=
+      - equal:
+          path: data.JCLOUDS_CREDENTIAL
+          value: bXktc2VjcmV0
+
+  # --- enabled: deployment injection ---
+
+  - it: injects s3proxy sidecar and volume when enabled
+    set:
+      s3proxy:
+        enabled: true
+    template: templates/deployment.yaml
+    asserts:
+      - lengthEqual:
+          path: spec.template.spec.containers
+          count: 2
+      - equal:
+          path: spec.template.spec.containers[1].name
+          value: s3proxy
+      - equal:
+          path: spec.template.spec.containers[1].image
+          value: docker.io/andrewgaul/s3proxy:sha-001d042
+      - equal:
+          path: spec.template.spec.containers[1].ports[0].containerPort
+          value: 8080
+      - contains:
+          path: spec.template.spec.containers[1].envFrom
+          content:
+            configMapRef:
+              name: llama-agents-s3proxy
+      - contains:
+          path: spec.template.spec.containers[1].envFrom
+          content:
+            secretRef:
+              name: llama-agents-s3proxy
+      - equal:
+          path: spec.template.spec.containers[1].volumeMounts[0].name
+          value: s3proxy-tmp
+      - equal:
+          path: spec.template.spec.containers[1].volumeMounts[0].mountPath
+          value: /tmp
+      - equal:
+          path: spec.template.spec.containers[1].volumeMounts[0].subPath
+          value: tmp-dir
+      - contains:
+          path: spec.template.spec.volumes
+          content:
+            name: s3proxy-tmp
+            emptyDir: {}
+
+  - it: defaults S3_ENDPOINT_URL to localhost and S3_UNSIGNED to true when enabled
+    set:
+      s3proxy:
+        enabled: true
+    template: templates/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: S3_ENDPOINT_URL
+            value: "http://localhost:8080"
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: S3_UNSIGNED
+            value: "true"
+
+  - it: honors explicit endpointUrl override when s3proxy is enabled
+    set:
+      s3proxy:
+        enabled: true
+      controlPlane:
+        objectStorage:
+          s3:
+            bucket: "my-bucket"
+            endpointUrl: "https://s3.example.com"
+    template: templates/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: S3_ENDPOINT_URL
+            value: "https://s3.example.com"
+
+  - it: honors explicit unsigned=false override when s3proxy is enabled
+    set:
+      s3proxy:
+        enabled: true
+      controlPlane:
+        objectStorage:
+          s3:
+            bucket: "my-bucket"
+            unsigned: false
+    template: templates/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: S3_UNSIGNED
+            value: "false"
+
+  # --- sidecar overrides ---
+
+  - it: uses a custom containerPort for the sidecar and the localhost URL
+    set:
+      s3proxy:
+        enabled: true
+        containerPort: 9000
+    template: templates/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[1].ports[0].containerPort
+          value: 9000
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: S3_ENDPOINT_URL
+            value: "http://localhost:9000"
+
+  - it: uses custom containerPort in the ConfigMap's S3PROXY_ENDPOINT
+    set:
+      s3proxy:
+        enabled: true
+        containerPort: 9000
+    template: templates/s3proxy-configmap.yaml
+    asserts:
+      - equal:
+          path: data.S3PROXY_ENDPOINT
+          value: "http://0.0.0.0:9000"
+
+  - it: uses a custom image when specified
+    set:
+      s3proxy:
+        enabled: true
+        image: custom-registry/s3proxy:custom-tag
+    template: templates/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[1].image
+          value: custom-registry/s3proxy:custom-tag
+
+  - it: applies custom resources to the sidecar
+    set:
+      s3proxy:
+        enabled: true
+        resources:
+          requests:
+            cpu: 250m
+            memory: 256Mi
+          limits:
+            cpu: "2"
+            memory: 2Gi
+    template: templates/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[1].resources.requests.cpu
+          value: 250m
+      - equal:
+          path: spec.template.spec.containers[1].resources.requests.memory
+          value: 256Mi
+      - equal:
+          path: spec.template.spec.containers[1].resources.limits.cpu
+          value: "2"
+      - equal:
+          path: spec.template.spec.containers[1].resources.limits.memory
+          value: 2Gi
+
+  - it: omits securityContext when not specified
+    set:
+      s3proxy:
+        enabled: true
+    template: templates/deployment.yaml
+    asserts:
+      - isNull:
+          path: spec.template.spec.containers[1].securityContext
+
+  - it: renders securityContext when specified
+    set:
+      s3proxy:
+        enabled: true
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+              - ALL
+    template: templates/deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[1].securityContext.allowPrivilegeEscalation
+          value: false
+      - equal:
+          path: spec.template.spec.containers[1].securityContext.capabilities.drop[0]
+          value: ALL

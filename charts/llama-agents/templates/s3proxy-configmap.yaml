@@ -1,0 +1,11 @@
+{{- if .Values.s3proxy.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "llama-agents.s3proxy.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: {{ include "llama-agents.controlplane.name" . }}
+data:
+  {{- include "llama-agents.s3proxy.configMapData" . | nindent 2 }}
+{{- end }}

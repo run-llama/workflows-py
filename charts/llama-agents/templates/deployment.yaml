@@ -53,13 +53,25 @@ spec:
         - name: DEFAULT_APPSERVER_IMAGE_TAG
           value: {{ .Values.controlPlane.defaultAppserverImageTag | default .Values.images.appserver.tag | quote }}
         - name: S3_ENDPOINT_URL
+          {{- if .Values.controlPlane.objectStorage.s3.endpointUrl }}
           value: {{ .Values.controlPlane.objectStorage.s3.endpointUrl | quote }}
+          {{- else if .Values.s3proxy.enabled }}
+          value: {{ include "llama-agents.s3proxy.localEndpoint" . | quote }}
+          {{- else }}
+          value: ""
+          {{- end }}
         - name: S3_BUCKET
           value: {{ required "controlPlane.objectStorage.s3.bucket is required" .Values.controlPlane.objectStorage.s3.bucket | quote }}
         - name: S3_REGION
           value: {{ .Values.controlPlane.objectStorage.s3.region | quote }}
         - name: S3_UNSIGNED
-          value: {{ .Values.controlPlane.objectStorage.s3.unsigned | default false | quote }}
+          {{- if kindIs "bool" .Values.controlPlane.objectStorage.s3.unsigned }}
+          value: {{ .Values.controlPlane.objectStorage.s3.unsigned | quote }}
+          {{- else if .Values.s3proxy.enabled }}
+          value: "true"
+          {{- else }}
+          value: "false"
+          {{- end }}
         - name: BUILD_S3_KEY_PREFIX
           value: {{ .Values.controlPlane.objectStorage.buildKeyPrefix | quote }}
         - name: BACKUP_S3_KEY_PREFIX
@@ -96,3 +108,9 @@ spec:
         resources:
           {{- toYaml .Values.controlPlane.container.resources | nindent 10 }}
         {{- end }}
+      {{- if .Values.s3proxy.enabled }}
+      {{- include "llama-agents.s3proxy.container" . | nindent 6 }}
+      volumes:
+      - name: s3proxy-tmp
+        emptyDir: {}
+      {{- end }}

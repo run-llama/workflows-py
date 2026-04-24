@@ -72,6 +72,14 @@ helm install llama-agents oci://docker.io/llamaindex/llama-agents \
 yourself, or use node-level pull credentials. Switching modes on an existing
 install requires draining and recreating `LlamaDeployment` CRs.
 
+## Non-AWS object storage (Azure, GCS, …)
+
+Set `s3proxy.enabled=true` and fill in `s3proxy.config` with the JCLOUDS_*
+credentials for your cloud. A sidecar container runs alongside the control
+plane and translates S3 API calls to the native backend. See
+[`docs/s3-proxy-setup.md`](docs/s3-proxy-setup.md) for Azure Blob and GCS
+examples.
+
 {{ template "chart.valuesSection" . }}
 
 ## Uninstalling
