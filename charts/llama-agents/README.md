@@ -11,7 +11,7 @@ This chart deploys two components:
 
 CRDs (`LlamaDeployment`, `LlamaDeploymentTemplate`) are included in the chart's `crds/` directory and installed automatically on first `helm install`. They are **not** modified on upgrade or removed on uninstall (standard Helm CRD behavior).
 
-For managed CRD upgrades, use the companion [`llama-agents-crds`](../llama-agents-crds/) chart.
+For managed CRD upgrades, use the companion [`llama-agents-crds`](../llama-agents-crds/) chart. Each release of `llama-agents` pins the compatible CRD chart version in `crds.version` (see the values table below) — use that version when installing or upgrading the CRD chart.
 
 ## Prerequisites
 
@@ -36,8 +36,8 @@ CRDs are installed automatically from the `crds/` directory.
 If you prefer explicit CRD lifecycle management (recommended for production):
 
 ```bash
-# Install CRD chart first
-helm install llama-agents-crds oci://docker.io/llamaindex/llama-agents-crds
+# Install CRD chart first — pin to the compatible version from `crds.version` below
+helm install llama-agents-crds oci://docker.io/llamaindex/llama-agents-crds --version <crds.version>
 
 # Install main chart, skipping bundled CRDs
 helm install llama-agents oci://docker.io/llamaindex/llama-agents --skip-crds \
@@ -47,8 +47,8 @@ helm install llama-agents oci://docker.io/llamaindex/llama-agents --skip-crds \
 ## Upgrading
 
 ```bash
-# If CRD schema has changed, upgrade CRDs first
-helm upgrade --install llama-agents-crds oci://docker.io/llamaindex/llama-agents-crds
+# If CRD schema has changed, upgrade CRDs first — pin to `crds.version` from the values table
+helm upgrade --install llama-agents-crds oci://docker.io/llamaindex/llama-agents-crds --version <crds.version>
 
 # Then upgrade the main chart
 helm upgrade llama-agents oci://docker.io/llamaindex/llama-agents
@@ -209,6 +209,12 @@ Partial inline (one of `accessKey`/`secretKey` set) is a template error.
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | apps.namespace | string | `""` | Namespace where LlamaDeployment CRs and all operator-managed child resources live. Empty = release namespace. When set, the operator + control plane stay in the release namespace and target this namespace for all app resources. |
+
+### CRDs
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| crds.version | string | `"0.7.2"` | Compatible `llama-agents-crds` chart version for this release. Documentation only; not read by templates. Auto-synced at release time. |
 
 ### Operator
 
