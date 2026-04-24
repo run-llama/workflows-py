@@ -22,8 +22,7 @@ Rendered into the control plane pod when `.Values.s3proxy.enabled` is true.
   envFrom:
   - configMapRef:
       name: {{ include "llama-agents.s3proxy.name" . }}
-  - secretRef:
-      name: {{ include "llama-agents.s3proxy.name" . }}
+  {{- include "llama-agents.secrets.s3proxy" . | nindent 2 }}
   {{- with .Values.s3proxy.resources }}
   resources:
     {{- toYaml . | nindent 4 }}

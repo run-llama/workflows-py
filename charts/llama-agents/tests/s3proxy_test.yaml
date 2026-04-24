@@ -121,11 +121,9 @@ tests:
           content:
             configMapRef:
               name: llama-agents-s3proxy
-      - contains:
+      - lengthEqual:
           path: spec.template.spec.containers[1].envFrom
-          content:
-            secretRef:
-              name: llama-agents-s3proxy
+          count: 1
       - equal:
           path: spec.template.spec.containers[1].volumeMounts[0].name
           value: s3proxy-tmp
@@ -140,6 +138,72 @@ tests:
           content:
             name: s3proxy-tmp
             emptyDir: {}
+
+  - it: does not render the sidecar Secret when no config or secret is set
+    set:
+      s3proxy:
+        enabled: true
+    template: templates/s3proxy-secret.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: renders chart Secret and envFrom at chart name when only config is set
+    set:
+      s3proxy:
+        enabled: true
+        config:
+          JCLOUDS_PROVIDER: azureblob
+    asserts:
+      - template: templates/s3proxy-secret.yaml
+        hasDocuments:
+          count: 1
+      - template: templates/deployment.yaml
+        contains:
+          path: spec.template.spec.containers[1].envFrom
+          content:
+            secretRef:
+              name: llama-agents-s3proxy
+
+  - it: skips chart Secret and envFroms the user-supplied Secret when only secret is set
+    set:
+      s3proxy:
+        enabled: true
+        secret: my-s3proxy-secret
+    asserts:
+      - template: templates/s3proxy-secret.yaml
+        hasDocuments:
+          count: 0
+      - template: templates/deployment.yaml
+        contains:
+          path: spec.template.spec.containers[1].envFrom
+          content:
+            secretRef:
+              name: my-s3proxy-secret
+
+  - it: prefers secret over config (silent precedence)
+    set:
+      s3proxy:
+        enabled: true
+        config:
+          JCLOUDS_PROVIDER: azureblob
+        secret: my-s3proxy-secret
+    asserts:
+      - template: templates/s3proxy-secret.yaml
+        hasDocuments:
+          count: 0
+      - template: templates/deployment.yaml
+        contains:
+          path: spec.template.spec.containers[1].envFrom
+          content:
+            secretRef:
+              name: my-s3proxy-secret
+      - template: templates/deployment.yaml
+        notContains:
+          path: spec.template.spec.containers[1].envFrom
+          content:
+            secretRef:
+              name: llama-agents-s3proxy
 
   - it: defaults S3_ENDPOINT_URL to localhost and S3_UNSIGNED to true when enabled
     set:

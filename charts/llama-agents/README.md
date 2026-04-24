@@ -139,7 +139,9 @@ plane. See [`docs/s3-proxy-setup.md`](docs/s3-proxy-setup.md).
 | controlPlane.objectStorage.s3.bucket | string | `""` | S3 bucket name (**required**) |
 | controlPlane.objectStorage.s3.region | string | `""` | S3 region |
 | controlPlane.objectStorage.s3.unsigned | string | `nil` | Send S3 requests unsigned (no Authorization header). Leave unset/`false` for any auth-requiring S3-compatible backend. For non-S3 object/blob storage, see `s3proxy.enabled` below — when that's on, this defaults to `true` unless you override it here. |
-| controlPlane.objectStorage.secretRef | string | `""` | K8s Secret name containing `S3_ACCESS_KEY` and `S3_SECRET_KEY` |
+| controlPlane.objectStorage.s3.accessKey | string | `""` | Inline S3 access key. When set alongside `secretKey`, the chart renders a Secret and wires it into the control plane. Mutually exclusive with `s3.secret` (which wins silently). |
+| controlPlane.objectStorage.s3.secretKey | string | `""` | Inline S3 secret key. Must be set together with `accessKey`; partial setting is an error. |
+| controlPlane.objectStorage.s3.secret | string | `""` | Name of an existing K8s Secret supplying `S3_ACCESS_KEY` and `S3_SECRET_KEY`. Takes precedence over `accessKey`/`secretKey`. |
 | controlPlane.objectStorage.buildKeyPrefix | string | `"builds"` | Key prefix for build artifacts in the bucket |
 | controlPlane.objectStorage.backupKeyPrefix | string | `"backups"` | Key prefix for backup archives in the bucket |
 | controlPlane.objectStorage.codeRepoKeyPrefix | string | `"git"` | Key prefix for code repositories in the bucket |
@@ -212,6 +214,7 @@ plane. See [`docs/s3-proxy-setup.md`](docs/s3-proxy-setup.md).
 | s3proxy.securityContext | object | `{}` | securityContext for the s3proxy container |
 | s3proxy.resources | object | `{requests: {cpu: 500m, memory: 512Mi}, limits: {cpu: "1", memory: 1Gi}}` | Resource requests/limits for the s3proxy sidecar |
 | s3proxy.config | object | `{}` | Raw passthrough to the s3proxy Secret. Keys become environment variables on the sidecar. Typically `JCLOUDS_PROVIDER`, `JCLOUDS_IDENTITY`, `JCLOUDS_CREDENTIAL`, `JCLOUDS_ENDPOINT`, `JCLOUDS_REGION`. See https://github.com/gaul/s3proxy/wiki/Storage-backend-examples. |
+| s3proxy.secret | string | `""` | Name of an existing K8s Secret supplying the sidecar's env vars. Takes precedence over `config` (which is skipped if this is set). |
 
 ### Network Policy
 

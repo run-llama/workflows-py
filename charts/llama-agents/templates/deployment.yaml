@@ -81,18 +81,19 @@ spec:
         {{- if .Values.controlPlane.container.env }}
           {{- toYaml .Values.controlPlane.container.env | nindent 8 }}
         {{- end }}
-        {{- if or .Values.controlPlane.container.envFrom .Values.controlPlane.objectStorage.secretRef .Values.controlPlane.objectStorage.backupEncryptionSecretRef }}
+        {{- $os := .Values.controlPlane.objectStorage }}
+        {{- $s3Secret := include "llama-agents.secrets.controlplaneS3" . | trim }}
+        {{- if or .Values.controlPlane.container.envFrom $s3Secret $os.backupEncryptionSecretRef }}
         envFrom:
         {{- if .Values.controlPlane.container.envFrom }}
         {{- toYaml .Values.controlPlane.container.envFrom | nindent 8 }}
         {{- end }}
-        {{- if .Values.controlPlane.objectStorage.secretRef }}
-        - secretRef:
-            name: {{ .Values.controlPlane.objectStorage.secretRef }}
+        {{- if $s3Secret }}
+        {{- include "llama-agents.secrets.controlplaneS3" . | nindent 8 }}
         {{- end }}
-        {{- if .Values.controlPlane.objectStorage.backupEncryptionSecretRef }}
+        {{- if $os.backupEncryptionSecretRef }}
         - secretRef:
-            name: {{ .Values.controlPlane.objectStorage.backupEncryptionSecretRef }}
+            name: {{ $os.backupEncryptionSecretRef }}
         {{- end }}
         {{- end }}
 
