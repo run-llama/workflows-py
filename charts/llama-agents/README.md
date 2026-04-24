@@ -74,10 +74,67 @@ install requires draining and recreating `LlamaDeployment` CRs.
 
 ## Non-S3 object storage
 
-Set `s3proxy.enabled=true` and fill in `s3proxy.config` with the `JCLOUDS_*`
-vars for your backend. The chart runs an
+Set `s3proxy.enabled=true` to run an
 [s3proxy](https://github.com/gaul/s3proxy) sidecar alongside the control
-plane. See [`docs/s3-proxy-setup.md`](docs/s3-proxy-setup.md).
+plane. When enabled, `S3_ENDPOINT_URL` points at the sidecar on localhost and
+`S3_UNSIGNED` defaults to `true`; explicit overrides still win.
+
+Credentials take one of two forms:
+
+```yaml
+# Inline — chart renders llama-agents-s3proxy Secret
+s3proxy:
+  enabled: true
+  config:
+    JCLOUDS_PROVIDER: <provider>
+    JCLOUDS_IDENTITY: <id>
+    JCLOUDS_CREDENTIAL: <secret>
+    # ...any other JCLOUDS_* vars the backend needs
+```
+
+```yaml
+# BYO — point at an existing Secret whose keys are the sidecar env vars
+s3proxy:
+  enabled: true
+  secret: my-existing-s3proxy-secret
+```
+
+Pick `JCLOUDS_*` vars from the
+[s3proxy storage-backend examples](https://github.com/gaul/s3proxy/wiki/Storage-backend-examples).
+If both `config` and `secret` are set, `secret` wins.
+
+## Control plane S3 credentials
+
+Three mutually-exclusive forms, listed in precedence order:
+
+```yaml
+# BYO — envFroms an existing Secret (keys: S3_ACCESS_KEY, S3_SECRET_KEY)
+controlPlane:
+  objectStorage:
+    s3:
+      bucket: my-bucket
+      secret: my-s3-creds
+```
+
+```yaml
+# Inline — chart renders llama-agents-controlplane-s3 Secret
+controlPlane:
+  objectStorage:
+    s3:
+      bucket: my-bucket
+      accessKey: AKIA...
+      secretKey: ...
+```
+
+```yaml
+# Neither — control plane relies on IRSA / workload identity
+controlPlane:
+  objectStorage:
+    s3:
+      bucket: my-bucket
+```
+
+Partial inline (one of `accessKey`/`secretKey` set) is a template error.
 
 ## Values
 
