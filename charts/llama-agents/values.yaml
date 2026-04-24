@@ -302,7 +302,7 @@ s3proxy:
   enabled: false
   # -- s3proxy container image
   # @section -- s3proxy
-  image: "docker.io/andrewgaul/s3proxy:sha-001d042"
+  image: "docker.io/andrewgaul/s3proxy:3.1.0"
   # -- s3proxy image pull policy
   # @section -- s3proxy
   imagePullPolicy: IfNotPresent
@@ -316,15 +316,15 @@ s3proxy:
   # @section -- s3proxy
   securityContext: {}
   # -- Resource requests/limits for the s3proxy sidecar
-  # @default -- `{requests: {cpu: 500m, memory: 512Mi}, limits: {cpu: "1", memory: 1Gi}}`
+  # @default -- `{requests: {cpu: 50m, memory: 256Mi}, limits: {cpu: 500m, memory: 512Mi}}`
   # @section -- s3proxy
   resources:
     requests:
+      cpu: 50m
+      memory: 256Mi
+    limits:
       cpu: 500m
       memory: 512Mi
-    limits:
-      cpu: "1"
-      memory: 1Gi
   # -- Raw passthrough to the s3proxy Secret. Keys become environment variables
   # on the sidecar. Typically `JCLOUDS_PROVIDER`, `JCLOUDS_IDENTITY`,
   # `JCLOUDS_CREDENTIAL`, `JCLOUDS_ENDPOINT`, `JCLOUDS_REGION`. See

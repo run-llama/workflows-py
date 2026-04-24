@@ -112,7 +112,7 @@ tests:
           value: s3proxy
       - equal:
           path: spec.template.spec.containers[1].image
-          value: docker.io/andrewgaul/s3proxy:sha-001d042
+          value: docker.io/andrewgaul/s3proxy:3.1.0
       - equal:
           path: spec.template.spec.containers[1].ports[0].containerPort
           value: 8080

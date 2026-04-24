@@ -264,12 +264,12 @@ Partial inline (one of `accessKey`/`secretKey` set) is a template error.
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | s3proxy.enabled | bool | `false` | Run an [s3proxy](https://github.com/gaul/s3proxy) sidecar alongside the control plane to translate S3 API calls to non-AWS backends (Azure Blob, GCS, etc.). When enabled, `S3_ENDPOINT_URL` and `S3_UNSIGNED` default to localhost and `true` unless explicitly overridden. Fill in `s3proxy.config` with the JCLOUDS_* environment variables for your cloud. |
-| s3proxy.image | string | `"docker.io/andrewgaul/s3proxy:sha-001d042"` | s3proxy container image |
+| s3proxy.image | string | `"docker.io/andrewgaul/s3proxy:3.1.0"` | s3proxy container image |
 | s3proxy.imagePullPolicy | string | `"IfNotPresent"` | s3proxy image pull policy |
 | s3proxy.containerPort | int | `8080` | Port s3proxy listens on inside the pod (control plane reaches it over localhost) |
 | s3proxy.logLevel | string | `"info"` | s3proxy log level (passed as LOG_LEVEL and S3PROXY_LOG_LEVEL) |
 | s3proxy.securityContext | object | `{}` | securityContext for the s3proxy container |
-| s3proxy.resources | object | `{requests: {cpu: 500m, memory: 512Mi}, limits: {cpu: "1", memory: 1Gi}}` | Resource requests/limits for the s3proxy sidecar |
+| s3proxy.resources | object | `{requests: {cpu: 50m, memory: 256Mi}, limits: {cpu: 500m, memory: 512Mi}}` | Resource requests/limits for the s3proxy sidecar |
 | s3proxy.config | object | `{}` | Raw passthrough to the s3proxy Secret. Keys become environment variables on the sidecar. Typically `JCLOUDS_PROVIDER`, `JCLOUDS_IDENTITY`, `JCLOUDS_CREDENTIAL`, `JCLOUDS_ENDPOINT`, `JCLOUDS_REGION`. See https://github.com/gaul/s3proxy/wiki/Storage-backend-examples. |
 | s3proxy.secret | string | `""` | Name of an existing K8s Secret supplying the sidecar's env vars. Takes precedence over `config` (which is skipped if this is set). |
 
