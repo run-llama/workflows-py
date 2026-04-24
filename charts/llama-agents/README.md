@@ -72,6 +72,70 @@ helm install llama-agents oci://docker.io/llamaindex/llama-agents \
 yourself, or use node-level pull credentials. Switching modes on an existing
 install requires draining and recreating `LlamaDeployment` CRs.
 
+## Non-S3 object storage
+
+Set `s3proxy.enabled=true` to run an
+[s3proxy](https://github.com/gaul/s3proxy) sidecar alongside the control
+plane. When enabled, `S3_ENDPOINT_URL` points at the sidecar on localhost and
+`S3_UNSIGNED` defaults to `true`; explicit overrides still win.
+
+Credentials take one of two forms:
+
+```yaml
+# Inline — chart renders llama-agents-s3proxy Secret
+s3proxy:
+  enabled: true
+  config:
+    JCLOUDS_PROVIDER: <provider>
+    JCLOUDS_IDENTITY: <id>
+    JCLOUDS_CREDENTIAL: <secret>
+    # ...any other JCLOUDS_* vars the backend needs
+```
+
+```yaml
+# BYO — point at an existing Secret whose keys are the sidecar env vars
+s3proxy:
+  enabled: true
+  secret: my-existing-s3proxy-secret
+```
+
+Pick `JCLOUDS_*` vars from the
+[s3proxy storage-backend examples](https://github.com/gaul/s3proxy/wiki/Storage-backend-examples).
+If both `config` and `secret` are set, `secret` wins.
+
+## Control plane S3 credentials
+
+Three mutually-exclusive forms, listed in precedence order:
+
+```yaml
+# BYO — envFroms an existing Secret (keys: S3_ACCESS_KEY, S3_SECRET_KEY)
+controlPlane:
+  objectStorage:
+    s3:
+      bucket: my-bucket
+      secret: my-s3-creds
+```
+
+```yaml
+# Inline — chart renders llama-agents-controlplane-s3 Secret
+controlPlane:
+  objectStorage:
+    s3:
+      bucket: my-bucket
+      accessKey: AKIA...
+      secretKey: ...
+```
+
+```yaml
+# Neither — control plane relies on IRSA / workload identity
+controlPlane:
+  objectStorage:
+    s3:
+      bucket: my-bucket
+```
+
+Partial inline (one of `accessKey`/`secretKey` set) is a template error.
+
 ## Values
 
 ### Metrics
@@ -131,8 +195,10 @@ install requires draining and recreating `LlamaDeployment` CRs.
 | controlPlane.objectStorage.s3.endpointUrl | string | `""` | S3 endpoint URL (leave empty for AWS) |
 | controlPlane.objectStorage.s3.bucket | string | `""` | S3 bucket name (**required**) |
 | controlPlane.objectStorage.s3.region | string | `""` | S3 region |
-| controlPlane.objectStorage.s3.unsigned | bool | `false` | Send S3 requests unsigned (no Authorization header). Enable for authless backends like s3proxy/LocalStack or public-read buckets. Leave `false` for real AWS, MinIO, or any auth-requiring backend. |
-| controlPlane.objectStorage.secretRef | string | `""` | K8s Secret name containing `S3_ACCESS_KEY` and `S3_SECRET_KEY` |
+| controlPlane.objectStorage.s3.unsigned | string | `nil` | Send S3 requests unsigned (no Authorization header). Leave unset/`false` for any auth-requiring S3-compatible backend. For non-S3 object/blob storage, see `s3proxy.enabled` below — when that's on, this defaults to `true` unless you override it here. |
+| controlPlane.objectStorage.s3.accessKey | string | `""` | Inline S3 access key. When set alongside `secretKey`, the chart renders a Secret and wires it into the control plane. Mutually exclusive with `s3.secret` (which wins silently). |
+| controlPlane.objectStorage.s3.secretKey | string | `""` | Inline S3 secret key. Must be set together with `accessKey`; partial setting is an error. |
+| controlPlane.objectStorage.s3.secret | string | `""` | Name of an existing K8s Secret supplying `S3_ACCESS_KEY` and `S3_SECRET_KEY`. Takes precedence over `accessKey`/`secretKey`. |
 | controlPlane.objectStorage.buildKeyPrefix | string | `"builds"` | Key prefix for build artifacts in the bucket |
 | controlPlane.objectStorage.backupKeyPrefix | string | `"backups"` | Key prefix for backup archives in the bucket |
 | controlPlane.objectStorage.codeRepoKeyPrefix | string | `"git"` | Key prefix for code repositories in the bucket |
@@ -192,6 +258,20 @@ install requires draining and recreating `LlamaDeployment` CRs.
 | serviceAccount.create | bool | `true` | Create a ServiceAccount |
 | serviceAccount.name | string | `"llama-agents"` | ServiceAccount name |
 | serviceAccount.annotations | object | `{}` | Annotations for the ServiceAccount |
+
+### s3proxy
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| s3proxy.enabled | bool | `false` | Run an [s3proxy](https://github.com/gaul/s3proxy) sidecar alongside the control plane to translate S3 API calls to non-AWS backends (Azure Blob, GCS, etc.). When enabled, `S3_ENDPOINT_URL` and `S3_UNSIGNED` default to localhost and `true` unless explicitly overridden. Fill in `s3proxy.config` with the JCLOUDS_* environment variables for your cloud. |
+| s3proxy.image | string | `"docker.io/andrewgaul/s3proxy:3.1.0"` | s3proxy container image |
+| s3proxy.imagePullPolicy | string | `"IfNotPresent"` | s3proxy image pull policy |
+| s3proxy.containerPort | int | `8080` | Port s3proxy listens on inside the pod (control plane reaches it over localhost) |
+| s3proxy.logLevel | string | `"info"` | s3proxy log level (passed as LOG_LEVEL and S3PROXY_LOG_LEVEL) |
+| s3proxy.securityContext | object | `{}` | securityContext for the s3proxy container |
+| s3proxy.resources | object | `{requests: {cpu: 50m, memory: 256Mi}, limits: {cpu: 500m, memory: 512Mi}}` | Resource requests/limits for the s3proxy sidecar |
+| s3proxy.config | object | `{}` | Raw passthrough to the s3proxy Secret. Keys become environment variables on the sidecar. Typically `JCLOUDS_PROVIDER`, `JCLOUDS_IDENTITY`, `JCLOUDS_CREDENTIAL`, `JCLOUDS_ENDPOINT`, `JCLOUDS_REGION`. See https://github.com/gaul/s3proxy/wiki/Storage-backend-examples. |
+| s3proxy.secret | string | `""` | Name of an existing K8s Secret supplying the sidecar's env vars. Takes precedence over `config` (which is skipped if this is set). |
 
 ### Network Policy
 

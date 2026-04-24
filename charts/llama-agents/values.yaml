@@ -123,11 +123,24 @@ controlPlane:
       # -- S3 region
       # @section -- Object Storage
       region: ""
-      # -- Send S3 requests unsigned (no Authorization header). Enable for authless backends like s3proxy/LocalStack or public-read buckets. Leave `false` for real AWS, MinIO, or any auth-requiring backend.
+      # -- Send S3 requests unsigned (no Authorization header). Leave unset/`false` for any auth-requiring S3-compatible backend. For non-S3 object/blob storage, see `s3proxy.enabled` below — when that's on, this defaults to `true` unless you override it here.
       # @section -- Object Storage
-      unsigned: false
-    # -- K8s Secret name containing `S3_ACCESS_KEY` and `S3_SECRET_KEY`
-    # @section -- Object Storage
+      unsigned: ~
+      # -- Inline S3 access key. When set alongside `secretKey`, the chart renders
+      # a Secret and wires it into the control plane. Mutually exclusive with
+      # `s3.secret` (which wins silently).
+      # @section -- Object Storage
+      accessKey: ""
+      # -- Inline S3 secret key. Must be set together with `accessKey`; partial
+      # setting is an error.
+      # @section -- Object Storage
+      secretKey: ""
+      # -- Name of an existing K8s Secret supplying `S3_ACCESS_KEY` and
+      # `S3_SECRET_KEY`. Takes precedence over `accessKey`/`secretKey`.
+      # @section -- Object Storage
+      secret: ""
+    # Silent back-compat alias for s3.secret. Preferred surface is s3.secret.
+    # @ignored
     secretRef: ""
     # -- Key prefix for build artifacts in the bucket
     # @section -- Object Storage
@@ -278,6 +291,50 @@ serviceAccount:
   # -- Annotations for the ServiceAccount
   # @section -- Service Account
   annotations: {}
+
+s3proxy:
+  # -- Run an [s3proxy](https://github.com/gaul/s3proxy) sidecar alongside the
+  # control plane to translate S3 API calls to non-AWS backends (Azure Blob,
+  # GCS, etc.). When enabled, `S3_ENDPOINT_URL` and `S3_UNSIGNED` default to
+  # localhost and `true` unless explicitly overridden. Fill in `s3proxy.config`
+  # with the JCLOUDS_* environment variables for your cloud.
+  # @section -- s3proxy
+  enabled: false
+  # -- s3proxy container image
+  # @section -- s3proxy
+  image: "docker.io/andrewgaul/s3proxy:3.1.0"
+  # -- s3proxy image pull policy
+  # @section -- s3proxy
+  imagePullPolicy: IfNotPresent
+  # -- Port s3proxy listens on inside the pod (control plane reaches it over localhost)
+  # @section -- s3proxy
+  containerPort: 8080
+  # -- s3proxy log level (passed as LOG_LEVEL and S3PROXY_LOG_LEVEL)
+  # @section -- s3proxy
+  logLevel: info
+  # -- securityContext for the s3proxy container
+  # @section -- s3proxy
+  securityContext: {}
+  # -- Resource requests/limits for the s3proxy sidecar
+  # @default -- `{requests: {cpu: 50m, memory: 256Mi}, limits: {cpu: 500m, memory: 512Mi}}`
+  # @section -- s3proxy
+  resources:
+    requests:
+      cpu: 50m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  # -- Raw passthrough to the s3proxy Secret. Keys become environment variables
+  # on the sidecar. Typically `JCLOUDS_PROVIDER`, `JCLOUDS_IDENTITY`,
+  # `JCLOUDS_CREDENTIAL`, `JCLOUDS_ENDPOINT`, `JCLOUDS_REGION`. See
+  # https://github.com/gaul/s3proxy/wiki/Storage-backend-examples.
+  # @section -- s3proxy
+  config: {}
+  # -- Name of an existing K8s Secret supplying the sidecar's env vars. Takes
+  # precedence over `config` (which is skipped if this is set).
+  # @section -- s3proxy
+  secret: ""
 
 networkPolicy:
   # -- Enable egress NetworkPolicy for operator-managed pods

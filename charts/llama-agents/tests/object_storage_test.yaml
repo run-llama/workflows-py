@@ -1,13 +1,16 @@
 suite: Control plane object storage configuration
 templates:
   - templates/deployment.yaml
+  - templates/controlplane-s3-secret.yaml
 tests:
   - it: fails when objectStorage bucket is not set (default)
+    template: templates/deployment.yaml
     asserts:
       - failedTemplate:
           errorMessage: "controlPlane.objectStorage.s3.bucket is required"
 
   - it: sets S3 env vars when objectStorage bucket is configured
+    template: templates/deployment.yaml
     set:
       controlPlane:
         objectStorage:
@@ -48,6 +51,7 @@ tests:
             value: "git"
 
   - it: sets S3_UNSIGNED to true when unsigned is enabled
+    template: templates/deployment.yaml
     set:
       controlPlane:
         objectStorage:
@@ -62,6 +66,7 @@ tests:
             value: "true"
 
   - it: sets envFrom with objectStorage secretRef
+    template: templates/deployment.yaml
     set:
       controlPlane:
         objectStorage:
@@ -78,6 +83,7 @@ tests:
               name: "s3-credentials"
 
   - it: sets envFrom with backup encryptionSecretRef
+    template: templates/deployment.yaml
     set:
       controlPlane:
         objectStorage:
@@ -92,6 +98,7 @@ tests:
               name: "backup-encryption"
 
   - it: does not set envFrom when no secretRefs configured
+    template: templates/deployment.yaml
     set:
       controlPlane:
         objectStorage:
@@ -104,6 +111,7 @@ tests:
           path: spec.template.spec.containers[0].envFrom
 
   - it: merges all envFrom sources
+    template: templates/deployment.yaml
     set:
       controlPlane:
         objectStorage:
@@ -133,3 +141,171 @@ tests:
           content:
             secretRef:
               name: "backup-encryption"
+
+  # --- inline S3 creds ---
+
+  - it: renders a chart Secret with inline accessKey and secretKey
+    set:
+      controlPlane:
+        objectStorage:
+          s3:
+            bucket: "my-bucket"
+            accessKey: "AKIAEXAMPLE"
+            secretKey: "SECRETEXAMPLE"
+    template: templates/controlplane-s3-secret.yaml
+    asserts:
+      - isKind:
+          of: Secret
+      - equal:
+          path: metadata.name
+          value: llama-agents-controlplane-s3
+      - equal:
+          path: type
+          value: Opaque
+      - equal:
+          path: data.S3_ACCESS_KEY
+          value: QUtJQUVYQU1QTEU=
+      - equal:
+          path: data.S3_SECRET_KEY
+          value: U0VDUkVURVhBTVBMRQ==
+
+  - it: wires envFrom to the chart-rendered Secret when inline creds are set
+    template: templates/deployment.yaml
+    set:
+      controlPlane:
+        objectStorage:
+          s3:
+            bucket: "my-bucket"
+            accessKey: "AKIAEXAMPLE"
+            secretKey: "SECRETEXAMPLE"
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].envFrom
+          content:
+            secretRef:
+              name: "llama-agents-controlplane-s3"
+
+  - it: does not render the chart Secret when inline creds are unset
+    set:
+      controlPlane:
+        objectStorage:
+          s3:
+            bucket: "my-bucket"
+    template: templates/controlplane-s3-secret.yaml
+    asserts:
+      - hasDocuments:
+          count: 0
+
+  - it: fails when only accessKey is set
+    set:
+      controlPlane:
+        objectStorage:
+          s3:
+            bucket: "my-bucket"
+            accessKey: "AKIAEXAMPLE"
+    template: templates/controlplane-s3-secret.yaml
+    asserts:
+      - failedTemplate:
+          errorMessage: "controlPlane.objectStorage.s3.accessKey and controlPlane.objectStorage.s3.secretKey must both be set"
+
+  - it: fails when only secretKey is set
+    set:
+      controlPlane:
+        objectStorage:
+          s3:
+            bucket: "my-bucket"
+            secretKey: "SECRETEXAMPLE"
+    template: templates/controlplane-s3-secret.yaml
+    asserts:
+      - failedTemplate:
+          errorMessage: "controlPlane.objectStorage.s3.accessKey and controlPlane.objectStorage.s3.secretKey must both be set"
+
+  # --- s3.secret BYO ---
+
+  - it: skips chart Secret and envFroms the user Secret when s3.secret is set
+    set:
+      controlPlane:
+        objectStorage:
+          s3:
+            bucket: "my-bucket"
+            secret: "my-s3-creds"
+    asserts:
+      - template: templates/controlplane-s3-secret.yaml
+        hasDocuments:
+          count: 0
+      - template: templates/deployment.yaml
+        contains:
+          path: spec.template.spec.containers[0].envFrom
+          content:
+            secretRef:
+              name: "my-s3-creds"
+
+  # --- precedence ---
+
+  - it: prefers s3.secret over inline creds
+    set:
+      controlPlane:
+        objectStorage:
+          s3:
+            bucket: "my-bucket"
+            accessKey: "AKIAEXAMPLE"
+            secretKey: "SECRETEXAMPLE"
+            secret: "my-s3-creds"
+    asserts:
+      - template: templates/controlplane-s3-secret.yaml
+        hasDocuments:
+          count: 0
+      - template: templates/deployment.yaml
+        contains:
+          path: spec.template.spec.containers[0].envFrom
+          content:
+            secretRef:
+              name: "my-s3-creds"
+      - template: templates/deployment.yaml
+        notContains:
+          path: spec.template.spec.containers[0].envFrom
+          content:
+            secretRef:
+              name: "llama-agents-controlplane-s3"
+
+  - it: prefers s3.secret over legacy secretRef
+    set:
+      controlPlane:
+        objectStorage:
+          s3:
+            bucket: "my-bucket"
+            secret: "my-s3-creds"
+          secretRef: "legacy-creds"
+    asserts:
+      - template: templates/deployment.yaml
+        contains:
+          path: spec.template.spec.containers[0].envFrom
+          content:
+            secretRef:
+              name: "my-s3-creds"
+      - template: templates/deployment.yaml
+        notContains:
+          path: spec.template.spec.containers[0].envFrom
+          content:
+            secretRef:
+              name: "legacy-creds"
+
+  - it: prefers legacy secretRef over inline creds
+    set:
+      controlPlane:
+        objectStorage:
+          s3:
+            bucket: "my-bucket"
+            accessKey: "AKIAEXAMPLE"
+            secretKey: "SECRETEXAMPLE"
+          secretRef: "legacy-creds"
+    asserts:
+      - template: templates/controlplane-s3-secret.yaml
+        hasDocuments:
+          count: 0
+      - template: templates/deployment.yaml
+        contains:
+          path: spec.template.spec.containers[0].envFrom
+          content:
+            secretRef:
+              name: "legacy-creds"
