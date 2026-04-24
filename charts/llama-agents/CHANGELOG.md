@@ -1,5 +1,15 @@
 # llama-agents
 
+## 0.12.0
+
+### Minor Changes
+
+- 3ced443: Optional s3proxy sidecar for non-AWS object storage, plus inline-or-BYO creds on both the sidecar and control plane S3.
+
+### Patch Changes
+
+- 9eda189: Document the compatible `llama-agents-crds` chart version via a new `crds.version` values field, auto-synced at release time and surfaced in the README.
+
 ## 0.11.1
 
 ### Patch Changes

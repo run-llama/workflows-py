@@ -1,5 +1,12 @@
 # llama-index-workflows
 
+## 2.20.0
+
+### Minor Changes
+
+- 9bf247a: Add replay_ticks_stream and ReplayResult to surface the last exit-indicating command from tick replay
+- 2cc9fae: Add `@catch_error` handler (supports `for_steps=[...]` and `max_recoveries`) and `Context.retry_info()` for handling exhausted step retries inline. `retry_info().last_exception` and `StepFailedEvent.exception` are live Python exceptions.
+
 ## 2.19.1
 
 ### Patch Changes
