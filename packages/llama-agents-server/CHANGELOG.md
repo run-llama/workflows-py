@@ -1,5 +1,15 @@
 # llama-agents-server
 
+## 0.4.7
+
+### Patch Changes
+
+- 9bf247a: Classify zombie handlers on resume and collapse duplicate handler rows on write.
+- Updated dependencies [9bf247a]
+- Updated dependencies [2cc9fae]
+  - llama-index-workflows@2.20.0
+  - llama-agents-client@0.3.7
+
 ## 0.4.6
 
 ### Patch Changes
