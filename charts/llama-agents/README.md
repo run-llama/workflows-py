@@ -72,13 +72,12 @@ helm install llama-agents oci://docker.io/llamaindex/llama-agents \
 yourself, or use node-level pull credentials. Switching modes on an existing
 install requires draining and recreating `LlamaDeployment` CRs.
 
-## Non-AWS object storage (Azure, GCS, …)
+## Non-S3 object storage
 
-Set `s3proxy.enabled=true` and fill in `s3proxy.config` with the JCLOUDS_*
-credentials for your cloud. A sidecar container runs alongside the control
-plane and translates S3 API calls to the native backend. See
-[`docs/s3-proxy-setup.md`](docs/s3-proxy-setup.md) for Azure Blob and GCS
-examples.
+Set `s3proxy.enabled=true` and fill in `s3proxy.config` with the `JCLOUDS_*`
+vars for your backend. The chart runs an
+[s3proxy](https://github.com/gaul/s3proxy) sidecar alongside the control
+plane. See [`docs/s3-proxy-setup.md`](docs/s3-proxy-setup.md).
 
 ## Values
 
@@ -139,7 +138,7 @@ examples.
 | controlPlane.objectStorage.s3.endpointUrl | string | `""` | S3 endpoint URL (leave empty for AWS) |
 | controlPlane.objectStorage.s3.bucket | string | `""` | S3 bucket name (**required**) |
 | controlPlane.objectStorage.s3.region | string | `""` | S3 region |
-| controlPlane.objectStorage.s3.unsigned | string | `nil` | Send S3 requests unsigned (no Authorization header). Enable for authless backends like s3proxy/LocalStack or public-read buckets. Leave unset/`false` for real AWS, MinIO, or any auth-requiring backend. When `s3proxy.enabled=true` and this value is not explicitly set, it defaults to `true`. |
+| controlPlane.objectStorage.s3.unsigned | string | `nil` | Send S3 requests unsigned (no Authorization header). Leave unset/`false` for any auth-requiring S3-compatible backend. For non-S3 object/blob storage, see `s3proxy.enabled` below — when that's on, this defaults to `true` unless you override it here. |
 | controlPlane.objectStorage.secretRef | string | `""` | K8s Secret name containing `S3_ACCESS_KEY` and `S3_SECRET_KEY` |
 | controlPlane.objectStorage.buildKeyPrefix | string | `"builds"` | Key prefix for build artifacts in the bucket |
 | controlPlane.objectStorage.backupKeyPrefix | string | `"backups"` | Key prefix for backup archives in the bucket |

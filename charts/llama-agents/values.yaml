@@ -123,7 +123,7 @@ controlPlane:
       # -- S3 region
       # @section -- Object Storage
       region: ""
-      # -- Send S3 requests unsigned (no Authorization header). Enable for authless backends like s3proxy/LocalStack or public-read buckets. Leave unset/`false` for real AWS, MinIO, or any auth-requiring backend. When `s3proxy.enabled=true` and this value is not explicitly set, it defaults to `true`.
+      # -- Send S3 requests unsigned (no Authorization header). Leave unset/`false` for any auth-requiring S3-compatible backend. For non-S3 object/blob storage, see `s3proxy.enabled` below — when that's on, this defaults to `true` unless you override it here.
       # @section -- Object Storage
       unsigned: ~
     # -- K8s Secret name containing `S3_ACCESS_KEY` and `S3_SECRET_KEY`
