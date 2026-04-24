@@ -13,7 +13,8 @@
     "values.yaml": {
       "images.controlPlane.tag": "{llama-agents-control-plane:dockerTag}",
       "images.operator.tag": "{llama-agents-operator:dockerTag}",
-      "images.appserver.tag": "{llama-agents-appserver:dockerTag}"
+      "images.appserver.tag": "{llama-agents-appserver:dockerTag}",
+      "crds.version": "{llama-agents-crds:version}"
     }
   },
   "postVersion": [

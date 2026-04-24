@@ -167,6 +167,11 @@ apps:
   # @section -- Apps
   namespace: ""
 
+crds:
+  # -- Compatible `llama-agents-crds` chart version for this release. Documentation only; not read by templates. Auto-synced at release time.
+  # @section -- CRDs
+  version: "0.7.2"
+
 operator:
   # -- Deploy the operator
   # @section -- Operator
