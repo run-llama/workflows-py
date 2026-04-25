@@ -1,5 +1,11 @@
 # llamactl
 
+## 0.7.3
+
+### Patch Changes
+
+- e75a15d: Revert previous changes, `llamactl serve` now re-exports frontend API keys with public prefixes once again since this is necessary for local dev auth to work.
+
 ## 0.7.2
 
 ### Patch Changes
