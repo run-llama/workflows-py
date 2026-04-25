@@ -2,4 +2,4 @@
 "llamactl": patch
 ---
 
-Restore VITE_/NEXT_PUBLIC_ prefixed LLAMA_CLOUD_* env vars in `llamactl serve` so Vite and Next.js dev servers can pick up local auth credentials.
+`llamactl serve` now injects `PUBLIC_`, `VITE_`, and `NEXT_PUBLIC_` prefixed copies of `LLAMA_CLOUD_API_KEY` and `LLAMA_CLOUD_BASE_URL` for local dev. `PUBLIC_` is the canonical prefix templates should read; production deployments must opt in explicitly rather than always exposing the token to client code.

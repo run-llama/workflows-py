@@ -186,8 +186,11 @@ def _set_env_vars_from_env(env_vars: dict[str, str]) -> None:
 def _set_env_vars(key: str, url: str) -> None:
     os.environ["LLAMA_CLOUD_API_KEY"] = key
     os.environ["LLAMA_CLOUD_BASE_URL"] = url
-    # kludge for common web servers to inject local auth key
-    for prefix in ["VITE_", "NEXT_PUBLIC_"]:
+    # Inject prefixed copies for local dev. PUBLIC_ is the canonical convention
+    # templates should read; VITE_ and NEXT_PUBLIC_ are kept for framework
+    # defaults. These are only set by the CLI so production deployments must
+    # opt in explicitly rather than always exposing the token to client code.
+    for prefix in ["PUBLIC_", "VITE_", "NEXT_PUBLIC_"]:
         os.environ[f"{prefix}LLAMA_CLOUD_API_KEY"] = key
         os.environ[f"{prefix}LLAMA_CLOUD_BASE_URL"] = url
 
