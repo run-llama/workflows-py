@@ -1,5 +1,12 @@
 # llama-agents-appserver
 
+## 0.11.2
+
+### Patch Changes
+
+- Updated dependencies [2280e04]
+  - llama-agents-core@0.10.0
+
 ## 0.11.1
 
 ### Patch Changes

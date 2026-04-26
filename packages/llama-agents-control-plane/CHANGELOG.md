@@ -1,5 +1,16 @@
 # llama-agents-control-plane
 
+## 0.12.0
+
+### Minor Changes
+
+- 2280e04: Rename deployment field `llama_deploy_version` to `appserver_version`. The old name remains as a deprecated input/output alias so existing clients and servers keep working.
+
+### Patch Changes
+
+- Updated dependencies [2280e04]
+  - llama-agents-core@0.10.0
+
 ## 0.11.1
 
 ### Patch Changes
