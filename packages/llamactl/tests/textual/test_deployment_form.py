@@ -621,7 +621,7 @@ async def test_deployment_edit_app_end_to_end_update(
         project_id="proj-456",
         apiserver_url=None,
         status="Running",
-        llama_deploy_version="0.9.0",
+        appserver_version="0.9.0",
     )
 
     initial_data = DeploymentForm.from_deployment(existing_deployment)
@@ -638,7 +638,7 @@ async def test_deployment_edit_app_end_to_end_update(
         project_id="proj-456",
         apiserver_url=None,
         status="Running",
-        llama_deploy_version="1.0.0",
+        appserver_version="1.0.0",
     )
 
     mock_client.update_deployment.return_value = mock_updated_deployment
@@ -678,7 +678,7 @@ async def test_deployment_edit_app_end_to_end_update(
         assert isinstance(update_data, DeploymentUpdate)
         assert update_data.repo_url == "https://github.com/user/new-repo"
         assert update_data.git_ref == "main"
-        assert update_data.llama_deploy_version == "1.0.0"
+        assert update_data.appserver_version == "1.0.0"
 
         # Close monitor to exit app
         app.screen.post_message(MonitorCloseMessage())
@@ -929,7 +929,7 @@ async def test_appserver_version_selector_edit_when_different(
         project_id="proj-111",
         apiserver_url=None,
         status="Running",
-        llama_deploy_version="0.9.0",
+        appserver_version="0.9.0",
     )
 
     form = DeploymentForm.from_deployment(existing_deployment)
@@ -978,7 +978,7 @@ async def test_appserver_version_readonly_when_same(
         project_id="proj-222",
         apiserver_url=None,
         status="Running",
-        llama_deploy_version="1.0.0",
+        appserver_version="1.0.0",
     )
 
     form = DeploymentForm.from_deployment(existing_deployment)

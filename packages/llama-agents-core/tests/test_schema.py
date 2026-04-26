@@ -91,6 +91,115 @@ def test_deployment_response_deserializes_old_server_name() -> None:
     assert resp.display_name == "Old Server Deploy"
 
 
+# -- Backwards compatibility: llama_deploy_version <-> appserver_version --
+
+
+def test_deployment_create_accepts_deprecated_llama_deploy_version() -> None:
+    """Old callers passing 'llama_deploy_version' should still work."""
+    deployment = DeploymentCreate(
+        display_name="App",
+        repo_url="https://example.com",
+        llama_deploy_version="0.4.2",  # type: ignore[call-arg]  # ty: ignore[unknown-argument]
+    )
+    assert deployment.appserver_version == "0.4.2"
+
+
+def test_deployment_create_canonical_wins_on_conflict() -> None:
+    """When both fields are sent, canonical 'appserver_version' wins silently."""
+    deployment = DeploymentCreate.model_validate(
+        {
+            "display_name": "App",
+            "repo_url": "https://example.com",
+            "appserver_version": "0.4.2",
+            "llama_deploy_version": "0.3.0",
+        }
+    )
+    assert deployment.appserver_version == "0.4.2"
+
+
+def test_deployment_create_neither_version_field_set() -> None:
+    """With neither field set, appserver_version is None."""
+    deployment = DeploymentCreate(display_name="App", repo_url="https://example.com")
+    assert deployment.appserver_version is None
+
+
+def test_deployment_create_serializes_llama_deploy_version_for_old_servers() -> None:
+    """Serialized payload must include 'llama_deploy_version' so old servers accept it."""
+    deployment = DeploymentCreate(
+        display_name="App",
+        repo_url="https://example.com",
+        appserver_version="0.4.2",
+    )
+    data = deployment.model_dump()
+    assert data["appserver_version"] == "0.4.2"
+    assert data["llama_deploy_version"] == "0.4.2"
+
+
+def test_deployment_update_accepts_deprecated_llama_deploy_version() -> None:
+    """Old callers patching 'llama_deploy_version' should still work."""
+    update = DeploymentUpdate(llama_deploy_version="0.4.2")  # type: ignore[call-arg]  # ty: ignore[unknown-argument]
+    assert update.appserver_version == "0.4.2"
+
+
+def test_deployment_update_canonical_wins_on_conflict() -> None:
+    """When both fields are sent, canonical 'appserver_version' wins silently."""
+    update = DeploymentUpdate.model_validate(
+        {"appserver_version": "0.4.2", "llama_deploy_version": "0.3.0"}
+    )
+    assert update.appserver_version == "0.4.2"
+
+
+def test_deployment_update_serializes_llama_deploy_version_for_old_servers() -> None:
+    """Serialized PATCH payload must include 'llama_deploy_version' so old servers accept it."""
+    update = DeploymentUpdate(appserver_version="0.4.2")
+    data = update.model_dump()
+    assert data["appserver_version"] == "0.4.2"
+    assert data["llama_deploy_version"] == "0.4.2"
+
+
+def test_deployment_update_llama_deploy_version_none_when_unset() -> None:
+    """When appserver_version is not set, llama_deploy_version should also be None."""
+    update = DeploymentUpdate()
+    data = update.model_dump()
+    assert data["appserver_version"] is None
+    assert data["llama_deploy_version"] is None
+
+
+def test_deployment_response_accepts_old_server_llama_deploy_version() -> None:
+    """An old server emits only llama_deploy_version; new client should map it through."""
+    resp = DeploymentResponse.model_validate(
+        {
+            "id": "dep-1",
+            "display_name": "App",
+            "project_id": "proj-1",
+            "repo_url": "https://example.com",
+            "git_ref": "main",
+            "deployment_file_path": "",
+            "status": "Running",
+            "has_personal_access_token": False,
+            "llama_deploy_version": "0.4.2",
+        }
+    )
+    assert resp.appserver_version == "0.4.2"
+
+
+def test_deployment_response_serializes_both_version_fields() -> None:
+    """Responses include both keys so old clients keep working."""
+    resp = DeploymentResponse(
+        id="dep-1",
+        display_name="App",
+        project_id="proj-1",
+        repo_url="https://example.com",
+        git_ref="main",
+        deployment_file_path="",
+        status="Running",
+        appserver_version="0.4.2",
+    )
+    data = resp.model_dump()
+    assert data["appserver_version"] == "0.4.2"
+    assert data["llama_deploy_version"] == "0.4.2"
+
+
 def test_deployment_create_optional_fields() -> None:
     """Test DeploymentCreate with optional fields"""
 
@@ -530,7 +639,7 @@ def test_appserver_tag_prefix_constant() -> None:
 
 
 def test_apply_deployment_update_image_tag_precedence() -> None:
-    """image_tag takes precedence over llama_deploy_version"""
+    """image_tag takes precedence over appserver_version"""
     existing_spec = LlamaDeploymentSpec(
         displayName="my-deployment",
         projectId="test-project",
@@ -538,7 +647,7 @@ def test_apply_deployment_update_image_tag_precedence() -> None:
     )
 
     update = DeploymentUpdate(
-        llama_deploy_version="0.3.0",
+        appserver_version="0.3.0",
         image_tag="appserver-0.4.2",
     )
 
@@ -656,13 +765,13 @@ def test_apply_deployment_update_static_assets_path_not_cleared() -> None:
 
 
 def test_apply_deployment_update_version_sets_image_tag() -> None:
-    """llama_deploy_version is converted to imageTag when image_tag is not set"""
+    """appserver_version is converted to imageTag when image_tag is not set"""
     existing_spec = LlamaDeploymentSpec(
         displayName="my-deployment",
         projectId="test-project",
         repoUrl="https://github.com/user/repo.git",
     )
 
-    update = DeploymentUpdate(llama_deploy_version="0.3.1")
+    update = DeploymentUpdate(appserver_version="0.3.1")
     result = apply_deployment_update(update, existing_spec)
     assert result.updated_spec.imageTag == "0.3.1"

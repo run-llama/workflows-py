@@ -37,7 +37,7 @@ INTERNAL_CODE_REPO_SCHEME = "internal://"
 
 
 def version_to_image_tag(version: str) -> str:
-    """Convert a llama_deploy_version like '0.4.2' to an image tag like '0.4.2'."""
+    """Convert an appserver_version like '0.4.2' to an image tag like '0.4.2'."""
     return version
 
 
@@ -120,7 +120,7 @@ class DeploymentResponse(Base):
     events: list[DeploymentEvent] | None = Field(
         default=None, description="Recent Kubernetes events for this deployment"
     )
-    llama_deploy_version: str | None = Field(
+    appserver_version: str | None = Field(
         default=None, description="Appserver version (e.g. '0.4.2')"
     )
     suspended: bool = Field(
@@ -132,13 +132,20 @@ class DeploymentResponse(Base):
     def name(self) -> str:
         return self.display_name
 
+    @computed_field(description="Deprecated: use appserver_version")
+    @property
+    def llama_deploy_version(self) -> str | None:
+        return self.appserver_version
+
     @model_validator(mode="before")
     @classmethod
-    def _compat_name(cls, data: dict) -> dict:  # type: ignore[type-arg]
-        """Accept 'name' in input for backwards compatibility."""
+    def _compat_aliases(cls, data: dict) -> dict:  # type: ignore[type-arg]
+        """Accept deprecated 'name' and 'llama_deploy_version' input aliases."""
         if isinstance(data, dict):
             if not data.get("display_name") and data.get("name"):
                 data["display_name"] = data["name"]
+            if not data.get("appserver_version") and data.get("llama_deploy_version"):
+                data["appserver_version"] = data["llama_deploy_version"]
         return data
 
 
@@ -171,7 +178,7 @@ class DeploymentCreate(Base):
         default=None,
         description="Key-value pairs to store as deployment secrets",
     )
-    llama_deploy_version: str | None = Field(
+    appserver_version: str | None = Field(
         default=None,
         description="Appserver version to use (e.g. '0.4.2'). "
         "If omitted, server may set based on client version.",
@@ -179,17 +186,24 @@ class DeploymentCreate(Base):
 
     @model_validator(mode="before")
     @classmethod
-    def _compat_name(cls, data: dict) -> dict:  # type: ignore[type-arg]
-        """Accept deprecated 'name' field as alias for 'display_name'."""
+    def _compat_aliases(cls, data: dict) -> dict:  # type: ignore[type-arg]
+        """Accept deprecated 'name' and 'llama_deploy_version' input aliases."""
         if isinstance(data, dict):
             if data.get("name") and not data.get("display_name"):
                 data["display_name"] = data.pop("name")
+            if data.get("llama_deploy_version") and not data.get("appserver_version"):
+                data["appserver_version"] = data.pop("llama_deploy_version")
         return data
 
     @computed_field(description="Deprecated: use display_name")
     @property
     def name(self) -> str:
         return self.display_name
+
+    @computed_field(description="Deprecated: use appserver_version")
+    @property
+    def llama_deploy_version(self) -> str | None:
+        return self.appserver_version
 
     @model_validator(mode="after")
     def _require_id_format(self) -> "DeploymentCreate":
@@ -302,12 +316,12 @@ class DeploymentUpdate(Base):
     static_assets_path: Path | None = Field(
         default=None, description="Path to prebuilt UI assets (set by service layer)"
     )
-    llama_deploy_version: str | None = Field(
+    appserver_version: str | None = Field(
         default=None, description="Updated appserver version selector"
     )
     image_tag: str | None = Field(
         default=None,
-        description="Explicit image tag (takes precedence over llama_deploy_version)",
+        description="Explicit image tag (takes precedence over appserver_version)",
     )
     bump_to_latest_appserver: bool = Field(
         default=False,
@@ -326,13 +340,20 @@ class DeploymentUpdate(Base):
     def name(self) -> str | None:
         return self.display_name
 
+    @computed_field(description="Deprecated: use appserver_version")
+    @property
+    def llama_deploy_version(self) -> str | None:
+        return self.appserver_version
+
     @model_validator(mode="before")
     @classmethod
-    def _compat_name(cls, data: dict) -> dict:  # type: ignore[type-arg]
-        """Accept deprecated 'name' field as alias for 'display_name'."""
+    def _compat_aliases(cls, data: dict) -> dict:  # type: ignore[type-arg]
+        """Accept deprecated 'name' and 'llama_deploy_version' input aliases."""
         if isinstance(data, dict):
             if data.get("name") and not data.get("display_name"):
                 data["display_name"] = data.pop("name")
+            if data.get("llama_deploy_version") and not data.get("appserver_version"):
+                data["appserver_version"] = data.pop("llama_deploy_version")
         return data
 
     def has_git_fields(self) -> bool:
@@ -356,7 +377,7 @@ class DeploymentUpdate(Base):
                 self.personal_access_token is not None,
                 self.secrets is not None,
                 self.image_tag is not None,
-                self.llama_deploy_version is not None,
+                self.appserver_version is not None,
                 self.bump_to_latest_appserver,
             ]
         )
@@ -454,8 +475,8 @@ def apply_deployment_update(
     # Handle image tag / version selector (image_tag takes precedence)
     if update.image_tag is not None:
         updated_spec.imageTag = update.image_tag
-    elif update.llama_deploy_version is not None:
-        updated_spec.imageTag = version_to_image_tag(update.llama_deploy_version)
+    elif update.appserver_version is not None:
+        updated_spec.imageTag = version_to_image_tag(update.appserver_version)
 
     # Bump buildGeneration to force a rebuild (e.g. retry after transient failure)
     if update.rebuild:

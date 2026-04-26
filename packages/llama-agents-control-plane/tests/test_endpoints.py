@@ -216,7 +216,7 @@ def test_create_deployment_success(mock_create_deployment: MagicMock) -> None:
         "repo_url": "https://github.com/user/repo.git",
         "personal_access_token": "ghp_token123",
         "secrets": {"API_KEY": "secret_value"},
-        "llama_deploy_version": "0.3.0",
+        "appserver_version": "0.3.0",
     }
 
     response = client.post(
@@ -414,7 +414,7 @@ def test_update_deployment_success(
         has_personal_access_token=True,
         secret_names=["NEW_SECRET"],  # updated
         apiserver_url=HttpUrl("http://test-deploy.example.com"),
-        llama_deploy_version="0.3.1",
+        appserver_version="0.3.1",
     )
 
     update_data = {
@@ -425,7 +425,7 @@ def test_update_deployment_success(
             "NEW_SECRET": "new_value",
             "OLD_SECRET": None,  # remove this secret
         },
-        "llama_deploy_version": "0.3.1",
+        "appserver_version": "0.3.1",
     }
 
     response = client.patch(
@@ -441,6 +441,8 @@ def test_update_deployment_success(
     assert data["git_ref"] == "main"
     assert data["has_personal_access_token"] is True
     assert data["secret_names"] == ["NEW_SECRET"]
+    assert data["appserver_version"] == "0.3.1"
+    # Old clients reading the response see the deprecated key populated
     assert data["llama_deploy_version"] == "0.3.1"
 
     # Verify the update function was called with correct parameters
@@ -452,7 +454,7 @@ def test_update_deployment_success(
     assert update_arg.deployment_file_path == "new_deploy.yml"
     assert update_arg.personal_access_token == "ghp_newtoken"
     assert update_arg.secrets == {"NEW_SECRET": "new_value", "OLD_SECRET": None}
-    assert update_arg.llama_deploy_version == "0.3.1"
+    assert update_arg.appserver_version == "0.3.1"
 
 
 @patch("llama_agents.control_plane.k8s_client.update_deployment")
@@ -1004,7 +1006,7 @@ def test_update_deployment_operator_default_ignores_client_version(
     assert response.status_code == 200
 
     update_arg = mock_update_deployment.call_args[1]["update"]
-    assert update_arg.llama_deploy_version is None
+    assert update_arg.appserver_version is None
     assert update_arg.image_tag is None
 
 
