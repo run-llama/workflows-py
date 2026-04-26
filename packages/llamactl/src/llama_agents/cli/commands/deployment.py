@@ -26,6 +26,7 @@ from rich.text import Text
 
 from ..app import app, console
 from ..client import get_project_client, project_client_context
+from ..log_format import parse_log_body, render_plain
 from ..options import (
     global_options,
     interactive_option,
@@ -710,9 +711,6 @@ def _emit_log_event(ev: LogEvent, *, json_lines: bool) -> None:
     if json_lines:
         click.echo(ev.model_dump_json())
         return
-
-    # Defer to the lightweight plain renderer in log_format.
-    from ..log_format import parse_log_body, render_plain
 
     body = render_plain(parse_log_body(ev.text))
     ts = ev.timestamp.isoformat() if ev.timestamp else ""

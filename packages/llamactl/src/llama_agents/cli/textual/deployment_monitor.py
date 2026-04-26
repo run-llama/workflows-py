@@ -13,7 +13,7 @@ from pathlib import Path
 from llama_agents.cli.client import (
     project_client_context,
 )
-from llama_agents.cli.log_format import parse_log_body
+from llama_agents.cli.log_format import parse_log_body, trim_timestamp
 from llama_agents.core.iter_utils import merge_generators
 from llama_agents.core.schema import LogEvent
 from llama_agents.core.schema.deployments import DeploymentResponse
@@ -41,14 +41,6 @@ _LEVEL_STYLES: dict[str, str] = {
 }
 
 
-def _trim_timestamp(ts: str) -> str:
-    if "T" in ts:
-        ts = ts.split("T", 1)[1]
-        for suffix in ("Z", "+00:00"):
-            ts = ts.removesuffix(suffix)
-    return ts
-
-
 def _format_log_line(line: str) -> Text:
     """Parse a structlog JSON line into styled Rich Text, or pass through as-is.
 
@@ -60,7 +52,7 @@ def _format_log_line(line: str) -> Text:
         return Text(parsed.event or parsed.raw)
 
     txt = Text()
-    ts = _trim_timestamp(parsed.timestamp)
+    ts = trim_timestamp(parsed.timestamp)
     if ts:
         txt.append(f"{ts} ", style="dim")
     if parsed.level:

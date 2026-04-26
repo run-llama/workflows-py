@@ -1,61 +1,20 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 LlamaIndex Inc.
-"""Tests for ``deployments logs`` and ``deployments status`` (Slice A Phase 2)."""
+"""Tests for ``deployments logs`` and ``deployments status``."""
 
 from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
-from types import SimpleNamespace
 from typing import Any, AsyncIterator
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
-import pytest
 import yaml
 from click.testing import CliRunner
+from conftest import make_deployment, patch_project_client
 from llama_agents.cli.app import app
 from llama_agents.core.schema import LogEvent
 from llama_agents.core.schema.deployments import DeploymentResponse
-
-
-def _make_deployment(deployment_id: str = "my-app", **overrides: Any) -> DeploymentResponse:
-    base: dict[str, Any] = {
-        "id": deployment_id,
-        "display_name": deployment_id,
-        "repo_url": "https://github.com/example/repo",
-        "deployment_file_path": "llama_deploy.yaml",
-        "git_ref": "main",
-        "git_sha": "abc1234567890",
-        "project_id": "proj_default",
-        "secret_names": [],
-        "apiserver_url": None,
-        "status": "Running",
-    }
-    base.update(overrides)
-    return DeploymentResponse.model_validate(base)
-
-
-@pytest.fixture
-def fake_profile() -> SimpleNamespace:
-    return SimpleNamespace(
-        api_url="http://test:8011",
-        project_id="proj_default",
-        api_key="key",
-        device_oidc=None,
-        name="prof",
-    )
-
-
-@pytest.fixture
-def patched_auth(fake_profile: SimpleNamespace):
-    with patch("llama_agents.cli.config.env_service.service") as mock_service:
-        mock_auth_svc = MagicMock()
-        mock_auth_svc.get_current_profile.return_value = fake_profile
-        mock_auth_svc.list_profiles.return_value = [fake_profile]
-        mock_auth_svc.env = SimpleNamespace(requires_auth=True)
-        mock_auth_svc.auth_middleware.return_value = None
-        mock_service.current_auth_service.return_value = mock_auth_svc
-        yield mock_service
 
 
 def _make_log_events(n: int = 3) -> list[LogEvent]:
@@ -72,13 +31,6 @@ def _make_log_events(n: int = 3) -> list[LogEvent]:
         )
         for i in range(n)
     ]
-
-
-def _patch_project_client(client_mock: MagicMock):
-    return patch(
-        "llama_agents.core.client.manage_client.ProjectClient",
-        return_value=client_mock,
-    )
 
 
 def _make_logs_client(events: list[LogEvent]) -> MagicMock:
@@ -107,7 +59,7 @@ def test_logs_default_prints_recent_and_exits(patched_auth: Any) -> None:
     runner = CliRunner()
     events = _make_log_events(3)
     client = _make_logs_client(events)
-    with _patch_project_client(client):
+    with patch_project_client(client):
         result = runner.invoke(
             app, ["deployments", "logs", "my-app", "--no-interactive"]
         )
@@ -126,7 +78,7 @@ def test_logs_follow_passes_follow_true(patched_auth: Any) -> None:
     runner = CliRunner()
     events = _make_log_events(2)
     client = _make_logs_client(events)
-    with _patch_project_client(client):
+    with patch_project_client(client):
         result = runner.invoke(
             app,
             ["deployments", "logs", "my-app", "--no-interactive", "--follow"],
@@ -140,7 +92,7 @@ def test_logs_json_outputs_jsonl(patched_auth: Any) -> None:
     runner = CliRunner()
     events = _make_log_events(2)
     client = _make_logs_client(events)
-    with _patch_project_client(client):
+    with patch_project_client(client):
         result = runner.invoke(
             app,
             ["deployments", "logs", "my-app", "--no-interactive", "--json"],
@@ -160,7 +112,7 @@ def test_logs_json_outputs_jsonl(patched_auth: Any) -> None:
 def test_logs_no_events_emits_stderr_note(patched_auth: Any) -> None:
     runner = CliRunner()
     client = _make_logs_client([])
-    with _patch_project_client(client):
+    with patch_project_client(client):
         # mix_stderr=False so we can inspect stderr separately.
         result = runner.invoke(
             app,
@@ -174,14 +126,16 @@ def test_logs_no_events_emits_stderr_note(patched_auth: Any) -> None:
 def test_status_text_one_liner(patched_auth: Any) -> None:
     runner = CliRunner()
 
-    async def _get(deployment_id: str, include_events: bool = False) -> DeploymentResponse:
-        return _make_deployment(deployment_id, git_sha="deadbeef1234")
+    async def _get(
+        deployment_id: str, include_events: bool = False
+    ) -> DeploymentResponse:
+        return make_deployment(deployment_id, git_sha="deadbeef1234")
 
     client = MagicMock()
     client.get_deployment = MagicMock(side_effect=_get)
     client.project_id = "proj_default"
     client.base_url = "http://test:8011"
-    with _patch_project_client(client):
+    with patch_project_client(client):
         result = runner.invoke(
             app, ["deployments", "status", "my-app", "--no-interactive"]
         )
@@ -195,14 +149,16 @@ def test_status_text_one_liner(patched_auth: Any) -> None:
 def test_status_json_full_payload(patched_auth: Any) -> None:
     runner = CliRunner()
 
-    async def _get(deployment_id: str, include_events: bool = False) -> DeploymentResponse:
-        return _make_deployment(deployment_id)
+    async def _get(
+        deployment_id: str, include_events: bool = False
+    ) -> DeploymentResponse:
+        return make_deployment(deployment_id)
 
     client = MagicMock()
     client.get_deployment = MagicMock(side_effect=_get)
     client.project_id = "proj_default"
     client.base_url = "http://test:8011"
-    with _patch_project_client(client):
+    with patch_project_client(client):
         result = runner.invoke(
             app,
             ["deployments", "status", "my-app", "--no-interactive", "-o", "json"],
@@ -217,14 +173,16 @@ def test_status_json_full_payload(patched_auth: Any) -> None:
 def test_status_yaml(patched_auth: Any) -> None:
     runner = CliRunner()
 
-    async def _get(deployment_id: str, include_events: bool = False) -> DeploymentResponse:
-        return _make_deployment(deployment_id)
+    async def _get(
+        deployment_id: str, include_events: bool = False
+    ) -> DeploymentResponse:
+        return make_deployment(deployment_id)
 
     client = MagicMock()
     client.get_deployment = MagicMock(side_effect=_get)
     client.project_id = "proj_default"
     client.base_url = "http://test:8011"
-    with _patch_project_client(client):
+    with patch_project_client(client):
         result = runner.invoke(
             app,
             ["deployments", "status", "my-app", "--no-interactive", "-o", "yaml"],

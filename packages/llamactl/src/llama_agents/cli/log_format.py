@@ -74,8 +74,8 @@ def parse_log_body(line: str) -> ParsedLogBody:
     )
 
 
-def _trim_timestamp(ts: str) -> str:
-    """Trim ISO timestamp to its time portion (matches Textual renderer)."""
+def trim_timestamp(ts: str) -> str:
+    """Trim ISO timestamp to its time portion (shared with the Textual renderer)."""
     if "T" in ts:
         ts = ts.split("T", 1)[1]
         for suffix in ("Z", "+00:00"):
@@ -93,7 +93,7 @@ def render_plain(parsed: ParsedLogBody) -> str:
         return parsed.event or parsed.raw
 
     parts: list[str] = []
-    ts = _trim_timestamp(parsed.timestamp)
+    ts = trim_timestamp(parsed.timestamp)
     if ts:
         parts.append(ts)
     if parsed.level:

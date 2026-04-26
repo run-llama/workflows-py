@@ -4,7 +4,6 @@ import os
 from typing import Any, Callable, ParamSpec, TypeVar
 
 import click
-import yaml
 from llama_agents.cli.interactive_prompts.session_utils import is_interactive_session
 from pydantic import BaseModel
 
@@ -63,8 +62,8 @@ def render_output(
 
     - ``text``: invoke ``text_renderer`` (typically prints a Rich table).
     - ``json``: emit canonical JSON via ``click.echo`` (no Rich markup).
-    - ``yaml``: emit naive YAML (Slice A format; will evolve in Slice B for
-      single-deployment ``get -o yaml`` round-tripping).
+    - ``yaml``: emit YAML via ``click.echo`` (currently the naive Pydantic
+      shape; the apply-format with masked secrets is a follow-up).
 
     ``payload`` may be a Pydantic model, a list of Pydantic models, or any
     JSON-serializable value (dict, list of dicts). The structured outputs go
@@ -72,7 +71,7 @@ def render_output(
     otherwise insert markup.
     """
 
-    mode = (output or "text").lower()
+    mode = output.lower()
     if mode == "text":
         text_renderer()
         return
@@ -90,15 +89,13 @@ def render_output(
         click.echo(json.dumps(_to_json_safe(payload), indent=2))
         return
     if mode == "yaml":
-        # NOTE: Slice A emits the naive Pydantic shape (e.g.
-        # ``secret_names: [FOO, BAR]``). Slice B will replace this with a
-        # round-trippable apply-format (``secrets: { FOO: ********, ... }``
-        # plus read-only fields as comments). Scripts targeting ``-o json``
-        # are stable; ``-o yaml`` will evolve.
+        # Defer pyyaml import: it's a measurable chunk of CLI startup and
+        # only paid for by the (rare) `-o yaml` path.
+        import yaml
+
         click.echo(yaml.safe_dump(_to_json_safe(payload), sort_keys=False))
         return
 
-    # Should be unreachable given click.Choice, but be defensive.
     raise click.ClickException(f"Unknown output mode: {output}")
 
 
