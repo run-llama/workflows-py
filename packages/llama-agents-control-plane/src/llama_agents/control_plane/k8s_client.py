@@ -857,7 +857,7 @@ def _llamadeployment_to_response(
         if not filtered_secret_names:
             filtered_secret_names = None
 
-    # Derive llama_deploy_version from imageTag when tag follows appserver-X.Y.Z convention
+    # Derive appserver_version from imageTag when tag follows appserver-X.Y.Z convention
     derived_version = image_tag_to_version(spec.imageTag) if spec.imageTag else None
 
     # Map internal operator phases to backward-compatible values for old clients
@@ -889,7 +889,7 @@ def _llamadeployment_to_response(
         apiserver_url=HttpUrl(apiserver_url) if apiserver_url else None,
         status=phase,
         warning=warning,
-        llama_deploy_version=derived_version,
+        appserver_version=derived_version,
         suspended=spec.suspended,
     )
 

@@ -122,7 +122,7 @@ class DeploymentService(AbstractDeploymentsService):
         else:
             validated = None
 
-        requested_version = deployment_data.llama_deploy_version
+        requested_version = deployment_data.appserver_version
         if not settings.should_stamp_image_tag:
             # Defer to operator's LLAMA_DEPLOY_IMAGE_TAG env var
             requested_image_tag = None
@@ -153,7 +153,7 @@ class DeploymentService(AbstractDeploymentsService):
         )
 
         # Propagate version in response for clients
-        deployment_response.llama_deploy_version = requested_version
+        deployment_response.appserver_version = requested_version
 
         # Return deployment response with warning header if there are git issues
         if validated is not None and validated.error_message:
@@ -259,11 +259,11 @@ class DeploymentService(AbstractDeploymentsService):
             # Defer to operator's LLAMA_DEPLOY_IMAGE_TAG env var
             # Local-dev only: this does not clear an already pinned CRD spec.imageTag.
             # Existing dev deployments may need one-time recreation/manual field clear.
-            update_data.llama_deploy_version = None
+            update_data.appserver_version = None
             update_data.image_tag = None
         elif (
             update_data.bump_to_latest_appserver
-            and not update_data.llama_deploy_version
+            and not update_data.appserver_version
             and not update_data.image_tag
         ):
             update_data.image_tag = settings.default_appserver_image_tag

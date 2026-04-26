@@ -88,7 +88,7 @@ class DeploymentForm:
     env_info_messages: str | None = None
     # appserver version fields
     installed_appserver_version: str | None = None
-    existing_llama_deploy_version: str | None = None
+    existing_appserver_version: str | None = None
     selected_appserver_version: str | None = None
     # required secret names from config
     required_secret_names: list[str] = field(default_factory=list)
@@ -108,7 +108,7 @@ class DeploymentForm:
         secret_names = deployment.secret_names or []
 
         installed = get_installed_appserver_version()
-        existing = deployment.llama_deploy_version
+        existing = deployment.appserver_version
         # If versions match (or existing is None), treat as non-editable like create
         selected = existing or installed
 
@@ -128,7 +128,7 @@ class DeploymentForm:
             initial_secrets=set(secret_names),
             is_editing=True,
             installed_appserver_version=installed,
-            existing_llama_deploy_version=existing,
+            existing_appserver_version=existing,
             selected_appserver_version=selected,
             push_mode=is_internal,
             is_local_git_repo=has_git,
@@ -171,7 +171,7 @@ class DeploymentForm:
                 else self.personal_access_token
             ),
             secrets=secrets,
-            llama_deploy_version=appserver_version,
+            appserver_version=appserver_version,
         )
 
         return data
@@ -187,7 +187,7 @@ class DeploymentForm:
             git_ref=self.git_ref or "main",
             personal_access_token=self.personal_access_token,
             secrets=self.secrets,
-            llama_deploy_version=appserver_version,
+            appserver_version=appserver_version,
         )
 
 
@@ -356,14 +356,14 @@ class DeploymentFormWidget(Widget):
             versions_differ = (
                 self.form_data.is_editing
                 and self.form_data.installed_appserver_version
-                and self.form_data.existing_llama_deploy_version
+                and self.form_data.existing_appserver_version
                 and self.form_data.installed_appserver_version
-                != self.form_data.existing_llama_deploy_version
+                != self.form_data.existing_appserver_version
             )
             if versions_differ:
                 # Show dropdown selector for version choice
                 installed_version = self.form_data.installed_appserver_version
-                existing_version = self.form_data.existing_llama_deploy_version
+                existing_version = self.form_data.existing_appserver_version
                 current_selection = (
                     self.form_data.selected_appserver_version
                     or existing_version
@@ -389,7 +389,7 @@ class DeploymentFormWidget(Widget):
                 # Non-editable display of version
                 readonly_version = (
                     self.form_data.installed_appserver_version
-                    or self.form_data.existing_llama_deploy_version
+                    or self.form_data.existing_appserver_version
                     or "unknown"
                 )
                 yield Static(readonly_version, id="appserver_version_readonly")
@@ -525,7 +525,7 @@ class DeploymentFormWidget(Widget):
                 updated_prior_secrets
             ),
             installed_appserver_version=self.form_data.installed_appserver_version,
-            existing_llama_deploy_version=self.form_data.existing_llama_deploy_version,
+            existing_appserver_version=self.form_data.existing_appserver_version,
             selected_appserver_version=self.form_data.selected_appserver_version,
             required_secret_names=self.form_data.required_secret_names,
             push_mode=self.form_data.push_mode,
