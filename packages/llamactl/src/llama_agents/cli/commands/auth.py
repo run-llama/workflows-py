@@ -24,7 +24,7 @@ from rich.table import Table
 from rich.text import Text
 
 from ..app import app, console
-from ..options import global_options, interactive_option
+from ..options import global_options, interactive_option, output_option, render_output
 
 if TYPE_CHECKING:
     from llama_agents.cli.config.auth_service import AuthService
@@ -149,14 +149,15 @@ def device_login() -> None:
 
 @auth.command("list")
 @global_options
-def list_profiles() -> None:
+@output_option
+def list_profiles(output: str) -> None:
     """List all logged in users/tokens"""
     try:
         auth_svc = _get_service().current_auth_service()
         profiles = auth_svc.list_profiles()
         current = auth_svc.get_current_profile()
 
-        if not profiles:
+        if not profiles and output == "text":
             rprint(f"[{WARNING}]No profiles found[/]")
             if auth_svc.env.requires_auth:
                 rprint("Create one with: [cyan]llamactl auth login[/cyan]")
@@ -164,24 +165,38 @@ def list_profiles() -> None:
                 rprint("Create one with: [cyan]llamactl auth token[/cyan]")
             return
 
-        table = Table(show_edge=False, box=None, header_style=f"bold {HEADER_COLOR}")
-        table.add_column("  Name", style=PRIMARY_COL)
-        table.add_column("Active Project", style=MUTED_COL)
-
-        for profile in profiles:
-            text = Text()
-            if profile == current:
-                text.append("* ", style=ACTIVE_INDICATOR)
-            else:
-                text.append("  ")
-            text.append(profile.name)
-            active_project = profile.project_id or "-"
-            table.add_row(
-                text,
-                active_project,
+        def _render_table() -> None:
+            table = Table(
+                show_edge=False, box=None, header_style=f"bold {HEADER_COLOR}"
             )
+            table.add_column("  Name", style=PRIMARY_COL)
+            table.add_column("Active Project", style=MUTED_COL)
 
-        console.print(table)
+            for profile in profiles:
+                text = Text()
+                if profile == current:
+                    text.append("* ", style=ACTIVE_INDICATOR)
+                else:
+                    text.append("  ")
+                text.append(profile.name)
+                active_project = profile.project_id or "-"
+                table.add_row(text, active_project)
+
+            console.print(table)
+
+        # Build a JSON-safe payload that masks secrets and surfaces only
+        # script-friendly fields. ``api_key`` is intentionally omitted.
+        payload = [
+            {
+                "name": p.name,
+                "api_url": p.api_url,
+                "project_id": p.project_id,
+                "active": p == current,
+                "auth_type": "oidc" if p.device_oidc else "token",
+            }
+            for p in profiles
+        ]
+        render_output(payload, output, _render_table)
 
     except Exception as e:
         rprint(f"[red]Error: {e}[/red]")

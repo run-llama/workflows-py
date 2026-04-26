@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import json
 import logging
 import threading
 import webbrowser
@@ -14,6 +13,7 @@ from pathlib import Path
 from llama_agents.cli.client import (
     project_client_context,
 )
+from llama_agents.cli.log_format import parse_log_body
 from llama_agents.core.iter_utils import merge_generators
 from llama_agents.core.schema import LogEvent
 from llama_agents.core.schema.deployments import DeploymentResponse
@@ -31,7 +31,7 @@ from typing_extensions import Literal
 
 logger = logging.getLogger(__name__)
 
-# structlog JSON keys to display inline and their styles
+# structlog level → Rich style for Textual renderer.
 _LEVEL_STYLES: dict[str, str] = {
     "debug": "dim",
     "info": "cyan",
@@ -40,61 +40,40 @@ _LEVEL_STYLES: dict[str, str] = {
     "critical": "bold red reverse",
 }
 
-# Keys handled specially — everything else goes into extras
-_KNOWN_KEYS = {"event", "level", "timestamp", "logger", "request_id"}
+
+def _trim_timestamp(ts: str) -> str:
+    if "T" in ts:
+        ts = ts.split("T", 1)[1]
+        for suffix in ("Z", "+00:00"):
+            ts = ts.removesuffix(suffix)
+    return ts
 
 
 def _format_log_line(line: str) -> Text:
-    """Parse a structlog JSON line into styled Rich Text, or pass through as-is."""
-    stripped = line.strip()
-    if not stripped.startswith("{"):
-        return Text(line)
-    try:
-        data = json.loads(stripped)
-    except (json.JSONDecodeError, ValueError):
-        return Text(line)
+    """Parse a structlog JSON line into styled Rich Text, or pass through as-is.
 
-    if not isinstance(data, dict) or "event" not in data:
-        return Text(line)
+    Delegates body parsing to ``log_format.parse_log_body`` and adds Rich
+    styling on top. Plain (non-structured) lines pass through unchanged.
+    """
+    parsed = parse_log_body(line)
+    if not parsed.structured:
+        return Text(parsed.event or parsed.raw)
 
     txt = Text()
-
-    # Timestamp
-    ts = data.get("timestamp", "")
+    ts = _trim_timestamp(parsed.timestamp)
     if ts:
-        # Trim ISO timestamp to just time portion if it has a T
-        if "T" in str(ts):
-            ts = str(ts).split("T", 1)[1]
-            # Remove trailing Z or timezone offset for compactness
-            for suffix in ("Z", "+00:00"):
-                ts = ts.removesuffix(suffix)
         txt.append(f"{ts} ", style="dim")
-
-    # Level
-    level = str(data.get("level", "")).lower()
-    level_style = _LEVEL_STYLES.get(level, "")
-    if level:
-        txt.append(f"{level.upper():8s}", style=level_style)
-
-    # Logger name
-    logger_name = data.get("logger", "")
-    if logger_name:
-        txt.append(f"{logger_name} ", style="dim cyan")
-
-    # Event message
-    txt.append(str(data.get("event", "")))
-
-    # Request ID
-    req_id = data.get("request_id", "")
-    if req_id:
-        txt.append(f" req={req_id}", style="dim")
-
-    # Extra fields (everything not in _KNOWN_KEYS)
-    extras = {k: v for k, v in data.items() if k not in _KNOWN_KEYS}
-    if extras:
-        parts = " ".join(f"{k}={v}" for k, v in extras.items())
+    if parsed.level:
+        level_style = _LEVEL_STYLES.get(parsed.level, "")
+        txt.append(f"{parsed.level.upper():8s}", style=level_style)
+    if parsed.logger:
+        txt.append(f"{parsed.logger} ", style="dim cyan")
+    txt.append(parsed.event)
+    if parsed.request_id:
+        txt.append(f" req={parsed.request_id}", style="dim")
+    if parsed.extras:
+        parts = " ".join(f"{k}={v}" for k, v in parsed.extras.items())
         txt.append(f" {parts}", style="dim yellow")
-
     return txt
 
 

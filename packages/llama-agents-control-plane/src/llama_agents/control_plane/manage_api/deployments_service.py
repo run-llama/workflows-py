@@ -461,6 +461,7 @@ class DeploymentService(AbstractDeploymentsService):
         deployment_id: str,
         since_seconds: int | None,
         tail_lines: int | None,
+        follow: bool = True,
     ) -> AsyncGenerator[LogEvent, None]:
         """Yield log events from the build Job, if one exists."""
         async for line in k8s_client.stream_build_job_logs(
@@ -468,6 +469,7 @@ class DeploymentService(AbstractDeploymentsService):
             since_seconds=since_seconds,
             tail_lines=tail_lines,
             stop_event=shutdown_event,
+            follow=follow,
         ):
             timestamp = line.timestamp or datetime.now(timezone.utc)
             yield LogEvent(
@@ -485,14 +487,16 @@ class DeploymentService(AbstractDeploymentsService):
         include_init_containers: bool = False,
         since_seconds: int | None = None,
         tail_lines: int | None = None,
+        follow: bool = True,
     ) -> AsyncGenerator[LogEvent, None]:
         """Stream logs for a deployment.
 
         Build job logs (if any) are automatically merged into the stream.
-        App logs stream from the latest ReplicaSet. When the RS changes
-        (e.g. build finishes and operator creates a Deployment), the inner
-        generators restart so logs continue seamlessly without requiring
-        the client to reconnect.
+        App logs stream from the latest ReplicaSet. When ``follow`` is True
+        and the RS changes (e.g. build finishes and operator creates a
+        Deployment), the inner generators restart so logs continue seamlessly
+        without requiring the client to reconnect. When ``follow`` is False,
+        the generator returns whatever logs are currently available and ends.
         """
 
         await self._get_deployment_or_raise(project_id, deployment_id)
@@ -507,6 +511,7 @@ class DeploymentService(AbstractDeploymentsService):
                 since_seconds=since_seconds,
                 tail_lines=tail_lines,
                 stop_event=shutdown_event,
+                follow=follow,
             )
 
             if include_build_logs:
@@ -514,6 +519,7 @@ class DeploymentService(AbstractDeploymentsService):
                     deployment_id=deployment_id,
                     since_seconds=since_seconds,
                     tail_lines=tail_lines,
+                    follow=follow,
                 )
                 include_build_logs = False
             else:
@@ -534,18 +540,48 @@ class DeploymentService(AbstractDeploymentsService):
                 max_window_seconds=0.5,
             )
 
-            when_changes = self._when_replicaset_changes(deployment_id, 0.05)
+            if follow:
+                when_changes = self._when_replicaset_changes(deployment_id, 0.05)
 
-            rs_changed = False
-            async for ev in merge_generators(
-                debounced_logs,
-                cast(AsyncGenerator[LogEvent | str, None], when_changes),
-                stop_on_first_completion=True,
-            ):
-                if isinstance(ev, str):
-                    # RS-change sentinel — restart inner generators
-                    rs_changed = True
-                    break
+                rs_changed = False
+                async for ev in merge_generators(
+                    debounced_logs,
+                    cast(AsyncGenerator[LogEvent | str, None], when_changes),
+                    stop_on_first_completion=True,
+                ):
+                    if isinstance(ev, str):
+                        # RS-change sentinel — restart inner generators
+                        rs_changed = True
+                        break
+                    timestamp = ev.timestamp or datetime.now(timezone.utc)
+                    yield LogEvent(
+                        pod=ev.pod,
+                        container=ev.container,
+                        text=ev.text,
+                        timestamp=timestamp,
+                    )
+
+                if rs_changed:
+                    # RS changed (e.g. build→deploy transition). Loop to pick up
+                    # the new RS's pods without dropping the SSE connection.
+                    continue
+
+                # All log generators completed without an RS change. Check if an
+                # RS appeared while we were streaming build logs (race window
+                # where debounced_logs finishes before _when_replicaset_changes
+                # polls).
+                if initial_rs_uid is None:
+                    current_uid = await self._current_rs_uid(deployment_id)
+                    if current_uid is not None:
+                        continue
+
+                # No new RS appeared — nothing more to stream.
+                break
+
+            # follow=False: drain whatever's available and exit. No RS-change
+            # watcher, no reconnect — the underlying read uses follow=False
+            # against k8s and terminates on its own.
+            async for ev in debounced_logs:
                 timestamp = ev.timestamp or datetime.now(timezone.utc)
                 yield LogEvent(
                     pod=ev.pod,
@@ -553,21 +589,6 @@ class DeploymentService(AbstractDeploymentsService):
                     text=ev.text,
                     timestamp=timestamp,
                 )
-
-            if rs_changed:
-                # RS changed (e.g. build→deploy transition). Loop to pick up
-                # the new RS's pods without dropping the SSE connection.
-                continue
-
-            # All log generators completed without an RS change. Check if an RS
-            # appeared while we were streaming build logs (race window where
-            # debounced_logs finishes before _when_replicaset_changes polls).
-            if initial_rs_uid is None:
-                current_uid = await self._current_rs_uid(deployment_id)
-                if current_uid is not None:
-                    continue
-
-            # No new RS appeared — nothing more to stream.
             break
 
 

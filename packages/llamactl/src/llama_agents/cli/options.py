@@ -1,9 +1,12 @@
+import json
 import logging
 import os
-from typing import Callable, ParamSpec, TypeVar
+from typing import Any, Callable, ParamSpec, TypeVar
 
 import click
+import yaml
 from llama_agents.cli.interactive_prompts.session_utils import is_interactive_session
+from pydantic import BaseModel
 
 from .debug import setup_file_logging
 
@@ -15,6 +18,88 @@ def global_options(f: Callable[P, R]) -> Callable[P, R]:
     """Common decorator to add global options to command groups"""
 
     return native_tls_option(file_logging(f))
+
+
+def output_option(f: Callable[P, R]) -> Callable[P, R]:
+    """Add a `-o/--output` option for read commands.
+
+    Choices: ``text`` (default; existing Rich tables), ``json``, ``yaml``.
+    The value is exposed as the ``output`` keyword argument.
+    """
+
+    return click.option(
+        "-o",
+        "--output",
+        "output",
+        type=click.Choice(["text", "json", "yaml"], case_sensitive=False),
+        default="text",
+        show_default=True,
+        help="Output format. Use 'json' or 'yaml' for machine-readable output.",
+    )(f)
+
+
+def project_option(f: Callable[P, R]) -> Callable[P, R]:
+    """Add a ``--project`` option to override the active profile's project for a command.
+
+    The value is exposed as the ``project`` keyword argument and should be
+    threaded into ``get_project_client()`` or ``project_client_context()`` via
+    the ``project_id_override`` parameter.
+    """
+
+    return click.option(
+        "--project",
+        "project",
+        default=None,
+        help="Project ID to use for this command (overrides active profile).",
+    )(f)
+
+
+def render_output(
+    payload: BaseModel | list[BaseModel] | Any,
+    output: str,
+    text_renderer: Callable[[], None],
+) -> None:
+    """Render a payload according to ``output`` mode.
+
+    - ``text``: invoke ``text_renderer`` (typically prints a Rich table).
+    - ``json``: emit canonical JSON via ``click.echo`` (no Rich markup).
+    - ``yaml``: emit naive YAML (Slice A format; will evolve in Slice B for
+      single-deployment ``get -o yaml`` round-tripping).
+
+    ``payload`` may be a Pydantic model, a list of Pydantic models, or any
+    JSON-serializable value (dict, list of dicts). The structured outputs go
+    through ``click.echo`` so they pipe cleanly even when Rich would
+    otherwise insert markup.
+    """
+
+    mode = (output or "text").lower()
+    if mode == "text":
+        text_renderer()
+        return
+
+    def _to_json_safe(value: Any) -> Any:
+        if isinstance(value, BaseModel):
+            return value.model_dump(mode="json")
+        if isinstance(value, list):
+            return [_to_json_safe(item) for item in value]
+        if isinstance(value, dict):
+            return {k: _to_json_safe(v) for k, v in value.items()}
+        return value
+
+    if mode == "json":
+        click.echo(json.dumps(_to_json_safe(payload), indent=2))
+        return
+    if mode == "yaml":
+        # NOTE: Slice A emits the naive Pydantic shape (e.g.
+        # ``secret_names: [FOO, BAR]``). Slice B will replace this with a
+        # round-trippable apply-format (``secrets: { FOO: ********, ... }``
+        # plus read-only fields as comments). Scripts targeting ``-o json``
+        # are stable; ``-o yaml`` will evolve.
+        click.echo(yaml.safe_dump(_to_json_safe(payload), sort_keys=False))
+        return
+
+    # Should be unreachable given click.Choice, but be defensive.
+    raise click.ClickException(f"Unknown output mode: {output}")
 
 
 def interactive_option(f: Callable[P, R]) -> Callable[P, R]:
