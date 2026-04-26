@@ -37,7 +37,7 @@ def test_deployment_type_returns_fetched_items(
     monkeypatch.setattr(
         pt,
         "_fetch_deployments",
-        lambda: [
+        lambda project_id_override=None: [
             CompletionItem("my-app"),
             CompletionItem("staging"),
         ],
@@ -54,10 +54,31 @@ def test_deployment_type_returns_fetched_items(
     assert items[0].value == "my-app"
 
 
+def test_deployment_type_passes_project_override_to_fetch(
+    ctx: click.Context, param: click.Parameter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_overrides: list[str | None] = []
+
+    def _fetch_deployments(
+        project_id_override: str | None = None,
+    ) -> list[CompletionItem]:
+        project_overrides.append(project_id_override)
+        return [CompletionItem("project-app")]
+
+    monkeypatch.setattr(pt, "_fetch_deployments", _fetch_deployments)
+    ctx.params["project"] = "project-123"
+
+    dt = DeploymentType()
+    items = dt.shell_complete(ctx, param, "")
+
+    assert [item.value for item in items] == ["project-app"]
+    assert project_overrides == ["project-123"]
+
+
 def test_deployment_type_fetch_failure(
     ctx: click.Context, param: click.Parameter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def _boom() -> list[CompletionItem]:
+    def _boom(project_id_override: str | None = None) -> list[CompletionItem]:
         raise RuntimeError("API down")
 
     monkeypatch.setattr(pt, "_fetch_deployments", _boom)

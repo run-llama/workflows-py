@@ -176,18 +176,16 @@ def get_deployment(
 
 @deployments.command("list", hidden=True)
 @global_options
-@click.argument("deployment_id", required=False, type=DeploymentType())
 @output_option
 @project_option
 @interactive_option
 def list_deployments(
-    deployment_id: str | None,
     interactive: bool,
     output: str,
     project: str | None,
 ) -> None:
     """Hidden alias for ``deployments get``. Kept for backward compatibility."""
-    _do_get(deployment_id, interactive, output, project)
+    _do_get(None, interactive, output, project)
 
 
 @deployments.command("create")
