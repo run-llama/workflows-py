@@ -161,13 +161,26 @@ class Collect:
 
 ## AsyncIterator semantics
 
-Async-iterator fan-out is the elegant default — it lets the type graph stay honest while supporting dynamic cardinality. It introduces one wrinkle: failure mid-batch.
+Iterator and `list[E]` returns emit events as they are yielded. Replay (worker death, retry, journal restart) re-runs the iterator from the start and **events emitted on prior runs may be emitted again**. This matches the existing semantics of `ctx.send_event` — the framework does not enforce a determinism contract or attempt to dedupe.
 
-**Determinism contract.** On replay, the framework re-invokes the iterator from the start and dedupes against a per-batch journal. Yields where `seq < len(journal)` are dropped silently after a content match; new yields extend the journal. Iterator prefixes must be deterministic given the input event and `ctx.store` snapshot — the same contract today's reducer-based steps already carry.
+**Replay journal.** Steps that want to skip previously-emitted events on replay can read them from the context:
 
-**Non-deterministic sources.** For LLM streams or queue consumers, prefix-replay is unsafe. The escape hatch is `@step(replay="abort")`: on crash, do not re-run; emit `BatchAborted(batch_id, partial=k)` instead. Joins decide what to do via `on_partial="fire" | "fail"` (default `"fail"` — silent partial joins are footguns).
+```python
+@step
+async def fan_out(ev: StartEvent, ctx: Context) -> AsyncIterator[Task]:
+    already_sent = ctx.replayed_events()    # list[Event]; empty on first run
+    seen = {e.id for e in already_sent}
+    for item in source():
+        if item.id in seen:
+            continue
+        yield Task(item)
+```
 
-**Batch closure.** A batch closes on iterator exit (`BatchClosed`) or on retry exhaustion (`BatchAborted`). Joins fire on closure; `Take` and `Window` modifiers may fire earlier.
+The framework provides the data; the dedupe policy is user-defined. "Same event" is a domain concept (id equality, content hash, position in some external stream) — only the user knows which one applies. Steps that don't read the journal will produce duplicate emissions on replay, exactly as `send_event` does today.
+
+**Batch closure.** A batch closes on iterator exit (`BatchClosed`) or on retry exhaustion (`BatchAborted`). Joins fire on closure; `Take` and `Window` modifiers may fire earlier. Without user-side dedupe, replays can extend a batch with duplicate events; cardinality modifiers count what they receive.
+
+**Retry exhaustion mid-stream.** If the iterator step exhausts its retry budget before exiting, emit `BatchAborted(batch_id, partial=k, error=...)`. Joins decide what to do via `on_partial="fire" | "fail"` (default `"fail"` — silent partial joins are footguns).
 
 ## What's explicitly out of scope (for now)
 
@@ -196,9 +209,11 @@ Async-iterator fan-out is the elegant default — it lets the type graph stay ho
 
 6. **OpenTelemetry alignment.** Internal lineage fields (`batch_id`, parent linkage) are isomorphic to OTel's `trace_id` / `span_id` / `parent_span_id`. Worth naming them the same so instrumentation lines up, even if we don't expose them as user API.
 
+7. **Replay-journal accessor.** What's the right name and shape for `ctx.replayed_events()`? Candidates: a method returning `list[Event]`, an attribute, a typed view (`ctx.replay.events`), or scoped per-batch (`ctx.replay.for_batch(batch_id)`). It only matters for steps that want to dedupe explicitly — most won't.
+
 ## Phasing
 
-**v1** — atom shape, multi-param structuring, `Collect(at=, from_=)`, `All` / `Take` / `AtLeast`, all-keys-gate release, `list[E]` and `AsyncIterator[E]` returns, `BatchClosed` / `BatchAborted` ticks, prefix-replay determinism contract.
+**v1** — atom shape, multi-param structuring, `Collect(at=, from_=)`, `All` / `Take` / `AtLeast`, all-keys-gate release, `list[E]` and `AsyncIterator[E]` returns, `BatchClosed` / `BatchAborted` ticks, `ctx.replayed_events()` accessor.
 
 **v2** — `Buffer`, `Window`, `release="any"`, `where` predicates.
 
