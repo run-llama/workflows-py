@@ -13,6 +13,7 @@ import click
 from llama_agents.cli.commands.auth import validate_authenticated_profile
 from llama_agents.cli.param_types import DeploymentType, GitShaType
 from llama_agents.cli.styles import HEADER_COLOR, MUTED_COL, PRIMARY_COL, WARNING
+from llama_agents.core.schema import LogEvent
 from llama_agents.core.schema.deployments import (
     INTERNAL_CODE_REPO_SCHEME,
     DeploymentHistoryResponse,
@@ -21,11 +22,19 @@ from llama_agents.core.schema.deployments import (
 )
 from rich import print as rprint
 from rich.table import Table
-from rich.text import Text
 
 from ..app import app, console
 from ..client import get_project_client, project_client_context
-from ..options import global_options, interactive_option
+from ..display import DeploymentDisplay
+from ..log_format import parse_log_body, render_plain
+from ..options import (
+    global_options,
+    interactive_option,
+    output_option,
+    project_option,
+    render_output,
+)
+from ..render import short_sha
 from ..utils.capabilities import probe_code_push_support
 from ..utils.git_push import (
     configure_git_remote,
@@ -46,105 +55,115 @@ def deployments() -> None:
     pass
 
 
-# Deployments commands
-@deployments.command("list")
-@global_options
-@interactive_option
-def list_deployments(interactive: bool) -> None:
-    """List deployments for the configured project."""
-    validate_authenticated_profile(interactive)
-    try:
-        client = get_project_client()
-        deployments = asyncio.run(client.list_deployments())
+def friendly_http_error(
+    exc: Exception,
+    *,
+    deployment_id: str | None = None,
+    project_id: str | None = None,
+) -> str | None:
+    """Translate well-known HTTP errors into a one-line CLI message.
 
-        if not deployments:
-            rprint(
-                f"[{WARNING}]No deployments found for project {client.project_id}[/]"
-            )
+    Returns ``None`` when the caller should fall back to the verbose default
+    rendering. We only collapse the cases where a richer message would just
+    be debug noise to the user — currently a 404 on a known deployment id.
+    Other 4xx/5xx and non-HTTP errors keep their existing message so we
+    don't swallow useful info on unexpected paths.
+    """
+    # Defer httpx import: `llamactl --help` is held to a no-httpx startup
+    # budget by tests/test_cli_imports.py; only error paths need the type.
+    import httpx
+
+    if not isinstance(exc, httpx.HTTPStatusError):
+        return None
+    if exc.response.status_code != 404 or not deployment_id:
+        return None
+    msg = f"deployment '{deployment_id}' not found"
+    if project_id:
+        msg += f" in project '{project_id}'"
+    return msg
+
+
+def _do_get(
+    deployment_id: str | None,
+    interactive: bool,
+    output: str,
+    project: str | None,
+) -> None:
+    """Implementation of ``deployments get`` shared with the hidden ``list`` alias.
+
+    No ``deployment_id`` → list all deployments (kubectl-style). With an ID →
+    a single-row table for that deployment. Never launches the TUI; for a
+    live view use ``deployments logs --follow``.
+    """
+    validate_authenticated_profile(interactive)
+    # Fall back to the user-supplied override if client construction itself
+    # raises; `client.project_id` resolves the active project when no override.
+    effective_project: str | None = project
+    try:
+        client = get_project_client(project_id_override=project)
+        effective_project = client.project_id
+
+        if not deployment_id:
+            deployments = asyncio.run(client.list_deployments())
+
+            if not deployments and output == "text":
+                rprint(
+                    f"[{WARNING}]No deployments found for project {client.project_id}[/]"
+                )
+                return
+
+            displays = [DeploymentDisplay.from_response(d) for d in deployments]
+            render_output(displays, output)
             return
 
-        table = Table(show_edge=False, box=None, header_style=f"bold {HEADER_COLOR}")
-        table.add_column("Name", style=PRIMARY_COL)
-        table.add_column("ID", style=MUTED_COL)
-        table.add_column("Status", style=MUTED_COL)
-        table.add_column("URL", style=MUTED_COL)
-        table.add_column("Repository", style=MUTED_COL)
-
-        for deployment in deployments:
-            display_name = deployment.display_name
-            status = deployment.status
-            repo_url = deployment.repo_url
-            gh = "https://github.com/"
-            if repo_url.startswith(gh):
-                repo_url = "gh:" + repo_url.removeprefix(gh)
-
-            table.add_row(
-                display_name,
-                deployment.id,
-                status,
-                str(deployment.apiserver_url or ""),
-                repo_url,
-            )
-
-        console.print(table)
+        deployment = asyncio.run(client.get_deployment(deployment_id))
+        display = DeploymentDisplay.from_response(deployment)
+        render_output(display, output)
 
     except Exception as e:
-        rprint(f"[red]Error: {e}[/red]")
+        friendly = friendly_http_error(
+            e, deployment_id=deployment_id, project_id=effective_project
+        )
+        message = friendly if friendly is not None else str(e)
+        rprint(f"[red]Error: {message}[/red]")
         raise click.Abort()
 
 
 @deployments.command("get")
 @global_options
 @click.argument("deployment_id", required=False, type=DeploymentType())
+@output_option
+@project_option
 @interactive_option
-def get_deployment(deployment_id: str | None, interactive: bool) -> None:
-    """Get details of a specific deployment"""
-    # Keep this import local: `llamactl --help` eagerly imports command modules,
-    # and import-time profiling showed Textual adds material startup cost here.
-    # Avoid adding other local imports unless instrumentation shows they are slow.
-    from ..textual.deployment_monitor import monitor_deployment_screen
+def get_deployment(
+    deployment_id: str | None,
+    interactive: bool,
+    output: str,
+    project: str | None,
+) -> None:
+    """Get one or more deployments.
 
-    validate_authenticated_profile(interactive)
-    try:
-        client = get_project_client()
+    With no argument: lists all deployments in the project (kubectl-style).
+    With a deployment ID: prints details for that deployment.
 
-        deployment_id = select_deployment(deployment_id, interactive=interactive)
-        if not deployment_id:
-            rprint(f"[{WARNING}]No deployment selected[/]")
-            return
-        if interactive:
-            monitor_deployment_screen(deployment_id)
-            return
+    Use ``-o json`` or ``-o yaml`` for machine-readable output. Use
+    ``llamactl deployments logs <name> --follow`` to stream logs.
+    """
+    _do_get(deployment_id, interactive, output, project)
 
-        deployment = asyncio.run(client.get_deployment(deployment_id))
 
-        table = Table(show_edge=False, box=None, header_style=f"bold {HEADER_COLOR}")
-        table.add_column("Property", style=MUTED_COL, justify="right")
-        table.add_column("Value", style=PRIMARY_COL)
-
-        table.add_row("Name", Text(deployment.display_name))
-        table.add_row("ID", Text(deployment.id))
-        table.add_row("Project ID", Text(deployment.project_id))
-        table.add_row("Status", Text(deployment.status))
-        table.add_row("Repository", Text(deployment.repo_url))
-        table.add_row("Deployment File", Text(deployment.deployment_file_path))
-        table.add_row("Git Ref", Text(deployment.git_ref or "-"))
-        table.add_row("Last Deployed Commit", Text((deployment.git_sha or "-")[:7]))
-
-        apiserver_url = deployment.apiserver_url
-        table.add_row(
-            "API Server URL",
-            Text(str(apiserver_url) if apiserver_url else "-"),
-        )
-
-        secret_names = deployment.secret_names or []
-        table.add_row("Secrets", Text("\n".join(secret_names), style="italic"))
-
-        console.print(table)
-
-    except Exception as e:
-        rprint(f"[red]Error: {e}[/red]")
-        raise click.Abort()
+@deployments.command("list", hidden=True)
+@global_options
+@output_option
+@project_option
+@interactive_option
+def list_deployments(
+    interactive: bool,
+    output: str,
+    project: str | None,
+) -> None:
+    """Hidden alias for ``deployments get``. Kept for backward compatibility."""
+    _do_get(None, interactive, output, project)
 
 
 @deployments.command("create")
@@ -164,7 +183,6 @@ def create_deployment(
     # Avoid adding other local imports unless instrumentation shows they are slow.
     from ..textual.deployment_form import create_deployment_form
 
-    # Use interactive creation
     deployment_form = create_deployment_form(
         server_supports_code_push=probe_code_push_support(),
     )
@@ -180,8 +198,11 @@ def create_deployment(
 @deployments.command("configure-git-remote")
 @global_options
 @click.argument("deployment_id", required=False, type=DeploymentType())
+@project_option
 @interactive_option
-def configure_git_remote_cmd(deployment_id: str | None, interactive: bool) -> None:
+def configure_git_remote_cmd(
+    deployment_id: str | None, interactive: bool, project: str | None
+) -> None:
     """Configure a git remote for a deployment.
 
     Sets up authentication and a git remote named 'llamaagents-<deployment_id>'
@@ -193,7 +214,6 @@ def configure_git_remote_cmd(deployment_id: str | None, interactive: bool) -> No
     """
     validate_authenticated_profile(interactive)
     try:
-        # Verify we're in a git repo
         result = subprocess.run(
             ["git", "rev-parse", "--git-dir"],
             capture_output=True,
@@ -202,12 +222,14 @@ def configure_git_remote_cmd(deployment_id: str | None, interactive: bool) -> No
         if result.returncode != 0:
             raise click.ClickException("Not a git repository")
 
-        deployment_id = select_deployment(deployment_id, interactive=interactive)
+        deployment_id = select_deployment(
+            deployment_id, interactive=interactive, project_id_override=project
+        )
         if not deployment_id:
             rprint(f"[{WARNING}]No deployment selected[/]")
             return
 
-        client = get_project_client()
+        client = get_project_client(project_id_override=project)
         git_url = get_deployment_git_url(client.base_url, deployment_id)
         api_key = get_api_key()
         remote_name = configure_git_remote(
@@ -229,8 +251,11 @@ def configure_git_remote_cmd(deployment_id: str | None, interactive: bool) -> No
 @deployments.command("delete")
 @global_options
 @click.argument("deployment_id", required=False, type=DeploymentType())
+@project_option
 @interactive_option
-def delete_deployment(deployment_id: str | None, interactive: bool) -> None:
+def delete_deployment(
+    deployment_id: str | None, interactive: bool, project: str | None
+) -> None:
     """Delete a deployment"""
     # Keep this import local: the helper imports `questionary`, which import-time
     # profiling showed is a noticeable CLI startup cost. Avoid other local
@@ -239,9 +264,11 @@ def delete_deployment(deployment_id: str | None, interactive: bool) -> None:
 
     validate_authenticated_profile(interactive)
     try:
-        client = get_project_client()
+        client = get_project_client(project_id_override=project)
 
-        deployment_id = select_deployment(deployment_id, interactive=interactive)
+        deployment_id = select_deployment(
+            deployment_id, interactive=interactive, project_id_override=project
+        )
         if not deployment_id:
             rprint(f"[{WARNING}]No deployment selected[/]")
             return
@@ -262,8 +289,11 @@ def delete_deployment(deployment_id: str | None, interactive: bool) -> None:
 @deployments.command("edit")
 @global_options
 @click.argument("deployment_id", required=False, type=DeploymentType())
+@project_option
 @interactive_option
-def edit_deployment(deployment_id: str | None, interactive: bool) -> None:
+def edit_deployment(
+    deployment_id: str | None, interactive: bool, project: str | None
+) -> None:
     """Interactively edit a deployment"""
     # Keep this import local: `llamactl --help` eagerly imports command modules,
     # and import-time profiling showed Textual adds material startup cost here.
@@ -272,17 +302,17 @@ def edit_deployment(deployment_id: str | None, interactive: bool) -> None:
 
     validate_authenticated_profile(interactive)
     try:
-        client = get_project_client()
+        client = get_project_client(project_id_override=project)
 
-        deployment_id = select_deployment(deployment_id, interactive=interactive)
+        deployment_id = select_deployment(
+            deployment_id, interactive=interactive, project_id_override=project
+        )
         if not deployment_id:
             rprint(f"[{WARNING}]No deployment selected[/]")
             return
 
-        # Get current deployment details
         current_deployment = asyncio.run(client.get_deployment(deployment_id))
 
-        # Use the interactive edit form
         updated_deployment = edit_deployment_form(
             current_deployment,
             server_supports_code_push=probe_code_push_support(),
@@ -300,7 +330,11 @@ def edit_deployment(deployment_id: str | None, interactive: bool) -> None:
         raise click.Abort()
 
 
-def _push_internal_for_update(deployment_id: str, git_ref: str | None = None) -> None:
+def _push_internal_for_update(
+    deployment_id: str,
+    git_ref: str | None = None,
+    project_id_override: str | None = None,
+) -> None:
     """Push local code to the internal repo before updating.
 
     This ensures the S3-stored bare repo has the latest commits so the
@@ -315,13 +349,13 @@ def _push_internal_for_update(deployment_id: str, git_ref: str | None = None) ->
         )
         return
 
-    client = get_project_client()
+    client = get_project_client(project_id_override=project_id_override)
     api_key = get_api_key()
     git_url = get_deployment_git_url(client.base_url, deployment_id)
     remote_name = configure_git_remote(
         git_url, api_key, client.project_id, deployment_id
     )
-    local_ref, target_ref = _internal_push_refspec(git_ref)
+    local_ref, target_ref = internal_push_refspec(git_ref)
     with console.status("Pushing code..."):
         push_result = push_to_remote(
             remote_name, local_ref=local_ref, target_ref=target_ref
@@ -335,12 +369,6 @@ def _push_internal_for_update(deployment_id: str, git_ref: str | None = None) ->
         )
 
 
-def _internal_push_refspec(git_ref: str | None) -> tuple[str, str]:
-    # Delegate to the shared implementation in git_push.py.
-    # Keep this thin wrapper so existing call sites and tests don't break.
-    return internal_push_refspec(git_ref)
-
-
 @deployments.command("update")
 @global_options
 @click.argument("deployment_id", required=False, type=DeploymentType())
@@ -349,22 +377,26 @@ def _internal_push_refspec(git_ref: str | None) -> tuple[str, str]:
     help="Reference branch, tag, or commit SHA for the deployment. If not provided, the current reference and latest commit on it will be used.",
     default=None,
 )
+@project_option
 @interactive_option
 def refresh_deployment(
-    deployment_id: str | None, git_ref: str | None, interactive: bool
+    deployment_id: str | None,
+    git_ref: str | None,
+    interactive: bool,
+    project: str | None,
 ) -> None:
     """Update the deployment, pulling the latest code from it's branch"""
     validate_authenticated_profile(interactive)
     try:
-        deployment_id = select_deployment(deployment_id, interactive=interactive)
+        deployment_id = select_deployment(
+            deployment_id, interactive=interactive, project_id_override=project
+        )
         if not deployment_id:
             rprint(f"[{WARNING}]No deployment selected[/]")
             return
 
-        # Get current deployment details to show what we're refreshing
-        current_deployment = asyncio.run(
-            get_project_client().get_deployment(deployment_id)
-        )
+        client = get_project_client(project_id_override=project)
+        current_deployment = asyncio.run(client.get_deployment(deployment_id))
         deployment_name = current_deployment.display_name
         old_git_sha = current_deployment.git_sha or ""
 
@@ -372,24 +404,22 @@ def refresh_deployment(
         # latest commits to resolve against.
         effective_git_ref = git_ref or current_deployment.git_ref
         if current_deployment.repo_url == INTERNAL_CODE_REPO_SCHEME:
-            _push_internal_for_update(deployment_id, effective_git_ref)
+            _push_internal_for_update(
+                deployment_id, effective_git_ref, project_id_override=project
+            )
 
         # Re-resolves the branch to the latest commit SHA.
         with console.status(f"Refreshing {deployment_name}..."):
-            deployment_update = DeploymentUpdate(
-                git_ref=effective_git_ref,
-            )
             updated_deployment = asyncio.run(
-                get_project_client().update_deployment(
+                client.update_deployment(
                     deployment_id,
-                    deployment_update,
+                    DeploymentUpdate(git_ref=effective_git_ref),
                 )
             )
 
-        # Show the git SHA change with short SHAs
         new_git_sha = updated_deployment.git_sha or ""
-        old_short = old_git_sha[:7] if old_git_sha else "none"
-        new_short = new_git_sha[:7] if new_git_sha else "none"
+        old_short = short_sha(old_git_sha) if old_git_sha else "-"
+        new_short = short_sha(new_git_sha) if new_git_sha else "-"
 
         if old_git_sha == new_git_sha:
             rprint(f"No changes: already at {new_short}")
@@ -520,7 +550,119 @@ def rollback(deployment_id: str | None, git_sha: str | None, interactive: bool) 
         raise click.Abort()
 
 
-def select_deployment(deployment_id: str | None, interactive: bool) -> str | None:
+@deployments.command("logs")
+@global_options
+@click.argument("deployment_id", required=False, type=DeploymentType())
+@click.option(
+    "--follow",
+    "-f",
+    is_flag=True,
+    default=False,
+    help="Stream logs continuously until interrupted (Ctrl-C).",
+)
+@click.option(
+    "--json",
+    "json_lines",
+    is_flag=True,
+    default=False,
+    help="Output one LogEvent JSON object per line (jsonl).",
+)
+@click.option(
+    "--tail",
+    "tail",
+    type=click.IntRange(min=1),
+    default=200,
+    show_default=True,
+    help="Number of lines to retrieve from the end of the logs initially.",
+)
+@click.option(
+    "--since-seconds",
+    "since_seconds",
+    type=click.IntRange(min=0),
+    default=None,
+    help="Only return logs newer than this many seconds.",
+)
+@click.option(
+    "--include-init-containers",
+    is_flag=True,
+    default=False,
+    help="Include init container logs.",
+)
+@project_option
+@interactive_option
+def deployment_logs(
+    deployment_id: str | None,
+    follow: bool,
+    json_lines: bool,
+    tail: int,
+    since_seconds: int | None,
+    include_init_containers: bool,
+    interactive: bool,
+    project: str | None,
+) -> None:
+    """Stream or fetch logs for a deployment.
+
+    By default, prints recent logs and exits. Use ``--follow`` to keep the
+    stream open until you Ctrl-C. Use ``--json`` to emit one JSON
+    ``LogEvent`` per line for downstream tooling (jsonl).
+    """
+    validate_authenticated_profile(interactive)
+
+    deployment_id = select_deployment(
+        deployment_id, interactive=interactive, project_id_override=project
+    )
+    if not deployment_id:
+        rprint(f"[{WARNING}]No deployment selected[/]")
+        return
+
+    async def _consume() -> int:
+        events_seen = 0
+        async with project_client_context(project_id_override=project) as client:
+            async for ev in client.stream_deployment_logs(
+                deployment_id,
+                include_init_containers=include_init_containers,
+                tail_lines=tail,
+                since_seconds=since_seconds,
+                follow=follow,
+            ):
+                events_seen += 1
+                _emit_log_event(ev, json_lines=json_lines)
+        return events_seen
+
+    try:
+        events_seen = asyncio.run(_consume())
+    except KeyboardInterrupt:
+        # Clean exit on Ctrl-C; no traceback.
+        return
+    except Exception as e:
+        rprint(f"[red]Error: {e}[/red]")
+        raise click.Abort()
+
+    if events_seen == 0 and not follow:
+        click.echo("no logs available yet", err=True)
+
+
+def _emit_log_event(ev: LogEvent, *, json_lines: bool) -> None:
+    """Render a single LogEvent to stdout per the requested format."""
+    if json_lines:
+        click.echo(ev.model_dump_json())
+        return
+
+    parsed = parse_log_body(ev.text)
+    body = render_plain(parsed)
+    pod = f"{ev.pod}/{ev.container}"
+    # Skip the envelope timestamp when the structured body already carries one,
+    # otherwise structlog lines render with two side-by-side timestamps.
+    ts = "" if parsed.timestamp else (ev.timestamp.isoformat() if ev.timestamp else "")
+    prefix = " ".join(p for p in (ts, pod) if p)
+    click.echo(f"{prefix} {body}" if prefix else body)
+
+
+def select_deployment(
+    deployment_id: str | None,
+    interactive: bool,
+    project_id_override: str | None = None,
+) -> str | None:
     """
     Select a deployment interactively if ID not provided.
     Returns the selected deployment ID or None if cancelled.
@@ -538,7 +680,7 @@ def select_deployment(deployment_id: str | None, interactive: bool) -> str | Non
     # Don't attempt interactive selection in non-interactive sessions
     if not interactive:
         return None
-    client = get_project_client()
+    client = get_project_client(project_id_override=project_id_override)
     deployments = asyncio.run(client.list_deployments())
 
     if not deployments:

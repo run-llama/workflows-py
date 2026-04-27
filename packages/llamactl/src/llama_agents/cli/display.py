@@ -26,7 +26,13 @@ import types
 from dataclasses import dataclass
 from typing import Any, Callable, Union, get_args, get_origin
 
-from pydantic import BaseModel
+from llama_agents.cli.render import gh_short, short_sha
+from llama_agents.core.schema.deployments import (
+    DeploymentResponse,
+    LlamaDeploymentPhase,
+)
+from pydantic import BaseModel, ConfigDict
+from typing_extensions import Annotated
 
 SECRET_MASK = "********"
 
@@ -162,3 +168,108 @@ def render_columns(
     for row in rows:
         table_rows.append({c.column.header: _extract_cell(row, c) for c in cols})
     render_table(table_rows, columns)
+
+
+class DeploymentSpec(BaseModel):
+    """Editable deployment fields.
+
+    These are the fields a user can set via ``apply``. ``personal_access_token``
+    is a leaky abstraction over the server-side ``GITHUB_PAT`` secret — it is
+    surfaced here as a dedicated field rather than mixed into ``secrets`` so
+    the apply input shape is explicit.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    display_name: str
+    repo_url: Annotated[str, Column("REPO", format=gh_short)]
+    deployment_file_path: str
+    git_ref: Annotated[str | None, Column("GIT_REF", default="-")] = None
+    appserver_version: Annotated[
+        str | None, Column("APPSERVER", default="-", wide=True)
+    ] = None
+    # No Column: suspended state is already visible via status.phase.
+    suspended: bool = False
+    secrets: dict[str, str] | None = None
+    personal_access_token: str | None = None
+
+
+class DeploymentStatus(BaseModel):
+    """Read-only / system-set deployment status block.
+
+    These fields reflect runtime state and are not editable via ``apply``.
+    ``warning`` is intentionally always serialized (explicit ``null`` when no
+    warning is present) — absence vs. explicit-null carries meaning for the
+    future ``describe`` command.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    phase: Annotated[LlamaDeploymentPhase, Column("PHASE")]
+    git_sha: Annotated[
+        str | None, Column("GIT_SHA", format=short_sha, default="-", wide=True)
+    ] = None
+    apiserver_url: Annotated[
+        str | None, Column("APISERVER_URL", default="-", wide=True)
+    ] = None
+    project_id: Annotated[str, Column("PROJECT", wide=True)]
+    warning: str | None = None
+
+
+class DeploymentDisplay(BaseModel):
+    """CLI projection of a deployment.
+
+    Top-level ``name`` is the stable id (immutable on update). ``spec``
+    carries the editable surface. ``status`` carries everything set by the
+    server. Use :meth:`from_response` to translate a ``DeploymentResponse``
+    into this shape; use :meth:`to_output_dict` to obtain a dict suitable for
+    JSON/YAML emission with the omit-when-empty rules applied.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: Annotated[str, Column("NAME")]
+    spec: DeploymentSpec
+    status: DeploymentStatus | None = None
+
+    @classmethod
+    def from_response(cls, r: DeploymentResponse) -> DeploymentDisplay:
+        """Project a wire ``DeploymentResponse`` into the CLI display shape."""
+        secret_names = r.secret_names or []
+        secrets: dict[str, str] | None = (
+            {name: SECRET_MASK for name in secret_names} if secret_names else None
+        )
+        pat = SECRET_MASK if r.has_personal_access_token else None
+        spec = DeploymentSpec(
+            display_name=r.display_name,
+            repo_url=r.repo_url,
+            deployment_file_path=r.deployment_file_path,
+            git_ref=r.git_ref,
+            appserver_version=r.appserver_version,
+            suspended=r.suspended,
+            secrets=secrets,
+            personal_access_token=pat,
+        )
+        status = DeploymentStatus(
+            phase=r.status,
+            git_sha=r.git_sha,
+            apiserver_url=str(r.apiserver_url) if r.apiserver_url else None,
+            project_id=r.project_id,
+            warning=r.warning,
+        )
+        return cls(name=r.id, spec=spec, status=status)
+
+    def to_output_dict(self) -> dict[str, Any]:
+        """Return the dict shape used for JSON/YAML rendering.
+
+        Omits fields inside ``spec`` whose value is None (e.g., unset
+        ``personal_access_token``, empty ``secrets``). The nested ``status``
+        block is preserved verbatim so its ``warning`` key remains explicit
+        even when ``null``.
+        """
+        spec_data = self.spec.model_dump(mode="json")
+        spec_data = {k: v for k, v in spec_data.items() if v is not None}
+        data: dict[str, Any] = {"name": self.name, "spec": spec_data}
+        if self.status is not None:
+            data["status"] = self.status.model_dump(mode="json")
+        return data
