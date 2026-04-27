@@ -24,9 +24,7 @@ def test_auth_organizations_text_lists_orgs() -> None:
             "llama_agents.cli.commands.auth.probe_organizations_support",
             return_value=True,
         ),
-        patch(
-            "llama_agents.cli.commands.auth._list_organizations", return_value=orgs
-        ),
+        patch("llama_agents.cli.commands.auth._list_organizations", return_value=orgs),
         patch("llama_agents.cli.config.env_service.service") as mock_service,
     ):
         mock_service.current_auth_service.return_value = MagicMock()
@@ -53,9 +51,7 @@ def test_auth_organizations_json() -> None:
             "llama_agents.cli.commands.auth.probe_organizations_support",
             return_value=True,
         ),
-        patch(
-            "llama_agents.cli.commands.auth._list_organizations", return_value=orgs
-        ),
+        patch("llama_agents.cli.commands.auth._list_organizations", return_value=orgs),
         patch("llama_agents.cli.config.env_service.service") as mock_service,
     ):
         mock_service.current_auth_service.return_value = MagicMock()
@@ -77,9 +73,7 @@ def test_auth_organizations_yaml() -> None:
             "llama_agents.cli.commands.auth.probe_organizations_support",
             return_value=True,
         ),
-        patch(
-            "llama_agents.cli.commands.auth._list_organizations", return_value=orgs
-        ),
+        patch("llama_agents.cli.commands.auth._list_organizations", return_value=orgs),
         patch("llama_agents.cli.config.env_service.service") as mock_service,
     ):
         mock_service.current_auth_service.return_value = MagicMock()
