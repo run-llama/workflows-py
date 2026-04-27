@@ -203,7 +203,7 @@ def test_git_sha_type_with_deployment_id(
     monkeypatch.setattr(
         pt,
         "_fetch_deployment_history",
-        lambda dep_id: [
+        lambda dep_id, project_id_override=None: [
             CompletionItem("abc1234", help="2026-01-01T00:00:00"),
             CompletionItem("def5678", help="2026-01-02T00:00:00"),
         ],
@@ -216,3 +216,24 @@ def test_git_sha_type_with_deployment_id(
     items = gt.shell_complete(ctx, param, "abc")
     assert len(items) == 1
     assert items[0].value == "abc1234"
+
+
+def test_git_sha_type_passes_project_override_to_fetch(
+    ctx: click.Context, param: click.Parameter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    project_overrides: list[str | None] = []
+
+    def _fetch_deployment_history(
+        deployment_id: str, project_id_override: str | None = None
+    ) -> list[CompletionItem]:
+        project_overrides.append(project_id_override)
+        return [CompletionItem("abc1234")]
+
+    monkeypatch.setattr(pt, "_fetch_deployment_history", _fetch_deployment_history)
+    ctx.params = {"deployment_id": "my-deploy", "project": "project-123"}
+
+    gt = GitShaType()
+    items = gt.shell_complete(ctx, param, "")
+
+    assert [item.value for item in items] == ["abc1234"]
+    assert project_overrides == ["project-123"]

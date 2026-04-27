@@ -72,6 +72,41 @@ def test_logs_default_prints_recent_and_exits(patched_auth: Any) -> None:
     assert kwargs["follow"] is False
 
 
+def test_logs_structured_text_uses_body_timestamp_once(patched_auth: Any) -> None:
+    runner = CliRunner()
+    events = _make_log_events(1)
+    client = _make_logs_client(events)
+    with patch_project_client(client):
+        result = runner.invoke(
+            app, ["deployments", "logs", "my-app", "--no-interactive"]
+        )
+
+    assert result.exit_code == 0, result.output
+    line = result.output.strip()
+    assert line.startswith("pod-x/app 12:00:00.000")
+    assert line.count("12:00:00") == 1
+
+
+def test_logs_unstructured_text_uses_envelope_timestamp(patched_auth: Any) -> None:
+    runner = CliRunner()
+    event = LogEvent(
+        pod="pod-x",
+        container="app",
+        text="plain stdout line",
+        timestamp=datetime(2026, 4, 26, 12, 0, 0, tzinfo=timezone.utc),
+    )
+    client = _make_logs_client([event])
+    with patch_project_client(client):
+        result = runner.invoke(
+            app, ["deployments", "logs", "my-app", "--no-interactive"]
+        )
+
+    assert result.exit_code == 0, result.output
+    assert result.output.strip() == (
+        "2026-04-26T12:00:00+00:00 pod-x/app plain stdout line"
+    )
+
+
 def test_logs_follow_passes_follow_true(patched_auth: Any) -> None:
     runner = CliRunner()
     events = _make_log_events(2)
@@ -119,6 +154,35 @@ def test_logs_no_events_emits_stderr_note(patched_auth: Any) -> None:
     assert result.exit_code == 0, result.output
     # stderr message present in combined output (CliRunner default).
     assert "no logs available yet" in result.output
+
+
+def test_logs_rejects_zero_tail(patched_auth: Any) -> None:
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        ["deployments", "logs", "my-app", "--no-interactive", "--tail", "0"],
+    )
+
+    assert result.exit_code != 0
+    assert "Invalid value for '--tail'" in result.output
+
+
+def test_logs_rejects_negative_since_seconds(patched_auth: Any) -> None:
+    runner = CliRunner()
+    result = runner.invoke(
+        app,
+        [
+            "deployments",
+            "logs",
+            "my-app",
+            "--no-interactive",
+            "--since-seconds",
+            "-1",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "Invalid value for '--since-seconds'" in result.output
 
 
 def test_deployments_status_command_removed() -> None:

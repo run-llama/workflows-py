@@ -362,7 +362,10 @@ def test_deployments_get_404_renders_friendly_message(patched_auth: Any) -> None
             ["deployments", "get", "nonexistent-app", "--no-interactive"],
         )
     assert result.exit_code != 0
-    assert "deployment 'nonexistent-app' not found" in result.output
+    assert (
+        "deployment 'nonexistent-app' not found in project 'proj_default'"
+        in result.output
+    )
     # No URL, no JSON body should leak through.
     assert "http://" not in result.output
     assert "detail" not in result.output
@@ -373,6 +376,7 @@ def test_deployments_get_404_with_project_includes_project(
 ) -> None:
     runner = CliRunner()
     client_mock = _make_client_mock([])
+    client_mock.project_id = "proj_other"
 
     async def _raise_404(deployment_id: str, include_events: bool = False) -> None:
         raise _http_status_error(404)

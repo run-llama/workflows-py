@@ -61,10 +61,12 @@ def _fetch_organizations() -> list[CompletionItem]:
     ]
 
 
-def _fetch_deployment_history(deployment_id: str) -> list[CompletionItem]:
+def _fetch_deployment_history(
+    deployment_id: str, project_id_override: str | None = None
+) -> list[CompletionItem]:
     from llama_agents.cli.client import get_project_client
 
-    client = get_project_client()
+    client = get_project_client(project_id_override=project_id_override)
 
     async def _fetch() -> Any:
         return await client.get_deployment_history(deployment_id)
@@ -171,7 +173,10 @@ class GitShaType(click.ParamType):
         deployment_id = ctx.params.get("deployment_id")
         if not deployment_id:
             return []
+        project_id_override = ctx.params.get("project")
         return _filter(
-            _safe_fetch(lambda: _fetch_deployment_history(deployment_id)),
+            _safe_fetch(
+                lambda: _fetch_deployment_history(deployment_id, project_id_override)
+            ),
             incomplete,
         )

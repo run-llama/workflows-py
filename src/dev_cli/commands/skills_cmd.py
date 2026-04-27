@@ -42,11 +42,19 @@ def sync_skills(check: bool) -> None:
         )
         return
 
-    dst_dir.mkdir(parents=True, exist_ok=True)
-
     drift: list[str] = []
     created: list[str] = []
     ok: list[str] = []
+
+    if check:
+        if not dst_dir.is_dir():
+            click.echo(
+                f"drift    missing destination dir {dst_dir.relative_to(root)}",
+                err=True,
+            )
+            raise SystemExit(1)
+    else:
+        dst_dir.mkdir(parents=True, exist_ok=True)
 
     for entry in sorted(src_dir.iterdir()):
         if not entry.is_dir():

@@ -116,8 +116,12 @@ def _do_get(
     live view use ``deployments logs --follow``.
     """
     validate_authenticated_profile(interactive)
+    # Fall back to the user-supplied override if client construction itself
+    # raises; `client.project_id` resolves the active project when no override.
+    effective_project: str | None = project
     try:
         client = get_project_client(project_id_override=project)
+        effective_project = client.project_id
 
         if not deployment_id:
             # List all deployments (former `list_deployments` body).
@@ -147,7 +151,7 @@ def _do_get(
 
     except Exception as e:
         friendly = friendly_http_error(
-            e, deployment_id=deployment_id, project_id=project
+            e, deployment_id=deployment_id, project_id=effective_project
         )
         message = friendly if friendly is not None else str(e)
         rprint(f"[red]Error: {message}[/red]")
@@ -644,7 +648,7 @@ def rollback(
 @click.option(
     "--tail",
     "tail",
-    type=int,
+    type=click.IntRange(min=1),
     default=200,
     show_default=True,
     help="Number of lines to retrieve from the end of the logs initially.",
@@ -652,7 +656,7 @@ def rollback(
 @click.option(
     "--since-seconds",
     "since_seconds",
-    type=int,
+    type=click.IntRange(min=0),
     default=None,
     help="Only return logs newer than this many seconds.",
 )
@@ -722,10 +726,13 @@ def _emit_log_event(ev: LogEvent, *, json_lines: bool) -> None:
         click.echo(ev.model_dump_json())
         return
 
-    body = render_plain(parse_log_body(ev.text))
-    ts = ev.timestamp.isoformat() if ev.timestamp else ""
-    prefix_parts = [p for p in (ts, f"{ev.pod}/{ev.container}") if p]
-    prefix = " ".join(prefix_parts)
+    parsed = parse_log_body(ev.text)
+    body = render_plain(parsed)
+    pod = f"{ev.pod}/{ev.container}"
+    # Skip the envelope timestamp when the structured body already carries one,
+    # otherwise structlog lines render with two side-by-side timestamps.
+    ts = "" if parsed.timestamp else (ev.timestamp.isoformat() if ev.timestamp else "")
+    prefix = " ".join(p for p in (ts, pod) if p)
     click.echo(f"{prefix} {body}" if prefix else body)
 
 

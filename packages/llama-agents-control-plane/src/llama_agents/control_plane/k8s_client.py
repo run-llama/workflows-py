@@ -1272,10 +1272,12 @@ async def _stream_pod_container_logs(
         yield "__SHUTDOWN__"
         return
 
-    merged = merge_generators(
-        *generators,
-        when_shutdown(),
-    )
+    gen_args: list[AsyncGenerator[LogLine | Literal["__SHUTDOWN__"], None]] = [
+        *generators
+    ]
+    if follow:
+        gen_args.append(when_shutdown())
+    merged = merge_generators(*gen_args)
 
     try:
         async for item in merged:

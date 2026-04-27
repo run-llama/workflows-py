@@ -5,6 +5,7 @@ from typing import Any, Callable, ParamSpec, TypeVar
 
 import click
 from llama_agents.cli.interactive_prompts.session_utils import is_interactive_session
+from llama_agents.cli.param_types import ProjectType
 from pydantic import BaseModel
 
 from .debug import setup_file_logging
@@ -48,6 +49,7 @@ def project_option(f: Callable[P, R]) -> Callable[P, R]:
     return click.option(
         "--project",
         "project",
+        type=ProjectType(),
         default=None,
         help="Project ID to use for this command (overrides active profile).",
     )(f)
