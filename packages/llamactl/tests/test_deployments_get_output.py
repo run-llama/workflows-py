@@ -253,7 +253,9 @@ def _history_client_mock(items: list[ReleaseHistoryItem]) -> MagicMock:
     client_mock = _make_client_mock([make_deployment("my-app")])
 
     async def _hist(deployment_id: str) -> DeploymentHistoryResponse:
-        return DeploymentHistoryResponse(deployment_id=deployment_id, history=list(items))
+        return DeploymentHistoryResponse(
+            deployment_id=deployment_id, history=list(items)
+        )
 
     client_mock.get_deployment_history.side_effect = _hist
     return client_mock
