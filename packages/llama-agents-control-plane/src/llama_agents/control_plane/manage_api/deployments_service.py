@@ -45,6 +45,57 @@ logger = logging.getLogger(__name__)
 DEFAULT_ORG = schema.OrgSummary(org_id="default", org_name="Default", is_default=True)
 
 
+async def _on_push_complete(
+    deployment_id: str,
+    new_sha: str | None,
+    git_ref: str | None,
+) -> None:
+    if new_sha is None:
+        logger.warning(
+            "Push to deployment %s completed but could not determine HEAD SHA",
+            deployment_id,
+        )
+        return
+
+    # Only update the CRD on the first push — when the deployment
+    # doesn't yet have an internal repo_url or is missing a git_sha.
+    # Subsequent pushes just upload code to S3; the user must use
+    # `llamactl deploy update` to explicitly advance the ref/sha.
+    current = await k8s_client.get_deployment(deployment_id)
+    if (
+        current is not None
+        and current.repo_url == INTERNAL_CODE_REPO_SCHEME
+        and current.git_sha
+    ):
+        logger.info(
+            "Push to deployment %s uploaded to S3; skipping CRD update "
+            "(already has repo_url and git_sha)",
+            deployment_id,
+        )
+        return
+
+    logger.info(
+        "First push to deployment %s: setting sha=%s ref=%s",
+        deployment_id,
+        new_sha,
+        git_ref,
+    )
+    update = DeploymentUpdate(
+        repo_url=INTERNAL_CODE_REPO_SCHEME,
+        git_sha=new_sha,
+        git_ref=git_ref,
+    )
+    result = await k8s_client.update_deployment(
+        deployment_id=deployment_id,
+        update=update,
+    )
+    if result is None:
+        logger.error(
+            "Failed to update deployment %s after push (not found)",
+            deployment_id,
+        )
+
+
 class PublicDeploymentService(AbstractPublicDeploymentsService):
     @override
     async def get_version(self) -> schema.VersionResponse:
@@ -64,13 +115,12 @@ class DeploymentService(AbstractDeploymentsService):
         self, project_id: str, deployment_id: str, include_events: bool = False
     ) -> DeploymentResponse:
         deployment = await k8s_client.get_deployment(deployment_id)
-        if include_events and deployment is not None:
-            events = await k8s_client.get_deployment_events(deployment_id)
-            deployment.events = events
         if deployment is None or deployment.project_id != project_id:
             raise DeploymentNotFoundError(
                 f"Deployment with id {deployment_id} not found"
             )
+        if include_events:
+            deployment.events = await k8s_client.get_deployment_events(deployment_id)
         return deployment
 
     @override
@@ -285,11 +335,8 @@ class DeploymentService(AbstractDeploymentsService):
         )
 
         validated = None
-        needs_internal_ref_resolution = any(
-            [
-                update_data.repo_url is not None,
-                update_data.git_ref is not None,
-            ]
+        needs_internal_ref_resolution = (
+            update_data.repo_url is not None or update_data.git_ref is not None
         )
         resolved_repo_url = update_data.repo_url or current_deployment.repo_url
         if clearing_repo_url:
@@ -299,10 +346,7 @@ class DeploymentService(AbstractDeploymentsService):
             needs_internal_ref_resolution
             and resolved_repo_url == INTERNAL_CODE_REPO_SCHEME
         ):
-            # Internal repo: resolve the ref from the S3-stored bare repo.
-            # Callers (e.g. the textual edit form, the `update` CLI command)
-            # are expected to push local code first so the bare repo is up to
-            # date before this resolves to a SHA.
+            # Internal repo: resolve the ref from the S3-stored bare repo
             git_ref_to_resolve = update_data.git_ref or current_deployment.git_ref
             if git_ref_to_resolve:
                 storage = code_repo_storage
@@ -381,56 +425,6 @@ class DeploymentService(AbstractDeploymentsService):
                 status_code=503,
             )
 
-        async def _on_push_complete(
-            deployment_id: str,
-            new_sha: str | None,
-            git_ref: str | None,
-        ) -> None:
-            if new_sha is None:
-                logger.warning(
-                    "Push to deployment %s completed but could not determine HEAD SHA",
-                    deployment_id,
-                )
-                return
-
-            # Only update the CRD on the first push — when the deployment
-            # doesn't yet have an internal repo_url or is missing a git_sha.
-            # Subsequent pushes just upload code to S3; the user must use
-            # `llamactl deploy update` to explicitly advance the ref/sha.
-            current = await k8s_client.get_deployment(deployment_id)
-            if (
-                current is not None
-                and current.repo_url == INTERNAL_CODE_REPO_SCHEME
-                and current.git_sha
-            ):
-                logger.info(
-                    "Push to deployment %s uploaded to S3; skipping CRD update "
-                    "(already has repo_url and git_sha)",
-                    deployment_id,
-                )
-                return
-
-            logger.info(
-                "First push to deployment %s: setting sha=%s ref=%s",
-                deployment_id,
-                new_sha,
-                git_ref,
-            )
-            update = DeploymentUpdate(
-                repo_url=INTERNAL_CODE_REPO_SCHEME,
-                git_sha=new_sha,
-                git_ref=git_ref,
-            )
-            result = await k8s_client.update_deployment(
-                deployment_id=deployment_id,
-                update=update,
-            )
-            if result is None:
-                logger.error(
-                    "Failed to update deployment %s after push (not found)",
-                    deployment_id,
-                )
-
         return await _handle_git_request(
             request=request,
             deployment_id=deployment_id,
@@ -464,6 +458,7 @@ class DeploymentService(AbstractDeploymentsService):
         deployment_id: str,
         since_seconds: int | None,
         tail_lines: int | None,
+        follow: bool = True,
     ) -> AsyncGenerator[LogEvent, None]:
         """Yield log events from the build Job, if one exists."""
         async for line in k8s_client.stream_build_job_logs(
@@ -471,6 +466,7 @@ class DeploymentService(AbstractDeploymentsService):
             since_seconds=since_seconds,
             tail_lines=tail_lines,
             stop_event=shutdown_event,
+            follow=follow,
         ):
             timestamp = line.timestamp or datetime.now(timezone.utc)
             yield LogEvent(
@@ -488,14 +484,16 @@ class DeploymentService(AbstractDeploymentsService):
         include_init_containers: bool = False,
         since_seconds: int | None = None,
         tail_lines: int | None = None,
+        follow: bool = True,
     ) -> AsyncGenerator[LogEvent, None]:
         """Stream logs for a deployment.
 
         Build job logs (if any) are automatically merged into the stream.
-        App logs stream from the latest ReplicaSet. When the RS changes
-        (e.g. build finishes and operator creates a Deployment), the inner
-        generators restart so logs continue seamlessly without requiring
-        the client to reconnect.
+        App logs stream from the latest ReplicaSet. When ``follow`` is True
+        and the RS changes (e.g. build finishes and operator creates a
+        Deployment), the inner generators restart so logs continue seamlessly
+        without requiring the client to reconnect. When ``follow`` is False,
+        the generator returns whatever logs are currently available and ends.
         """
 
         await self._get_deployment_or_raise(project_id, deployment_id)
@@ -510,6 +508,7 @@ class DeploymentService(AbstractDeploymentsService):
                 since_seconds=since_seconds,
                 tail_lines=tail_lines,
                 stop_event=shutdown_event,
+                follow=follow,
             )
 
             if include_build_logs:
@@ -517,6 +516,7 @@ class DeploymentService(AbstractDeploymentsService):
                     deployment_id=deployment_id,
                     since_seconds=since_seconds,
                     tail_lines=tail_lines,
+                    follow=follow,
                 )
                 include_build_logs = False
             else:
@@ -537,18 +537,48 @@ class DeploymentService(AbstractDeploymentsService):
                 max_window_seconds=0.5,
             )
 
-            when_changes = self._when_replicaset_changes(deployment_id, 0.05)
+            if follow:
+                when_changes = self._when_replicaset_changes(deployment_id, 0.05)
 
-            rs_changed = False
-            async for ev in merge_generators(
-                debounced_logs,
-                cast(AsyncGenerator[LogEvent | str, None], when_changes),
-                stop_on_first_completion=True,
-            ):
-                if isinstance(ev, str):
-                    # RS-change sentinel — restart inner generators
-                    rs_changed = True
-                    break
+                rs_changed = False
+                async for ev in merge_generators(
+                    debounced_logs,
+                    cast(AsyncGenerator[LogEvent | str, None], when_changes),
+                    stop_on_first_completion=True,
+                ):
+                    if isinstance(ev, str):
+                        # RS-change sentinel — restart inner generators
+                        rs_changed = True
+                        break
+                    timestamp = ev.timestamp or datetime.now(timezone.utc)
+                    yield LogEvent(
+                        pod=ev.pod,
+                        container=ev.container,
+                        text=ev.text,
+                        timestamp=timestamp,
+                    )
+
+                if rs_changed:
+                    # RS changed (e.g. build→deploy transition). Loop to pick up
+                    # the new RS's pods without dropping the SSE connection.
+                    continue
+
+                # All log generators completed without an RS change. Check if an
+                # RS appeared while we were streaming build logs (race window
+                # where debounced_logs finishes before _when_replicaset_changes
+                # polls).
+                if initial_rs_uid is None:
+                    current_uid = await self._current_rs_uid(deployment_id)
+                    if current_uid is not None:
+                        continue
+
+                # No new RS appeared — nothing more to stream.
+                break
+
+            # follow=False: drain whatever's available and exit. No RS-change
+            # watcher, no reconnect — the underlying read uses follow=False
+            # against k8s and terminates on its own.
+            async for ev in debounced_logs:
                 timestamp = ev.timestamp or datetime.now(timezone.utc)
                 yield LogEvent(
                     pod=ev.pod,
@@ -556,21 +586,6 @@ class DeploymentService(AbstractDeploymentsService):
                     text=ev.text,
                     timestamp=timestamp,
                 )
-
-            if rs_changed:
-                # RS changed (e.g. build→deploy transition). Loop to pick up
-                # the new RS's pods without dropping the SSE connection.
-                continue
-
-            # All log generators completed without an RS change. Check if an RS
-            # appeared while we were streaming build logs (race window where
-            # debounced_logs finishes before _when_replicaset_changes polls).
-            if initial_rs_uid is None:
-                current_uid = await self._current_rs_uid(deployment_id)
-                if current_uid is not None:
-                    continue
-
-            # No new RS appeared — nothing more to stream.
             break
 
 

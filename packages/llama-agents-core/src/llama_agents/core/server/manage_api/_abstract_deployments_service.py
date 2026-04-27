@@ -174,6 +174,7 @@ class AbstractDeploymentsService(ABC):
         include_init_containers: bool = False,
         since_seconds: int | None = None,
         tail_lines: int | None = None,
+        follow: bool = True,
     ) -> AsyncGenerator[LogEvent, None]:
         """
         Stream the logs for a deployment.
@@ -187,6 +188,9 @@ class AbstractDeploymentsService(ABC):
             include_init_containers: Whether to include init containers in the logs
             since_seconds: The number of seconds to stream the logs for
             tail_lines: The number of lines to stream the logs for
+            follow: If False, return only currently-available logs and end the
+                stream; if True (default), keep streaming and reconnect across
+                ReplicaSet changes.
 
         Returns:
             A generator of log events
