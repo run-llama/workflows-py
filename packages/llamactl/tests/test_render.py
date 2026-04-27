@@ -4,9 +4,11 @@
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import click
 from click.testing import CliRunner
-from llama_agents.cli.render import gh_short, render_table
+from llama_agents.cli.render import format_iso_z, gh_short, render_table
 
 
 def _capture(rows: list[dict[str, str]], columns: list[tuple[str, str]]) -> str:
@@ -64,9 +66,7 @@ def test_render_table_column_width_uses_widest_cell() -> None:
 
 
 def test_render_table_handles_empty_rows() -> None:
-    output = _capture(
-        rows=[], columns=[("NAME", "name"), ("PHASE", "phase")]
-    )
+    output = _capture(rows=[], columns=[("NAME", "name"), ("PHASE", "phase")])
     # Header row only; trailing whitespace stripped.
     assert output.strip().split("\n") == ["NAME  PHASE"]
 
@@ -81,3 +81,24 @@ def test_gh_short_translates_github_urls() -> None:
 def test_gh_short_passes_through_non_github() -> None:
     assert gh_short("https://gitlab.com/x/y") == "https://gitlab.com/x/y"
     assert gh_short("internal://repo") == "internal://repo"
+
+
+def test_format_iso_z_tz_aware_utc() -> None:
+    dt = datetime(2026, 4, 25, 15, 1, 15, tzinfo=timezone.utc)
+    assert format_iso_z(dt) == "2026-04-25T15:01:15Z"
+
+
+def test_format_iso_z_tz_aware_non_utc_is_converted() -> None:
+    # Pacific (UTC-8 standard time): 07:01:15-08:00 == 15:01:15Z
+    from datetime import timedelta
+    from datetime import timezone as _tz
+
+    pst = _tz(timedelta(hours=-8))
+    dt = datetime(2026, 4, 25, 7, 1, 15, tzinfo=pst)
+    assert format_iso_z(dt) == "2026-04-25T15:01:15Z"
+
+
+def test_format_iso_z_naive_is_treated_as_utc() -> None:
+    # Documented behavior: naive datetimes are assumed to already be UTC.
+    dt = datetime(2026, 4, 25, 15, 1, 15)
+    assert format_iso_z(dt) == "2026-04-25T15:01:15Z"

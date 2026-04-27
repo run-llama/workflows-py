@@ -9,6 +9,8 @@ shape.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import click
 
 GH_PREFIX = "https://github.com/"
@@ -22,6 +24,22 @@ def gh_short(repo_url: str) -> str:
     if repo_url.startswith(GH_PREFIX):
         return "gh:" + repo_url.removeprefix(GH_PREFIX)
     return repo_url
+
+
+def format_iso_z(dt: datetime) -> str:
+    """Format ``dt`` as a UTC ISO 8601 string with a ``Z`` suffix.
+
+    Tz-aware datetimes are converted to UTC. Naive datetimes are assumed to
+    already be UTC (the server emits UTC; this is a safety fallback rather
+    than an invitation to pass local time). Fractional seconds are dropped:
+    current data doesn't carry them and the table cell stays narrow.
+
+    The output (``YYYY-MM-DDTHH:MM:SSZ``) matches what Pydantic emits in
+    JSON mode, so text and JSON encodings of the same instant agree.
+    """
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(timezone.utc)
+    return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def render_table(

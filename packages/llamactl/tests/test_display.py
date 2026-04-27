@@ -11,12 +11,13 @@ from conftest import make_deployment
 from llama_agents.cli.display import (
     SECRET_MASK,
     DeploymentDisplay,
+    DeploymentSpec,
     DeploymentStatus,
 )
 from pydantic import ValidationError
 
 
-def test_from_response_translates_top_level_fields() -> None:
+def test_from_response_translates_spec_fields() -> None:
     response = make_deployment(
         "my-app",
         display_name="My App",
@@ -30,12 +31,13 @@ def test_from_response_translates_top_level_fields() -> None:
 
     # ``name`` is the stable id, NOT the deprecated ``r.name`` alias.
     assert display.name == "my-app"
-    assert display.display_name == "My App"
-    assert display.repo_url == "https://github.com/example/repo"
-    assert display.deployment_file_path == "llama_deploy.yaml"
-    assert display.git_ref == "main"
-    assert display.appserver_version == "0.4.2"
-    assert display.suspended is True
+    assert isinstance(display.spec, DeploymentSpec)
+    assert display.spec.display_name == "My App"
+    assert display.spec.repo_url == "https://github.com/example/repo"
+    assert display.spec.deployment_file_path == "llama_deploy.yaml"
+    assert display.spec.git_ref == "main"
+    assert display.spec.appserver_version == "0.4.2"
+    assert display.spec.suspended is True
 
 
 def test_from_response_status_block() -> None:
@@ -61,7 +63,7 @@ def test_from_response_secrets_masked() -> None:
     )
     display = DeploymentDisplay.from_response(response)
 
-    assert display.secrets == {
+    assert display.spec.secrets == {
         "LLAMA_CLOUD_API_KEY": SECRET_MASK,
         "OPENAI_API_KEY": SECRET_MASK,
     }
@@ -70,32 +72,33 @@ def test_from_response_secrets_masked() -> None:
 def test_from_response_no_secrets_is_none() -> None:
     response = make_deployment("my-app", secret_names=[])
     display = DeploymentDisplay.from_response(response)
-    assert display.secrets is None
+    assert display.spec.secrets is None
 
     response = make_deployment("my-app", secret_names=None)
     display = DeploymentDisplay.from_response(response)
-    assert display.secrets is None
+    assert display.spec.secrets is None
 
 
 def test_from_response_pat_masking() -> None:
     response = make_deployment("my-app", has_personal_access_token=True)
     display = DeploymentDisplay.from_response(response)
-    assert display.personal_access_token == SECRET_MASK
+    assert display.spec.personal_access_token == SECRET_MASK
 
     response = make_deployment("my-app", has_personal_access_token=False)
     display = DeploymentDisplay.from_response(response)
-    assert display.personal_access_token is None
+    assert display.spec.personal_access_token is None
 
 
-def test_to_output_dict_omits_empty_top_level_fields() -> None:
+def test_to_output_dict_omits_empty_spec_fields() -> None:
     response = make_deployment("my-app")  # no secrets, no PAT
     data = DeploymentDisplay.from_response(response).to_output_dict()
 
-    assert "secrets" not in data
-    assert "personal_access_token" not in data
-    # Editable defaults still surface so apply round-trips cleanly.
+    spec = data["spec"]
+    assert "secrets" not in spec
+    assert "personal_access_token" not in spec
+    # Editable defaults still surface inside spec so apply round-trips cleanly.
     assert data["name"] == "my-app"
-    assert data["suspended"] is False
+    assert spec["suspended"] is False
 
 
 def test_to_output_dict_keeps_explicit_status_warning_null() -> None:
@@ -111,8 +114,8 @@ def test_to_output_dict_includes_secrets_and_pat_when_set() -> None:
         has_personal_access_token=True,
     )
     data = DeploymentDisplay.from_response(response).to_output_dict()
-    assert data["secrets"] == {"KEY": SECRET_MASK}
-    assert data["personal_access_token"] == SECRET_MASK
+    assert data["spec"]["secrets"] == {"KEY": SECRET_MASK}
+    assert data["spec"]["personal_access_token"] == SECRET_MASK
 
 
 def test_display_model_forbids_extra_fields() -> None:
@@ -121,6 +124,20 @@ def test_display_model_forbids_extra_fields() -> None:
         DeploymentDisplay.model_validate(
             {
                 "name": "x",
+                "spec": {
+                    "display_name": "x",
+                    "repo_url": "https://github.com/x/y",
+                    "deployment_file_path": ".",
+                },
+                "novel_field": "leak",
+            }
+        )
+
+
+def test_spec_model_forbids_extra_fields() -> None:
+    with pytest.raises(ValidationError):
+        DeploymentSpec.model_validate(
+            {
                 "display_name": "x",
                 "repo_url": "https://github.com/x/y",
                 "deployment_file_path": ".",

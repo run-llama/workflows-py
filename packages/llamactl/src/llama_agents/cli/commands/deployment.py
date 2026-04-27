@@ -33,7 +33,7 @@ from ..options import (
     project_option,
     render_output,
 )
-from ..render import gh_short, render_table
+from ..render import format_iso_z, gh_short, render_table
 from ..utils.capabilities import probe_code_push_support
 from ..utils.git_push import (
     configure_git_remote,
@@ -59,8 +59,8 @@ def _render_deployments_table(displays: list[DeploymentDisplay]) -> None:
         {
             "name": d.name,
             "phase": d.status.phase if d.status else "-",
-            "git_ref": d.git_ref or "-",
-            "repo": gh_short(d.repo_url),
+            "git_ref": d.spec.git_ref or "-",
+            "repo": gh_short(d.spec.repo_url),
         }
         for d in displays
     ]
@@ -73,6 +73,34 @@ def _render_deployments_table(displays: list[DeploymentDisplay]) -> None:
             ("REPO", "repo"),
         ],
     )
+
+
+def friendly_http_error(
+    exc: Exception,
+    *,
+    deployment_id: str | None = None,
+    project_id: str | None = None,
+) -> str | None:
+    """Translate well-known HTTP errors into a one-line CLI message.
+
+    Returns ``None`` when the caller should fall back to the verbose default
+    rendering. We only collapse the cases where a richer message would just
+    be debug noise to the user — currently a 404 on a known deployment id.
+    Other 4xx/5xx and non-HTTP errors keep their existing message so we
+    don't swallow useful info on unexpected paths.
+    """
+    # Defer httpx import: `llamactl --help` is held to a no-httpx startup
+    # budget by tests/test_cli_imports.py; only error paths need the type.
+    import httpx
+
+    if not isinstance(exc, httpx.HTTPStatusError):
+        return None
+    if exc.response.status_code != 404 or not deployment_id:
+        return None
+    msg = f"deployment '{deployment_id}' not found"
+    if project_id:
+        msg += f" in project '{project_id}'"
+    return msg
 
 
 def _do_get(
@@ -118,7 +146,11 @@ def _do_get(
         )
 
     except Exception as e:
-        rprint(f"[red]Error: {e}[/red]")
+        friendly = friendly_http_error(
+            e, deployment_id=deployment_id, project_id=project
+        )
+        message = friendly if friendly is not None else str(e)
+        rprint(f"[red]Error: {message}[/red]")
         raise click.Abort()
 
 
@@ -484,8 +516,8 @@ def show_history(
         def _render_text() -> None:
             rows = [
                 {
-                    "released_at": item.released_at.isoformat(),
-                    "git_sha": item.git_sha,
+                    "released_at": format_iso_z(item.released_at),
+                    "git_sha": item.git_sha[:7],
                     "image_tag": item.image_tag or "-",
                 }
                 for item in items_sorted

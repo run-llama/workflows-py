@@ -11,6 +11,7 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock, patch
 
+import httpx
 import yaml
 from click.testing import CliRunner
 from conftest import make_deployment, patch_project_client
@@ -130,6 +131,7 @@ def test_deployments_get_single_json(patched_auth: Any) -> None:
     obj = json.loads(result.output)
     assert isinstance(obj, dict)
     assert obj["name"] == "my-app"
+    assert "spec" in obj
     assert obj["status"]["phase"] == "Running"
     assert obj["status"]["project_id"] == "proj_default"
     # warning is always-explicit-null
@@ -139,9 +141,9 @@ def test_deployments_get_single_json(patched_auth: Any) -> None:
     assert "llama_deploy_version" not in obj
     assert "has_personal_access_token" not in obj
     assert "secret_names" not in obj
-    # Empty secrets / no PAT means the keys are omitted entirely.
-    assert "secrets" not in obj
-    assert "personal_access_token" not in obj
+    # Empty secrets / no PAT means the keys are omitted entirely from spec.
+    assert "secrets" not in obj["spec"]
+    assert "personal_access_token" not in obj["spec"]
 
 
 def test_deployments_get_single_yaml(patched_auth: Any) -> None:
@@ -175,11 +177,11 @@ def test_deployments_get_secrets_and_pat_masked(patched_auth: Any) -> None:
         )
     assert result.exit_code == 0, result.output
     obj = json.loads(result.output)
-    assert obj["secrets"] == {
+    assert obj["spec"]["secrets"] == {
         "LLAMA_CLOUD_API_KEY": "********",
         "OPENAI_API_KEY": "********",
     }
-    assert obj["personal_access_token"] == "********"
+    assert obj["spec"]["personal_access_token"] == "********"
 
 
 def test_deployments_get_empty_json_is_array(patched_auth: Any) -> None:
@@ -243,28 +245,40 @@ def test_deployments_get_project_override_threads_to_client(
     assert args[1] == "proj_other"
 
 
-def test_deployments_history_json_output(patched_auth: Any) -> None:
-    runner = CliRunner()
-    items = [
-        ReleaseHistoryItem(
-            git_sha="aaaaaaa1111", released_at=datetime(2026, 1, 1, tzinfo=timezone.utc)
-        ),
-        ReleaseHistoryItem(
-            git_sha="bbbbbbb2222", released_at=datetime(2026, 2, 1, tzinfo=timezone.utc)
-        ),
-    ]
+def _full_sha(prefix: str) -> str:
+    """Return a 40-char hex string starting with ``prefix`` for history tests."""
+    return (prefix + "0" * 40)[:40]
+
+
+def _history_client_mock(items: list[ReleaseHistoryItem]) -> MagicMock:
+    client_mock = _make_client_mock([make_deployment("my-app")])
 
     async def _hist(deployment_id: str) -> DeploymentHistoryResponse:
         return DeploymentHistoryResponse(deployment_id=deployment_id, history=items)
 
-    client_mock = _make_client_mock([make_deployment("my-app")])
     client_mock.get_deployment_history.side_effect = _hist
-    client_mock.aclose = MagicMock()
 
     async def _aclose() -> None:
         return None
 
+    client_mock.aclose = MagicMock()
     client_mock.aclose.side_effect = _aclose
+    return client_mock
+
+
+def test_deployments_history_json_output(patched_auth: Any) -> None:
+    runner = CliRunner()
+    items = [
+        ReleaseHistoryItem(
+            git_sha=_full_sha("aaaaaaa1111"),
+            released_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        ),
+        ReleaseHistoryItem(
+            git_sha=_full_sha("bbbbbbb2222"),
+            released_at=datetime(2026, 2, 1, tzinfo=timezone.utc),
+        ),
+    ]
+    client_mock = _history_client_mock(items)
     with patch_project_client(client_mock):
         result = runner.invoke(
             app,
@@ -281,8 +295,125 @@ def test_deployments_history_json_output(patched_auth: Any) -> None:
     data = json.loads(result.output)
     assert isinstance(data, list)
     # Newest first
-    assert data[0]["git_sha"] == "bbbbbbb2222"
-    assert data[1]["git_sha"] == "aaaaaaa1111"
+    assert data[0]["git_sha"] == _full_sha("bbbbbbb2222")
+    assert data[1]["git_sha"] == _full_sha("aaaaaaa1111")
+    # JSON keeps full 40-char shas.
+    assert all(len(d["git_sha"]) == 40 for d in data)
+    # JSON timestamps are Z-suffixed (Pydantic default).
+    assert all(d["released_at"].endswith("Z") for d in data)
+
+
+def test_deployments_history_text_short_sha_and_z_timestamp(
+    patched_auth: Any,
+) -> None:
+    runner = CliRunner()
+    full_sha = _full_sha("640f764")
+    items = [
+        ReleaseHistoryItem(
+            git_sha=full_sha,
+            released_at=datetime(2026, 4, 25, 15, 1, 15, tzinfo=timezone.utc),
+            image_tag="0.11.1",
+        ),
+    ]
+    client_mock = _history_client_mock(items)
+    with patch_project_client(client_mock):
+        result = runner.invoke(
+            app,
+            ["deployments", "history", "my-app", "--no-interactive"],
+        )
+    assert result.exit_code == 0, result.output
+    # Header present.
+    assert "RELEASED_AT" in result.output
+    assert "GIT_SHA" in result.output
+    assert "IMAGE_TAG" in result.output
+    # Z-suffixed timestamp; no +00:00.
+    assert "2026-04-25T15:01:15Z" in result.output
+    assert "+00:00" not in result.output
+    # Short sha (7 chars) only — full sha must not appear.
+    assert "640f764" in result.output
+    assert full_sha not in result.output
+    assert "0.11.1" in result.output
+
+
+def _http_status_error(
+    status: int, *, url: str = "http://internal/api"
+) -> httpx.HTTPStatusError:
+    """Build an HTTPStatusError with a real Response for friendly-error tests."""
+    request = httpx.Request("GET", url)
+    response = httpx.Response(status, request=request, text='{"detail":"x"}')
+    return httpx.HTTPStatusError(
+        f"HTTP {status} for url {url} - {response.text}",
+        request=request,
+        response=response,
+    )
+
+
+def test_deployments_get_404_renders_friendly_message(patched_auth: Any) -> None:
+    runner = CliRunner()
+    client_mock = _make_client_mock([])
+
+    async def _raise_404(deployment_id: str, include_events: bool = False) -> None:
+        raise _http_status_error(404)
+
+    client_mock.get_deployment.side_effect = _raise_404
+    with patch_project_client(client_mock):
+        result = runner.invoke(
+            app,
+            ["deployments", "get", "nonexistent-app", "--no-interactive"],
+        )
+    assert result.exit_code != 0
+    assert "deployment 'nonexistent-app' not found" in result.output
+    # No URL, no JSON body should leak through.
+    assert "http://" not in result.output
+    assert "detail" not in result.output
+
+
+def test_deployments_get_404_with_project_includes_project(
+    patched_auth: Any,
+) -> None:
+    runner = CliRunner()
+    client_mock = _make_client_mock([])
+
+    async def _raise_404(deployment_id: str, include_events: bool = False) -> None:
+        raise _http_status_error(404)
+
+    client_mock.get_deployment.side_effect = _raise_404
+    with patch_project_client(client_mock):
+        result = runner.invoke(
+            app,
+            [
+                "deployments",
+                "get",
+                "nonexistent-app",
+                "--no-interactive",
+                "--project",
+                "proj_other",
+            ],
+        )
+    assert result.exit_code != 0
+    assert (
+        "deployment 'nonexistent-app' not found in project 'proj_other'"
+        in result.output
+    )
+
+
+def test_deployments_get_500_keeps_verbose_message(patched_auth: Any) -> None:
+    runner = CliRunner()
+    client_mock = _make_client_mock([])
+
+    async def _raise_500(deployment_id: str, include_events: bool = False) -> None:
+        raise _http_status_error(500)
+
+    client_mock.get_deployment.side_effect = _raise_500
+    with patch_project_client(client_mock):
+        result = runner.invoke(
+            app,
+            ["deployments", "get", "boom", "--no-interactive"],
+        )
+    assert result.exit_code != 0
+    # Non-404 keeps the verbose default message (URL + body) for debug-visibility.
+    assert "HTTP 500" in result.output
+    assert "http://" in result.output
 
 
 def _make_auth_profile() -> Any:

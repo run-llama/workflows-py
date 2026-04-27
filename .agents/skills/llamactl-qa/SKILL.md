@@ -1,13 +1,21 @@
 ---
 name: llamactl-qa
-description: Plan and run CLI-side QA for llamactl changes. Cooperatively builds a small test matrix from a diff or set of acceptance criteria, executes against a chosen backend (prod test project by default, local kind+tilt for new API contract changes), and writes a transcript report to `thoughts/shared/qa/`. Use this for changes to `llamactl` commands, output formats, auth, or control-plane API contracts. For UI/template smoke tests, use `llamactl_browser_test` instead.
+description: Plan and run a design-QA / "taste test" of llamactl changes against a real backend. Cooperatively builds a small matrix of cases worth eyeballing, runs them against a chosen backend (prod test project by default, local kind+tilt for new API contract changes), and writes a design-review report to `thoughts/shared/qa/`. Use this for changes to `llamactl` commands, output formats, auth, or control-plane API contracts. For UI/template smoke tests, use `llamactl_browser_test` instead.
 ---
 
 # llamactl CLI QA
 
-Two halves. First, a planning pass that turns "I changed X" into a small, sign-off-able test matrix. Second, an execution pass that runs the matrix and writes a transcript report.
+A design QA, not an integration test. The goal is to put the actual rendered output in front of a human reviewer so they can judge whether the design is right — alignment, naming, key ordering, error wording, what's noisy, what's missing. The LLM's job is to set up well-chosen cases and call out what looks off; the human's job is to read the outputs and decide.
 
-The point is deliberateness, not exhaustiveness. Every row in the matrix is there because we agreed it covers a real risk in the diff.
+Two halves. First, a planning pass that turns "I changed X" into a small, sign-off-able matrix of cases worth running. Second, an execution pass that runs them and writes a report whose body is mostly verbatim output plus design-review notes.
+
+Every row in the matrix is there because we agreed it covers a real risk or design question in the diff.
+
+### What this is NOT
+
+- **Not an automated integration test.** No `jq has(...)` shape assertions, no `python -c "assert ..."`. If a row reads as "the command works", drop it; if it reads as "let's see the output and judge it", keep it. Real integration tests are a separate task (authoring real pytest cases against the API), not this one.
+- **Not exhaustive coverage.** 4–8 well-chosen rows. The point is taste, not a regression matrix.
+- **Not pass/fail.** The report's job is "here's what the surface actually looks like", not "all green".
 
 llamactl is churning right now (multi-slice rework: output modes, apply/delete, template/apply-loop). Treat this skill as a living reference. When a run teaches you something about llamactl that isn't in here, edit the skill before closing the task. See "Self-update" at the bottom.
 
@@ -35,7 +43,7 @@ A profile is `(env, oauth tokens, active org, active project)`. The env is a con
 
 Read commands accept `-o text|json|yaml`. Text is human-facing; json/yaml are assertable. Prefer json for QA — exact-match assertions catch field-rename regressions text formatting hides.
 
-Several commands branch on a TTY check or `--no-interactive`. If a command can launch a TUI or open a browser, exercise both branches. Always pass `--no-interactive` (or `-o json`) for QA runs so a TUI doesn't appear to hang the session.
+Read commands (`deployments get/list/history/logs`, `auth list`, `auth env list`) do not need `--no-interactive` when their argument is supplied. The flag is a no-op there post-Slice-A.5 and slated to be removed in the parent plan's Phase 3. Don't pad commands with it. Write/select commands (`deployments delete`, `deployments edit`, `deployments rollback` without `--git-sha`) still branch on the interactive flag — pass `--no-interactive` for those if you don't want a prompt, or supply every required arg.
 
 The command surface is moving. Run `--help` on any command you're testing before assuming flag names; don't go from memory.
 
@@ -44,42 +52,52 @@ The command surface is moving. Run `--help` on any command you're testing before
 Don't run anything until the user has signed off on the matrix.
 
 1. Read the diff. `git diff <base>...HEAD --stat` and targeted reads on the command files. Identify the behavior surface: which subcommands, flags, output formats, endpoints changed.
-2. List risks, not features. One line each. "JSON output for `deployments get` could omit fields the schema declares." "`--project` override could be ignored when an env var is also set." A risk is what a reviewer would reasonably ask "did you check".
-3. Map risks to a small matrix. One row per case. 4–10 rows is usually right; 20 means you're testing features.
+2. List design questions, not features. One line each. The right question reads as "would the user be happy seeing this output?", not "does the command run". Examples: "Does the `spec:` / `status:` split actually feel right when you eyeball `get -o yaml`?" "Does the plain-table list output stay readable for a deployment whose repo URL is 80 chars?" "Does the no-secrets case render as cleanly as the with-secrets case?"
+3. Map questions to a small matrix. One row per case. 4–8 rows is usually right; 12 means you're testing features.
 4. Present the matrix inline. Wait for the user to keep, cut, or add rows.
 
-Matrix row format:
+Matrix row format. Note "Look for" replaces a pass-fail "Expect" — the reviewer is meant to read the output and judge against these prompts, not check a list of facts.
 
-| # | Command | Backend | Expect | Covers |
+| # | Command | Backend | Look for | Covers |
 |---|---|---|---|---|
-| 1 | `deployments get -o json <id> --project <test>` | prod-test | exit 0; stdout parses as json with `id`, `status`, `latest_release` keys | json mode shape regression |
-| 2 | `deployments get --project <test>` | prod-test | exit 0; lists ≥1 row; no TUI | new list-mode path |
-| 3 | `deployments get <id> --project <other-test>` | prod-test | returns deployment from `<other-test>`, not active project | `--project` override |
+| 1 | `deployments get my-app -o yaml --project <test>` | prod-test | spec/status split reads cleanly; field ordering; null vs omitted; PAT presentation | new display model shape |
+| 2 | `deployments get --project <test>` | prod-test | column choices, alignment, behavior with long repo URLs | plain-table list mode |
+| 3 | `deployments get my-app --project <other-test>` vs default | prod-test | does the override actually retarget the project | `--project` override |
 
-If a row's "Covers" reads as "verify the command works", drop it.
+If a row's "Look for" reads as "the command works", drop it. If it reads as "I'd want to eyeball this", keep it.
 
 ## Execution
 
-Run rows top to bottom. Capture for each:
+Run rows top to bottom. For each, the goal is to capture the actual output the human reviewer will judge.
 
-- The exact command, including any inline env vars.
-- Exit code and elapsed time (latency is part of the UX).
-- **Verbatim stdout and stderr.** Don't trim, don't summarize, don't replace with "all keys present". The point of the report is the user reading the actual output and judging the design. Truncation only when output is genuinely huge (200+ line log dumps); even then, keep the head, the tail, and a `... <N> lines elided ...` marker so the reader can see what got cut.
-- Anything you'd call out in a design review: column widths and truncation, field naming, key ordering, redundant data, error message wording, how the output looks when something is missing.
+Capture:
 
-When you make an assertion (`jq`, `python -c`), include both the assertion command and the verbatim output so the reader can see the proof, not just your verdict.
+- The exact command (including inline env vars).
+- Exit code and elapsed time (latency is part of UX).
+- **Verbatim stdout and stderr.** Don't trim, don't summarize, don't paraphrase. The report's body is the output, not your verdict on it. Truncation only when output is genuinely huge (200+ line log dumps); keep head, tail, and a `... <N> lines elided ...` marker.
+- Your design-review observations as one-line "Notes" — what a thoughtful reviewer would point at. "REPO column is 67 chars wide on a 100-char terminal — leaves no room for two repos to align." "`status.warning: null` reads cleanly; the omitted vs explicit-null asymmetry is visible." "Why are both `display_name` and `name` here when they're equal?"
 
-If a row fails or surprises, decide before continuing: fix-and-rerun, file-and-skip, or stop and ask. Don't paper over by re-running with different flags until the symptom goes away.
+What NOT to do:
 
-For comparison rows (`--project` override, `list` vs `get`, text vs json), capture both calls in the same row and show them adjacent so the reader can eyeball the difference.
+- **No `jq has(...)` / `python -c "assert ..."` style assertions.** The report is for human judgment, not pass/fail. If you find yourself asserting a key exists, you're in the wrong skill — that's pytest territory.
+- **Don't pre-judge.** Notes flag things to look at; the reader judges. "Suspicious: `personal_access_token` shown as `********` even when the underlying secret name is also `GITHUB_PAT`" is fine. "Wrong: PAT should be unmasked" is not — that's the reader's call.
+- **Don't paper over surprises.** If a row produces a stack trace or an unexpected shape, capture it verbatim and call it out in Highlights. Re-running with different flags to make the symptom go away is forbidden; that's the QA finding.
 
-Long-running commands (`serve`, `logs --follow`) go in the background with `run_in_background: true`. Stop them at end of row before moving on.
+For comparison rows (`--project` override, `list` vs `get`, text vs json, with-data vs empty), capture both calls in the same row, side by side. The reader should be able to eyeball the difference without scrolling.
+
+Long-running commands (`serve`, `logs --follow`) go in the background with `run_in_background: true`. Stop them before moving on.
+
+### Storing raw transcripts
+
+Don't dump `.log` / `.out` / `.err` files into `thoughts/shared/qa/`. The report is the artifact. Embed verbatim outputs in the report with fenced blocks.
+
+If a single output is genuinely too large to embed (200+ lines of logs, many-deployment dumps), put it in `thoughts/shared/qa/raw/<date>-<scope>/<row-id>.txt` and link it from the report row. Default to embedding; the subdir is the exception, not the rule.
 
 ## Report
 
-The report is a design and interaction review surface, not a test result. The reader should be able to scroll through it and form their own opinion: are the columns aligned, is the field naming consistent, does this command feel right, is the error message clear. Your job is to put the real evidence in front of them, not to pre-judge it.
+The report is a design and interaction review surface, not a test result. The reader scrolls through it and forms their own opinion: are columns aligned, is naming consistent, does this command feel right, is the error message clear. Your job is to put the evidence in front of them and flag the design questions worth their attention.
 
-Write to `thoughts/shared/qa/<date>-llamactl-<scope>.md`. Post a short pointer inline (one or two sentences plus the file link). The user reads the file, not your inline summary.
+Write to `thoughts/shared/qa/<date>-llamactl-<scope>.md`. Post a one-or-two-sentence pointer inline plus the file link. The user reads the file, not your inline summary.
 
 Template:
 
@@ -91,12 +109,19 @@ Profile: <name> (<env URL>)
 Project: <test project id/name>
 Branch: <branch>  Commit: <short sha>
 
-## Highlights
-<2–4 bullets pointing at things the reader should look at: surprises, design questions, anything that needs a decision. Do not summarize "what passed". Lean toward open questions, not conclusions.>
+## Design questions for the reviewer
+
+<3–6 bullets. These are the things you want the reader's eyes on. Not "all rows passed". Examples:
+- "Is `spec:` + `status:` the right split, or is the extra indent annoying?"
+- "REPO column gets pushed off-screen when the URL isn't a github short. Do we want a `--wide` mode or terminal-aware wrapping?"
+- "`auth list` text mode shows ACTIVE column but the indicator is `*` only — is that legible enough?"
+- "When secrets are unset, the JSON spec block is just `{display_name, repo_url, deployment_file_path, suspended: false}`. Is `suspended: false` worth showing on a fresh deploy or is it noise?"
+
+Lean open-ended. If a question has an obvious answer, it doesn't belong here.>
 
 ## Rows
 
-### 1. <one-line description, e.g. "deployments get -o json (list mode)">
+### 1. <one-line description, e.g. "deployments get my-app -o yaml">
 
 Command:
 ```
@@ -113,31 +138,50 @@ Stderr:
 <verbatim stderr>
 ```
 
-<if you ran an assertion:>
-Check:
+Notes:
+- <one-line observation a thoughtful reviewer would make>
+- <another, if there's something else worth flagging>
+
+### 2. <comparison row>
+
+Command A:
 ```
-$ <assertion command>
-<verbatim assertion output>
+$ <command 1>
 ```
 
-<if anything design-relevant:>
-Notes: <bullet or two on what the reader should notice>
+Output A (exit=<n>):
+```
+<output>
+```
 
-### 2. <next row>
-... same shape ...
+Command B:
+```
+$ <command 2>
+```
+
+Output B (exit=<n>):
+```
+<output>
+```
+
+Notes:
+- <what the side-by-side reveals>
+
+... same shape for remaining rows ...
 
 ## Followups
 
-- <questions surfaced by the run that need a human answer>
+- <design questions that need a human answer>
 - <regressions or design choices that should turn into issues / changes>
+- <items the matrix didn't cover but the reader should know about>
 ````
 
 Rules:
 
-- **Show, don't tell.** "JSON keys are id, status, git_sha" → no. Paste the JSON. The reader can see the keys.
-- **Keep verbatim formatting.** Tables in fenced blocks preserve the column rendering. Don't reformat or "clean up" output.
-- **Comparison rows live in one section.** Two adjacent fenced blocks labeled "active" and "override" beat two separate rows.
-- **Highlights surface decisions, not pass/fail.** "`auth env list -o json` includes `min_llamactl_version` — keep in the public contract or drop?" beats "all rows pass".
+- **Show, don't tell.** "Output shows a spec block with editable fields" → no. Paste the YAML. The reader can see the shape.
+- **Keep verbatim formatting.** Tables in fenced blocks preserve column rendering. Don't reformat or "clean up" output.
+- **Comparison rows live in one section.** Two adjacent fenced blocks labeled clearly beat two separate rows.
+- **Notes are observations, not verdicts.** Point at what's interesting; let the reader judge.
 - **No celebration.** If everything looks reasonable, the report just looks reasonable. Don't add "all green" framing.
 
 The inline chat reply is one or two sentences pointing at the file. Don't restate the report.
@@ -147,7 +191,8 @@ The inline chat reply is one or two sentences pointing at the file. Don't restat
 - Stale profile. `llamactl auth list` first, every session. A profile pointing at last week's env produces 401s that look like a code bug.
 - Active project drift. A test that "works on my machine" can fail elsewhere because the active project differs. Pin every prod row with `--project`.
 - Non-test project mutation. If you mutate without `--project`, the active profile decides where it lands. Always pin write commands.
-- TUI launches in non-tty. Some commands open a textual app when stdin is a TTY. Pass `--no-interactive` or `-o json` for QA.
+- TUI/prompt risk on write commands. `deployments delete/edit/rollback` and `create` will prompt when interactive. For QA, supply every required arg or pass `--no-interactive`. Read commands (`get`, `logs`, `history`, `auth list`, `auth env list`) don't need the flag.
+- `tee` ate a row of a multi-line table once during a run. Use shell `>` redirect for QA captures, not `tee`, when you need every line preserved.
 - `serve` vs tilt. `llamactl serve` runs the appserver locally with no kubernetes. Tilt runs the full cloud stack in kind. Different scopes; pick one.
 - Don't leak IDs. Deployment and org IDs are fine in your terminal and in `thoughts/`, not fine in a public PR description. Strip or alias them in anything that might leave the repo.
 
