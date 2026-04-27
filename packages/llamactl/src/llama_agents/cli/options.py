@@ -23,18 +23,22 @@ def global_options(f: Callable[P, R]) -> Callable[P, R]:
 def output_option(f: Callable[P, R]) -> Callable[P, R]:
     """Add a `-o/--output` option for read commands.
 
-    Choices: ``text`` (default; existing Rich tables), ``json``, ``yaml``.
-    The value is exposed as the ``output`` keyword argument.
+    Choices: ``text`` (default), ``json``, ``yaml``, ``wide``. ``wide`` is
+    text mode with the less-common columns interleaved into their natural
+    positions (kubectl-style).
     """
 
     return click.option(
         "-o",
         "--output",
         "output",
-        type=click.Choice(["text", "json", "yaml"], case_sensitive=False),
+        type=click.Choice(["text", "json", "yaml", "wide"], case_sensitive=False),
         default="text",
         show_default=True,
-        help="Output format. Use 'json' or 'yaml' for machine-readable output.",
+        help=(
+            "Output format. 'json'/'yaml' for machine-readable output; "
+            "'wide' for the text table with extra columns."
+        ),
     )(f)
 
 
@@ -58,23 +62,46 @@ def project_option(f: Callable[P, R]) -> Callable[P, R]:
 def render_output(
     payload: BaseModel | list[BaseModel] | Any,
     output: str,
-    text_renderer: Callable[[], None],
+    text_renderer: Callable[[], None] | None = None,
 ) -> None:
     """Render a payload according to ``output`` mode.
 
-    - ``text``: invoke ``text_renderer`` (typically prints a Rich table).
+    - ``text`` / ``wide``: if ``payload`` is a ``BaseModel`` (or list of
+      them) whose class declares ``Column`` annotations, the framework
+      derives the table directly. Otherwise (or if ``text_renderer`` is
+      provided as an explicit override) the supplied text renderer runs.
+      ``wide`` includes ``wide=True`` columns; ``text`` excludes them.
     - ``json``: emit canonical JSON via ``click.echo`` (no Rich markup).
-    - ``yaml``: emit YAML via ``click.echo`` (currently the naive Pydantic
-      shape; the apply-format with masked secrets is a follow-up).
+    - ``yaml``: emit YAML via ``click.echo`` (the naive Pydantic shape).
 
     ``payload`` may be a Pydantic model, a list of Pydantic models, or any
-    JSON-serializable value (dict, list of dicts). The structured outputs go
-    through ``click.echo`` so they pipe cleanly even when Rich would
-    otherwise insert markup.
+    JSON-serializable value. Structured outputs go through ``click.echo`` so
+    they pipe cleanly even when Rich would otherwise insert markup.
     """
 
+    # Defer the import: the framework lives in ``cli.display`` which has
+    # heavier transitive imports than ``options.py`` itself.
+    from llama_agents.cli.display import render_columns, resolve_columns
+
     mode = output.lower()
-    if mode == "text":
+    if mode in {"text", "wide"}:
+        rows: list[BaseModel] | None = None
+        if isinstance(payload, BaseModel):
+            rows = [payload]
+        elif (
+            isinstance(payload, list) and payload and isinstance(payload[0], BaseModel)
+        ):
+            rows = list(payload)
+        if rows is not None and resolve_columns(type(rows[0])):
+            render_columns(rows, wide=(mode == "wide"))
+            return
+        if isinstance(payload, list) and not payload:
+            # Empty list in text/wide mode: caller is expected to have
+            # emitted a status line ("No X found"). Silently no-op rather
+            # than demanding a text_renderer for the degenerate case.
+            return
+        if text_renderer is None:
+            raise click.ClickException("No text renderer available for this payload.")
         text_renderer()
         return
 

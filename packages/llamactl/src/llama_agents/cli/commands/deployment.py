@@ -24,7 +24,7 @@ from rich import print as rprint
 
 from ..app import app, console
 from ..client import get_project_client, project_client_context
-from ..display import DeploymentDisplay
+from ..display import DeploymentDisplay, ReleaseDisplay
 from ..log_format import parse_log_body, render_plain
 from ..options import (
     global_options,
@@ -33,7 +33,6 @@ from ..options import (
     project_option,
     render_output,
 )
-from ..render import format_iso_z, gh_short, render_table
 from ..utils.capabilities import probe_code_push_support
 from ..utils.git_push import (
     configure_git_remote,
@@ -52,27 +51,6 @@ from ..utils.git_push import (
 def deployments() -> None:
     """Manage deployments"""
     pass
-
-
-def _render_deployments_table(displays: list[DeploymentDisplay]) -> None:
-    rows = [
-        {
-            "name": d.name,
-            "phase": d.status.phase if d.status else "-",
-            "git_ref": d.spec.git_ref or "-",
-            "repo": gh_short(d.spec.repo_url),
-        }
-        for d in displays
-    ]
-    render_table(
-        rows,
-        [
-            ("NAME", "name"),
-            ("PHASE", "phase"),
-            ("GIT_REF", "git_ref"),
-            ("REPO", "repo"),
-        ],
-    )
 
 
 def friendly_http_error(
@@ -134,20 +112,12 @@ def _do_get(
                 return
 
             displays = [DeploymentDisplay.from_response(d) for d in deployments]
-            render_output(
-                displays,
-                output,
-                lambda: _render_deployments_table(displays),
-            )
+            render_output(displays, output)
             return
 
         deployment = asyncio.run(client.get_deployment(deployment_id))
         display = DeploymentDisplay.from_response(deployment)
-        render_output(
-            display,
-            output,
-            lambda: _render_deployments_table([display]),
-        )
+        render_output(display, output)
 
     except Exception as e:
         friendly = friendly_http_error(
@@ -517,25 +487,8 @@ def show_history(
             rprint(f"No history recorded for {deployment_id}")
             return
 
-        def _render_text() -> None:
-            rows = [
-                {
-                    "released_at": format_iso_z(item.released_at),
-                    "git_sha": item.git_sha[:7],
-                    "image_tag": item.image_tag or "-",
-                }
-                for item in items_sorted
-            ]
-            render_table(
-                rows,
-                [
-                    ("RELEASED_AT", "released_at"),
-                    ("GIT_SHA", "git_sha"),
-                    ("IMAGE_TAG", "image_tag"),
-                ],
-            )
-
-        render_output(items_sorted, output, _render_text)
+        displays = [ReleaseDisplay.from_response(item) for item in items_sorted]
+        render_output(displays, output)
     except Exception as e:
         rprint(f"[red]Error: {e}[/red]")
         raise click.Abort()

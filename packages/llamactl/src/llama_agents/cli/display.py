@@ -1,36 +1,196 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 LlamaIndex Inc.
-"""CLI-side display projection of ``DeploymentResponse``.
+"""CLI-side display models and the declarative column framework.
+
+Every "tabular read command" in llamactl emits a CLI-side display model whose
+fields carry :class:`Column` markers in their ``Annotated[]`` metadata. A small
+walker (``resolve_columns``) reads the markers; ``render_columns`` derives a
+plain-whitespace table; ``render_output`` dispatches text/json/yaml/wide.
+
+The ``Annotated[]`` channel is intentionally open: future markers
+(``YamlComment`` for pedagogical comments in template output, ``Alias`` for
+legacy-name input tolerance on ``apply``, etc.) live alongside ``Column`` on
+the same fields. Each consumer reads ``field.metadata`` and filters on its own
+marker class via ``isinstance`` — markers do not register with the framework.
+
+Logs are intentionally outside this convention: ``deployments logs`` keeps its
+own ``--json`` jsonl path and per-event text rendering.
 
 The wire model (``llama_agents.core.schema.deployments.DeploymentResponse``)
-carries deprecated ``@computed_field`` aliases (``name``, ``llama_deploy_version``)
-and a flag (``has_personal_access_token``) that we don't want to leak into the
-public CLI output. ``DeploymentDisplay`` is the canonical CLI shape:
+carries deprecated ``@computed_field`` aliases (``name``,
+``llama_deploy_version``) and a flag (``has_personal_access_token``) that we
+don't want to leak into public CLI output. ``DeploymentDisplay`` is the
+canonical CLI shape:
 
 - ``name`` (the stable id) lives at the top level.
 - Editable fields live under a nested ``spec:`` block (kubectl-style).
 - Read-only / system-set fields live under a nested ``status:`` block.
 - Secrets are masked; ``personal_access_token`` is presented as a top-level
   field of ``spec`` even though server-side it is the ``GITHUB_PAT`` secret.
-  We document the leaky abstraction here and otherwise hide it.
 
 This is the contract Slice B's ``apply -f`` consumes as input — see
-``thoughts/shared/plans/2026-04-26-llamactl-slice-a5-display-model.md`` for the
-input-tolerance rules (top-level ``status:`` is stripped before validation;
-``spec:`` is the editable surface).
+``thoughts/shared/plans/2026-04-26-llamactl-slice-a5-display-model.md`` for
+the input-tolerance rules (top-level ``status:`` is stripped before
+validation; ``spec:`` is the editable surface).
 """
 
 from __future__ import annotations
 
-from typing import Any
+import functools
+import types
+from dataclasses import dataclass
+from datetime import datetime
+from typing import Any, Callable, Literal, Union, get_args, get_origin
 
+from llama_agents.cli.render import format_iso_z, gh_short, short_sha, star_marker
 from llama_agents.core.schema.deployments import (
     DeploymentResponse,
     LlamaDeploymentPhase,
+    ReleaseHistoryItem,
 )
+from llama_agents.core.schema.projects import OrgSummary
 from pydantic import BaseModel, ConfigDict
+from typing_extensions import Annotated
 
 SECRET_MASK = "********"
+
+
+@dataclass(frozen=True)
+class Column:
+    """Marker placed in a field's ``Annotated[]`` metadata to declare a column.
+
+    The marker is a pure data class; it carries no behaviour. The walker
+    (:func:`resolve_columns`) discovers ``Column`` instances and the renderer
+    (:func:`render_columns`) consumes them.
+
+    Args:
+        header: Column header rendered verbatim in the table.
+        format: Optional cell formatter. Called with the raw field value
+            (only when non-None). Must return a string.
+        default: Cell text when the value (or any nested-model parent on the
+            field path) is ``None``.
+        wide: When ``True``, the column appears only under ``-o wide``.
+    """
+
+    header: str
+    format: Callable[[Any], str] | None = None
+    default: str = ""
+    wide: bool = False
+
+
+@dataclass(frozen=True)
+class ResolvedColumn:
+    """A walker-derived column: its declaration path plus the marker."""
+
+    path: tuple[str, ...]
+    column: Column
+
+
+def _is_basemodel(tp: Any) -> bool:
+    return isinstance(tp, type) and issubclass(tp, BaseModel)
+
+
+def _unwrap_optional_model(annotation: Any) -> type[BaseModel] | None:
+    """If ``annotation`` is ``BaseModel``, ``Optional[BaseModel]`` or
+    ``BaseModel | None``, return the model class. Otherwise ``None``."""
+
+    if _is_basemodel(annotation):
+        return annotation  # type: ignore[return-value]
+    origin = get_origin(annotation)
+    if origin is Union or origin is types.UnionType:
+        non_none = [a for a in get_args(annotation) if a is not type(None)]
+        if len(non_none) == 1 and _is_basemodel(non_none[0]):
+            return non_none[0]
+    return None
+
+
+@functools.cache
+def resolve_columns(model_cls: type[BaseModel]) -> tuple[ResolvedColumn, ...]:
+    """Walk a display model in declaration order and return its columns.
+
+    Field annotations carrying a ``Column`` marker yield a leaf column at the
+    field's path. Fields whose annotation is a ``BaseModel`` (or
+    ``Optional[BaseModel]``) are descended into. All other fields are skipped.
+
+    A field carrying multiple ``Column`` markers is a typo: the walker raises
+    ``ValueError`` rather than silently picking one.
+
+    Display models are assumed to form a tree, not a graph — circular
+    references are not supported.
+    """
+
+    return tuple(_walk(model_cls, ()))
+
+
+def _walk(model_cls: type[BaseModel], prefix: tuple[str, ...]) -> list[ResolvedColumn]:
+    out: list[ResolvedColumn] = []
+    for name, info in model_cls.model_fields.items():
+        path = prefix + (name,)
+        cols = [m for m in info.metadata if isinstance(m, Column)]
+        if len(cols) > 1:
+            raise ValueError(
+                f"{model_cls.__name__}.{name}: multiple Column annotations on a single field"
+            )
+        if cols:
+            out.append(ResolvedColumn(path=path, column=cols[0]))
+            continue
+        nested = _unwrap_optional_model(info.annotation)
+        if nested is not None:
+            out.extend(_walk(nested, path))
+    return out
+
+
+def _extract_cell(row: BaseModel, column: ResolvedColumn) -> str:
+    value: Any = row
+    for part in column.path:
+        if value is None:
+            return column.column.default
+        value = getattr(value, part)
+    if value is None:
+        return column.column.default
+    if column.column.format is not None:
+        return column.column.format(value)
+    return str(value)
+
+
+def render_columns(
+    rows: list[BaseModel] | list[Any],
+    *,
+    wide: bool = False,
+) -> None:
+    """Render ``rows`` as a plain-whitespace table using ``Column`` metadata.
+
+    ``rows`` must be homogeneous; the row class is read from the first
+    element. An empty list still emits headers (matches ``render_table``'s
+    empty-row behaviour). Columns marked ``wide=True`` are filtered out unless
+    ``wide`` is ``True``.
+    """
+
+    from llama_agents.cli.render import render_table  # local: avoid cycle
+
+    if not rows:
+        # No row to derive a class from. Caller is expected to have emitted a
+        # status message ("No X found") before reaching here — but if not,
+        # we silently emit nothing rather than guessing the column layout.
+        return
+
+    row_cls = type(rows[0])
+    if not isinstance(rows[0], BaseModel):
+        raise TypeError(
+            f"render_columns expects BaseModel rows; got {row_cls.__name__}"
+        )
+
+    cols = [c for c in resolve_columns(row_cls) if wide or not c.column.wide]
+    columns = [(c.column.header, c.column.header) for c in cols]
+    table_rows: list[dict[str, str]] = []
+    for row in rows:
+        table_rows.append({c.column.header: _extract_cell(row, c) for c in cols})
+    render_table(table_rows, columns)
+
+
+# ---------------------------------------------------------------------------
+# Display models
+# ---------------------------------------------------------------------------
 
 
 class DeploymentSpec(BaseModel):
@@ -45,11 +205,13 @@ class DeploymentSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     display_name: str
-    repo_url: str
+    repo_url: Annotated[str, Column("REPO", format=gh_short)]
     deployment_file_path: str
-    git_ref: str | None = None
-    appserver_version: str | None = None
-    suspended: bool = False
+    git_ref: Annotated[str | None, Column("GIT_REF", default="-")] = None
+    appserver_version: Annotated[
+        str | None, Column("APPSERVER", default="-", wide=True)
+    ] = None
+    suspended: Annotated[bool, Column("SUSPENDED", wide=True)] = False
     secrets: dict[str, str] | None = None
     personal_access_token: str | None = None
 
@@ -65,10 +227,14 @@ class DeploymentStatus(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    phase: LlamaDeploymentPhase
-    git_sha: str | None = None
-    apiserver_url: str | None = None
-    project_id: str
+    phase: Annotated[LlamaDeploymentPhase, Column("PHASE")]
+    git_sha: Annotated[
+        str | None, Column("GIT_SHA", format=short_sha, default="-", wide=True)
+    ] = None
+    apiserver_url: Annotated[
+        str | None, Column("APISERVER_URL", default="-", wide=True)
+    ] = None
+    project_id: Annotated[str, Column("PROJECT", wide=True)]
     warning: str | None = None
 
 
@@ -84,7 +250,7 @@ class DeploymentDisplay(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    name: str
+    name: Annotated[str, Column("NAME")]
     spec: DeploymentSpec
     status: DeploymentStatus | None = None
 
@@ -129,3 +295,106 @@ class DeploymentDisplay(BaseModel):
         if self.status is not None:
             data["status"] = self.status.model_dump(mode="json")
         return data
+
+
+class ReleaseDisplay(BaseModel):
+    """A single release-history entry, projected for table output."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    released_at: Annotated[datetime, Column("RELEASED_AT", format=format_iso_z)]
+    git_sha: Annotated[str, Column("GIT_SHA", format=short_sha)]
+    image_tag: Annotated[str | None, Column("IMAGE_TAG", default="-")] = None
+
+    @classmethod
+    def from_response(cls, item: ReleaseHistoryItem) -> ReleaseDisplay:
+        return cls(
+            released_at=item.released_at,
+            git_sha=item.git_sha,
+            image_tag=item.image_tag,
+        )
+
+
+class AuthProfileDisplay(BaseModel):
+    """A locally-stored auth profile, projected for ``auth list``.
+
+    Secret material (``api_key``, OIDC tokens) is intentionally not surfaced.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: Annotated[str, Column("NAME")]
+    api_url: Annotated[str, Column("API_URL")]
+    project_id: Annotated[str | None, Column("PROJECT_ID", default="-")] = None
+    active: Annotated[bool, Column("ACTIVE", format=star_marker)] = False
+    auth_type: Annotated[Literal["none", "token", "oidc"], Column("AUTH")] = "none"
+
+    @classmethod
+    def from_profile(
+        cls, profile: Any, *, current_name: str | None
+    ) -> AuthProfileDisplay:
+        if profile.device_oidc:
+            auth_type: Literal["none", "token", "oidc"] = "oidc"
+        elif profile.api_key:
+            auth_type = "token"
+        else:
+            auth_type = "none"
+        return cls(
+            name=profile.name,
+            api_url=profile.api_url,
+            project_id=profile.project_id,
+            active=profile.name == current_name,
+            auth_type=auth_type,
+        )
+
+
+def _bool_str_lower(value: bool) -> str:
+    return "true" if value else "false"
+
+
+class EnvDisplay(BaseModel):
+    """A configured environment, projected for ``auth env list``.
+
+    ``min_llamactl_version`` is intentionally omitted — it isn't part of the
+    public env-list contract.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    api_url: Annotated[str, Column("API_URL")]
+    requires_auth: Annotated[bool, Column("REQUIRES_AUTH", format=_bool_str_lower)]
+    active: Annotated[bool, Column("ACTIVE", format=star_marker)] = False
+
+    @classmethod
+    def from_environment(cls, env: Any, *, current_url: str | None) -> EnvDisplay:
+        return cls(
+            api_url=env.api_url,
+            requires_auth=env.requires_auth,
+            active=env.api_url == current_url,
+        )
+
+
+def _yes_if_true(value: bool) -> str:
+    return "yes" if value else ""
+
+
+class OrgDisplay(BaseModel):
+    """An organization summary, projected for ``auth organizations``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    org_id: Annotated[str, Column("ORG_ID")]
+    org_name: Annotated[str, Column("NAME")]
+    is_default: Annotated[bool, Column("DEFAULT", format=_yes_if_true)]
+    active: Annotated[bool, Column("ACTIVE", format=star_marker)] = False
+
+    @classmethod
+    def from_org_summary(
+        cls, org: OrgSummary, *, current_org_id: str | None = None
+    ) -> OrgDisplay:
+        return cls(
+            org_id=org.org_id,
+            org_name=org.org_name,
+            is_default=org.is_default,
+            active=current_org_id is not None and org.org_id == current_org_id,
+        )

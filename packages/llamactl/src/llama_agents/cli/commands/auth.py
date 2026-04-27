@@ -11,21 +11,13 @@ from typing import TYPE_CHECKING
 
 import click
 from llama_agents.cli.param_types import OrgType, ProfileType, ProjectType
-from llama_agents.cli.styles import (
-    ACTIVE_INDICATOR,
-    HEADER_COLOR,
-    MUTED_COL,
-    PRIMARY_COL,
-    WARNING,
-)
+from llama_agents.cli.styles import PRIMARY_COL, WARNING
 from llama_agents.cli.utils.capabilities import probe_organizations_support
 from rich import print as rprint
-from rich.table import Table
-from rich.text import Text
 
-from ..app import app, console
+from ..app import app
+from ..display import AuthProfileDisplay, OrgDisplay
 from ..options import global_options, interactive_option, output_option, render_output
-from ..render import render_table
 
 if TYPE_CHECKING:
     from llama_agents.cli.config.auth_service import AuthService
@@ -37,21 +29,6 @@ if TYPE_CHECKING:
 
 class NoProjectsFoundError(Exception):
     """Raised when the authenticated user has no accessible projects on an org-less server."""
-
-
-def _auth_type(profile: Auth) -> str:
-    """Classify a profile by its credential shape.
-
-    - ``oidc``: device-OIDC profile.
-    - ``token``: API-key profile.
-    - ``none``: profile with no credential (e.g., a no-auth env where the user
-      hasn't run ``auth token``).
-    """
-    if profile.device_oidc:
-        return "oidc"
-    if profile.api_key:
-        return "token"
-    return "none"
 
 
 _ClickPath = getattr(click, "Path")
@@ -181,42 +158,12 @@ def list_profiles(output: str) -> None:
                 rprint("Create one with: [cyan]llamactl auth token[/cyan]")
             return
 
-        # Build a JSON-safe payload that masks secrets and surfaces only
-        # script-friendly fields. ``api_key`` is intentionally omitted.
-        payload = [
-            {
-                "name": p.name,
-                "api_url": p.api_url,
-                "project_id": p.project_id,
-                "active": p == current,
-                "auth_type": _auth_type(p),
-            }
+        current_name = current.name if current else None
+        displays = [
+            AuthProfileDisplay.from_profile(p, current_name=current_name)
             for p in profiles
         ]
-
-        def _render_text() -> None:
-            rows = [
-                {
-                    "name": p.name,
-                    "api_url": p.api_url,
-                    "project_id": p.project_id or "-",
-                    "active": "*" if p == current else "",
-                    "auth_type": _auth_type(p),
-                }
-                for p in profiles
-            ]
-            render_table(
-                rows,
-                [
-                    ("NAME", "name"),
-                    ("API_URL", "api_url"),
-                    ("PROJECT_ID", "project_id"),
-                    ("ACTIVE", "active"),
-                    ("AUTH", "auth_type"),
-                ],
-            )
-
-        render_output(payload, output, _render_text)
+        render_output(displays, output)
 
     except Exception as e:
         rprint(f"[red]Error: {e}[/red]")
@@ -324,34 +271,31 @@ def me() -> None:
 # Organizations commands
 @auth.command("organizations")
 @global_options
-def list_organizations() -> None:
+@output_option
+def list_organizations(output: str) -> None:
     """List organizations available to the current profile"""
     try:
         auth_svc = _get_service().current_auth_service()
         if not probe_organizations_support():
-            rprint(f"[{WARNING}]This server does not support organizations[/]")
+            if output == "text":
+                rprint(f"[{WARNING}]This server does not support organizations[/]")
+                return
+            # Structured outputs: emit an empty list so scripts get a
+            # well-typed answer instead of an unparsable warning.
+            render_output([], output)
             return
 
         organizations = _list_organizations(auth_svc)
-        if not organizations:
+        if not organizations and output == "text":
             rprint(f"[{WARNING}]No organizations found[/]")
             return
 
-        table = Table(show_edge=False, box=None, header_style=f"bold {HEADER_COLOR}")
-        table.add_column("  Org ID", style=PRIMARY_COL)
-        table.add_column("Name", style=MUTED_COL)
-        table.add_column("Default", style=MUTED_COL)
-
-        for org in organizations:
-            indicator = Text()
-            if org.is_default:
-                indicator.append("* ", style=ACTIVE_INDICATOR)
-            else:
-                indicator.append("  ")
-            indicator.append(org.org_id)
-            table.add_row(indicator, org.org_name, "yes" if org.is_default else "")
-
-        console.print(table)
+        default_org = next((o.org_id for o in organizations if o.is_default), None)
+        displays = [
+            OrgDisplay.from_org_summary(o, current_org_id=default_org)
+            for o in organizations
+        ]
+        render_output(displays, output)
 
     except Exception as e:
         rprint(f"[red]Error: {e}[/red]")

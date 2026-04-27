@@ -10,8 +10,8 @@ from llama_agents.cli.styles import WARNING
 from packaging import version as packaging_version
 from rich import print as rprint
 
+from ..display import EnvDisplay
 from ..options import global_options, interactive_option, output_option, render_output
-from ..render import render_table
 from .auth import auth
 
 if TYPE_CHECKING:
@@ -52,33 +52,11 @@ def list_environments_cmd(output: str) -> None:
             rprint(f"[{WARNING}]No environments found[/]")
             return
 
-        def _render_text() -> None:
-            rows = [
-                {
-                    "api_url": env.api_url,
-                    "requires_auth": "true" if env.requires_auth else "false",
-                    "active": "*" if env == current_env else "",
-                }
-                for env in envs
-            ]
-            render_table(
-                rows,
-                [
-                    ("API_URL", "api_url"),
-                    ("REQUIRES_AUTH", "requires_auth"),
-                    ("ACTIVE", "active"),
-                ],
-            )
-
-        payload = [
-            {
-                "api_url": env.api_url,
-                "requires_auth": env.requires_auth,
-                "active": env == current_env,
-            }
-            for env in envs
+        current_url = current_env.api_url if current_env else None
+        displays = [
+            EnvDisplay.from_environment(env, current_url=current_url) for env in envs
         ]
-        render_output(payload, output, _render_text)
+        render_output(displays, output)
     except Exception as e:
         rprint(f"[red]Error: {e}[/red]")
         raise click.Abort()

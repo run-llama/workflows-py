@@ -8,7 +8,13 @@ from datetime import datetime, timezone
 
 import click
 from click.testing import CliRunner
-from llama_agents.cli.render import format_iso_z, gh_short, render_table
+from llama_agents.cli.render import (
+    format_iso_z,
+    gh_short,
+    render_table,
+    short_sha,
+    star_marker,
+)
 
 
 def _capture(rows: list[dict[str, str]], columns: list[tuple[str, str]]) -> str:
@@ -102,3 +108,17 @@ def test_format_iso_z_naive_is_treated_as_utc() -> None:
     # Documented behavior: naive datetimes are assumed to already be UTC.
     dt = datetime(2026, 4, 25, 15, 1, 15)
     assert format_iso_z(dt) == "2026-04-25T15:01:15Z"
+
+
+def test_short_sha_truncates_to_seven() -> None:
+    assert short_sha("a" * 40) == "aaaaaaa"
+
+
+def test_short_sha_passthrough_on_short_input() -> None:
+    assert short_sha("abc") == "abc"
+    assert short_sha("") == ""
+
+
+def test_star_marker_active_and_inactive() -> None:
+    assert star_marker(True) == "*"
+    assert star_marker(False) == ""

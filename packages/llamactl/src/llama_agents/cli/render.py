@@ -26,6 +26,22 @@ def gh_short(repo_url: str) -> str:
     return repo_url
 
 
+def short_sha(sha: str) -> str:
+    """Return the first 7 characters of ``sha``, or the input unchanged.
+
+    Used in table cells; JSON/YAML keep the full SHA. Safe on shorter input.
+    """
+    return sha[:7] if len(sha) > 7 else sha
+
+
+def star_marker(active: bool) -> str:
+    """Render a boolean as ``"*"`` (true) or ``""`` (false).
+
+    Used by the ``ACTIVE`` column on profile/env/org tables.
+    """
+    return "*" if active else ""
+
+
 def format_iso_z(dt: datetime) -> str:
     """Format ``dt`` as a UTC ISO 8601 string with a ``Z`` suffix.
 

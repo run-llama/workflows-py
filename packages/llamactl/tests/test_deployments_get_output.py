@@ -483,6 +483,57 @@ def test_auth_list_json_no_credential_is_none() -> None:
     assert data[0]["auth_type"] == "none"
 
 
+def test_deployments_get_text_column_order(patched_auth: Any) -> None:
+    """Text mode columns are in declaration order: NAME, REPO, GIT_REF, PHASE."""
+    runner = CliRunner()
+    deployments = [make_deployment("app-a")]
+    client_mock = _make_client_mock(deployments)
+    with patch_project_client(client_mock):
+        result = runner.invoke(app, ["deployments", "get", "--no-interactive"])
+    assert result.exit_code == 0, result.output
+    header = result.output.splitlines()[0]
+    name_idx = header.index("NAME")
+    repo_idx = header.index("REPO")
+    ref_idx = header.index("GIT_REF")
+    phase_idx = header.index("PHASE")
+    assert name_idx < repo_idx < ref_idx < phase_idx
+
+
+def test_deployments_get_text_no_wide_columns(patched_auth: Any) -> None:
+    """``-o text`` excludes wide-only columns (GIT_SHA, APISERVER_URL, ...)."""
+    runner = CliRunner()
+    deployments = [make_deployment("app-a")]
+    client_mock = _make_client_mock(deployments)
+    with patch_project_client(client_mock):
+        result = runner.invoke(app, ["deployments", "get", "--no-interactive"])
+    assert result.exit_code == 0, result.output
+    assert "GIT_SHA" not in result.output
+    assert "APISERVER_URL" not in result.output
+    assert "PROJECT" not in result.output
+    assert "APPSERVER" not in result.output
+    assert "SUSPENDED" not in result.output
+
+
+def test_deployments_get_wide_includes_extra_columns(patched_auth: Any) -> None:
+    runner = CliRunner()
+    deployments = [
+        make_deployment("app-a", git_sha="abc1234567", appserver_version="0.4.2")
+    ]
+    client_mock = _make_client_mock(deployments)
+    with patch_project_client(client_mock):
+        result = runner.invoke(
+            app, ["deployments", "get", "--no-interactive", "-o", "wide"]
+        )
+    assert result.exit_code == 0, result.output
+    header = result.output.splitlines()[0]
+    # Default columns still present; wide columns now appear too.
+    for h in ("NAME", "REPO", "GIT_REF", "PHASE", "APPSERVER", "GIT_SHA"):
+        assert h in header
+    # Wide columns slot into their natural positions, interleaved.
+    # APPSERVER (spec) should appear before PHASE (status).
+    assert header.index("APPSERVER") < header.index("PHASE")
+
+
 def test_auth_env_list_json(patched_auth: Any) -> None:
     runner = CliRunner()
     from llama_agents.cli.config.schema import Environment
