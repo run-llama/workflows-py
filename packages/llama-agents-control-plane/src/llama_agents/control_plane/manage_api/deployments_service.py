@@ -299,7 +299,10 @@ class DeploymentService(AbstractDeploymentsService):
             needs_internal_ref_resolution
             and resolved_repo_url == INTERNAL_CODE_REPO_SCHEME
         ):
-            # Internal repo: resolve the ref from the S3-stored bare repo
+            # Internal repo: resolve the ref from the S3-stored bare repo.
+            # Callers (e.g. the textual edit form, the `update` CLI command)
+            # are expected to push local code first so the bare repo is up to
+            # date before this resolves to a SHA.
             git_ref_to_resolve = update_data.git_ref or current_deployment.git_ref
             if git_ref_to_resolve:
                 storage = code_repo_storage

@@ -665,7 +665,12 @@ class ValidationScreen(Screen[DeploymentForm | None]):
 
 
 class PushScreen(Screen[DeploymentResponse | None]):
-    """Screen shown while pushing code to the deployment."""
+    """Screen shown while pushing code to the deployment after a successful save.
+
+    Used for first-push bootstrap (external→internal switch or fresh create with
+    push_mode): the CRD already has the placeholder repo_url, and this push
+    populates the bare repo so `_on_push_complete` can stamp gitSha/repoUrl.
+    """
 
     def __init__(self, deployment: DeploymentResponse) -> None:
         super().__init__()
@@ -698,6 +703,49 @@ class PushScreen(Screen[DeploymentResponse | None]):
             self.dismiss(None)
 
 
+class PrePushScreen(Screen[bool]):
+    """Screen shown while pushing code BEFORE saving an existing internal-repo
+    deployment.
+
+    Used for internal→internal edits: the bare repo must contain the new ref
+    and latest commits before `update_deployment` resolves git_ref to a SHA,
+    otherwise the server either 400s on a new branch or silently records a
+    stale SHA on the current branch.
+
+    Dismisses with True on success, False on push failure (push_error set).
+    """
+
+    def __init__(self, deployment_id: str, git_ref: str) -> None:
+        super().__init__()
+        self.deployment_id = deployment_id
+        self.git_ref = git_ref
+        self.push_error: str = ""
+
+    def compose(self) -> ComposeResult:
+        client = get_client()
+        git_url = get_deployment_git_url(client.base_url, self.deployment_id)
+        with Container(classes="form-container"):
+            yield PushingWidget(
+                self.deployment_id,
+                git_url,
+                client.project_id,
+                git_ref=self.git_ref,
+            )
+
+    def on_push_complete_message(self, message: PushCompleteMessage) -> None:
+        if message.success:
+            self.dismiss(True)
+        else:
+            from textual.markup import escape
+
+            escaped_error = escape(message.error) if message.error else ""
+            self.push_error = (
+                f"Push failed before save: {escaped_error}. "
+                "Fix the local repo and try again."
+            )
+            self.dismiss(False)
+
+
 class MonitorScreen(Screen[DeploymentResponse | None]):
     """Screen wrapping the deployment monitor."""
 
@@ -725,6 +773,12 @@ class FormScreen(Screen[DeploymentResponse | None]):
         self._initial_focus_applied = False
         self._focus_bootstrap_timers: list[Timer] = []
         self._push_screen: PushScreen | None = None
+        self._pre_push_screen: PrePushScreen | None = None
+        # Snapshot of the deployment's push-mode state at the time the form was
+        # opened. Used to distinguish internal→internal edits (where we must
+        # push before save) from external→internal switches (where we save
+        # first to write the placeholder repo_url, then push to bootstrap).
+        self._original_push_mode = initial_data.is_editing and initial_data.push_mode
 
     def compose(self) -> ComposeResult:
         with Container(classes="form-container"):
@@ -819,6 +873,35 @@ class FormScreen(Screen[DeploymentResponse | None]):
     async def _perform_save(self) -> None:
         logging.info("saving form data %s", self.form_data)
         result = self.form_data
+        # internal→internal edit with a local git repo: push first so the bare
+        # repo has the new ref and latest commits before the server resolves
+        # git_ref to a SHA. Without this, switching to an unpushed branch 400s
+        # and re-saving the current branch silently records a stale SHA.
+        if (
+            self._original_push_mode
+            and result.push_mode
+            and result.is_editing
+            and result.is_local_git_repo
+            and result.id
+        ):
+            self._pre_push_screen = PrePushScreen(
+                deployment_id=result.id,
+                git_ref=result.git_ref or "main",
+            )
+            self.app.push_screen(self._pre_push_screen, self._on_pre_push_result)
+            return
+
+        await self._do_save()
+
+    async def _on_pre_push_result(self, success: bool | None) -> None:
+        if success:
+            await self._do_save()
+            return
+        push_error = self._pre_push_screen.push_error if self._pre_push_screen else ""
+        self._return_to_form(save_error=push_error or "Push failed")
+
+    async def _do_save(self) -> None:
+        result = self.form_data
         client = get_client()
         try:
             if result.is_editing:
@@ -835,11 +918,21 @@ class FormScreen(Screen[DeploymentResponse | None]):
                 updated_form.is_editing = True
                 self.form_data = updated_form
             logging.info(
-                "save complete: push_mode=%s is_editing=%s",
+                "save complete: push_mode=%s is_editing=%s original_push_mode=%s",
                 result.push_mode,
                 result.is_editing,
+                self._original_push_mode,
             )
-            if result.push_mode and result.is_local_git_repo:
+            # Post-save bootstrap push only fires for the transition into push
+            # mode (external→internal or fresh create with push_mode). For
+            # internal→internal, the push already happened in _perform_save
+            # before we got here.
+            needs_post_save_push = (
+                result.push_mode
+                and result.is_local_git_repo
+                and not self._original_push_mode
+            )
+            if needs_post_save_push:
                 self._push_screen = PushScreen(deployment)
                 self.app.push_screen(self._push_screen, self._on_push_result)
             else:

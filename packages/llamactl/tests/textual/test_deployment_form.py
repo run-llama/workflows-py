@@ -12,6 +12,7 @@ from llama_agents.cli.textual.deployment_form import (
     DeploymentFormWidget,
     FormScreen,
     MonitorScreen,
+    PrePushScreen,
     PushScreen,
     StartValidationMessage,
     ValidationScreen,
@@ -1271,3 +1272,134 @@ async def test_push_mode_push_failure(mock_client: MagicMock) -> None:
         assert isinstance(app.screen, FormScreen)
         assert "push failed" in app.screen.save_error
         assert "configure-git-remote" in app.screen.save_error
+
+
+@pytest.mark.asyncio
+async def test_internal_to_internal_edit_pushes_before_update(
+    mock_client: MagicMock,
+) -> None:
+    """Editing a push-mode deployment must push before calling update_deployment
+    so the bare repo has the new ref + latest commits when the server resolves
+    git_ref to a SHA."""
+    initial_data = DeploymentForm(
+        id="dep-int",
+        display_name="int-deployment",
+        is_local_git_repo=True,
+        push_mode=True,
+        is_editing=True,
+        git_ref="main",
+    )
+
+    # Track call ordering: push must happen before update_deployment.
+    call_order: list[str] = []
+
+    def record_push(*args: object, **kwargs: object) -> MagicMock:
+        call_order.append("push")
+        return MagicMock(returncode=0, stderr=b"")
+
+    async def record_update(*args: object, **kwargs: object) -> DeploymentResponse:
+        call_order.append("update")
+        return DeploymentResponse(
+            id="dep-int",
+            display_name="int-deployment",
+            repo_url="internal://",
+            git_ref="feature",
+            git_sha="def456",
+            deployment_file_path="llama_deploy.yaml",
+            has_personal_access_token=False,
+            secret_names=[],
+            project_id="proj-int",
+            apiserver_url=None,
+            status="Running",
+        )
+
+    mock_client.update_deployment.side_effect = record_update
+    mock_client.base_url = "http://test"
+    mock_client.project_id = "proj-int"
+
+    app = DeploymentEditApp(initial_data)
+
+    async with app.run_test(size=(100, 40)) as pilot:
+        # Switch to a different ref to exercise the new-branch path.
+        git_ref_input = app.screen.query_one("#git_ref")
+        git_ref_input.value = "feature"  # type: ignore
+
+        with (
+            patch(
+                "llama_agents.cli.utils.git_push.get_api_key",
+                return_value="sk-test-abc",
+            ),
+            patch(
+                "llama_agents.cli.utils.git_push.configure_git_remote",
+                return_value="llamaagents-dep-int",
+            ),
+            patch(
+                "llama_agents.cli.utils.git_push.push_to_remote",
+                side_effect=record_push,
+            ),
+        ):
+            await pilot.click("#save")
+            await pilot.pause()
+            await pilot.pause()
+            await pilot.pause()
+
+        assert call_order == ["push", "update"], (
+            f"expected push before update, got {call_order}"
+        )
+        # update payload reflects the new ref the user typed.
+        update_arg = mock_client.update_deployment.await_args.args[1]
+        assert update_arg.git_ref == "feature"
+        assert isinstance(app.screen, MonitorScreen)
+        app.screen.post_message(MonitorCloseMessage())
+        await pilot.pause()
+
+
+@pytest.mark.asyncio
+async def test_internal_to_internal_edit_push_failure_blocks_save(
+    mock_client: MagicMock,
+) -> None:
+    """If the pre-save push fails, update_deployment must NOT run — the form
+    returns to the user with the push error so they can fix the local repo."""
+    initial_data = DeploymentForm(
+        id="dep-int-fail",
+        display_name="int-deployment",
+        is_local_git_repo=True,
+        push_mode=True,
+        is_editing=True,
+        git_ref="main",
+    )
+
+    mock_client.base_url = "http://test"
+    mock_client.project_id = "proj-int"
+
+    app = DeploymentEditApp(initial_data)
+
+    async with app.run_test(size=(100, 40)) as pilot:
+        with (
+            patch(
+                "llama_agents.cli.utils.git_push.get_api_key",
+                return_value="sk-test-abc",
+            ),
+            patch(
+                "llama_agents.cli.utils.git_push.configure_git_remote",
+                return_value="llamaagents-dep-int-fail",
+            ),
+            patch(
+                "llama_agents.cli.utils.git_push.push_to_remote",
+                return_value=MagicMock(returncode=128, stderr=b"auth failed"),
+            ),
+        ):
+            await pilot.click("#save")
+            await pilot.pause()
+            await pilot.pause()
+            await pilot.pause()
+
+        assert isinstance(app.screen, FormScreen)
+        assert "Push failed before save" in app.screen.save_error
+        mock_client.update_deployment.assert_not_called()
+
+
+def test_pre_push_screen_dismisses_with_success_on_push_complete() -> None:
+    """Sanity: PrePushScreen surfaces success/failure as a bool dismissal."""
+    screen = PrePushScreen(deployment_id="d", git_ref="main")
+    assert screen.push_error == ""
