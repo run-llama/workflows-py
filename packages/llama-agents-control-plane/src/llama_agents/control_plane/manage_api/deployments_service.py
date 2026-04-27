@@ -285,7 +285,6 @@ class DeploymentService(AbstractDeploymentsService):
         )
 
         validated = None
-        pending_ref_warning: str | None = None
         needs_internal_ref_resolution = any(
             [
                 update_data.repo_url is not None,
@@ -300,7 +299,10 @@ class DeploymentService(AbstractDeploymentsService):
             needs_internal_ref_resolution
             and resolved_repo_url == INTERNAL_CODE_REPO_SCHEME
         ):
-            # Internal repo: resolve the ref from the S3-stored bare repo
+            # Internal repo: resolve the ref from the S3-stored bare repo.
+            # Callers (e.g. the textual edit form, the `update` CLI command)
+            # are expected to push local code first so the bare repo is up to
+            # date before this resolves to a SHA.
             git_ref_to_resolve = update_data.git_ref or current_deployment.git_ref
             if git_ref_to_resolve:
                 storage = code_repo_storage
@@ -314,35 +316,11 @@ class DeploymentService(AbstractDeploymentsService):
                 )
                 if resolved_sha:
                     update_data.git_sha = resolved_sha
-                elif (
-                    update_data.git_ref is not None
-                    and update_data.git_ref != current_deployment.git_ref
-                ):
-                    # User is switching to a new branch that hasn't been pushed
-                    # yet. Mark the deployment as pending — clear gitSha so the
-                    # next push to this ref is picked up by the bootstrap path
-                    # in `_on_push_complete`. We only clear when the ref is
-                    # actually changing; a re-submit of the current ref that
-                    # transiently fails to resolve must not disturb a healthy
-                    # running deployment.
-                    update_data.git_sha = ""
-                    pending_ref_warning = (
-                        f"git_ref '{git_ref_to_resolve}' not yet present in the "
-                        f"internal repo for deployment {deployment_id}; the "
-                        "deployment is pending a push of this ref."
-                    )
                 else:
-                    # Ref unchanged but unresolvable (e.g. bare repo missing).
-                    # Don't disturb the existing gitSha — the deployment keeps
-                    # running on the current commit. Reject the update so the
-                    # caller knows resolution failed and can investigate.
                     raise HTTPException(
                         status_code=400,
-                        detail=(
-                            f"Could not resolve ref '{git_ref_to_resolve}' in "
-                            f"the internal repo for deployment {deployment_id}. "
-                            "Push the ref first or check for typos."
-                        ),
+                        detail=f"Could not resolve ref '{git_ref_to_resolve}' in the internal repo for deployment {deployment_id}. "
+                        "Push the ref first or check for typos.",
                     )
         elif (
             update_data.has_git_fields()
@@ -374,8 +352,6 @@ class DeploymentService(AbstractDeploymentsService):
         # Return deployment response with warning header if there are git issues
         if validated is not None and validated.error_message:
             updated_deployment.warning = validated.error_message
-        elif pending_ref_warning is not None:
-            updated_deployment.warning = pending_ref_warning
         return updated_deployment
 
     @override

@@ -1,7 +1,6 @@
 import types
 from collections.abc import AsyncGenerator
 from datetime import datetime, timezone
-from typing import Any
 from unittest import mock
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -487,72 +486,17 @@ async def test_update_deployment_missing(mock_get_deployment: AsyncMock) -> None
     "llama_agents.control_plane.manage_api.deployments_service.code_repo_storage",
 )
 @patch(
-    "llama_agents.control_plane.manage_api.deployments_service.k8s_client.update_deployment",
-    new_callable=AsyncMock,
-)
-@patch(
     "llama_agents.control_plane.manage_api.deployments_service.k8s_client.get_deployment",
     new_callable=AsyncMock,
 )
 @pytest.mark.asyncio
-async def test_update_deployment_unresolvable_internal_ref_marks_pending(
+async def test_update_deployment_unresolvable_ref_returns_400(
     mock_get_deployment: AsyncMock,
-    mock_update_deployment: AsyncMock,
     mock_code_repo_storage: MagicMock,
 ) -> None:
-    """Updating an internal deployment to an unpushed ref clears gitSha and warns
-    instead of erroring — the next push to that ref bootstraps the SHA."""
+    """Updating an internal deployment to a ref that can't be resolved returns 400."""
     dep = _make_deployment()
     dep.repo_url = INTERNAL_CODE_REPO_SCHEME
-    mock_get_deployment.return_value = dep
-    mock_code_repo_storage.resolve_ref = AsyncMock(return_value=None)
-    mock_update_deployment.return_value = dep.model_copy(
-        update={"git_ref": "nonexistent-branch", "git_sha": None}
-    )
-
-    response = await deployments_service.update_deployment(
-        project_id="proj-1",
-        deployment_id="dep-1",
-        update_data=schema.DeploymentUpdate(git_ref="nonexistent-branch"),
-    )
-
-    # The downstream patch payload should clear gitSha (empty string maps to
-    # cleared in apply_deployment_update) so the push callback's bootstrap
-    # condition (current.git_sha falsy) fires on the next push.
-    assert mock_update_deployment.await_args is not None
-    sent_update = mock_update_deployment.await_args.kwargs["update"]
-    assert sent_update.git_sha == ""
-    assert sent_update.git_ref == "nonexistent-branch"
-
-    assert response.warning is not None
-    assert "nonexistent-branch" in response.warning
-    assert "pending" in response.warning.lower()
-
-
-@patch(
-    "llama_agents.control_plane.manage_api.deployments_service.code_repo_storage",
-)
-@patch(
-    "llama_agents.control_plane.manage_api.deployments_service.k8s_client.update_deployment",
-    new_callable=AsyncMock,
-)
-@patch(
-    "llama_agents.control_plane.manage_api.deployments_service.k8s_client.get_deployment",
-    new_callable=AsyncMock,
-)
-@pytest.mark.asyncio
-async def test_update_deployment_unresolvable_unchanged_ref_returns_400(
-    mock_get_deployment: AsyncMock,
-    mock_update_deployment: AsyncMock,
-    mock_code_repo_storage: MagicMock,
-) -> None:
-    """A re-submit of the current ref that fails to resolve must not silently
-    clear gitSha on a running deployment — return 400 so the caller can
-    investigate (e.g. transient storage failure, missing bare repo)."""
-    dep = _make_deployment()
-    dep.repo_url = INTERNAL_CODE_REPO_SCHEME
-    dep.git_ref = "main"
-    dep.git_sha = "abc123"
     mock_get_deployment.return_value = dep
     mock_code_repo_storage.resolve_ref = AsyncMock(return_value=None)
 
@@ -560,11 +504,10 @@ async def test_update_deployment_unresolvable_unchanged_ref_returns_400(
         await deployments_service.update_deployment(
             project_id="proj-1",
             deployment_id="dep-1",
-            update_data=schema.DeploymentUpdate(git_ref="main"),
+            update_data=schema.DeploymentUpdate(git_ref="nonexistent-branch"),
         )
     assert exc_info.value.status_code == 400
-    assert "main" in str(exc_info.value.detail)
-    mock_update_deployment.assert_not_awaited()
+    assert "nonexistent-branch" in str(exc_info.value.detail)
 
 
 @patch(
@@ -726,72 +669,3 @@ async def test_handle_git_request_allows_push_mode_deployments(
     await_args = mock_handle_git_request.await_args
     assert await_args is not None
     assert await_args.kwargs["storage"] is mock_code_repo_storage
-
-
-async def _capture_push_callback(
-    deployment: DeploymentResponse,
-    mock_get_deployment: AsyncMock,
-    mock_handle_git_request: AsyncMock,
-) -> Any:
-    """Drive `handle_git_request` once to extract the `_on_push_complete` callback."""
-    mock_get_deployment.return_value = deployment
-    mock_handle_git_request.return_value = Response(status_code=200)
-
-    await deployments_service.handle_git_request(
-        request=MagicMock(),
-        project_id=deployment.project_id,
-        deployment_id=deployment.id or "dep-1",
-        git_path="info/refs",
-    )
-    assert mock_handle_git_request.await_args is not None
-    return mock_handle_git_request.await_args.kwargs["on_push_complete"]
-
-
-@patch(
-    "llama_agents.control_plane.manage_api.deployments_service._handle_git_request",
-    new_callable=AsyncMock,
-)
-@patch(
-    "llama_agents.control_plane.manage_api.deployments_service.code_repo_storage",
-)
-@patch(
-    "llama_agents.control_plane.manage_api.deployments_service.k8s_client.update_deployment",
-    new_callable=AsyncMock,
-)
-@patch(
-    "llama_agents.control_plane.manage_api.deployments_service.k8s_client.get_deployment",
-    new_callable=AsyncMock,
-)
-@pytest.mark.asyncio
-async def test_push_callback_advances_pending_deployment(
-    mock_get_deployment: AsyncMock,
-    mock_update_deployment: AsyncMock,
-    mock_code_repo_storage: MagicMock,
-    mock_handle_git_request: AsyncMock,
-) -> None:
-    """A push to a deployment left pending by an unresolvable-ref update should
-    advance gitSha/gitRef via the bootstrap branch of `_on_push_complete`."""
-    pending = _make_deployment()
-    pending.repo_url = INTERNAL_CODE_REPO_SCHEME
-    pending.git_ref = "main"
-    pending.git_sha = None  # pending: cleared by Phase 1's update_deployment
-
-    callback = await _capture_push_callback(
-        pending, mock_get_deployment, mock_handle_git_request
-    )
-
-    # The callback re-fetches the deployment before deciding to update.
-    mock_get_deployment.return_value = pending
-    mock_update_deployment.return_value = pending.model_copy(
-        update={"git_sha": "abc123"}
-    )
-
-    await callback("dep-1", "abc123", "main")
-
-    mock_update_deployment.assert_awaited_once()
-    assert mock_update_deployment.await_args is not None
-    sent_update = mock_update_deployment.await_args.kwargs["update"]
-    assert sent_update.git_sha == "abc123"
-    assert sent_update.git_ref == "main"
-    assert sent_update.repo_url == INTERNAL_CODE_REPO_SCHEME
-    assert mock_code_repo_storage is not None
