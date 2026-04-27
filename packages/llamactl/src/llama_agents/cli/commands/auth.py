@@ -127,6 +127,7 @@ def create_api_key_profile(
 @global_options
 def device_login() -> None:
     """Login via web browser"""
+    from llama_agents.cli.auth.client import OIDCNotEnabledError
 
     try:
         created = _create_device_profile()
@@ -139,6 +140,17 @@ def device_login() -> None:
         rprint(f"[{WARNING}]Looks like this may be your first time logging in.[/]")
         rprint(
             f"[{WARNING}]Before you can get started, log in to https://cloud.llamaindex.ai to complete your account setup.[/]"
+        )
+        return
+
+    except OIDCNotEnabledError as e:
+        rprint(
+            f"[{WARNING}]This server does not have browser-based login (OIDC) configured.[/]"
+        )
+        if str(e):
+            rprint(f"[{MUTED_COL}]Server response: {e}[/]")
+        rprint(
+            "Use [cyan]llamactl auth token[/cyan] to log in with an API key instead."
         )
         return
 
