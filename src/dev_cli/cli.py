@@ -13,6 +13,7 @@ from . import gha, git_utils, index_html, versioning
 from .commands.changesets_cmd import changeset_publish, changeset_version
 from .commands.publish_cmd import changeset_plan, publish_action
 from .commands.pytest_cmd import pytest_cmd
+from .commands.skills_cmd import sync_skills
 
 # Known subcommands for argument injection
 _KNOWN_SUBCOMMANDS = {
@@ -23,6 +24,7 @@ _KNOWN_SUBCOMMANDS = {
     "publish-action",
     "compute-tag-metadata",
     "update-index-html",
+    "sync-skills",
 }
 
 
@@ -116,3 +118,4 @@ cli.add_command(changeset_publish)
 cli.add_command(changeset_plan)
 cli.add_command(publish_action)
 cli.add_command(pytest_cmd)
+cli.add_command(sync_skills)
