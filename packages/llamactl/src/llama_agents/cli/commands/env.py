@@ -6,20 +6,12 @@ from typing import TYPE_CHECKING
 import click
 from llama_agents.cli.config.schema import Environment
 from llama_agents.cli.param_types import EnvironmentType
-from llama_agents.cli.styles import (
-    ACTIVE_INDICATOR,
-    HEADER_COLOR,
-    MUTED_COL,
-    PRIMARY_COL,
-    WARNING,
-)
+from llama_agents.cli.styles import WARNING
 from packaging import version as packaging_version
 from rich import print as rprint
-from rich.table import Table
-from rich.text import Text
 
-from ..app import console
-from ..options import global_options, interactive_option
+from ..display import EnvDisplay
+from ..options import global_options, interactive_option, output_option, render_output
 from .auth import auth
 
 if TYPE_CHECKING:
@@ -49,30 +41,22 @@ def env_group() -> None:
 
 @env_group.command("list")
 @global_options
-def list_environments_cmd() -> None:
+@output_option
+def list_environments_cmd(output: str) -> None:
     try:
         service = _env_service()
         envs = service.list_environments()
         current_env = service.get_current_environment()
 
-        if not envs:
+        if not envs and output == "text":
             rprint(f"[{WARNING}]No environments found[/]")
             return
 
-        table = Table(show_edge=False, box=None, header_style=f"bold {HEADER_COLOR}")
-        table.add_column("  API URL", style=PRIMARY_COL)
-        table.add_column("Requires Auth", style=MUTED_COL)
-
-        for env in envs:
-            text = Text()
-            if env == current_env:
-                text.append("* ", style=ACTIVE_INDICATOR)
-            else:
-                text.append("  ")
-            text.append(env.api_url)
-            table.add_row(text, Text("true" if env.requires_auth else "false"))
-
-        console.print(table)
+        current_url = current_env.api_url if current_env else None
+        displays = [
+            EnvDisplay.from_environment(env, current_url=current_url) for env in envs
+        ]
+        render_output(displays, output)
     except Exception as e:
         rprint(f"[red]Error: {e}[/red]")
         raise click.Abort()

@@ -11,20 +11,13 @@ from typing import TYPE_CHECKING
 
 import click
 from llama_agents.cli.param_types import OrgType, ProfileType, ProjectType
-from llama_agents.cli.styles import (
-    ACTIVE_INDICATOR,
-    HEADER_COLOR,
-    MUTED_COL,
-    PRIMARY_COL,
-    WARNING,
-)
+from llama_agents.cli.styles import MUTED_COL, PRIMARY_COL, WARNING
 from llama_agents.cli.utils.capabilities import probe_organizations_support
 from rich import print as rprint
-from rich.table import Table
-from rich.text import Text
 
-from ..app import app, console
-from ..options import global_options, interactive_option
+from ..app import app
+from ..display import AuthProfileDisplay, OrgDisplay
+from ..options import global_options, interactive_option, output_option, render_output
 
 if TYPE_CHECKING:
     from llama_agents.cli.config.auth_service import AuthService
@@ -161,14 +154,15 @@ def device_login() -> None:
 
 @auth.command("list")
 @global_options
-def list_profiles() -> None:
+@output_option
+def list_profiles(output: str) -> None:
     """List all logged in users/tokens"""
     try:
         auth_svc = _get_service().current_auth_service()
         profiles = auth_svc.list_profiles()
         current = auth_svc.get_current_profile()
 
-        if not profiles:
+        if not profiles and output == "text":
             rprint(f"[{WARNING}]No profiles found[/]")
             if auth_svc.env.requires_auth:
                 rprint("Create one with: [cyan]llamactl auth login[/cyan]")
@@ -176,24 +170,12 @@ def list_profiles() -> None:
                 rprint("Create one with: [cyan]llamactl auth token[/cyan]")
             return
 
-        table = Table(show_edge=False, box=None, header_style=f"bold {HEADER_COLOR}")
-        table.add_column("  Name", style=PRIMARY_COL)
-        table.add_column("Active Project", style=MUTED_COL)
-
-        for profile in profiles:
-            text = Text()
-            if profile == current:
-                text.append("* ", style=ACTIVE_INDICATOR)
-            else:
-                text.append("  ")
-            text.append(profile.name)
-            active_project = profile.project_id or "-"
-            table.add_row(
-                text,
-                active_project,
-            )
-
-        console.print(table)
+        current_name = current.name if current else None
+        displays = [
+            AuthProfileDisplay.from_profile(p, current_name=current_name)
+            for p in profiles
+        ]
+        render_output(displays, output)
 
     except Exception as e:
         rprint(f"[red]Error: {e}[/red]")
@@ -301,34 +283,31 @@ def me() -> None:
 # Organizations commands
 @auth.command("organizations")
 @global_options
-def list_organizations() -> None:
+@output_option
+def list_organizations(output: str) -> None:
     """List organizations available to the current profile"""
     try:
         auth_svc = _get_service().current_auth_service()
         if not probe_organizations_support():
-            rprint(f"[{WARNING}]This server does not support organizations[/]")
+            if output == "text":
+                rprint(f"[{WARNING}]This server does not support organizations[/]")
+                return
+            # Structured outputs: emit an empty list so scripts get a
+            # well-typed answer instead of an unparsable warning.
+            render_output([], output)
             return
 
         organizations = _list_organizations(auth_svc)
-        if not organizations:
+        if not organizations and output == "text":
             rprint(f"[{WARNING}]No organizations found[/]")
             return
 
-        table = Table(show_edge=False, box=None, header_style=f"bold {HEADER_COLOR}")
-        table.add_column("  Org ID", style=PRIMARY_COL)
-        table.add_column("Name", style=MUTED_COL)
-        table.add_column("Default", style=MUTED_COL)
-
-        for org in organizations:
-            indicator = Text()
-            if org.is_default:
-                indicator.append("* ", style=ACTIVE_INDICATOR)
-            else:
-                indicator.append("  ")
-            indicator.append(org.org_id)
-            table.add_row(indicator, org.org_name, "yes" if org.is_default else "")
-
-        console.print(table)
+        default_org = next((o.org_id for o in organizations if o.is_default), None)
+        displays = [
+            OrgDisplay.from_org_summary(o, current_org_id=default_org)
+            for o in organizations
+        ]
+        render_output(displays, output)
 
     except Exception as e:
         rprint(f"[red]Error: {e}[/red]")
