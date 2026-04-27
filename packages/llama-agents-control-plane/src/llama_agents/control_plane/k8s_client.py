@@ -1058,8 +1058,13 @@ async def stream_container_logs(
     *,
     since_seconds: int | None = None,
     tail_lines: int | None = None,
+    follow: bool = True,
 ) -> tuple[CancelFn, AsyncGenerator[str, None]]:
-    """generator for a single container's logs."""
+    """generator for a single container's logs.
+
+    When ``follow=False``, the underlying K8s read returns the currently
+    buffered log content and the generator ends naturally; no streaming.
+    """
 
     try:
         read_pod_log = cast(
@@ -1071,7 +1076,7 @@ async def stream_container_logs(
             name=pod_name,
             namespace=_k8s_client.namespace,
             container=container_name,
-            follow=True,
+            follow=follow,
             since_seconds=since_seconds,
             tail_lines=tail_lines,
             timestamps=True,
@@ -1087,6 +1092,19 @@ async def stream_container_logs(
     except ApiException as e:
         # Non-fatal conditions when the container isn't ready yet
         if e.status in (400, 404):
+            # In non-follow mode, just return an empty generator — the caller
+            # asked for "what's available now" and there's nothing yet.
+            if not follow:
+
+                async def empty() -> AsyncGenerator[str, None]:
+                    if False:
+                        yield ""  # marker to keep this an async generator
+                    return
+
+                async def noop_cancel() -> None:
+                    return None
+
+                return noop_cancel, empty()
 
             async def wait_and_retry() -> tuple[CancelFn, AsyncGenerator[str, None]]:
                 await asyncio.sleep(5)
@@ -1096,6 +1114,7 @@ async def stream_container_logs(
                     container_name,
                     since_seconds=since_seconds,
                     tail_lines=tail_lines,
+                    follow=follow,
                 )
 
             task = asyncio.create_task(wait_and_retry())
@@ -1230,6 +1249,7 @@ async def _stream_pod_container_logs(
     since_seconds: int | None = None,
     tail_lines: int | None = None,
     stop_event: asyncio.Event | None = None,
+    follow: bool = True,
 ) -> AsyncGenerator[LogLine, None]:
     """Stream and merge log lines from multiple pod/container pairs with shutdown support."""
     generators: list[AsyncGenerator[LogLine, None]] = []
@@ -1240,6 +1260,7 @@ async def _stream_pod_container_logs(
             container_name,
             since_seconds=since_seconds,
             tail_lines=tail_lines,
+            follow=follow,
         )
         cancel_fns.append(cancel)
         generators.append(_parse_raw_log_lines(pod_name, container_name, iterator))
@@ -1251,10 +1272,12 @@ async def _stream_pod_container_logs(
         yield "__SHUTDOWN__"
         return
 
-    merged = merge_generators(
-        *generators,
-        when_shutdown(),
-    )
+    gen_args: list[AsyncGenerator[LogLine | Literal["__SHUTDOWN__"], None]] = [
+        *generators
+    ]
+    if follow:
+        gen_args.append(when_shutdown())
+    merged = merge_generators(*gen_args)
 
     try:
         async for item in merged:
@@ -1272,10 +1295,12 @@ async def stream_replicaset_logs(
     since_seconds: int | None = None,
     tail_lines: int | None = None,
     stop_event: asyncio.Event | None = None,
+    follow: bool = True,
 ) -> AsyncGenerator[LogLine, None]:
     """Blocking generator that streams log lines for all pods/containers in the latest ReplicaSet.
 
-    Yields `LogLine` objects until the consumer closes the generator.
+    Yields `LogLine` objects until the consumer closes the generator (or, when
+    ``follow=False``, until the underlying K8s reads finish).
     """
     target_pods = await get_replicaset_pods_for_deployment(deployment_id)
 
@@ -1298,6 +1323,7 @@ async def stream_replicaset_logs(
         since_seconds=since_seconds,
         tail_lines=tail_lines,
         stop_event=stop_event,
+        follow=follow,
     ):
         yield line
 
@@ -1318,6 +1344,7 @@ async def stream_build_job_logs(
     since_seconds: int | None = None,
     tail_lines: int | None = None,
     stop_event: asyncio.Event | None = None,
+    follow: bool = True,
 ) -> AsyncGenerator[LogLine, None]:
     """Stream log lines from a build Job's pod.
 
@@ -1345,6 +1372,7 @@ async def stream_build_job_logs(
         since_seconds=since_seconds,
         tail_lines=tail_lines,
         stop_event=stop_event,
+        follow=follow,
     ):
         yield line
 

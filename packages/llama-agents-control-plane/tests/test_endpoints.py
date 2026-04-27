@@ -766,6 +766,37 @@ def test_stream_deployment_logs_success(mock_stream: MagicMock) -> None:
         include_init_containers=True,
         since_seconds=10,
         tail_lines=5,
+        follow=True,
+    )
+
+
+@patch(
+    "llama_agents.control_plane.manage_api.deployments_service.deployments_service.stream_deployment_logs"
+)
+def test_stream_deployment_logs_follow_false_threads_through(
+    mock_stream: MagicMock,
+) -> None:
+    """``?follow=false`` should be threaded into the service call."""
+
+    async def empty_gen() -> AsyncGenerator[LogEvent, None]:
+        if False:
+            yield LogEvent(pod="x", container="c", text="", timestamp=datetime.now())
+        return
+
+    mock_stream.return_value = empty_gen()
+
+    resp = client.get(
+        "/api/v1beta1/deployments/deploy-1/logs",
+        params={"project_id": "proj-1", "follow": "false"},
+    )
+    assert resp.status_code == 200
+    mock_stream.assert_called_once_with(
+        project_id="proj-1",
+        deployment_id="deploy-1",
+        include_init_containers=False,
+        since_seconds=None,
+        tail_lines=None,
+        follow=False,
     )
 
 

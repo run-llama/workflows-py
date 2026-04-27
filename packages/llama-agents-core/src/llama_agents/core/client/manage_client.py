@@ -305,14 +305,18 @@ class ProjectClient(BaseClient):
         include_init_containers: bool = False,
         since_seconds: int | None = None,
         tail_lines: int | None = None,
+        follow: bool = True,
     ) -> AsyncGenerator[LogEvent, None]:
         """Stream logs as LogEvent items from the control plane using SSE.
 
-        Yields `LogEvent` models until the stream ends (e.g., rollout completes).
+        Yields `LogEvent` models until the stream ends. With ``follow=False``
+        the server returns currently-available logs and ends the stream
+        naturally — useful for "fetch and exit" callers.
         """
         params_dict: dict[str, PrimitiveData] = {
             "project_id": self.project_id,
             "include_init_containers": include_init_containers,
+            "follow": follow,
         }
         if since_seconds is not None:
             params_dict["since_seconds"] = since_seconds

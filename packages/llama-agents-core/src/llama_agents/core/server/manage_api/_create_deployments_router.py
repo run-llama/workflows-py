@@ -191,11 +191,16 @@ def create_v1beta1_deployments_router(
         include_init_containers: Annotated[bool, Query()] = False,
         since_seconds: Annotated[int | None, Query()] = None,
         tail_lines: Annotated[int | None, Query()] = None,
+        follow: Annotated[bool, Query()] = True,
     ) -> StreamingResponse:
         """Stream logs for a deployment.
 
         Build job logs (if any) are automatically merged before application logs.
-        The stream ends when the latest ReplicaSet changes (e.g., a new rollout occurs).
+        With ``follow=true`` (default) the stream continues until the latest
+        ReplicaSet changes (e.g. a new rollout occurs). With ``follow=false``
+        the server returns whatever logs are currently available and ends the
+        SSE stream — useful for clients that want a bounded, "fetch and exit"
+        response.
         """
 
         try:
@@ -205,6 +210,7 @@ def create_v1beta1_deployments_router(
                 include_init_containers=include_init_containers,
                 since_seconds=since_seconds,
                 tail_lines=tail_lines,
+                follow=follow,
             )
 
             async def sse_lines() -> AsyncGenerator[str, None]:
