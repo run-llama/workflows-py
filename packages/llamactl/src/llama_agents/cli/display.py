@@ -188,7 +188,8 @@ class DeploymentSpec(BaseModel):
     appserver_version: Annotated[
         str | None, Column("APPSERVER", default="-", wide=True)
     ] = None
-    suspended: Annotated[bool, Column("SUSPENDED", wide=True)] = False
+    # No Column: suspended state is already visible via status.phase.
+    suspended: bool = False
     secrets: dict[str, str] | None = None
     personal_access_token: str | None = None
 
