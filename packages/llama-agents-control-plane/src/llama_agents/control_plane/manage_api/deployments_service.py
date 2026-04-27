@@ -314,16 +314,35 @@ class DeploymentService(AbstractDeploymentsService):
                 )
                 if resolved_sha:
                     update_data.git_sha = resolved_sha
-                else:
-                    # Ref isn't in the internal repo yet (e.g. user is switching
-                    # branches before pushing the new one). Mark the deployment
-                    # as pending — clear gitSha so the next push to this ref is
-                    # picked up by the bootstrap path in `_on_push_complete`.
+                elif (
+                    update_data.git_ref is not None
+                    and update_data.git_ref != current_deployment.git_ref
+                ):
+                    # User is switching to a new branch that hasn't been pushed
+                    # yet. Mark the deployment as pending — clear gitSha so the
+                    # next push to this ref is picked up by the bootstrap path
+                    # in `_on_push_complete`. We only clear when the ref is
+                    # actually changing; a re-submit of the current ref that
+                    # transiently fails to resolve must not disturb a healthy
+                    # running deployment.
                     update_data.git_sha = ""
                     pending_ref_warning = (
                         f"git_ref '{git_ref_to_resolve}' not yet present in the "
                         f"internal repo for deployment {deployment_id}; the "
                         "deployment is pending a push of this ref."
+                    )
+                else:
+                    # Ref unchanged but unresolvable (e.g. bare repo missing).
+                    # Don't disturb the existing gitSha — the deployment keeps
+                    # running on the current commit. Reject the update so the
+                    # caller knows resolution failed and can investigate.
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            f"Could not resolve ref '{git_ref_to_resolve}' in "
+                            f"the internal repo for deployment {deployment_id}. "
+                            "Push the ref first or check for typos."
+                        ),
                     )
         elif (
             update_data.has_git_fields()

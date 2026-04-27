@@ -531,6 +531,44 @@ async def test_update_deployment_unresolvable_internal_ref_marks_pending(
 
 @patch(
     "llama_agents.control_plane.manage_api.deployments_service.code_repo_storage",
+)
+@patch(
+    "llama_agents.control_plane.manage_api.deployments_service.k8s_client.update_deployment",
+    new_callable=AsyncMock,
+)
+@patch(
+    "llama_agents.control_plane.manage_api.deployments_service.k8s_client.get_deployment",
+    new_callable=AsyncMock,
+)
+@pytest.mark.asyncio
+async def test_update_deployment_unresolvable_unchanged_ref_returns_400(
+    mock_get_deployment: AsyncMock,
+    mock_update_deployment: AsyncMock,
+    mock_code_repo_storage: MagicMock,
+) -> None:
+    """A re-submit of the current ref that fails to resolve must not silently
+    clear gitSha on a running deployment — return 400 so the caller can
+    investigate (e.g. transient storage failure, missing bare repo)."""
+    dep = _make_deployment()
+    dep.repo_url = INTERNAL_CODE_REPO_SCHEME
+    dep.git_ref = "main"
+    dep.git_sha = "abc123"
+    mock_get_deployment.return_value = dep
+    mock_code_repo_storage.resolve_ref = AsyncMock(return_value=None)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await deployments_service.update_deployment(
+            project_id="proj-1",
+            deployment_id="dep-1",
+            update_data=schema.DeploymentUpdate(git_ref="main"),
+        )
+    assert exc_info.value.status_code == 400
+    assert "main" in str(exc_info.value.detail)
+    mock_update_deployment.assert_not_awaited()
+
+
+@patch(
+    "llama_agents.control_plane.manage_api.deployments_service.code_repo_storage",
     new=None,
 )
 @patch(
