@@ -170,6 +170,69 @@ async def test_stream_logs_happy_path(
         since_seconds=None,
         tail_lines=None,
         stop_event=mock.ANY,
+        follow=True,
+    )
+
+
+@patch(
+    "llama_agents.control_plane.manage_api.deployments_service.k8s_client.stream_build_job_logs"
+)
+@patch(
+    "llama_agents.control_plane.manage_api.deployments_service.k8s_client.stream_replicaset_logs"
+)
+@patch(
+    "llama_agents.control_plane.manage_api.deployments_service.k8s_client.get_latest_replicaset_for_deployment",
+    new_callable=AsyncMock,
+)
+@patch(
+    "llama_agents.control_plane.manage_api.deployments_service.k8s_client.get_deployment",
+    new_callable=AsyncMock,
+)
+@pytest.mark.asyncio
+async def test_stream_logs_follow_false_threads_through_and_terminates(
+    mock_get_deployment: AsyncMock,
+    mock_get_rs: AsyncMock,
+    mock_stream_logs: MagicMock,
+    mock_build_logs: MagicMock,
+) -> None:
+    """``follow=False`` skips the RS-change watcher and ends after one pass."""
+    mock_get_deployment.return_value = _make_deployment()
+    mock_get_rs.return_value = _rs("uid-1")
+
+    async def agen() -> AsyncGenerator[types.SimpleNamespace, None]:
+        yield _line("pod-1", "c", "a")
+
+    async def empty_gen() -> AsyncGenerator[types.SimpleNamespace, None]:
+        return
+        yield  # make it a generator
+
+    mock_stream_logs.return_value = agen()
+    mock_build_logs.return_value = empty_gen()
+
+    items = [
+        item
+        async for item in deployments_service.stream_deployment_logs(
+            project_id="proj-1", deployment_id="dep-1", follow=False
+        )
+    ]
+
+    # Stream completes after one pass.
+    assert len(items) == 1
+    # ``follow=False`` should propagate to the K8s read.
+    mock_stream_logs.assert_called_once_with(
+        deployment_id="dep-1",
+        include_init_containers=False,
+        since_seconds=None,
+        tail_lines=None,
+        stop_event=mock.ANY,
+        follow=False,
+    )
+    mock_build_logs.assert_called_once_with(
+        deployment_id="dep-1",
+        since_seconds=None,
+        tail_lines=None,
+        stop_event=mock.ANY,
+        follow=False,
     )
 
 

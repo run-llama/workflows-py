@@ -1,5 +1,6 @@
 """Unit tests for k8s_client.py"""
 
+import asyncio
 import base64
 import sys
 from collections.abc import Iterator
@@ -989,6 +990,49 @@ async def test_stream_replicaset_logs_follow(mock_k8s: MagicMock) -> None:
 
         assert first == LogLine(pod="pod-1", container="app", text="hello")
         assert second == LogLine(pod="pod-1", container="app", text="world")
+
+
+@pytest.mark.asyncio
+async def test_stream_replicaset_logs_non_follow_completes_with_stop_event(
+    mock_k8s: MagicMock,
+) -> None:
+    with patch(
+        "llama_agents.control_plane.k8s_client.get_latest_replicaset_for_deployment",
+        return_value=V1ReplicaSet(metadata=V1ObjectMeta(uid="rs-uid")),
+    ):
+        pod = V1Pod(
+            metadata=V1ObjectMeta(
+                name="pod-1",
+                owner_references=[
+                    V1OwnerReference(
+                        api_version="apps/v1",
+                        kind="ReplicaSet",
+                        uid="rs-uid",
+                        name="rs",
+                    )
+                ],
+            ),
+            spec=V1PodSpec(containers=[V1Container(name="app")]),
+        )
+        mock_k8s.k8s_core_v1.list_namespaced_pod.return_value = Mock(items=[pod])
+        mock_k8s.k8s_core_v1.read_namespaced_pod_log.return_value = "hello\nworld\n"
+
+        async def collect_logs() -> list[LogLine]:
+            return [
+                line
+                async for line in k8s_client.stream_replicaset_logs(
+                    "dep",
+                    stop_event=asyncio.Event(),
+                    follow=False,
+                )
+            ]
+
+        lines = await asyncio.wait_for(collect_logs(), timeout=1)
+
+        assert lines == [
+            LogLine(pod="pod-1", container="app", text="hello"),
+            LogLine(pod="pod-1", container="app", text="world"),
+        ]
 
 
 @pytest.mark.asyncio
