@@ -24,13 +24,14 @@ from __future__ import annotations
 import functools
 import types
 from dataclasses import dataclass
-from typing import Any, Callable, Union, get_args, get_origin
+from typing import Any, Callable, Literal, Union, get_args, get_origin
 
-from llama_agents.cli.render import gh_short, short_sha
+from llama_agents.cli.render import gh_short, short_sha, star_marker
 from llama_agents.core.schema.deployments import (
     DeploymentResponse,
     LlamaDeploymentPhase,
 )
+from llama_agents.core.schema.projects import OrgSummary
 from pydantic import BaseModel, ConfigDict
 from typing_extensions import Annotated
 
@@ -273,3 +274,88 @@ class DeploymentDisplay(BaseModel):
         if self.status is not None:
             data["status"] = self.status.model_dump(mode="json")
         return data
+
+
+class AuthProfileDisplay(BaseModel):
+    """A locally-stored auth profile, projected for ``auth list``.
+
+    Secret material (``api_key``, OIDC tokens) is intentionally not surfaced.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: Annotated[str, Column("NAME")]
+    api_url: Annotated[str, Column("API_URL")]
+    project_id: Annotated[str | None, Column("PROJECT_ID", default="-")] = None
+    active: Annotated[bool, Column("ACTIVE", format=star_marker)] = False
+    auth_type: Annotated[Literal["none", "token", "oidc"], Column("AUTH")] = "none"
+
+    @classmethod
+    def from_profile(
+        cls, profile: Any, *, current_name: str | None
+    ) -> AuthProfileDisplay:
+        if profile.device_oidc:
+            auth_type: Literal["none", "token", "oidc"] = "oidc"
+        elif profile.api_key:
+            auth_type = "token"
+        else:
+            auth_type = "none"
+        return cls(
+            name=profile.name,
+            api_url=profile.api_url,
+            project_id=profile.project_id,
+            active=profile.name == current_name,
+            auth_type=auth_type,
+        )
+
+
+def _bool_str_lower(value: bool) -> str:
+    return "true" if value else "false"
+
+
+class EnvDisplay(BaseModel):
+    """A configured environment, projected for ``auth env list``.
+
+    ``min_llamactl_version`` is intentionally omitted — it isn't part of the
+    public env-list contract.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    api_url: Annotated[str, Column("API_URL")]
+    requires_auth: Annotated[bool, Column("REQUIRES_AUTH", format=_bool_str_lower)]
+    active: Annotated[bool, Column("ACTIVE", format=star_marker)] = False
+
+    @classmethod
+    def from_environment(cls, env: Any, *, current_url: str | None) -> EnvDisplay:
+        return cls(
+            api_url=env.api_url,
+            requires_auth=env.requires_auth,
+            active=env.api_url == current_url,
+        )
+
+
+def _yes_if_true(value: bool) -> str:
+    return "yes" if value else ""
+
+
+class OrgDisplay(BaseModel):
+    """An organization summary, projected for ``auth organizations``."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    org_id: Annotated[str, Column("ORG_ID")]
+    org_name: Annotated[str, Column("NAME")]
+    is_default: Annotated[bool, Column("DEFAULT", format=_yes_if_true)]
+    active: Annotated[bool, Column("ACTIVE", format=star_marker)] = False
+
+    @classmethod
+    def from_org_summary(
+        cls, org: OrgSummary, *, current_org_id: str | None = None
+    ) -> OrgDisplay:
+        return cls(
+            org_id=org.org_id,
+            org_name=org.org_name,
+            is_default=org.is_default,
+            active=current_org_id is not None and org.org_id == current_org_id,
+        )
