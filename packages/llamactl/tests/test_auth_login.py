@@ -1,9 +1,17 @@
+from __future__ import annotations
+
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import click
+import httpx
 import pytest
-from llama_agents.cli.commands.auth import _create_device_profile
+from click.testing import CliRunner
+from llama_agents.cli.auth.client import (
+    OIDCNotEnabledError,
+    PlatformAuthDiscoveryClient,
+)
+from llama_agents.cli.commands.auth import _create_device_profile, device_login
 
 
 def _make_fake_device_oidc() -> SimpleNamespace:
@@ -69,3 +77,36 @@ def test_create_device_profile_cleans_up_on_api_key_failure() -> None:
             _create_device_profile()
 
     mock_auth_svc.delete_profile.assert_awaited_once_with(fake_profile.name)
+
+
+@pytest.mark.asyncio
+async def test_oidc_discovery_translates_disabled_400_to_typed_error() -> None:
+    """A 400 from /auth/oidc/discovery should surface as OIDCNotEnabledError."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(400, json={"detail": "Discovery URL is not enabled"})
+
+    transport = httpx.MockTransport(handler)
+    client = PlatformAuthDiscoveryClient("http://example.test")
+    client.client = httpx.AsyncClient(
+        base_url="http://example.test", transport=transport
+    )
+    try:
+        with pytest.raises(OIDCNotEnabledError, match="Discovery URL is not enabled"):
+            await client.oidc_discovery()
+    finally:
+        await client.close()
+
+
+def test_device_login_suggests_token_when_oidc_disabled() -> None:
+    """When OIDC is unavailable, login should print a friendly hint, not a stack trace."""
+
+    with patch(
+        "llama_agents.cli.commands.auth._create_device_profile",
+        side_effect=OIDCNotEnabledError("Discovery URL is not enabled"),
+    ):
+        result = CliRunner().invoke(device_login, [])
+
+    assert result.exit_code == 0, result.output
+    assert "browser-based login" in result.output
+    assert "llamactl auth token" in result.output

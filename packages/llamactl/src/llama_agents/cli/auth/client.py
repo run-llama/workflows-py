@@ -29,6 +29,10 @@ else:
 logger = logging.getLogger(__name__)
 
 
+class OIDCNotEnabledError(Exception):
+    """Raised when the server does not have OIDC browser-login configured."""
+
+
 class OidcDiscoveryResponse(BaseModel):
     discovery_url: str
     client_ids: dict[str, str] | None = None
@@ -98,6 +102,19 @@ class ClientContextManager(AsyncContextManager):
         await self.close()
 
 
+def _extract_detail(resp: httpx.Response) -> str | None:
+    """Best-effort extract of a FastAPI-style ``detail`` string from a response."""
+    try:
+        payload = resp.json()
+    except Exception:
+        return None
+    if isinstance(payload, dict):
+        detail = payload.get("detail")
+        if isinstance(detail, str):
+            return detail
+    return None
+
+
 class PlatformAuthDiscoveryClient(ClientContextManager):
     """Client for ad hoc auth endpoints under /api/v1/auth."""
 
@@ -106,6 +123,14 @@ class PlatformAuthDiscoveryClient(ClientContextManager):
 
     async def oidc_discovery(self) -> OidcDiscoveryResponse:
         resp = await self.client.get("/api/v1/auth/oidc/discovery", timeout=10.0)
+        if resp.status_code in (400, 404, 501):
+            # Server reachable but OIDC discovery isn't configured. Surface a
+            # typed error so callers can suggest the API key flow instead of
+            # leaking a raw HTTP status.
+            detail = _extract_detail(resp)
+            raise OIDCNotEnabledError(
+                detail or "Server does not have OIDC browser login enabled"
+            )
         resp.raise_for_status()
         return OidcDiscoveryResponse.model_validate(resp.json())
 
