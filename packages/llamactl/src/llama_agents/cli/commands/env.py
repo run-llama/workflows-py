@@ -6,20 +6,12 @@ from typing import TYPE_CHECKING
 import click
 from llama_agents.cli.config.schema import Environment
 from llama_agents.cli.param_types import EnvironmentType
-from llama_agents.cli.styles import (
-    ACTIVE_INDICATOR,
-    HEADER_COLOR,
-    MUTED_COL,
-    PRIMARY_COL,
-    WARNING,
-)
+from llama_agents.cli.styles import WARNING
 from packaging import version as packaging_version
 from rich import print as rprint
-from rich.table import Table
-from rich.text import Text
 
-from ..app import console
 from ..options import global_options, interactive_option, output_option, render_output
+from ..render import render_table
 from .auth import auth
 
 if TYPE_CHECKING:
@@ -60,34 +52,33 @@ def list_environments_cmd(output: str) -> None:
             rprint(f"[{WARNING}]No environments found[/]")
             return
 
-        def _render_table() -> None:
-            table = Table(
-                show_edge=False, box=None, header_style=f"bold {HEADER_COLOR}"
+        def _render_text() -> None:
+            rows = [
+                {
+                    "api_url": env.api_url,
+                    "requires_auth": "true" if env.requires_auth else "false",
+                    "active": "*" if env == current_env else "",
+                }
+                for env in envs
+            ]
+            render_table(
+                rows,
+                [
+                    ("API_URL", "api_url"),
+                    ("REQUIRES_AUTH", "requires_auth"),
+                    ("ACTIVE", "active"),
+                ],
             )
-            table.add_column("  API URL", style=PRIMARY_COL)
-            table.add_column("Requires Auth", style=MUTED_COL)
-
-            for env in envs:
-                text = Text()
-                if env == current_env:
-                    text.append("* ", style=ACTIVE_INDICATOR)
-                else:
-                    text.append("  ")
-                text.append(env.api_url)
-                table.add_row(text, Text("true" if env.requires_auth else "false"))
-
-            console.print(table)
 
         payload = [
             {
                 "api_url": env.api_url,
                 "requires_auth": env.requires_auth,
-                "min_llamactl_version": env.min_llamactl_version,
                 "active": env == current_env,
             }
             for env in envs
         ]
-        render_output(payload, output, _render_table)
+        render_output(payload, output, _render_text)
     except Exception as e:
         rprint(f"[red]Error: {e}[/red]")
         raise click.Abort()

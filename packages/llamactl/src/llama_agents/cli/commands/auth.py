@@ -25,6 +25,7 @@ from rich.text import Text
 
 from ..app import app, console
 from ..options import global_options, interactive_option, output_option, render_output
+from ..render import render_table
 
 if TYPE_CHECKING:
     from llama_agents.cli.config.auth_service import AuthService
@@ -36,6 +37,21 @@ if TYPE_CHECKING:
 
 class NoProjectsFoundError(Exception):
     """Raised when the authenticated user has no accessible projects on an org-less server."""
+
+
+def _auth_type(profile: Auth) -> str:
+    """Classify a profile by its credential shape.
+
+    - ``oidc``: device-OIDC profile.
+    - ``token``: API-key profile.
+    - ``none``: profile with no credential (e.g., a no-auth env where the user
+      hasn't run ``auth token``).
+    """
+    if profile.device_oidc:
+        return "oidc"
+    if profile.api_key:
+        return "token"
+    return "none"
 
 
 _ClickPath = getattr(click, "Path")
@@ -165,25 +181,6 @@ def list_profiles(output: str) -> None:
                 rprint("Create one with: [cyan]llamactl auth token[/cyan]")
             return
 
-        def _render_table() -> None:
-            table = Table(
-                show_edge=False, box=None, header_style=f"bold {HEADER_COLOR}"
-            )
-            table.add_column("  Name", style=PRIMARY_COL)
-            table.add_column("Active Project", style=MUTED_COL)
-
-            for profile in profiles:
-                text = Text()
-                if profile == current:
-                    text.append("* ", style=ACTIVE_INDICATOR)
-                else:
-                    text.append("  ")
-                text.append(profile.name)
-                active_project = profile.project_id or "-"
-                table.add_row(text, active_project)
-
-            console.print(table)
-
         # Build a JSON-safe payload that masks secrets and surfaces only
         # script-friendly fields. ``api_key`` is intentionally omitted.
         payload = [
@@ -192,11 +189,34 @@ def list_profiles(output: str) -> None:
                 "api_url": p.api_url,
                 "project_id": p.project_id,
                 "active": p == current,
-                "auth_type": "oidc" if p.device_oidc else "token",
+                "auth_type": _auth_type(p),
             }
             for p in profiles
         ]
-        render_output(payload, output, _render_table)
+
+        def _render_text() -> None:
+            rows = [
+                {
+                    "name": p.name,
+                    "api_url": p.api_url,
+                    "project_id": p.project_id or "-",
+                    "active": "*" if p == current else "",
+                    "auth_type": _auth_type(p),
+                }
+                for p in profiles
+            ]
+            render_table(
+                rows,
+                [
+                    ("NAME", "name"),
+                    ("API_URL", "api_url"),
+                    ("PROJECT_ID", "project_id"),
+                    ("ACTIVE", "active"),
+                    ("AUTH", "auth_type"),
+                ],
+            )
+
+        render_output(payload, output, _render_text)
 
     except Exception as e:
         rprint(f"[red]Error: {e}[/red]")

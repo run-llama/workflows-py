@@ -1,0 +1,60 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 LlamaIndex Inc.
+"""Plain-whitespace table renderer for llamactl.
+
+No colors, no truncation, no Rich. Long values let the terminal wrap. The
+helper exists so every read command emits the same simple, grep-friendly
+shape.
+"""
+
+from __future__ import annotations
+
+import click
+
+GH_PREFIX = "https://github.com/"
+
+
+def gh_short(repo_url: str) -> str:
+    """Return ``gh:org/repo`` for github URLs, otherwise the input unchanged.
+
+    Used in table cells only; YAML/JSON keep the full URL.
+    """
+    if repo_url.startswith(GH_PREFIX):
+        return "gh:" + repo_url.removeprefix(GH_PREFIX)
+    return repo_url
+
+
+def render_table(
+    rows: list[dict[str, str]],
+    columns: list[tuple[str, str]],
+) -> None:
+    """Render a plain whitespace table to stdout.
+
+    Args:
+        rows: Each row is a ``{column_key: cell_value}`` mapping. Cells must
+            already be strings (callers handle ``None`` → ``"-"``).
+        columns: Ordered ``(header, key)`` pairs. Headers are rendered
+            verbatim — callers pass uppercase headers if they want them.
+
+    Column widths are sized to the widest cell (header included) plus a
+    two-space gutter on the right except the last column. No truncation.
+    """
+    widths: list[int] = []
+    for header, key in columns:
+        cell_widths = [len(row.get(key, "")) for row in rows]
+        widths.append(max(len(header), *cell_widths) if cell_widths else len(header))
+
+    def _format_line(values: list[str]) -> str:
+        parts: list[str] = []
+        last = len(values) - 1
+        for i, value in enumerate(values):
+            if i == last:
+                parts.append(value)
+            else:
+                parts.append(value.ljust(widths[i] + 2))
+        return "".join(parts).rstrip()
+
+    headers = [header for header, _ in columns]
+    click.echo(_format_line(headers))
+    for row in rows:
+        click.echo(_format_line([row.get(key, "") for _, key in columns]))

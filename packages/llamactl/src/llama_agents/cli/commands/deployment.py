@@ -12,7 +12,7 @@ import subprocess
 import click
 from llama_agents.cli.commands.auth import validate_authenticated_profile
 from llama_agents.cli.param_types import DeploymentType, GitShaType
-from llama_agents.cli.styles import HEADER_COLOR, MUTED_COL, PRIMARY_COL, WARNING
+from llama_agents.cli.styles import WARNING
 from llama_agents.core.schema import LogEvent
 from llama_agents.core.schema.deployments import (
     INTERNAL_CODE_REPO_SCHEME,
@@ -21,11 +21,10 @@ from llama_agents.core.schema.deployments import (
     DeploymentUpdate,
 )
 from rich import print as rprint
-from rich.table import Table
-from rich.text import Text
 
 from ..app import app, console
 from ..client import get_project_client, project_client_context
+from ..display import DeploymentDisplay
 from ..log_format import parse_log_body, render_plain
 from ..options import (
     global_options,
@@ -34,6 +33,7 @@ from ..options import (
     project_option,
     render_output,
 )
+from ..render import gh_short, render_table
 from ..utils.capabilities import probe_code_push_support
 from ..utils.git_push import (
     configure_git_remote,
@@ -54,55 +54,25 @@ def deployments() -> None:
     pass
 
 
-def _render_deployments_table(deployments: list[DeploymentResponse]) -> None:
-    table = Table(show_edge=False, box=None, header_style=f"bold {HEADER_COLOR}")
-    table.add_column("Name", style=PRIMARY_COL)
-    table.add_column("ID", style=MUTED_COL)
-    table.add_column("Status", style=MUTED_COL)
-    table.add_column("URL", style=MUTED_COL)
-    table.add_column("Repository", style=MUTED_COL)
-
-    for deployment in deployments:
-        repo_url = deployment.repo_url
-        gh = "https://github.com/"
-        if repo_url.startswith(gh):
-            repo_url = "gh:" + repo_url.removeprefix(gh)
-
-        table.add_row(
-            deployment.display_name,
-            deployment.id,
-            deployment.status,
-            str(deployment.apiserver_url or ""),
-            repo_url,
-        )
-
-    console.print(table)
-
-
-def _render_deployment_detail_table(deployment: DeploymentResponse) -> None:
-    table = Table(show_edge=False, box=None, header_style=f"bold {HEADER_COLOR}")
-    table.add_column("Property", style=MUTED_COL, justify="right")
-    table.add_column("Value", style=PRIMARY_COL)
-
-    table.add_row("Name", Text(deployment.display_name))
-    table.add_row("ID", Text(deployment.id))
-    table.add_row("Project ID", Text(deployment.project_id))
-    table.add_row("Status", Text(deployment.status))
-    table.add_row("Repository", Text(deployment.repo_url))
-    table.add_row("Deployment File", Text(deployment.deployment_file_path))
-    table.add_row("Git Ref", Text(deployment.git_ref or "-"))
-    table.add_row("Last Deployed Commit", Text((deployment.git_sha or "-")[:7]))
-
-    apiserver_url = deployment.apiserver_url
-    table.add_row(
-        "API Server URL",
-        Text(str(apiserver_url) if apiserver_url else "-"),
+def _render_deployments_table(displays: list[DeploymentDisplay]) -> None:
+    rows = [
+        {
+            "name": d.name,
+            "phase": d.status.phase if d.status else "-",
+            "git_ref": d.git_ref or "-",
+            "repo": gh_short(d.repo_url),
+        }
+        for d in displays
+    ]
+    render_table(
+        rows,
+        [
+            ("NAME", "name"),
+            ("PHASE", "phase"),
+            ("GIT_REF", "git_ref"),
+            ("REPO", "repo"),
+        ],
     )
-
-    secret_names = deployment.secret_names or []
-    table.add_row("Secrets", Text("\n".join(secret_names), style="italic"))
-
-    console.print(table)
 
 
 def _do_get(
@@ -114,9 +84,8 @@ def _do_get(
     """Implementation of ``deployments get`` shared with the hidden ``list`` alias.
 
     No ``deployment_id`` → list all deployments (kubectl-style). With an ID →
-    info table for that deployment. Never launches the TUI; users wanting a
-    live view should use ``deployments logs --follow`` and
-    ``deployments status``.
+    a single-row table for that deployment. Never launches the TUI; for a
+    live view use ``deployments logs --follow``.
     """
     validate_authenticated_profile(interactive)
     try:
@@ -132,18 +101,20 @@ def _do_get(
                 )
                 return
 
+            displays = [DeploymentDisplay.from_response(d) for d in deployments]
             render_output(
-                deployments,
+                displays,
                 output,
-                lambda: _render_deployments_table(deployments),
+                lambda: _render_deployments_table(displays),
             )
             return
 
         deployment = asyncio.run(client.get_deployment(deployment_id))
+        display = DeploymentDisplay.from_response(deployment)
         render_output(
-            deployment,
+            display,
             output,
-            lambda: _render_deployment_detail_table(deployment),
+            lambda: _render_deployments_table([display]),
         )
 
     except Exception as e:
@@ -169,8 +140,7 @@ def get_deployment(
     With a deployment ID: prints details for that deployment.
 
     Use ``-o json`` or ``-o yaml`` for machine-readable output. Use
-    ``llamactl deployments logs <name> --follow`` to stream logs and
-    ``llamactl deployments status <name>`` to check status.
+    ``llamactl deployments logs <name> --follow`` to stream logs.
     """
     _do_get(deployment_id, interactive, output, project)
 
@@ -511,17 +481,25 @@ def show_history(
             rprint(f"No history recorded for {deployment_id}")
             return
 
-        def _render_table() -> None:
-            table = Table(
-                show_edge=False, box=None, header_style=f"bold {HEADER_COLOR}"
+        def _render_text() -> None:
+            rows = [
+                {
+                    "released_at": item.released_at.isoformat(),
+                    "git_sha": item.git_sha,
+                    "image_tag": item.image_tag or "-",
+                }
+                for item in items_sorted
+            ]
+            render_table(
+                rows,
+                [
+                    ("RELEASED_AT", "released_at"),
+                    ("GIT_SHA", "git_sha"),
+                    ("IMAGE_TAG", "image_tag"),
+                ],
             )
-            table.add_column("Released At", style=MUTED_COL)
-            table.add_column("Git SHA", style=PRIMARY_COL)
-            for item in items_sorted:
-                table.add_row(item.released_at.isoformat(), item.git_sha)
-            console.print(table)
 
-        render_output(items_sorted, output, _render_table)
+        render_output(items_sorted, output, _render_text)
     except Exception as e:
         rprint(f"[red]Error: {e}[/red]")
         raise click.Abort()
@@ -717,46 +695,6 @@ def _emit_log_event(ev: LogEvent, *, json_lines: bool) -> None:
     prefix_parts = [p for p in (ts, f"{ev.pod}/{ev.container}") if p]
     prefix = " ".join(prefix_parts)
     click.echo(f"{prefix} {body}" if prefix else body)
-
-
-@deployments.command("status")
-@global_options
-@click.argument("deployment_id", required=False, type=DeploymentType())
-@output_option
-@project_option
-@interactive_option
-def deployment_status(
-    deployment_id: str | None,
-    output: str,
-    interactive: bool,
-    project: str | None,
-) -> None:
-    """Show deployment status.
-
-    Default text output is a single line: ``<id>: <status> (<short_sha>)``.
-    Use ``-o json`` or ``-o yaml`` for the full ``DeploymentResponse``.
-    """
-    validate_authenticated_profile(interactive)
-
-    deployment_id = select_deployment(
-        deployment_id, interactive=interactive, project_id_override=project
-    )
-    if not deployment_id:
-        rprint(f"[{WARNING}]No deployment selected[/]")
-        return
-
-    try:
-        client = get_project_client(project_id_override=project)
-        deployment = asyncio.run(client.get_deployment(deployment_id))
-
-        def _render_text() -> None:
-            short_sha = (deployment.git_sha or "")[:7] or "unknown"
-            click.echo(f"{deployment.id}: {deployment.status} ({short_sha})")
-
-        render_output(deployment, output, _render_text)
-    except Exception as e:
-        rprint(f"[red]Error: {e}[/red]")
-        raise click.Abort()
 
 
 def select_deployment(

@@ -53,6 +53,11 @@ def test_deployments_get_text_no_args_lists(patched_auth: Any) -> None:
     assert result.exit_code == 0, result.output
     assert "app-a" in result.output
     assert "app-b" in result.output
+    # Plain-table headers, no Rich markup, no truncation ellipsis.
+    assert "NAME" in result.output
+    assert "PHASE" in result.output
+    assert "\x1b[" not in result.output  # no ANSI escapes
+    assert "…" not in result.output
 
 
 def test_deployments_get_json_array(patched_auth: Any) -> None:
@@ -66,9 +71,16 @@ def test_deployments_get_json_array(patched_auth: Any) -> None:
     assert result.exit_code == 0, result.output
     data = json.loads(result.output)
     assert isinstance(data, list)
-    assert {d["id"] for d in data} == {"app-a", "app-b"}
+    assert {d["name"] for d in data} == {"app-a", "app-b"}
     # All deployments returned should expose ``status``.
     assert all("status" in d for d in data)
+    assert all("phase" in d["status"] for d in data)
+    # Deprecated aliases / leaked flags must not appear.
+    for d in data:
+        assert "id" not in d
+        assert "llama_deploy_version" not in d
+        assert "has_personal_access_token" not in d
+        assert "secret_names" not in d
 
 
 def test_deployments_get_yaml_list(patched_auth: Any) -> None:
@@ -82,7 +94,7 @@ def test_deployments_get_yaml_list(patched_auth: Any) -> None:
     assert result.exit_code == 0, result.output
     parsed = yaml.safe_load(result.output)
     assert isinstance(parsed, list)
-    assert parsed[0]["id"] == "only-one"
+    assert parsed[0]["name"] == "only-one"
 
 
 def test_deployments_get_single_text_no_tui(patched_auth: Any) -> None:
@@ -101,6 +113,9 @@ def test_deployments_get_single_text_no_tui(patched_auth: Any) -> None:
     assert result.exit_code == 0, result.output
     assert mock_monitor.call_count == 0
     assert "my-app" in result.output
+    # Single-row uses the same column layout as the list view.
+    assert "NAME" in result.output
+    assert "PHASE" in result.output
 
 
 def test_deployments_get_single_json(patched_auth: Any) -> None:
@@ -114,8 +129,19 @@ def test_deployments_get_single_json(patched_auth: Any) -> None:
     assert result.exit_code == 0, result.output
     obj = json.loads(result.output)
     assert isinstance(obj, dict)
-    assert obj["id"] == "my-app"
-    assert obj["status"] == "Running"
+    assert obj["name"] == "my-app"
+    assert obj["status"]["phase"] == "Running"
+    assert obj["status"]["project_id"] == "proj_default"
+    # warning is always-explicit-null
+    assert obj["status"]["warning"] is None
+    # No deprecated aliases / leaks
+    assert "id" not in obj
+    assert "llama_deploy_version" not in obj
+    assert "has_personal_access_token" not in obj
+    assert "secret_names" not in obj
+    # Empty secrets / no PAT means the keys are omitted entirely.
+    assert "secrets" not in obj
+    assert "personal_access_token" not in obj
 
 
 def test_deployments_get_single_yaml(patched_auth: Any) -> None:
@@ -129,7 +155,31 @@ def test_deployments_get_single_yaml(patched_auth: Any) -> None:
     assert result.exit_code == 0, result.output
     obj = yaml.safe_load(result.output)
     assert isinstance(obj, dict)
-    assert obj["id"] == "my-app"
+    assert obj["name"] == "my-app"
+    assert obj["status"]["phase"] == "Running"
+
+
+def test_deployments_get_secrets_and_pat_masked(patched_auth: Any) -> None:
+    runner = CliRunner()
+    deployments = [
+        make_deployment(
+            "secret-app",
+            secret_names=["LLAMA_CLOUD_API_KEY", "OPENAI_API_KEY"],
+            has_personal_access_token=True,
+        )
+    ]
+    client_mock = _make_client_mock(deployments)
+    with patch_project_client(client_mock):
+        result = runner.invoke(
+            app, ["deployments", "get", "secret-app", "--no-interactive", "-o", "json"]
+        )
+    assert result.exit_code == 0, result.output
+    obj = json.loads(result.output)
+    assert obj["secrets"] == {
+        "LLAMA_CLOUD_API_KEY": "********",
+        "OPENAI_API_KEY": "********",
+    }
+    assert obj["personal_access_token"] == "********"
 
 
 def test_deployments_get_empty_json_is_array(patched_auth: Any) -> None:
@@ -154,7 +204,7 @@ def test_deployments_list_hidden_alias_works(patched_auth: Any) -> None:
         )
     assert result.exit_code == 0, result.output
     data = json.loads(result.output)
-    assert [d["id"] for d in data] == ["app-a"]
+    assert [d["name"] for d in data] == ["app-a"]
 
 
 def test_deployments_list_hidden_in_help(patched_auth: Any) -> None:
@@ -266,8 +316,36 @@ def test_auth_list_json_omits_secrets(patched_auth: Any) -> None:
     data = json.loads(result.output)
     assert isinstance(data, list)
     assert data[0]["name"] == "prof"
+    # API-key profile reports auth_type=token.
+    assert data[0]["auth_type"] == "token"
     # Secrets must not leak through.
     assert "api_key" not in data[0]
+
+
+def test_auth_list_json_no_credential_is_none() -> None:
+    """A profile with no api_key and no device_oidc reports auth_type=none."""
+    runner = CliRunner()
+    from llama_agents.cli.config.schema import Auth
+
+    profile = Auth(
+        id="2",
+        name="noauth",
+        api_url="http://localhost:8011",
+        project_id="proj_default",
+        api_key=None,
+        api_key_id=None,
+        device_oidc=None,
+    )
+    with patch("llama_agents.cli.config.env_service.service") as mock_service:
+        mock_auth_svc = MagicMock()
+        mock_auth_svc.list_profiles.return_value = [profile]
+        mock_auth_svc.get_current_profile.return_value = profile
+        mock_auth_svc.env = SimpleNamespace(requires_auth=False)
+        mock_service.current_auth_service.return_value = mock_auth_svc
+        result = runner.invoke(app, ["auth", "list", "-o", "json"])
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert data[0]["auth_type"] == "none"
 
 
 def test_auth_env_list_json(patched_auth: Any) -> None:
@@ -286,3 +364,6 @@ def test_auth_env_list_json(patched_auth: Any) -> None:
     data = json.loads(result.output)
     assert {e["api_url"] for e in data} == {"https://api.a", "https://api.b"}
     assert next(e for e in data if e["api_url"] == "https://api.a")["active"] is True
+    # ``min_llamactl_version`` is not part of the public env list contract.
+    for entry in data:
+        assert "min_llamactl_version" not in entry

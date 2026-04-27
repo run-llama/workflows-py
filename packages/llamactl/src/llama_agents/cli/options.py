@@ -77,6 +77,12 @@ def render_output(
         return
 
     def _to_json_safe(value: Any) -> Any:
+        # Models with a custom ``to_output_dict`` (e.g. ``DeploymentDisplay``)
+        # own their on-the-wire shape — including which null keys to keep —
+        # so prefer that over a raw ``model_dump``.
+        to_output = getattr(value, "to_output_dict", None)
+        if callable(to_output):
+            return to_output()
         if isinstance(value, BaseModel):
             return value.model_dump(mode="json")
         if isinstance(value, list):

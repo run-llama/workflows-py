@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 LlamaIndex Inc.
-"""Tests for ``deployments logs`` and ``deployments status``."""
+"""Tests for ``deployments logs``."""
 
 from __future__ import annotations
 
@@ -9,12 +9,10 @@ from datetime import datetime, timezone
 from typing import Any, AsyncIterator
 from unittest.mock import MagicMock
 
-import yaml
 from click.testing import CliRunner
-from conftest import make_deployment, patch_project_client
+from conftest import patch_project_client
 from llama_agents.cli.app import app
 from llama_agents.core.schema import LogEvent
-from llama_agents.core.schema.deployments import DeploymentResponse
 
 
 def _make_log_events(n: int = 3) -> list[LogEvent]:
@@ -123,70 +121,12 @@ def test_logs_no_events_emits_stderr_note(patched_auth: Any) -> None:
     assert "no logs available yet" in result.output
 
 
-def test_status_text_one_liner(patched_auth: Any) -> None:
+def test_deployments_status_command_removed() -> None:
+    """``deployments status`` was removed in Slice A.5; ``get`` covers the use case."""
     runner = CliRunner()
+    result = runner.invoke(app, ["deployments", "--help"])
+    assert result.exit_code == 0
+    assert "  status " not in result.output
 
-    async def _get(
-        deployment_id: str, include_events: bool = False
-    ) -> DeploymentResponse:
-        return make_deployment(deployment_id, git_sha="deadbeef1234")
-
-    client = MagicMock()
-    client.get_deployment = MagicMock(side_effect=_get)
-    client.project_id = "proj_default"
-    client.base_url = "http://test:8011"
-    with patch_project_client(client):
-        result = runner.invoke(
-            app, ["deployments", "status", "my-app", "--no-interactive"]
-        )
-    assert result.exit_code == 0, result.output
-    out = result.output.strip()
-    assert "my-app" in out
-    assert "Running" in out
-    assert "deadbee" in out  # short sha (7 chars)
-
-
-def test_status_json_full_payload(patched_auth: Any) -> None:
-    runner = CliRunner()
-
-    async def _get(
-        deployment_id: str, include_events: bool = False
-    ) -> DeploymentResponse:
-        return make_deployment(deployment_id)
-
-    client = MagicMock()
-    client.get_deployment = MagicMock(side_effect=_get)
-    client.project_id = "proj_default"
-    client.base_url = "http://test:8011"
-    with patch_project_client(client):
-        result = runner.invoke(
-            app,
-            ["deployments", "status", "my-app", "--no-interactive", "-o", "json"],
-        )
-    assert result.exit_code == 0, result.output
-    obj = json.loads(result.output)
-    assert obj["id"] == "my-app"
-    assert obj["status"] == "Running"
-    assert obj["project_id"] == "proj_default"
-
-
-def test_status_yaml(patched_auth: Any) -> None:
-    runner = CliRunner()
-
-    async def _get(
-        deployment_id: str, include_events: bool = False
-    ) -> DeploymentResponse:
-        return make_deployment(deployment_id)
-
-    client = MagicMock()
-    client.get_deployment = MagicMock(side_effect=_get)
-    client.project_id = "proj_default"
-    client.base_url = "http://test:8011"
-    with patch_project_client(client):
-        result = runner.invoke(
-            app,
-            ["deployments", "status", "my-app", "--no-interactive", "-o", "yaml"],
-        )
-    assert result.exit_code == 0, result.output
-    obj = yaml.safe_load(result.output)
-    assert obj["id"] == "my-app"
+    result = runner.invoke(app, ["deployments", "status", "--no-interactive"])
+    assert result.exit_code != 0
