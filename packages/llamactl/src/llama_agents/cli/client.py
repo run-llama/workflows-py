@@ -28,7 +28,13 @@ def get_control_plane_client() -> ControlPlaneClient:
     return ControlPlaneClient(resolved_base_url)
 
 
-def get_project_client() -> ProjectClient:
+def get_project_client(project_id_override: str | None = None) -> ProjectClient:
+    """Return a ProjectClient bound to the active profile.
+
+    If ``project_id_override`` is provided, the client uses that project ID
+    instead of the profile's default. Auth (API key + middleware) and base URL
+    still come from the active profile — this mirrors ``kubectl -n <ns>``.
+    """
     from llama_agents.cli.config.env_service import service
     from llama_agents.core.client.manage_client import ProjectClient
 
@@ -42,14 +48,17 @@ def get_project_client() -> ProjectClient:
         else:
             rprint("[cyan]llamactl auth token[/cyan]")
         raise SystemExit(1)
+    project_id = project_id_override or profile.project_id
     return ProjectClient(
-        profile.api_url, profile.project_id, profile.api_key, auth_svc.auth_middleware()
+        profile.api_url, project_id, profile.api_key, auth_svc.auth_middleware()
     )
 
 
 @asynccontextmanager
-async def project_client_context() -> AsyncGenerator[ProjectClient, None]:
-    client = get_project_client()
+async def project_client_context(
+    project_id_override: str | None = None,
+) -> AsyncGenerator[ProjectClient, None]:
+    client = get_project_client(project_id_override=project_id_override)
     try:
         yield client
     finally:
