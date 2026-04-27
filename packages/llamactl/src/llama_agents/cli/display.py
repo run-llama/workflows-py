@@ -188,11 +188,6 @@ def render_columns(
     render_table(table_rows, columns)
 
 
-# ---------------------------------------------------------------------------
-# Display models
-# ---------------------------------------------------------------------------
-
-
 class DeploymentSpec(BaseModel):
     """Editable deployment fields.
 

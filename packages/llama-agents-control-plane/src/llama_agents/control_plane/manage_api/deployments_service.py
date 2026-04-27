@@ -45,6 +45,57 @@ logger = logging.getLogger(__name__)
 DEFAULT_ORG = schema.OrgSummary(org_id="default", org_name="Default", is_default=True)
 
 
+async def _on_push_complete(
+    deployment_id: str,
+    new_sha: str | None,
+    git_ref: str | None,
+) -> None:
+    if new_sha is None:
+        logger.warning(
+            "Push to deployment %s completed but could not determine HEAD SHA",
+            deployment_id,
+        )
+        return
+
+    # Only update the CRD on the first push — when the deployment
+    # doesn't yet have an internal repo_url or is missing a git_sha.
+    # Subsequent pushes just upload code to S3; the user must use
+    # `llamactl deploy update` to explicitly advance the ref/sha.
+    current = await k8s_client.get_deployment(deployment_id)
+    if (
+        current is not None
+        and current.repo_url == INTERNAL_CODE_REPO_SCHEME
+        and current.git_sha
+    ):
+        logger.info(
+            "Push to deployment %s uploaded to S3; skipping CRD update "
+            "(already has repo_url and git_sha)",
+            deployment_id,
+        )
+        return
+
+    logger.info(
+        "First push to deployment %s: setting sha=%s ref=%s",
+        deployment_id,
+        new_sha,
+        git_ref,
+    )
+    update = DeploymentUpdate(
+        repo_url=INTERNAL_CODE_REPO_SCHEME,
+        git_sha=new_sha,
+        git_ref=git_ref,
+    )
+    result = await k8s_client.update_deployment(
+        deployment_id=deployment_id,
+        update=update,
+    )
+    if result is None:
+        logger.error(
+            "Failed to update deployment %s after push (not found)",
+            deployment_id,
+        )
+
+
 class PublicDeploymentService(AbstractPublicDeploymentsService):
     @override
     async def get_version(self) -> schema.VersionResponse:
@@ -373,56 +424,6 @@ class DeploymentService(AbstractDeploymentsService):
                 content="Code repo storage not configured (S3_BUCKET not set).",
                 status_code=503,
             )
-
-        async def _on_push_complete(
-            deployment_id: str,
-            new_sha: str | None,
-            git_ref: str | None,
-        ) -> None:
-            if new_sha is None:
-                logger.warning(
-                    "Push to deployment %s completed but could not determine HEAD SHA",
-                    deployment_id,
-                )
-                return
-
-            # Only update the CRD on the first push — when the deployment
-            # doesn't yet have an internal repo_url or is missing a git_sha.
-            # Subsequent pushes just upload code to S3; the user must use
-            # `llamactl deploy update` to explicitly advance the ref/sha.
-            current = await k8s_client.get_deployment(deployment_id)
-            if (
-                current is not None
-                and current.repo_url == INTERNAL_CODE_REPO_SCHEME
-                and current.git_sha
-            ):
-                logger.info(
-                    "Push to deployment %s uploaded to S3; skipping CRD update "
-                    "(already has repo_url and git_sha)",
-                    deployment_id,
-                )
-                return
-
-            logger.info(
-                "First push to deployment %s: setting sha=%s ref=%s",
-                deployment_id,
-                new_sha,
-                git_ref,
-            )
-            update = DeploymentUpdate(
-                repo_url=INTERNAL_CODE_REPO_SCHEME,
-                git_sha=new_sha,
-                git_ref=git_ref,
-            )
-            result = await k8s_client.update_deployment(
-                deployment_id=deployment_id,
-                update=update,
-            )
-            if result is None:
-                logger.error(
-                    "Failed to update deployment %s after push (not found)",
-                    deployment_id,
-                )
 
         return await _handle_git_request(
             request=request,

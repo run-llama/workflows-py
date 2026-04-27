@@ -182,7 +182,6 @@ def create_deployment(
     # Avoid adding other local imports unless instrumentation shows they are slow.
     from ..textual.deployment_form import create_deployment_form
 
-    # Use interactive creation
     deployment_form = create_deployment_form(
         server_supports_code_push=probe_code_push_support(),
     )
@@ -214,7 +213,6 @@ def configure_git_remote_cmd(
     """
     validate_authenticated_profile(interactive)
     try:
-        # Verify we're in a git repo
         result = subprocess.run(
             ["git", "rev-parse", "--git-dir"],
             capture_output=True,
@@ -312,10 +310,8 @@ def edit_deployment(
             rprint(f"[{WARNING}]No deployment selected[/]")
             return
 
-        # Get current deployment details
         current_deployment = asyncio.run(client.get_deployment(deployment_id))
 
-        # Use the interactive edit form
         updated_deployment = edit_deployment_form(
             current_deployment,
             server_supports_code_push=probe_code_push_support(),
@@ -421,8 +417,8 @@ def refresh_deployment(
             )
 
         new_git_sha = updated_deployment.git_sha or ""
-        old_short = short_sha(old_git_sha) if old_git_sha else "none"
-        new_short = short_sha(new_git_sha) if new_git_sha else "none"
+        old_short = short_sha(old_git_sha) if old_git_sha else "-"
+        new_short = short_sha(new_git_sha) if new_git_sha else "-"
 
         if old_git_sha == new_git_sha:
             rprint(f"No changes: already at {new_short}")
@@ -557,7 +553,7 @@ def rollback(
                 return await client.rollback_deployment(deployment_id, git_sha)
 
         updated = asyncio.run(_do_rollback())
-        new_short = short_sha(updated.git_sha) if updated.git_sha else "unknown"
+        new_short = short_sha(updated.git_sha) if updated.git_sha else "-"
         rprint(f"[green]Rollback initiated[/green]: {deployment_id} → {new_short}")
     except Exception as e:
         rprint(f"[red]Error: {e}[/red]")
