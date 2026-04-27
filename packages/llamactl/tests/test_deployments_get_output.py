@@ -1,0 +1,375 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 LlamaIndex Inc.
+"""Tests for ``deployments get`` output modes, ``--project`` override, and the
+``deployments list`` hidden alias."""
+
+from __future__ import annotations
+
+import json
+from typing import Any
+from unittest.mock import MagicMock, patch
+
+import httpx
+import yaml
+from click.testing import CliRunner
+from conftest import make_deployment, patch_project_client
+from llama_agents.cli.app import app
+from llama_agents.core.schema.deployments import DeploymentResponse
+
+
+def _make_client_mock(deployments: list[DeploymentResponse]) -> MagicMock:
+    """A mock ProjectClient stand-in with the methods the commands hit."""
+
+    async def _list() -> list[DeploymentResponse]:
+        return list(deployments)
+
+    async def _get(
+        deployment_id: str, include_events: bool = False
+    ) -> DeploymentResponse:
+        for d in deployments:
+            if d.id == deployment_id:
+                return d
+        raise RuntimeError(f"deployment not found: {deployment_id}")
+
+    client = MagicMock()
+    client.list_deployments.side_effect = _list
+    client.get_deployment.side_effect = _get
+    client.project_id = "proj_default"
+    client.base_url = "http://test:8011"
+    return client
+
+
+def test_deployments_get_text_no_args_lists(patched_auth: Any) -> None:
+    runner = CliRunner()
+    deployments = [make_deployment("app-a"), make_deployment("app-b")]
+    client_mock = _make_client_mock(deployments)
+    with patch_project_client(client_mock):
+        result = runner.invoke(app, ["deployments", "get", "--no-interactive"])
+    assert result.exit_code == 0, result.output
+    assert "app-a" in result.output
+    assert "app-b" in result.output
+    # Plain-table headers, no Rich markup, no truncation ellipsis.
+    assert "NAME" in result.output
+    assert "PHASE" in result.output
+    assert "\x1b[" not in result.output  # no ANSI escapes
+    assert "…" not in result.output
+
+
+def test_deployments_get_json_array(patched_auth: Any) -> None:
+    runner = CliRunner()
+    deployments = [make_deployment("app-a"), make_deployment("app-b")]
+    client_mock = _make_client_mock(deployments)
+    with patch_project_client(client_mock):
+        result = runner.invoke(
+            app, ["deployments", "get", "--no-interactive", "-o", "json"]
+        )
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert isinstance(data, list)
+    assert {d["name"] for d in data} == {"app-a", "app-b"}
+    # All deployments returned should expose ``status``.
+    assert all("status" in d for d in data)
+    assert all("phase" in d["status"] for d in data)
+    # Deprecated aliases / leaked flags must not appear.
+    for d in data:
+        assert "id" not in d
+        assert "llama_deploy_version" not in d
+        assert "has_personal_access_token" not in d
+        assert "secret_names" not in d
+
+
+def test_deployments_get_yaml_list(patched_auth: Any) -> None:
+    runner = CliRunner()
+    deployments = [make_deployment("only-one")]
+    client_mock = _make_client_mock(deployments)
+    with patch_project_client(client_mock):
+        result = runner.invoke(
+            app, ["deployments", "get", "--no-interactive", "-o", "yaml"]
+        )
+    assert result.exit_code == 0, result.output
+    parsed = yaml.safe_load(result.output)
+    assert isinstance(parsed, list)
+    assert parsed[0]["name"] == "only-one"
+
+
+def test_deployments_get_single_text_no_tui(patched_auth: Any) -> None:
+    """``deployments get <name>`` should never launch the Textual monitor."""
+    runner = CliRunner()
+    deployments = [make_deployment("my-app")]
+    client_mock = _make_client_mock(deployments)
+    with (
+        patch_project_client(client_mock),
+        patch(
+            "llama_agents.cli.textual.deployment_monitor.monitor_deployment_screen"
+        ) as mock_monitor,
+    ):
+        # Even if interactive=True, get must print a table — TUI is gone.
+        result = runner.invoke(app, ["deployments", "get", "my-app", "--interactive"])
+    assert result.exit_code == 0, result.output
+    assert mock_monitor.call_count == 0
+    assert "my-app" in result.output
+    # Single-row uses the same column layout as the list view.
+    assert "NAME" in result.output
+    assert "PHASE" in result.output
+
+
+def test_deployments_get_single_json(patched_auth: Any) -> None:
+    runner = CliRunner()
+    deployments = [make_deployment("my-app")]
+    client_mock = _make_client_mock(deployments)
+    with patch_project_client(client_mock):
+        result = runner.invoke(
+            app, ["deployments", "get", "my-app", "--no-interactive", "-o", "json"]
+        )
+    assert result.exit_code == 0, result.output
+    obj = json.loads(result.output)
+    assert isinstance(obj, dict)
+    assert obj["name"] == "my-app"
+    assert "spec" in obj
+    assert obj["status"]["phase"] == "Running"
+    assert obj["status"]["project_id"] == "proj_default"
+    # warning is always-explicit-null
+    assert obj["status"]["warning"] is None
+    # No deprecated aliases / leaks
+    assert "id" not in obj
+    assert "llama_deploy_version" not in obj
+    assert "has_personal_access_token" not in obj
+    assert "secret_names" not in obj
+    # Empty secrets / no PAT means the keys are omitted entirely from spec.
+    assert "secrets" not in obj["spec"]
+    assert "personal_access_token" not in obj["spec"]
+
+
+def test_deployments_get_single_yaml(patched_auth: Any) -> None:
+    runner = CliRunner()
+    deployments = [make_deployment("my-app")]
+    client_mock = _make_client_mock(deployments)
+    with patch_project_client(client_mock):
+        result = runner.invoke(
+            app, ["deployments", "get", "my-app", "--no-interactive", "-o", "yaml"]
+        )
+    assert result.exit_code == 0, result.output
+    obj = yaml.safe_load(result.output)
+    assert isinstance(obj, dict)
+    assert obj["name"] == "my-app"
+    assert obj["status"]["phase"] == "Running"
+
+
+def test_deployments_get_secrets_and_pat_masked(patched_auth: Any) -> None:
+    runner = CliRunner()
+    deployments = [
+        make_deployment(
+            "secret-app",
+            secret_names=["LLAMA_CLOUD_API_KEY", "OPENAI_API_KEY"],
+            has_personal_access_token=True,
+        )
+    ]
+    client_mock = _make_client_mock(deployments)
+    with patch_project_client(client_mock):
+        result = runner.invoke(
+            app, ["deployments", "get", "secret-app", "--no-interactive", "-o", "json"]
+        )
+    assert result.exit_code == 0, result.output
+    obj = json.loads(result.output)
+    assert obj["spec"]["secrets"] == {
+        "LLAMA_CLOUD_API_KEY": "********",
+        "OPENAI_API_KEY": "********",
+    }
+    assert obj["spec"]["personal_access_token"] == "********"
+
+
+def test_deployments_get_empty_json_is_array(patched_auth: Any) -> None:
+    runner = CliRunner()
+    client_mock = _make_client_mock([])
+    with patch_project_client(client_mock):
+        result = runner.invoke(
+            app, ["deployments", "get", "--no-interactive", "-o", "json"]
+        )
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output) == []
+
+
+def test_deployments_list_hidden_alias_works(patched_auth: Any) -> None:
+    """The hidden ``deployments list`` alias should still produce JSON output."""
+    runner = CliRunner()
+    deployments = [make_deployment("app-a")]
+    client_mock = _make_client_mock(deployments)
+    with patch_project_client(client_mock):
+        result = runner.invoke(
+            app, ["deployments", "list", "--no-interactive", "-o", "json"]
+        )
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert [d["name"] for d in data] == ["app-a"]
+
+
+def test_deployments_list_hidden_in_help(patched_auth: Any) -> None:
+    runner = CliRunner()
+    result = runner.invoke(app, ["deployments", "--help"])
+    assert result.exit_code == 0
+    # `list` should be hidden (not surfaced in `--help`), but `get` should be.
+    assert "  list " not in result.output
+    assert "  get " in result.output
+
+
+def test_deployments_get_project_override_threads_to_client(
+    patched_auth: Any,
+) -> None:
+    """``--project foo`` should construct a ProjectClient with project_id='foo'."""
+    runner = CliRunner()
+    deployments = [make_deployment("app-a", project_id="proj_other")]
+    client_mock = _make_client_mock(deployments)
+    with patch_project_client(client_mock) as ctor:
+        result = runner.invoke(
+            app,
+            [
+                "deployments",
+                "get",
+                "--no-interactive",
+                "--project",
+                "proj_other",
+                "-o",
+                "json",
+            ],
+        )
+    assert result.exit_code == 0, result.output
+    # ProjectClient was called with project_id='proj_other'
+    args, kwargs = ctor.call_args
+    # Positional: (api_url, project_id, api_key, auth_middleware)
+    assert args[1] == "proj_other"
+
+
+def _http_status_error(
+    status: int, *, url: str = "http://internal/api"
+) -> httpx.HTTPStatusError:
+    """Build an HTTPStatusError with a real Response for friendly-error tests."""
+    request = httpx.Request("GET", url)
+    response = httpx.Response(status, request=request, text='{"detail":"x"}')
+    return httpx.HTTPStatusError(
+        f"HTTP {status} for url {url} - {response.text}",
+        request=request,
+        response=response,
+    )
+
+
+def test_deployments_get_404_renders_friendly_message(patched_auth: Any) -> None:
+    runner = CliRunner()
+    client_mock = _make_client_mock([])
+
+    async def _raise_404(deployment_id: str, include_events: bool = False) -> None:
+        raise _http_status_error(404)
+
+    client_mock.get_deployment.side_effect = _raise_404
+    with patch_project_client(client_mock):
+        result = runner.invoke(
+            app,
+            ["deployments", "get", "nonexistent-app", "--no-interactive"],
+        )
+    assert result.exit_code != 0
+    assert (
+        "deployment 'nonexistent-app' not found in project 'proj_default'"
+        in result.output
+    )
+    # No URL, no JSON body should leak through.
+    assert "http://" not in result.output
+    assert "detail" not in result.output
+
+
+def test_deployments_get_404_with_project_includes_project(
+    patched_auth: Any,
+) -> None:
+    runner = CliRunner()
+    client_mock = _make_client_mock([])
+    client_mock.project_id = "proj_other"
+
+    async def _raise_404(deployment_id: str, include_events: bool = False) -> None:
+        raise _http_status_error(404)
+
+    client_mock.get_deployment.side_effect = _raise_404
+    with patch_project_client(client_mock):
+        result = runner.invoke(
+            app,
+            [
+                "deployments",
+                "get",
+                "nonexistent-app",
+                "--no-interactive",
+                "--project",
+                "proj_other",
+            ],
+        )
+    assert result.exit_code != 0
+    assert (
+        "deployment 'nonexistent-app' not found in project 'proj_other'"
+        in result.output
+    )
+
+
+def test_deployments_get_500_keeps_verbose_message(patched_auth: Any) -> None:
+    runner = CliRunner()
+    client_mock = _make_client_mock([])
+
+    async def _raise_500(deployment_id: str, include_events: bool = False) -> None:
+        raise _http_status_error(500)
+
+    client_mock.get_deployment.side_effect = _raise_500
+    with patch_project_client(client_mock):
+        result = runner.invoke(
+            app,
+            ["deployments", "get", "boom", "--no-interactive"],
+        )
+    assert result.exit_code != 0
+    # Non-404 keeps the verbose default message (URL + body) for debug-visibility.
+    assert "HTTP 500" in result.output
+    assert "http://" in result.output
+
+
+def test_deployments_get_text_column_order(patched_auth: Any) -> None:
+    """Text mode columns are in declaration order: NAME, REPO, GIT_REF, PHASE."""
+    runner = CliRunner()
+    deployments = [make_deployment("app-a")]
+    client_mock = _make_client_mock(deployments)
+    with patch_project_client(client_mock):
+        result = runner.invoke(app, ["deployments", "get", "--no-interactive"])
+    assert result.exit_code == 0, result.output
+    header = result.output.splitlines()[0]
+    name_idx = header.index("NAME")
+    repo_idx = header.index("REPO")
+    ref_idx = header.index("GIT_REF")
+    phase_idx = header.index("PHASE")
+    assert name_idx < repo_idx < ref_idx < phase_idx
+
+
+def test_deployments_get_text_no_wide_columns(patched_auth: Any) -> None:
+    """``-o text`` excludes wide-only columns (GIT_SHA, APISERVER_URL, ...)."""
+    runner = CliRunner()
+    deployments = [make_deployment("app-a")]
+    client_mock = _make_client_mock(deployments)
+    with patch_project_client(client_mock):
+        result = runner.invoke(app, ["deployments", "get", "--no-interactive"])
+    assert result.exit_code == 0, result.output
+    assert "GIT_SHA" not in result.output
+    assert "APISERVER_URL" not in result.output
+    assert "PROJECT" not in result.output
+    assert "APPSERVER" not in result.output
+    assert "SUSPENDED" not in result.output
+
+
+def test_deployments_get_wide_includes_extra_columns(patched_auth: Any) -> None:
+    runner = CliRunner()
+    deployments = [
+        make_deployment("app-a", git_sha="abc1234567", appserver_version="0.4.2")
+    ]
+    client_mock = _make_client_mock(deployments)
+    with patch_project_client(client_mock):
+        result = runner.invoke(
+            app, ["deployments", "get", "--no-interactive", "-o", "wide"]
+        )
+    assert result.exit_code == 0, result.output
+    header = result.output.splitlines()[0]
+    # Default columns still present; wide columns now appear too.
+    for h in ("NAME", "REPO", "GIT_REF", "PHASE", "APPSERVER", "GIT_SHA"):
+        assert h in header
+    # Wide columns slot into their natural positions, interleaved.
+    # APPSERVER (spec) should appear before PHASE (status).
+    assert header.index("APPSERVER") < header.index("PHASE")
