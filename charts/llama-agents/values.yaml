@@ -19,7 +19,7 @@ images:
     repository: llamaindex/llama-agents-control-plane
     # -- Control plane image tag
     # @section -- Images
-    tag: "0.11.1"
+    tag: "0.12.0"
     # -- Control plane image pull policy
     # @section -- Images
     pullPolicy: IfNotPresent
@@ -39,7 +39,7 @@ images:
     repository: llamaindex/llama-agents-appserver
     # -- Appserver image tag
     # @section -- Images
-    tag: "0.11.1"
+    tag: "0.11.2"
     # -- Appserver image pull policy
     # @section -- Images
     pullPolicy: IfNotPresent
@@ -125,7 +125,7 @@ controlPlane:
       region: ""
       # -- Send S3 requests unsigned (no Authorization header). Leave unset/`false` for any auth-requiring S3-compatible backend. For non-S3 object/blob storage, see `s3proxy.enabled` below — when that's on, this defaults to `true` unless you override it here.
       # @section -- Object Storage
-      unsigned: ~
+      unsigned:
       # -- Inline S3 access key. When set alongside `secretKey`, the chart renders
       # a Secret and wires it into the control plane. Mutually exclusive with
       # `s3.secret` (which wins silently).

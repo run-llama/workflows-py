@@ -1,5 +1,17 @@
 # llamactl
 
+## 0.8.0
+
+### Minor Changes
+
+- 2280e04: Rename deployment field `llama_deploy_version` to `appserver_version`. The old name remains as a deprecated input/output alias so existing clients and servers keep working.
+
+### Patch Changes
+
+- Updated dependencies [2280e04]
+  - llama-agents-core@0.10.0
+  - llama-agents-appserver@0.11.2
+
 ## 0.7.3
 
 ### Patch Changes
