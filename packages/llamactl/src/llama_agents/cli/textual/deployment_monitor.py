@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import functools
 import hashlib
 import logging
 import threading
 import webbrowser
+from collections import deque
 from collections.abc import AsyncGenerator
 from pathlib import Path
 
@@ -14,6 +16,7 @@ from llama_agents.cli.client import (
     project_client_context,
 )
 from llama_agents.cli.log_format import parse_log_body, trim_timestamp
+from llama_agents.cli.render import short_sha
 from llama_agents.core.iter_utils import merge_generators
 from llama_agents.core.schema import LogEvent
 from llama_agents.core.schema.deployments import DeploymentResponse
@@ -39,6 +42,26 @@ _LEVEL_STYLES: dict[str, str] = {
     "error": "bold red",
     "critical": "bold red reverse",
 }
+
+_CONTAINER_PALETTE = (
+    "bold magenta",
+    "bold cyan",
+    "bold blue",
+    "bold green",
+    "bold red",
+    "bold bright_blue",
+)
+
+# Bound the in-memory log buffer so long-running monitor sessions don't grow
+# unbounded. Matches the order of magnitude of RichLog's own viewport history.
+_LOG_BUFFER_MAX = 10_000
+
+
+@functools.lru_cache(maxsize=128)
+def _container_style(container_name: str) -> str:
+    """Pick a stable color per container name."""
+    h = int(hashlib.sha256(container_name.encode()).hexdigest(), 16)
+    return _CONTAINER_PALETTE[h % len(_CONTAINER_PALETTE)]
 
 
 def _format_log_line(line: str) -> Text:
@@ -147,15 +170,15 @@ class DeploymentMonitorWidget(Widget):
         super().__init__()
         self.deployment_id = deployment_id
         self._stop_stream = threading.Event()
-        # Persist content written to the RichLog across recomposes
-        self._log_buffer: list[Text] = []
+        # Persist content written to the RichLog across recomposes (bounded so
+        # long sessions don't accumulate forever).
+        self._log_buffer: deque[Text] = deque(maxlen=_LOG_BUFFER_MAX)
         self._log_stream_started = False
 
     async def on_mount(self) -> None:
-        # Kick off initial fetch and start logs stream in background
-        self.run_worker(self._fetch_deployment())
+        # The poller below runs the initial deployment fetch on its first tick;
+        # a separate one-shot fetch would race it and double the startup load.
         self.run_worker(self._stream_logs())
-        # Start periodic polling of deployment status
         self.run_worker(self._poll_deployment_status())
 
     def compose(self) -> ComposeResult:
@@ -223,17 +246,6 @@ class DeploymentMonitorWidget(Widget):
                     + (self.deployment.git_sha or "")
                 )
 
-    async def _fetch_deployment(self) -> None:
-        try:
-            async with project_client_context() as client:
-                self.deployment = await client.get_deployment(
-                    self.deployment_id, include_events=True
-                )
-            # Clear any previous error on success
-            self.error_message = ""
-        except Exception as e:  # pragma: no cover - network errors
-            self.error_message = f"Failed to fetch deployment: {e}"
-
     async def _stream_logs(self) -> None:
         """Consume the async log iterator, batch updates, and reconnect with backoff."""
 
@@ -299,9 +311,7 @@ class DeploymentMonitorWidget(Widget):
     def _handle_log_events(self, events: list[LogEvent]) -> None:
         def to_text(event: LogEvent) -> Text:
             txt = Text()
-            txt.append(
-                f"[{event.container}] ", style=self._container_style(event.container)
-            )
+            txt.append(f"[{event.container}] ", style=_container_style(event.container))
             txt.append_text(_format_log_line(event.text))
             return txt
 
@@ -326,25 +336,9 @@ class DeploymentMonitorWidget(Widget):
         for text in texts:
             log_widget.write(text)
             self._log_buffer.append(text)
-        log_widget.refresh()
 
-        # One-time kick to ensure initial draw
-        # Clear any previous error once we successfully receive logs
         if self.error_message:
             self.error_message = ""
-
-    def _container_style(self, container_name: str) -> str:
-        palette = [
-            "bold magenta",
-            "bold cyan",
-            "bold blue",
-            "bold green",
-            "bold red",
-            "bold bright_blue",
-        ]
-        # Stable hash to pick a color per container name
-        h = int(hashlib.sha256(container_name.encode()).hexdigest(), 16)
-        return palette[h % len(palette)]
 
     def _status_icon_and_style(self, phase: str) -> tuple[str, str]:
         # Map deployment phase to a colored icon
@@ -436,8 +430,8 @@ class DeploymentMonitorWidget(Widget):
         deployment_link_button.label = (
             f"{str(self.deployment.apiserver_url or '') if self.deployment else ''}"
         )
-        if self.deployment:
-            last_commit_button.label = f"{(str(self.deployment.git_sha or '-'))[:7]}"
+        if self.deployment and self.deployment.git_sha:
+            last_commit_button.label = short_sha(self.deployment.git_sha)
         else:
             last_commit_button.label = "-"
         # Update last event line
@@ -478,10 +472,13 @@ class DeploymentMonitorWidget(Widget):
         while not self._stop_stream.is_set():
             try:
                 async with project_client_context() as client:
-                    self.deployment = await client.get_deployment(
+                    fresh = await client.get_deployment(
                         self.deployment_id, include_events=True
                     )
-                # Clear any previous error on success
+                # Skip the reactive write when nothing changed; otherwise the
+                # watcher rewrites every status widget on each tick.
+                if fresh != self.deployment:
+                    self.deployment = fresh
                 if self.error_message:
                     self.error_message = ""
             except Exception as e:  # pragma: no cover - network errors

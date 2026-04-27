@@ -33,6 +33,7 @@ from ..options import (
     project_option,
     render_output,
 )
+from ..render import short_sha
 from ..utils.capabilities import probe_code_push_support
 from ..utils.git_push import (
     configure_git_remote,
@@ -102,7 +103,6 @@ def _do_get(
         effective_project = client.project_id
 
         if not deployment_id:
-            # List all deployments (former `list_deployments` body).
             deployments = asyncio.run(client.list_deployments())
 
             if not deployments and output == "text":
@@ -358,7 +358,7 @@ def _push_internal_for_update(
     remote_name = configure_git_remote(
         git_url, api_key, client.project_id, deployment_id
     )
-    local_ref, target_ref = _internal_push_refspec(git_ref)
+    local_ref, target_ref = internal_push_refspec(git_ref)
     with console.status("Pushing code..."):
         push_result = push_to_remote(
             remote_name, local_ref=local_ref, target_ref=target_ref
@@ -370,12 +370,6 @@ def _push_internal_for_update(
             f"[{WARNING}]Continuing with update using last pushed code. "
             f"To debug, try: llamactl deployments configure-git-remote {deployment_id}[/]"
         )
-
-
-def _internal_push_refspec(git_ref: str | None) -> tuple[str, str]:
-    # Delegate to the shared implementation in git_push.py.
-    # Keep this thin wrapper so existing call sites and tests don't break.
-    return internal_push_refspec(git_ref)
 
 
 @deployments.command("update")
@@ -404,12 +398,8 @@ def refresh_deployment(
             rprint(f"[{WARNING}]No deployment selected[/]")
             return
 
-        # Get current deployment details to show what we're refreshing
-        current_deployment = asyncio.run(
-            get_project_client(project_id_override=project).get_deployment(
-                deployment_id
-            )
-        )
+        client = get_project_client(project_id_override=project)
+        current_deployment = asyncio.run(client.get_deployment(deployment_id))
         deployment_name = current_deployment.display_name
         old_git_sha = current_deployment.git_sha or ""
 
@@ -423,20 +413,16 @@ def refresh_deployment(
 
         # Re-resolves the branch to the latest commit SHA.
         with console.status(f"Refreshing {deployment_name}..."):
-            deployment_update = DeploymentUpdate(
-                git_ref=effective_git_ref,
-            )
             updated_deployment = asyncio.run(
-                get_project_client(project_id_override=project).update_deployment(
+                client.update_deployment(
                     deployment_id,
-                    deployment_update,
+                    DeploymentUpdate(git_ref=effective_git_ref),
                 )
             )
 
-        # Show the git SHA change with short SHAs
         new_git_sha = updated_deployment.git_sha or ""
-        old_short = old_git_sha[:7] if old_git_sha else "none"
-        new_short = new_git_sha[:7] if new_git_sha else "none"
+        old_short = short_sha(old_git_sha) if old_git_sha else "none"
+        new_short = short_sha(new_git_sha) if new_git_sha else "none"
 
         if old_git_sha == new_git_sha:
             rprint(f"No changes: already at {new_short}")
@@ -475,10 +461,8 @@ def show_history(
                 return await client.get_deployment_history(deployment_id)
 
         history = asyncio.run(_fetch_history())
-        items = history.history
-        # newest first
         items_sorted = sorted(
-            items,
+            history.history,
             key=lambda it: it.released_at,
             reverse=True,
         )
@@ -540,12 +524,12 @@ def rollback(
             current_deployment, history = asyncio.run(_fetch_current_and_history())
             current_sha = current_deployment.git_sha or ""
 
-            items = history.history or []
-            # Sort newest first
-            items_sorted = sorted(items, key=lambda it: it.released_at, reverse=True)
+            items_sorted = sorted(
+                history.history or [], key=lambda it: it.released_at, reverse=True
+            )
             choices = []
             for it in items_sorted:
-                short = it.git_sha[:7]
+                short = short_sha(it.git_sha)
                 suffix = (
                     " [current]" if current_sha and it.git_sha == current_sha else ""
                 )
@@ -563,7 +547,7 @@ def rollback(
                 return
 
         if interactive and not confirm_action(
-            f"Rollback '{deployment_id}' to {git_sha[:7]}?"
+            f"Rollback '{deployment_id}' to {short_sha(git_sha)}?"
         ):
             rprint(f"[{WARNING}]Cancelled[/]")
             return
@@ -573,9 +557,8 @@ def rollback(
                 return await client.rollback_deployment(deployment_id, git_sha)
 
         updated = asyncio.run(_do_rollback())
-        rprint(
-            f"[green]Rollback initiated[/green]: {deployment_id} → {updated.git_sha[:7] if updated.git_sha else 'unknown'}"
-        )
+        new_short = short_sha(updated.git_sha) if updated.git_sha else "unknown"
+        rprint(f"[green]Rollback initiated[/green]: {deployment_id} → {new_short}")
     except Exception as e:
         rprint(f"[red]Error: {e}[/red]")
         raise click.Abort()

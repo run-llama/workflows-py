@@ -64,13 +64,12 @@ class DeploymentService(AbstractDeploymentsService):
         self, project_id: str, deployment_id: str, include_events: bool = False
     ) -> DeploymentResponse:
         deployment = await k8s_client.get_deployment(deployment_id)
-        if include_events and deployment is not None:
-            events = await k8s_client.get_deployment_events(deployment_id)
-            deployment.events = events
         if deployment is None or deployment.project_id != project_id:
             raise DeploymentNotFoundError(
                 f"Deployment with id {deployment_id} not found"
             )
+        if include_events:
+            deployment.events = await k8s_client.get_deployment_events(deployment_id)
         return deployment
 
     @override
@@ -285,11 +284,8 @@ class DeploymentService(AbstractDeploymentsService):
         )
 
         validated = None
-        needs_internal_ref_resolution = any(
-            [
-                update_data.repo_url is not None,
-                update_data.git_ref is not None,
-            ]
+        needs_internal_ref_resolution = (
+            update_data.repo_url is not None or update_data.git_ref is not None
         )
         resolved_repo_url = update_data.repo_url or current_deployment.repo_url
         if clearing_repo_url:

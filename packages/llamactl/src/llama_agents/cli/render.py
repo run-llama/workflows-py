@@ -73,10 +73,12 @@ def render_table(
     Column widths are sized to the widest cell (header included) plus a
     two-space gutter on the right except the last column. No truncation.
     """
-    widths: list[int] = []
-    for header, key in columns:
-        cell_widths = [len(row.get(key, "")) for row in rows]
-        widths.append(max(len(header), *cell_widths) if cell_widths else len(header))
+    widths: list[int] = [
+        max(len(header), *(len(row.get(key, "")) for row in rows))
+        if rows
+        else len(header)
+        for header, key in columns
+    ]
 
     def _format_line(values: list[str]) -> str:
         parts: list[str] = []
