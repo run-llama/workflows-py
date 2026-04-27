@@ -12,7 +12,7 @@ import subprocess
 import click
 from llama_agents.cli.commands.auth import validate_authenticated_profile
 from llama_agents.cli.param_types import DeploymentType, GitShaType
-from llama_agents.cli.styles import HEADER_COLOR, MUTED_COL, PRIMARY_COL, WARNING
+from llama_agents.cli.styles import WARNING
 from llama_agents.core.schema import LogEvent
 from llama_agents.core.schema.deployments import (
     INTERNAL_CODE_REPO_SCHEME,
@@ -21,11 +21,10 @@ from llama_agents.core.schema.deployments import (
     DeploymentUpdate,
 )
 from rich import print as rprint
-from rich.table import Table
 
 from ..app import app, console
 from ..client import get_project_client, project_client_context
-from ..display import DeploymentDisplay
+from ..display import DeploymentDisplay, ReleaseDisplay
 from ..log_format import parse_log_body, render_plain
 from ..options import (
     global_options,
@@ -434,40 +433,42 @@ def refresh_deployment(
 @deployments.command("history")
 @global_options
 @click.argument("deployment_id", required=False, type=DeploymentType())
+@output_option
+@project_option
 @interactive_option
-def show_history(deployment_id: str | None, interactive: bool) -> None:
+def show_history(
+    deployment_id: str | None,
+    interactive: bool,
+    output: str,
+    project: str | None,
+) -> None:
     """Show release history for a deployment."""
     validate_authenticated_profile(interactive)
     try:
-        deployment_id = select_deployment(deployment_id, interactive=interactive)
+        deployment_id = select_deployment(
+            deployment_id, interactive=interactive, project_id_override=project
+        )
         if not deployment_id:
             rprint(f"[{WARNING}]No deployment selected[/]")
             return
 
         async def _fetch_history() -> DeploymentHistoryResponse:
-            async with project_client_context() as client:
+            async with project_client_context(project_id_override=project) as client:
                 return await client.get_deployment_history(deployment_id)
 
         history = asyncio.run(_fetch_history())
-        items = history.history
-        if not items:
-            rprint(f"No history recorded for {deployment_id}")
-            return
-
-        table = Table(show_edge=False, box=None, header_style=f"bold {HEADER_COLOR}")
-        table.add_column("Released At", style=MUTED_COL)
-        table.add_column("Git SHA", style=PRIMARY_COL)
-        # newest first
         items_sorted = sorted(
-            items,
+            history.history,
             key=lambda it: it.released_at,
             reverse=True,
         )
-        for item in items_sorted:
-            ts = item.released_at.isoformat()
-            sha = item.git_sha
-            table.add_row(ts, sha)
-        console.print(table)
+
+        if not items_sorted and output == "text":
+            rprint(f"No history recorded for {deployment_id}")
+            return
+
+        displays = [ReleaseDisplay.from_response(item) for item in items_sorted]
+        render_output(displays, output)
     except Exception as e:
         rprint(f"[red]Error: {e}[/red]")
         raise click.Abort()
@@ -479,8 +480,14 @@ def show_history(deployment_id: str | None, interactive: bool) -> None:
 @click.option(
     "--git-sha", required=False, type=GitShaType(), help="Git SHA to roll back to"
 )
+@project_option
 @interactive_option
-def rollback(deployment_id: str | None, git_sha: str | None, interactive: bool) -> None:
+def rollback(
+    deployment_id: str | None,
+    git_sha: str | None,
+    interactive: bool,
+    project: str | None,
+) -> None:
     """Rollback a deployment to a previous git sha."""
     # Keep these imports local: profiling showed `questionary` is a noticeable
     # startup cost for `llamactl --help`. Avoid other local imports unless they
@@ -491,7 +498,9 @@ def rollback(deployment_id: str | None, git_sha: str | None, interactive: bool) 
 
     validate_authenticated_profile(interactive)
     try:
-        deployment_id = select_deployment(deployment_id, interactive=interactive)
+        deployment_id = select_deployment(
+            deployment_id, interactive=interactive, project_id_override=project
+        )
         if not deployment_id:
             rprint(f"[{WARNING}]No deployment selected[/]")
             return
@@ -501,7 +510,9 @@ def rollback(deployment_id: str | None, git_sha: str | None, interactive: bool) 
             async def _fetch_current_and_history() -> tuple[
                 DeploymentResponse, DeploymentHistoryResponse
             ]:
-                async with project_client_context() as client:
+                async with project_client_context(
+                    project_id_override=project
+                ) as client:
                     current = await client.get_deployment(deployment_id)
                     hist = await client.get_deployment_history(deployment_id)
                     return current, hist
@@ -509,12 +520,12 @@ def rollback(deployment_id: str | None, git_sha: str | None, interactive: bool) 
             current_deployment, history = asyncio.run(_fetch_current_and_history())
             current_sha = current_deployment.git_sha or ""
 
-            items = history.history or []
-            # Sort newest first
-            items_sorted = sorted(items, key=lambda it: it.released_at, reverse=True)
+            items_sorted = sorted(
+                history.history or [], key=lambda it: it.released_at, reverse=True
+            )
             choices = []
             for it in items_sorted:
-                short = it.git_sha[:7]
+                short = short_sha(it.git_sha)
                 suffix = (
                     " [current]" if current_sha and it.git_sha == current_sha else ""
                 )
@@ -532,19 +543,18 @@ def rollback(deployment_id: str | None, git_sha: str | None, interactive: bool) 
                 return
 
         if interactive and not confirm_action(
-            f"Rollback '{deployment_id}' to {git_sha[:7]}?"
+            f"Rollback '{deployment_id}' to {short_sha(git_sha)}?"
         ):
             rprint(f"[{WARNING}]Cancelled[/]")
             return
 
         async def _do_rollback() -> DeploymentResponse:
-            async with project_client_context() as client:
+            async with project_client_context(project_id_override=project) as client:
                 return await client.rollback_deployment(deployment_id, git_sha)
 
         updated = asyncio.run(_do_rollback())
-        rprint(
-            f"[green]Rollback initiated[/green]: {deployment_id} → {updated.git_sha[:7] if updated.git_sha else 'unknown'}"
-        )
+        new_short = short_sha(updated.git_sha) if updated.git_sha else "-"
+        rprint(f"[green]Rollback initiated[/green]: {deployment_id} → {new_short}")
     except Exception as e:
         rprint(f"[red]Error: {e}[/red]")
         raise click.Abort()
