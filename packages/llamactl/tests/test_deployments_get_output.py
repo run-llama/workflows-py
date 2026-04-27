@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -14,7 +15,11 @@ import yaml
 from click.testing import CliRunner
 from conftest import make_deployment, patch_project_client
 from llama_agents.cli.app import app
-from llama_agents.core.schema.deployments import DeploymentResponse
+from llama_agents.core.schema.deployments import (
+    DeploymentHistoryResponse,
+    DeploymentResponse,
+    ReleaseHistoryItem,
+)
 
 
 def _make_client_mock(deployments: list[DeploymentResponse]) -> MagicMock:
@@ -237,6 +242,90 @@ def test_deployments_get_project_override_threads_to_client(
     args, kwargs = ctor.call_args
     # Positional: (api_url, project_id, api_key, auth_middleware)
     assert args[1] == "proj_other"
+
+
+def _full_sha(prefix: str) -> str:
+    """Return a 40-char hex string starting with ``prefix`` for history tests."""
+    return (prefix + "0" * 40)[:40]
+
+
+def _history_client_mock(items: list[ReleaseHistoryItem]) -> MagicMock:
+    client_mock = _make_client_mock([make_deployment("my-app")])
+
+    async def _hist(deployment_id: str) -> DeploymentHistoryResponse:
+        return DeploymentHistoryResponse(deployment_id=deployment_id, history=list(items))
+
+    client_mock.get_deployment_history.side_effect = _hist
+    return client_mock
+
+
+def test_deployments_history_json_output(patched_auth: Any) -> None:
+    runner = CliRunner()
+    items = [
+        ReleaseHistoryItem(
+            git_sha=_full_sha("aaaaaaa1111"),
+            released_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        ),
+        ReleaseHistoryItem(
+            git_sha=_full_sha("bbbbbbb2222"),
+            released_at=datetime(2026, 2, 1, tzinfo=timezone.utc),
+        ),
+    ]
+    client_mock = _history_client_mock(items)
+    with patch_project_client(client_mock):
+        result = runner.invoke(
+            app,
+            [
+                "deployments",
+                "history",
+                "my-app",
+                "--no-interactive",
+                "-o",
+                "json",
+            ],
+        )
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.output)
+    assert isinstance(data, list)
+    # Newest first
+    assert data[0]["git_sha"] == _full_sha("bbbbbbb2222")
+    assert data[1]["git_sha"] == _full_sha("aaaaaaa1111")
+    # JSON keeps full 40-char shas.
+    assert all(len(d["git_sha"]) == 40 for d in data)
+    # JSON timestamps are Z-suffixed (Pydantic default).
+    assert all(d["released_at"].endswith("Z") for d in data)
+
+
+def test_deployments_history_text_short_sha_and_z_timestamp(
+    patched_auth: Any,
+) -> None:
+    runner = CliRunner()
+    full_sha = _full_sha("640f764")
+    items = [
+        ReleaseHistoryItem(
+            git_sha=full_sha,
+            released_at=datetime(2026, 4, 25, 15, 1, 15, tzinfo=timezone.utc),
+            image_tag="0.11.1",
+        ),
+    ]
+    client_mock = _history_client_mock(items)
+    with patch_project_client(client_mock):
+        result = runner.invoke(
+            app,
+            ["deployments", "history", "my-app", "--no-interactive"],
+        )
+    assert result.exit_code == 0, result.output
+    # Header present.
+    assert "RELEASED_AT" in result.output
+    assert "GIT_SHA" in result.output
+    assert "IMAGE_TAG" in result.output
+    # Z-suffixed timestamp; no +00:00.
+    assert "2026-04-25T15:01:15Z" in result.output
+    assert "+00:00" not in result.output
+    # Short sha (7 chars) only — full sha must not appear.
+    assert "640f764" in result.output
+    assert full_sha not in result.output
+    assert "0.11.1" in result.output
 
 
 def _http_status_error(

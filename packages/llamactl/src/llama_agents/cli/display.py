@@ -24,12 +24,14 @@ from __future__ import annotations
 import functools
 import types
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Callable, Union, get_args, get_origin
 
-from llama_agents.cli.render import gh_short, short_sha
+from llama_agents.cli.render import format_iso_z, gh_short, short_sha
 from llama_agents.core.schema.deployments import (
     DeploymentResponse,
     LlamaDeploymentPhase,
+    ReleaseHistoryItem,
 )
 from pydantic import BaseModel, ConfigDict
 from typing_extensions import Annotated
@@ -272,3 +274,21 @@ class DeploymentDisplay(BaseModel):
         if self.status is not None:
             data["status"] = self.status.model_dump(mode="json")
         return data
+
+
+class ReleaseDisplay(BaseModel):
+    """A single release-history entry, projected for table output."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    released_at: Annotated[datetime, Column("RELEASED_AT", format=format_iso_z)]
+    git_sha: Annotated[str, Column("GIT_SHA", format=short_sha)]
+    image_tag: Annotated[str | None, Column("IMAGE_TAG", default="-")] = None
+
+    @classmethod
+    def from_response(cls, item: ReleaseHistoryItem) -> ReleaseDisplay:
+        return cls(
+            released_at=item.released_at,
+            git_sha=item.git_sha,
+            image_tag=item.image_tag,
+        )
