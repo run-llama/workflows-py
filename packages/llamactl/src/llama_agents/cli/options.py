@@ -32,12 +32,15 @@ def output_option(f: Callable[P, R]) -> Callable[P, R]:
         "-o",
         "--output",
         "output",
-        type=click.Choice(["text", "json", "yaml", "wide"], case_sensitive=False),
+        type=click.Choice(
+            ["text", "json", "yaml", "wide", "template"], case_sensitive=False
+        ),
         default="text",
         show_default=True,
         help=(
             "Output format. 'json'/'yaml' for machine-readable output; "
-            "'wide' for the text table with extra columns."
+            "'wide' for the text table with extra columns; "
+            "'template' for an annotated YAML scaffold suitable for `apply`."
         ),
     )(f)
 
@@ -84,6 +87,14 @@ def render_output(
     from llama_agents.cli.display import render_columns, resolve_columns
 
     mode = output.lower()
+    if mode == "template":
+        # ``-o template`` is the apply-shaped scaffold output and only makes
+        # sense for ``deployments get <name>``. Each command that supports it
+        # short-circuits before calling ``render_output``; reaching here with
+        # ``template`` means the command does not.
+        raise click.ClickException(
+            "-o template is only supported for `llamactl deployments get <name>`"
+        )
     if mode in {"text", "wide"}:
         rows: list[BaseModel] | None = None
         if isinstance(payload, BaseModel):

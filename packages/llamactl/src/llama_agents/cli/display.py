@@ -41,6 +41,24 @@ SECRET_MASK = "********"
 
 
 @dataclass(frozen=True)
+class Doc:
+    """Marker placed in a field's ``Annotated[]`` metadata to attach a doc comment.
+
+    Consumed by the YAML template renderer (``cli.yaml_template.render``):
+    each ``Doc(text)`` becomes a ``#! <text>`` line above the field's key in
+    the rendered output. ``Doc`` is part of the open-marker convention — it
+    coexists with :class:`Column` on the same field and is read independently
+    via ``isinstance`` filtering of ``field.metadata``.
+
+    Args:
+        text: The comment body. Rendered verbatim, prefixed with ``#! `` by
+            the renderer. Keep terse — one short sentence per field.
+    """
+
+    text: str
+
+
+@dataclass(frozen=True)
 class Column:
     """Marker placed in a field's ``Annotated[]`` metadata to declare a column.
 
@@ -176,25 +194,58 @@ def render_columns(
 class DeploymentSpec(BaseModel):
     """Editable deployment fields.
 
-    These are the fields a user can set via ``apply``. ``personal_access_token``
-    is a leaky abstraction over the server-side ``GITHUB_PAT`` secret — it is
-    surfaced here as a dedicated field rather than mixed into ``secrets`` so
-    the apply input shape is explicit.
+    Every editable field is ``Optional`` (or has a default of ``None``) so the
+    same model serves three roles: (1) projection of a server-known deployment
+    (``DeploymentDisplay.from_response`` populates everything explicitly),
+    (2) input shape for ``apply`` (any subset is valid; create-time required
+    fields are enforced by the apply translator, not this model), (3) input
+    shape for partial updates (``model_dump(exclude_unset=True)`` produces a
+    clean patch payload).
+
+    ``personal_access_token`` is a leaky abstraction over the server-side
+    ``GITHUB_PAT`` secret — it is surfaced here as a dedicated field rather
+    than mixed into ``secrets`` so the apply input shape is explicit.
     """
 
     model_config = ConfigDict(extra="forbid")
 
-    display_name: str
-    repo_url: Annotated[str, Column("REPO", format=gh_short)]
-    deployment_file_path: str
-    git_ref: Annotated[str | None, Column("GIT_REF", default="-")] = None
+    display_name: Annotated[str | None, Doc("Human-readable name shown in the UI.")] = (
+        None
+    )
+    repo_url: Annotated[
+        str | None,
+        Column("REPO", format=gh_short, default="-"),
+        Doc("Git repository URL. Empty string = push mode (CLI pushes your tree)."),
+    ] = None
+    deployment_file_path: Annotated[
+        str | None,
+        Doc("Path to llama_deploy.yaml inside the repo (relative to repo root)."),
+    ] = None
+    git_ref: Annotated[
+        str | None,
+        Column("GIT_REF", default="-"),
+        Doc("Branch, tag, or commit SHA to deploy."),
+    ] = None
     appserver_version: Annotated[
-        str | None, Column("APPSERVER", default="-", wide=True)
+        str | None,
+        Column("APPSERVER", default="-", wide=True),
+        Doc("Pin the appserver image to a specific version. Omit for latest."),
     ] = None
     # No Column: suspended state is already visible via status.phase.
-    suspended: bool = False
-    secrets: dict[str, str] | None = None
-    personal_access_token: str | None = None
+    suspended: Annotated[
+        bool | None,
+        Doc("If true, scale the deployment to zero without deleting it."),
+    ] = None
+    # ``str | None`` value type matches ``DeploymentUpdate.secrets`` on the wire:
+    # null values delete on apply.
+    secrets: Annotated[
+        dict[str, str | None] | None,
+        Doc("Secret env vars. Use ${VAR} to reference your local environment."),
+    ] = None
+    personal_access_token: Annotated[
+        str | None,
+        Doc("GitHub Personal Access Token for private repo access."),
+    ] = None
 
 
 class DeploymentStatus(BaseModel):
@@ -231,7 +282,11 @@ class DeploymentDisplay(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    name: Annotated[str, Column("NAME")]
+    name: Annotated[
+        str,
+        Column("NAME"),
+        Doc("Stable id for the deployment. Immutable on update."),
+    ]
     spec: DeploymentSpec
     status: DeploymentStatus | None = None
 
@@ -239,7 +294,7 @@ class DeploymentDisplay(BaseModel):
     def from_response(cls, r: DeploymentResponse) -> DeploymentDisplay:
         """Project a wire ``DeploymentResponse`` into the CLI display shape."""
         secret_names = r.secret_names or []
-        secrets: dict[str, str] | None = (
+        secrets: dict[str, str | None] | None = (
             {name: SECRET_MASK for name in secret_names} if secret_names else None
         )
         pat = SECRET_MASK if r.has_personal_access_token else None

@@ -38,7 +38,8 @@ dependencies = [
   "copier>=9.10.2",
   "pyjwt[crypto]>=2.10.1",
   "typing-extensions>=4.15.0",
-  "typing-extensions>=4.15.0 ; python_full_version < '3.11'"
+  "typing-extensions>=4.15.0 ; python_full_version < '3.11'",
+  "ruamel.yaml>=0.18.0"
 ]
 
 [project.scripts]

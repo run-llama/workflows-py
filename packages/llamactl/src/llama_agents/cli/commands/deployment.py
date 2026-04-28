@@ -8,6 +8,7 @@ git ref, reads the config, and runs your app.
 
 import asyncio
 import subprocess
+from pathlib import Path
 
 import click
 from llama_agents.cli.commands.auth import validate_authenticated_profile
@@ -24,7 +25,8 @@ from rich import print as rprint
 
 from ..app import app, console
 from ..client import get_project_client, project_client_context
-from ..display import DeploymentDisplay, ReleaseDisplay
+from ..display import DeploymentDisplay, DeploymentSpec, ReleaseDisplay
+from ..local_context import gather_local_context
 from ..log_format import parse_log_body, render_plain
 from ..options import (
     global_options,
@@ -42,6 +44,7 @@ from ..utils.git_push import (
     internal_push_refspec,
     push_to_remote,
 )
+from ..yaml_template import render as render_yaml_template
 
 
 @app.group(
@@ -94,6 +97,9 @@ def _do_get(
     a single-row table for that deployment. Never launches the TUI; for a
     live view use ``deployments logs --follow``.
     """
+    if output.lower() == "template" and not deployment_id:
+        raise click.ClickException("-o template requires a deployment name")
+
     validate_authenticated_profile(interactive)
     # Fall back to the user-supplied override if client construction itself
     # raises; `client.project_id` resolves the active project when no override.
@@ -117,6 +123,9 @@ def _do_get(
 
         deployment = asyncio.run(client.get_deployment(deployment_id))
         display = DeploymentDisplay.from_response(deployment)
+        if output.lower() == "template":
+            click.echo(render_yaml_template(display), nl=False)
+            return
         render_output(display, output)
 
     except Exception as e:
@@ -163,6 +172,60 @@ def list_deployments(
 ) -> None:
     """Hidden alias for ``deployments get``. Kept for backward compatibility."""
     _do_get(None, interactive, output, project)
+
+
+@deployments.command("template")
+@global_options
+def template_deployment() -> None:
+    """Print an apply-shaped YAML scaffold for a new deployment.
+
+    Reads the local working tree (git remote and ref, deployment config,
+    .env, required secrets) and emits a YAML scaffold with ``#!`` instruction
+    comments. Edit the output, then run ``llamactl deployments apply -f
+    <file>``. Offline by design — no auth profile required.
+    """
+    ctx = gather_local_context()
+
+    display_name = ctx.display_name or Path.cwd().name or None
+    secrets: dict[str, str | None] | None = None
+    if ctx.required_secret_names:
+        secrets = {name: f"${{{name}}}" for name in ctx.required_secret_names}
+
+    spec = DeploymentSpec(
+        display_name=display_name,
+        repo_url="" if ctx.is_git_repo else None,
+        deployment_file_path=ctx.deployment_file_path or None,
+        git_ref=ctx.git_ref if ctx.is_git_repo else None,
+        appserver_version=ctx.installed_appserver_version,
+        secrets=secrets,
+    )
+    display = DeploymentDisplay(name=display_name or "my-app", spec=spec)
+
+    head: list[str] = ["Edit, then run: llamactl deployments apply -f <file>"]
+    if not ctx.is_git_repo:
+        head.append("NOTE: not in a git repo. Add repo_url, or cd into a working tree.")
+
+    field_overrides: dict[str, str] = {}
+    if ctx.is_git_repo:
+        field_overrides["repo_url"] = (
+            "Empty = push mode (CLI pushes your working tree on apply)."
+        )
+
+    secret_comments: dict[str, str] = {}
+    for name in ctx.required_secret_names:
+        if name in ctx.available_secrets:
+            secret_comments[name] = "from your .env"
+
+    click.echo(
+        render_yaml_template(
+            display,
+            head=head,
+            field_overrides=field_overrides,
+            secret_comments=secret_comments,
+            scaffold_unset=True,
+        ),
+        nl=False,
+    )
 
 
 @deployments.command("create")
