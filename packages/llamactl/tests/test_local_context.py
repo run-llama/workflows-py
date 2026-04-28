@@ -37,7 +37,8 @@ def test_normalize_to_http_strips_explicit_port() -> None:
 
 def test_normalize_to_http_bare_host_path() -> None:
     assert (
-        _normalize_to_http("gitlab.com/group/repo.git") == "https://gitlab.com/group/repo"
+        _normalize_to_http("gitlab.com/group/repo.git")
+        == "https://gitlab.com/group/repo"
     )
 
 
@@ -85,9 +86,7 @@ required_env_vars: ["API_KEY", "PORT"]
     monkeypatch.setattr(
         "llama_agents.cli.local_context.get_current_branch", lambda: "develop"
     )
-    monkeypatch.setattr(
-        "llama_agents.cli.local_context.get_git_root", lambda: tmp_path
-    )
+    monkeypatch.setattr("llama_agents.cli.local_context.get_git_root", lambda: tmp_path)
 
     ctx = gather_local_context()
 
@@ -121,9 +120,7 @@ workflows:
     monkeypatch.setattr(
         "llama_agents.cli.local_context.get_current_branch", lambda: "main"
     )
-    monkeypatch.setattr(
-        "llama_agents.cli.local_context.get_git_root", lambda: tmp_path
-    )
+    monkeypatch.setattr("llama_agents.cli.local_context.get_git_root", lambda: tmp_path)
 
     ctx = gather_local_context()
 

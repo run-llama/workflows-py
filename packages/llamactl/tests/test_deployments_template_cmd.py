@@ -20,9 +20,7 @@ def _patch_git(
     remotes: list[str] | None = None,
     git_root: Path | None = None,
 ) -> None:
-    monkeypatch.setattr(
-        "llama_agents.cli.local_context.is_git_repo", lambda: is_repo
-    )
+    monkeypatch.setattr("llama_agents.cli.local_context.is_git_repo", lambda: is_repo)
     monkeypatch.setattr(
         "llama_agents.cli.local_context.list_remotes",
         lambda: remotes if remotes is not None else [],

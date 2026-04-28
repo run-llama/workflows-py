@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import pytest
 import yaml as pyyaml
 from llama_agents.cli.display import (
     DeploymentDisplay,
@@ -11,8 +12,6 @@ from llama_agents.cli.display import (
     DeploymentStatus,
 )
 from llama_agents.cli.yaml_template import load_commented, render
-
-import pytest
 
 
 def _full_display() -> DeploymentDisplay:

@@ -58,9 +58,7 @@ def _attach_before_comment(cm: CommentedMap, key: str, text: str, indent: int) -
     rendered line is ``"# !<text>"``; the post-pass in :func:`_finalize`
     collapses ``"# !"`` → ``"#!"`` for the documented prefix.
     """
-    cm.yaml_set_comment_before_after_key(
-        key, before=f"! {text}", indent=indent
-    )
+    cm.yaml_set_comment_before_after_key(key, before=f"! {text}", indent=indent)
 
 
 def _finalize(text: str) -> str:
@@ -139,9 +137,7 @@ def render(
 
         comment_text = field_overrides.get(field_name) or _field_doc(field_name)
         if comment_text:
-            _attach_before_comment(
-                spec_map, field_name, comment_text, indent=_INDENT
-            )
+            _attach_before_comment(spec_map, field_name, comment_text, indent=_INDENT)
         last_set_key = field_name
 
     root = CommentedMap()
