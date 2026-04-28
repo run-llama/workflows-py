@@ -208,7 +208,9 @@ class DeploymentStatus(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    phase: Annotated[LlamaDeploymentPhase, Column("PHASE")]
+    # `LlamaDeploymentPhase | str` tolerates unknown phase values from a newer
+    # server; the column renders whatever string the server sent.
+    phase: Annotated[LlamaDeploymentPhase | str, Column("PHASE")]
     git_sha: Annotated[
         str | None, Column("GIT_SHA", format=short_sha, default="-", wide=True)
     ] = None
