@@ -112,7 +112,10 @@ class DeploymentResponse(Base):
     apiserver_url: HttpUrl | None = Field(
         default=None, description="URL of the deployment's API server"
     )
-    status: LlamaDeploymentPhase = Field(description="Current deployment phase")
+    # `LlamaDeploymentPhase | str`: tolerate unknown phase values from a newer
+    # server. Known phases still narrow to the Literal arm; unknown ones fall
+    # through to `str` instead of failing validation on older clients.
+    status: LlamaDeploymentPhase | str = Field(description="Current deployment phase")
     warning: str | None = Field(
         default=None,
         description="Warning message about the deployment state",

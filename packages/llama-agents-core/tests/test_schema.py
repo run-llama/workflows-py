@@ -532,6 +532,22 @@ def test_deployment_phases_all_valid() -> None:
         assert response.status == phase
 
 
+def test_unknown_phase_value_accepted() -> None:
+    """An unknown phase value (e.g. emitted by a newer server) is accepted as a
+    plain string instead of failing validation on older clients."""
+    response = DeploymentResponse(
+        id="deploy-future",
+        display_name="future-phase-deployment",
+        project_id="test-project",
+        repo_url="https://github.com/user/repo.git",
+        git_ref="main",
+        deployment_file_path="deploy.yml",
+        status="SomeFuturePhaseTheClientDoesNotKnow",
+        apiserver_url=HttpUrl("http://future.example.com"),
+    )
+    assert response.status == "SomeFuturePhaseTheClientDoesNotKnow"
+
+
 def test_rollingout_phase_response() -> None:
     """Test DeploymentResponse with RollingOut phase"""
     response = DeploymentResponse(
