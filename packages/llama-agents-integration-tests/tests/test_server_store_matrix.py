@@ -25,12 +25,12 @@ from llama_agents_integration_tests.postgres import get_asyncpg_dsn
 from llama_agents_integration_tests.server_test_utils import (
     ExternalEvent,
     InteractiveWorkflow,
-    RequestedExternalEvent,
     SimpleTestWorkflow,
     StreamEvent,
     StreamingWorkflow,
     live_server,
     wait_for_passing,
+    wait_for_requested_external_event_stream,
 )
 from workflows import Workflow, step
 from workflows.events import StartEvent, StopEvent
@@ -162,21 +162,20 @@ async def test_sse_event_streaming(
 async def test_send_external_event(
     server_with_store: tuple[str, WorkflowServer, str],
 ) -> None:
-    base_url, _server, _store_type = server_with_store
+    base_url, _server, store_type = server_with_store
     client = WorkflowClient(base_url=base_url)
     started = await client.run_workflow_nowait("interactive")
     handler_id = started.handler_id
 
-    async for ev in client.get_workflow_events(handler_id):
-        event = ev.load_event([RequestedExternalEvent])
-        if isinstance(event, RequestedExternalEvent):
-            sent = await client.send_event(handler_id, ExternalEvent(response="pong"))
-            assert sent.status == "sent"
-            break
+    await wait_for_requested_external_event_stream(client, handler_id, label=store_type)
+    sent = await client.send_event(handler_id, ExternalEvent(response="pong"))
+    assert sent.status == "sent"
 
     async def check_completed() -> None:
         data = await client.get_handler(handler_id)
-        assert data.status == "completed"
+        assert data.status == "completed", (
+            f"{store_type}: handler {handler_id} did not complete after external event"
+        )
         assert data.result is not None
         assert data.result.value.get("result") == "received: pong"
 
@@ -374,11 +373,9 @@ async def test_server_restart_resumes_workflow(
         started = await client.run_workflow_nowait("interactive")
         handler_id = started.handler_id
 
-        # Wait for the workflow to reach the waiting state
-        async for ev in client.get_workflow_events(handler_id):
-            event = ev.load_event([RequestedExternalEvent])
-            if isinstance(event, RequestedExternalEvent):
-                break
+        await wait_for_requested_external_event_stream(
+            client, handler_id, label="durable-restart"
+        )
 
     # Restart with same store - workflow should resume
     async with live_server(durable_server_factory) as (base_url2, _server2):

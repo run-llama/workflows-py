@@ -1,3 +1,8 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 LlamaIndex Inc.
+
+from __future__ import annotations
+
 import asyncio
 
 import pytest
@@ -58,17 +63,27 @@ class ExampleWorkflowDictState(Workflow):
 
 
 class ExampleWorkflowMultiWorkers(Workflow):
+    def __init__(self) -> None:
+        super().__init__()
+        self._running_event_ids: set[str] = set()
+        self._all_workers_running = asyncio.Event()
+
     @step
     async def first_step(self, ev: StartEvent, ctx: Context) -> SomeEvent | None:
-        for _ in range(10):
-            ctx.send_event(SomeEvent(data=ev.message))
+        for i in range(10):
+            ctx.send_event(SomeEvent(data=str(i)))
         return None
 
     @step(num_workers=10)
-    async def second_step(self, ev: SomeEvent, ctx: Context) -> StopEvent:
-        # allow for each worker to process each event
-        await asyncio.sleep(0.1)
-        return StopEvent(result=ev.data)
+    async def second_step(self, ev: SomeEvent, ctx: Context) -> StopEvent | None:
+        self._running_event_ids.add(ev.data)
+        if len(self._running_event_ids) == 10:
+            self._all_workers_running.set()
+
+        await self._all_workers_running.wait()
+        if ev.data == "9":
+            return StopEvent(result=ev.data)
+        return None
 
 
 @pytest.fixture()

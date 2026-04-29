@@ -17,6 +17,7 @@ from server_test_fixtures import (  # type: ignore[import]
     ErrorWorkflow,
     ExternalEvent,
     wait_for_passing,
+    wait_for_requested_external_event,
 )
 from workflows import Workflow
 
@@ -229,21 +230,9 @@ async def test_send_event_happy_path(
     )
 
     async with server.contextmanager():
-        handler_data = await server._service.start_workflow(
-            interactive_workflow, "send-hp-1"
-        )
+        await server._service.start_workflow(interactive_workflow, "send-hp-1")
 
-        # Wait for the workflow to emit the InputRequiredEvent (meaning it's waiting)
-        run_id = handler_data.run_id
-        assert run_id is not None
-
-        async def handler_emitted_input_required() -> None:
-            events = await memory_store.query_events(run_id)
-            assert any(e.event.type == "RequestedExternalEvent" for e in events)
-
-        await wait_for_passing(
-            handler_emitted_input_required, max_duration=2.0, interval=0.01
-        )
+        await wait_for_requested_external_event(memory_store, "send-hp-1")
 
         await server._service.send_event("send-hp-1", ExternalEvent(response="pong"))
 

@@ -20,6 +20,7 @@ from llama_agents_integration_tests.fake_agent_data import (
     FakeAgentDataBackend,
     create_agent_data_store,
 )
+from server_test_fixtures import wait_for_passing  # type: ignore[import]
 from workflows.context.serializers import JsonSerializer
 from workflows.context.state_store import DictState
 from workflows.events import Event, StopEvent
@@ -64,6 +65,39 @@ def make_envelope(
     if event is None:
         event = Event(data=f"seq-{seq_label}")
     return EventEnvelopeWithMetadata.from_event(event, include_qualified_name=False)
+
+
+async def _subscribe_and_collect(
+    store: AgentDataStore,
+    run_id: str,
+    after_sequence: int = -1,
+) -> tuple[list[StoredEvent], asyncio.Task[None]]:
+    collected: list[StoredEvent] = []
+    existing_queue_count = len(store._subscriber_queues.get(run_id, ()))
+
+    async def consumer() -> None:
+        async for event in store.subscribe_events(
+            run_id, after_sequence=after_sequence
+        ):
+            collected.append(event)
+
+    task = asyncio.create_task(consumer())
+
+    async def registered() -> None:
+        assert len(store._subscriber_queues.get(run_id, ())) > existing_queue_count
+
+    await wait_for_passing(registered, max_duration=2.0, interval=0.01)
+    return collected, task
+
+
+async def _wait_collected_count(
+    collected: list[StoredEvent],
+    expected: int,
+) -> None:
+    async def check() -> None:
+        assert len(collected) == expected
+
+    await wait_for_passing(check, max_duration=2.0, interval=0.01)
 
 
 # ---------------------------------------------------------------------------
@@ -331,14 +365,7 @@ async def test_events_isolated_by_run_id(store: AgentDataStore) -> None:
 
 @pytest.mark.asyncio
 async def test_subscribe_events_receives_appended(store: AgentDataStore) -> None:
-    collected: list[StoredEvent] = []
-
-    async def consumer() -> None:
-        async for event in store.subscribe_events("run-1"):
-            collected.append(event)
-
-    task = asyncio.create_task(consumer())
-    await asyncio.sleep(0.01)
+    collected, task = await _subscribe_and_collect(store, "run-1")
 
     await store.append_event("run-1", make_envelope(seq_label=0))
     await store.append_event("run-1", make_envelope(seq_label=1))
@@ -351,14 +378,7 @@ async def test_subscribe_events_receives_appended(store: AgentDataStore) -> None
 
 @pytest.mark.asyncio
 async def test_subscribe_events_terminates_on_stop(store: AgentDataStore) -> None:
-    collected: list[StoredEvent] = []
-
-    async def consumer() -> None:
-        async for event in store.subscribe_events("run-1"):
-            collected.append(event)
-
-    task = asyncio.create_task(consumer())
-    await asyncio.sleep(0.01)
+    collected, task = await _subscribe_and_collect(store, "run-1")
 
     await store.append_event("run-1", make_envelope(seq_label=0))
     await store.append_event("run-1", make_envelope(event=StopEvent(data="done")))
@@ -386,14 +406,7 @@ async def test_subscribe_events_with_after_sequence(store: AgentDataStore) -> No
     for i in range(3):
         await store.append_event("run-1", make_envelope(seq_label=i))
 
-    collected: list[StoredEvent] = []
-
-    async def consumer() -> None:
-        async for event in store.subscribe_events("run-1", after_sequence=1):
-            collected.append(event)
-
-    task = asyncio.create_task(consumer())
-    await asyncio.sleep(0.01)
+    collected, task = await _subscribe_and_collect(store, "run-1", after_sequence=1)
 
     await store.append_event("run-1", make_envelope(event=StopEvent(data="done")))
 
@@ -569,20 +582,8 @@ async def test_agent_data_client_reuses_http_client(store: AgentDataStore) -> No
 async def test_subscribe_events_multiple_concurrent_subscribers(
     store: AgentDataStore,
 ) -> None:
-    collected_a: list[StoredEvent] = []
-    collected_b: list[StoredEvent] = []
-
-    async def consumer_a() -> None:
-        async for event in store.subscribe_events("run-1"):
-            collected_a.append(event)
-
-    async def consumer_b() -> None:
-        async for event in store.subscribe_events("run-1"):
-            collected_b.append(event)
-
-    task_a = asyncio.create_task(consumer_a())
-    task_b = asyncio.create_task(consumer_b())
-    await asyncio.sleep(0.01)
+    collected_a, task_a = await _subscribe_and_collect(store, "run-1")
+    collected_b, task_b = await _subscribe_and_collect(store, "run-1")
 
     await store.append_event("run-1", make_envelope(seq_label=0))
     await store.append_event("run-1", make_envelope(seq_label=1))
@@ -603,14 +604,7 @@ async def test_subscribe_events_backfill_and_live(store: AgentDataStore) -> None
     await store.append_event("run-1", make_envelope(seq_label=0))
     await store.append_event("run-1", make_envelope(seq_label=1))
 
-    collected: list[StoredEvent] = []
-
-    async def consumer() -> None:
-        async for event in store.subscribe_events("run-1", after_sequence=-1):
-            collected.append(event)
-
-    task = asyncio.create_task(consumer())
-    await asyncio.sleep(0.01)
+    collected, task = await _subscribe_and_collect(store, "run-1", after_sequence=-1)
 
     # Append live events after subscriber is listening
     await store.append_event("run-1", make_envelope(seq_label=2))
@@ -631,22 +625,14 @@ async def test_subscribe_events_backfill_and_live(store: AgentDataStore) -> None
 async def test_events_fire_and_forget_during_streaming(
     store: AgentDataStore, backend: FakeAgentDataBackend
 ) -> None:
-    collected: list[StoredEvent] = []
-
-    async def consumer() -> None:
-        async for event in store.subscribe_events("run-1"):
-            collected.append(event)
-
-    task = asyncio.create_task(consumer())
-    await asyncio.sleep(0.01)
+    collected, task = await _subscribe_and_collect(store, "run-1")
 
     # Append several non-terminal events (fire-and-forget)
     for i in range(5):
         await store.append_event("run-1", make_envelope(seq_label=i))
 
     # Subscriber receives events immediately via in-memory queue
-    await asyncio.sleep(0.01)
-    assert len(collected) == 5
+    await _wait_collected_count(collected, 5)
 
     # Terminal event gathers all pending writes
     await store.append_event("run-1", make_envelope(event=StopEvent(data="done")))
@@ -745,14 +731,7 @@ async def test_persist_error_does_not_block_in_memory_delivery(
     store: AgentDataStore, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """In-memory subscribers receive events even when HTTP persistence fails."""
-    collected: list[StoredEvent] = []
-
-    async def consumer() -> None:
-        async for event in store.subscribe_events("run-1"):
-            collected.append(event)
-
-    task = asyncio.create_task(consumer())
-    await asyncio.sleep(0.01)
+    collected, task = await _subscribe_and_collect(store, "run-1")
 
     # Make client.create raise to simulate persistence failure
     original_create = store._client.create
@@ -766,11 +745,9 @@ async def test_persist_error_does_not_block_in_memory_delivery(
 
     await store.append_event("run-1", make_envelope(seq_label=0))
     await store.append_event("run-1", make_envelope(seq_label=1))
-    # Let the consumer task process queue items
-    await asyncio.sleep(0.01)
 
     # Subscriber should still receive events via in-memory queue
-    assert len(collected) == 2
+    await _wait_collected_count(collected, 2)
 
     # The failed tasks are still pending — _regroup_events would raise
     with pytest.raises(RuntimeError, match="simulated API failure"):

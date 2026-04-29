@@ -87,6 +87,7 @@ async def merge_generators(
                 return_when=asyncio.FIRST_COMPLETED,
             )
 
+            completed_results: list[tuple[int, T]] = []
             for finished in done:
                 # Locate which generator this task belonged to
                 task_index: int | None = None
@@ -117,21 +118,19 @@ async def merge_generators(
                     exception_to_raise = exc
                     break
                 else:
-                    # Remove the finished task before yielding
-                    next_item_tasks.pop(task_index, None)
-                    yield value
-                    # Schedule the next item fetch for this generator
-                    active_gen: AsyncGenerator[T, None] | None = active_generators.get(
-                        task_index
-                    )
-                    if active_gen is not None:
-                        next_item_tasks[task_index] = asyncio.create_task(
-                            anext(active_gen)
-                        )
-            # If we are configured to stop on first completion and observed one,
-            # exit the outer loop to perform cleanup in the finally block.
+                    completed_results.append((task_index, value))
             if stopped_on_first_completion:
                 break
+            for task_index, value in completed_results:
+                # Remove the finished task before yielding
+                next_item_tasks.pop(task_index, None)
+                yield value
+                # Schedule the next item fetch for this generator
+                active_gen: AsyncGenerator[T, None] | None = active_generators.get(
+                    task_index
+                )
+                if active_gen is not None:
+                    next_item_tasks[task_index] = asyncio.create_task(anext(active_gen))
     finally:
         # Ensure we do not leak tasks or open generators
         for task in next_item_tasks.values():

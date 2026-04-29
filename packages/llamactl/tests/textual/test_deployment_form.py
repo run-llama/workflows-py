@@ -1,7 +1,13 @@
-from collections.abc import Generator
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 LlamaIndex Inc.
+
+from __future__ import annotations
+
+import asyncio
+from collections.abc import Callable, Generator
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import AsyncIterator
+from typing import Any, AsyncIterator, Protocol, TypeVar
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -32,7 +38,57 @@ from llama_agents.core.schema.deployments import (
 )
 from textual.app import App, ComposeResult
 from textual.containers import Container
+from textual.css.query import NoMatches
+from textual.screen import Screen
 from textual.widgets import Input
+
+TScreen = TypeVar("TScreen", bound=Screen[Any])
+
+
+class _Pilot(Protocol):
+    async def pause(self) -> None: ...
+
+
+async def _wait_for_screen(
+    app: DeploymentEditApp,
+    pilot: _Pilot,
+    screen_type: type[TScreen],
+    *,
+    condition: Callable[[TScreen], bool] | None = None,
+    timeout: float = 3.0,
+) -> TScreen:
+    deadline = asyncio.get_running_loop().time() + timeout
+    while asyncio.get_running_loop().time() < deadline:
+        await pilot.pause()
+        screen = app.screen
+        if isinstance(screen, screen_type) and (condition is None or condition(screen)):
+            return screen
+
+    screen = app.screen
+    condition_text = " and matching state" if condition is not None else ""
+    raise AssertionError(
+        f"Timed out waiting for {screen_type.__name__}{condition_text}; "
+        f"current screen is {type(screen).__name__}"
+    )
+
+
+async def _wait_for_widget(
+    app: App[Any],
+    pilot: _Pilot,
+    selector: str,
+    *,
+    timeout: float = 3.0,
+) -> None:
+    deadline = asyncio.get_running_loop().time() + timeout
+    while asyncio.get_running_loop().time() < deadline:
+        await pilot.pause()
+        try:
+            app.screen.query_one(selector)
+        except NoMatches:
+            continue
+        return
+
+    raise AssertionError(f"Timed out waiting for widget {selector}")
 
 
 def test_normalize_to_http_https_basic() -> None:
@@ -574,17 +630,9 @@ async def test_deployment_edit_app_end_to_end_create(mock_client: MagicMock) -> 
 
         # Click save - proceed through validation to monitor
         await pilot.click("#save")
-        await pilot.pause()
-
-        # If validation screen was pushed, simulate success
-        if isinstance(app.screen, ValidationScreen):
-            app.screen.post_message(
-                ValidationResultMessage("https://github.com/user/test-repo", None)
-            )
-            await pilot.pause()
 
         # Should now be on monitor screen
-        assert isinstance(app.screen, MonitorScreen)
+        monitor_screen = await _wait_for_screen(app, pilot, MonitorScreen)
 
         # Verify API was called correctly
         mock_client.create_deployment.assert_called_once()
@@ -594,7 +642,7 @@ async def test_deployment_edit_app_end_to_end_create(mock_client: MagicMock) -> 
         assert call_args.repo_url == "https://github.com/user/test-repo"
 
         # Close monitor to exit app
-        app.screen.post_message(MonitorCloseMessage())
+        monitor_screen.post_message(MonitorCloseMessage())
         await pilot.pause()
 
         # App should exit with deployment response
@@ -660,17 +708,9 @@ async def test_deployment_edit_app_end_to_end_update(
 
         # Click save and proceed through validation to monitor
         await pilot.click("#save")
-        await pilot.pause()
-
-        if isinstance(app.screen, ValidationScreen):
-            # Mock successful git validation
-            app.screen.post_message(
-                ValidationResultMessage("https://github.com/user/new-repo", None)
-            )
-            await pilot.pause()
 
         # Should now be on monitor screen
-        assert isinstance(app.screen, MonitorScreen)
+        monitor_screen = await _wait_for_screen(app, pilot, MonitorScreen)
 
         # Verify API was called correctly
         mock_client.update_deployment.assert_called_once()
@@ -682,7 +722,7 @@ async def test_deployment_edit_app_end_to_end_update(
         assert update_data.appserver_version == "1.0.0"
 
         # Close monitor to exit app
-        app.screen.post_message(MonitorCloseMessage())
+        monitor_screen.post_message(MonitorCloseMessage())
         await pilot.pause()
 
         # App should exit with updated deployment
@@ -712,15 +752,13 @@ async def test_deployment_edit_app_validation_cancellation(
         repo_url_input.value = "https://github.com/user/test-repo"  # type: ignore
 
         await pilot.click("#save")
-        await pilot.pause()
 
         # Should be on validation screen
-        assert isinstance(app.screen, ValidationScreen)
-        app.screen.post_message(ValidationCancelMessage())
-        await pilot.pause()
+        validation_screen = await _wait_for_screen(app, pilot, ValidationScreen)
+        validation_screen.post_message(ValidationCancelMessage())
 
         # Should return to form screen with cleared error
-        assert isinstance(app.screen, FormScreen)
+        await _wait_for_screen(app, pilot, FormScreen)
 
         # App should still be running (not exited)
         assert app.return_value is None
@@ -762,18 +800,17 @@ async def test_deployment_edit_app_validation_with_pat_update(
         repo_url_input.value = "https://github.com/user/test-repo"  # type: ignore
 
         await pilot.click("#save")
-        await pilot.pause()
 
         # Should be on validation screen
-        assert isinstance(app.screen, ValidationScreen)
+        validation_screen = await _wait_for_screen(app, pilot, ValidationScreen)
 
         # Mock successful validation with new PAT
-        app.screen.post_message(
+        validation_screen.post_message(
             ValidationResultMessage(
                 "https://github.com/user/test-repo", "new-pat-token"
             )
         )
-        await pilot.pause()
+        monitor_screen = await _wait_for_screen(app, pilot, MonitorScreen)
 
         # Verify API was called with updated PAT
         mock_client.create_deployment.assert_called_once()
@@ -781,7 +818,7 @@ async def test_deployment_edit_app_validation_with_pat_update(
         assert call_args.personal_access_token == "new-pat-token"
 
         # Now we're on monitor; close it to exit
-        app.screen.post_message(MonitorCloseMessage())
+        monitor_screen.post_message(MonitorCloseMessage())
         await pilot.pause()
 
         # App should exit with result
@@ -828,19 +865,12 @@ async def test_deployment_edit_app_multiple_save_attempts(
         name_input.value = "test-deployment"
 
         await pilot.click("#save")
-        await pilot.pause()
 
         # Proceed through validation to monitor
-        if isinstance(app.screen, ValidationScreen):
-            app.screen.post_message(
-                ValidationResultMessage("https://github.com/user/test-repo", None)
-            )
-            await pilot.pause()
-
-        assert isinstance(app.screen, MonitorScreen)
+        monitor_screen = await _wait_for_screen(app, pilot, MonitorScreen)
 
         # Close monitor to complete
-        app.screen.post_message(MonitorCloseMessage())
+        monitor_screen.post_message(MonitorCloseMessage())
         await pilot.pause()
 
         # Should complete successfully
@@ -869,11 +899,18 @@ async def test_deployment_edit_app_end_to_end_api_error(
 
         # Click save
         await pilot.click("#save")
-        await pilot.pause()
 
         # Should return to form screen with error
-        assert isinstance(app.screen, FormScreen)
-        assert app.screen.save_error == "Error saving deployment: API connection failed"
+        form_screen = await _wait_for_screen(
+            app,
+            pilot,
+            FormScreen,
+            condition=lambda screen: screen.save_error
+            == "Error saving deployment: API connection failed",
+        )
+        assert (
+            form_screen.save_error == "Error saving deployment: API connection failed"
+        )
 
         # Verify API was called
         mock_client.create_deployment.assert_called_once()
@@ -944,7 +981,7 @@ async def test_appserver_version_selector_edit_when_different(
 
         # Change selection to installed version (1.0.0)
         version_select.value = "1.0.0"  # type: ignore
-        await pilot.pause()
+        await _wait_for_widget(app, pilot, "#save")
 
         # Repo URL is already set from existing deployment, just click save
         await pilot.click("#save")
