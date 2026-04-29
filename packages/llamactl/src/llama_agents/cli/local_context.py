@@ -141,7 +141,10 @@ def normalize_git_url_to_http(url: str) -> str:
 
     parsed = urlsplit(candidate if has_scheme else f"https://{candidate}")
     netloc = parsed.netloc.split("@", 1)[-1]
-    if ":" in netloc:
+    scheme = parsed.scheme.lower()
+    # SSH transport ports (e.g. :7999) are meaningless over HTTPS — drop them.
+    # HTTP/HTTPS ports are intentional (self-hosted on a non-standard port).
+    if scheme not in ("http", "https") and ":" in netloc:
         netloc = netloc.split(":", 1)[0]
     path = parsed.path.lstrip("/")
     if path.endswith(".git"):

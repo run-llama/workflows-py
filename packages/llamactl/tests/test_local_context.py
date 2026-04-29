@@ -28,10 +28,17 @@ def test_normalize_scp_style() -> None:
     )
 
 
-def test_normalize_strips_explicit_port() -> None:
+def test_normalize_strips_ssh_port() -> None:
     assert (
         normalize_git_url_to_http("ssh://git@bitbucket.org:7999/team/repo.git")
         == "https://bitbucket.org/team/repo"
+    )
+
+
+def test_normalize_preserves_https_port() -> None:
+    assert (
+        normalize_git_url_to_http("https://git.example.com:8443/org/repo.git")
+        == "https://git.example.com:8443/org/repo"
     )
 
 
