@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 LlamaIndex Inc.
 
+from __future__ import annotations
 
 import asyncio
 import socket
@@ -12,7 +13,13 @@ from typing import AsyncGenerator, Awaitable, Callable, TypeVar
 import httpx
 import pytest
 import uvicorn
-from llama_agents.server import MemoryWorkflowStore, SqliteWorkflowStore, WorkflowServer
+from llama_agents.server import (
+    AbstractWorkflowStore,
+    HandlerQuery,
+    MemoryWorkflowStore,
+    SqliteWorkflowStore,
+    WorkflowServer,
+)
 from workflows import Context, Workflow, step
 from workflows.events import (
     Event,
@@ -52,6 +59,39 @@ async def wait_for_passing(
         raise TimeoutError(
             f"Function {func_name} timed out after {max_duration} seconds"
         )
+
+
+async def wait_for_requested_external_event(
+    store: AbstractWorkflowStore,
+    handler_id: str,
+    *,
+    event_type: str = "RequestedExternalEvent",
+    max_duration: float = 2.0,
+    interval: float = 0.01,
+) -> str:
+    async def event_was_persisted() -> str:
+        handlers = await store.query(HandlerQuery(handler_id_in=[handler_id]))
+        assert len(handlers) == 1
+        handler = handlers[0]
+        assert handler.run_id is not None
+
+        events = await store.query_events(handler.run_id)
+        if any(
+            event.event.type == event_type or event_type in (event.event.types or [])
+            for event in events
+        ):
+            return handler.run_id
+
+        assert handler.status == "running", (
+            f"handler {handler_id} reached {handler.status} before {event_type}"
+        )
+        raise AssertionError(f"{event_type} not persisted for handler {handler_id}")
+
+    return await wait_for_passing(
+        event_was_persisted,
+        max_duration=max_duration,
+        interval=interval,
+    )
 
 
 @asynccontextmanager

@@ -1,5 +1,10 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 LlamaIndex Inc.
+
+from __future__ import annotations
+
 import asyncio
-from typing import AsyncGenerator, List
+from collections.abc import AsyncGenerator, Collection
 
 import pytest
 from llama_agents.core.iter_utils import (
@@ -9,11 +14,19 @@ from llama_agents.core.iter_utils import (
 
 
 async def _gen_with_delays(
-    values: List[str], delays: List[float]
+    values: list[str], delays: list[float]
 ) -> AsyncGenerator[str, None]:
     for value, delay in zip(values, delays):
         if delay:
             await asyncio.sleep(delay)
+        yield value
+
+
+async def _gen_with_gates(
+    values: list[str], gates: list[asyncio.Event]
+) -> AsyncGenerator[str, None]:
+    for value, gate in zip(values, gates):
+        await gate.wait()
         yield value
 
 
@@ -26,25 +39,48 @@ async def _gen_raises(after_items: int = 0) -> AsyncGenerator[str, None]:
     raise RuntimeError("boom")
 
 
-async def _gen_slow_with_close_flag(flag: asyncio.Event) -> AsyncGenerator[str, None]:
+async def _gen_with_close_flag(
+    flag: asyncio.Event, gate: asyncio.Event
+) -> AsyncGenerator[str, None]:
     try:
-        i = 0
-        while True:
-            await asyncio.sleep(0.05)
-            i += 1
-            yield f"slow-{i}"
+        await gate.wait()
+        yield "slow-1"
     finally:
         flag.set()
 
 
+async def _wait_for_count(values: Collection[object], expected_count: int) -> None:
+    for _ in range(100):
+        if len(values) == expected_count:
+            return
+        await asyncio.sleep(0)
+    raise AssertionError(f"expected {expected_count} items, got {values}")
+
+
 @pytest.mark.asyncio
 async def test_merge_generators_interleaves_in_arrival_order() -> None:
-    g1 = _gen_with_delays(["a", "c"], [0.01, 0.04])  # emits at ~0.01 and ~0.05
-    g2 = _gen_with_delays(["b", "d"], [0.02, 0.06])  # emits at ~0.02 and ~0.08
+    gate_a = asyncio.Event()
+    gate_b = asyncio.Event()
+    gate_c = asyncio.Event()
+    gate_d = asyncio.Event()
+    g1 = _gen_with_gates(["a", "c"], [gate_a, gate_c])
+    g2 = _gen_with_gates(["b", "d"], [gate_b, gate_d])
 
-    merged: List[str] = []
-    async for item in merge_generators(g1, g2):
-        merged.append(item)
+    merged: list[str] = []
+
+    async def collect() -> None:
+        async for item in merge_generators(g1, g2):
+            merged.append(item)
+
+    task = asyncio.create_task(collect())
+    gate_a.set()
+    await _wait_for_count(merged, 1)
+    gate_b.set()
+    await _wait_for_count(merged, 2)
+    gate_c.set()
+    await _wait_for_count(merged, 3)
+    gate_d.set()
+    await task
 
     assert merged == ["a", "b", "c", "d"]
 
@@ -54,7 +90,7 @@ async def test_merge_generators_propagates_exception_immediately() -> None:
     g_ok = _gen_with_delays(["x", "y"], [0.0, 0.1])
     g_err = _gen_raises(after_items=1)
 
-    items: List[str] = []
+    items: list[str] = []
     with pytest.raises(RuntimeError, match="boom"):
         async for item in merge_generators(g_ok, g_err):
             items.append(item)
@@ -67,12 +103,23 @@ async def test_merge_generators_propagates_exception_immediately() -> None:
 @pytest.mark.asyncio
 async def test_merge_generators_stop_on_first_completion_cancels_others() -> None:
     closed_event = asyncio.Event()
-    g_slow = _gen_slow_with_close_flag(closed_event)
-    g_fast = _gen_with_delays(["done"], [0.01])  # completes quickly
+    slow_gate = asyncio.Event()
+    fast_gate = asyncio.Event()
+    g_slow = _gen_with_close_flag(closed_event, slow_gate)
+    g_fast = _gen_with_gates(["done"], [fast_gate])
 
-    collected: List[str] = []
-    async for item in merge_generators(g_slow, g_fast, stop_on_first_completion=True):
-        collected.append(item)
+    collected: list[str] = []
+
+    async def collect() -> None:
+        async for item in merge_generators(
+            g_slow, g_fast, stop_on_first_completion=True
+        ):
+            collected.append(item)
+
+    task = asyncio.create_task(collect())
+    fast_gate.set()
+    await _wait_for_count(collected, 1)
+    await task
 
     # Only the fast item should be seen deterministically
     assert collected == ["done"]
@@ -93,7 +140,7 @@ async def test_debounced_sorted_prefix_sorts_then_passthrough() -> None:
             await asyncio.sleep(0.01)
             yield value
 
-    output: List[int] = []
+    output: list[int] = []
     async for item in debounced_sorted_prefix(
         inner(), key=lambda x: x, debounce_seconds=0.05, max_window_seconds=0.1
     ):

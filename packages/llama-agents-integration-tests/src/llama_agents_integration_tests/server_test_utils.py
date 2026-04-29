@@ -9,10 +9,11 @@ import asyncio
 import socket
 import time
 from contextlib import asynccontextmanager
-from typing import AsyncGenerator, Awaitable, Callable, TypeVar
+from typing import AsyncGenerator, Awaitable, Callable, Literal, TypeVar
 
 import httpx
 import uvicorn
+from llama_agents.client.client import WorkflowClient
 from llama_agents.server import WorkflowServer
 from workflows import Context, Workflow, step
 from workflows.events import (
@@ -44,6 +45,37 @@ async def wait_for_passing(
     if last_exception:
         raise last_exception
     raise TimeoutError(f"Timed out after {max_duration}s")
+
+
+async def wait_for_requested_external_event_stream(
+    client: WorkflowClient,
+    handler_id: str,
+    *,
+    label: str,
+    max_duration: float = 5.0,
+) -> int | Literal["now"]:
+    async def wait_for_prompt() -> int | Literal["now"]:
+        stream = client.get_workflow_events(handler_id)
+        try:
+            async for ev in stream:
+                event = ev.load_event([RequestedExternalEvent])
+                if isinstance(event, RequestedExternalEvent):
+                    return stream.last_sequence
+        finally:
+            await stream.aclose()
+
+        raise AssertionError(
+            f"{label}: event stream ended before RequestedExternalEvent "
+            f"for handler {handler_id}"
+        )
+
+    try:
+        return await asyncio.wait_for(wait_for_prompt(), timeout=max_duration)
+    except TimeoutError as exc:
+        raise AssertionError(
+            f"{label}: timed out waiting for RequestedExternalEvent "
+            f"for handler {handler_id}"
+        ) from exc
 
 
 # -- Shared workflow definitions --

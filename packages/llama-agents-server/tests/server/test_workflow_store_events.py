@@ -18,6 +18,7 @@ from llama_agents_integration_tests.fake_agent_data import (
     FakeAgentDataBackend,
     create_agent_data_store,
 )
+from server_test_fixtures import wait_for_passing  # type: ignore[import]
 from workflows.events import (
     Event,
     StopEvent,
@@ -60,17 +61,34 @@ async def _subscribe_and_collect(
 ) -> tuple[list[StoredEvent], asyncio.Task[None]]:
     """Subscribe to events, returning the collected list and the consumer task."""
     collected: list[StoredEvent] = []
-    started = asyncio.Event()
 
     async def consumer() -> None:
-        started.set()
         kwargs = {} if after_sequence is None else {"after_sequence": after_sequence}
         async for event in store.subscribe_events(run_id, **kwargs):
             collected.append(event)
 
+    subscriber_queues = getattr(store, "_subscriber_queues", None)
+    existing_queue_count = (
+        len(subscriber_queues.get(run_id, ()))
+        if subscriber_queues is not None
+        else None
+    )
     task = asyncio.create_task(consumer())
-    await started.wait()
-    await asyncio.sleep(0.01)
+
+    async def registered() -> None:
+        conditions = getattr(store, "_conditions", None)
+        if conditions is not None:
+            assert run_id in conditions
+            return
+
+        if subscriber_queues is not None:
+            assert existing_queue_count is not None
+            assert len(subscriber_queues.get(run_id, ())) > existing_queue_count
+            return
+
+        raise AssertionError("store does not expose subscription registration state")
+
+    await wait_for_passing(registered, max_duration=2.0, interval=0.01)
     return collected, task
 
 

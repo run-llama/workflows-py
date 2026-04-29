@@ -23,6 +23,7 @@ from llama_index_instrumentation.dispatcher import active_instrument_tags
 from server_test_fixtures import (
     ExternalEvent,  # type: ignore[import]
     wait_for_passing,  # type: ignore[import]
+    wait_for_requested_external_event,  # type: ignore[import]
 )
 from workflows import Context, step
 
@@ -452,12 +453,13 @@ async def test_get_workflow_result_error(
     assert "handler_id" in data
     handler_id = data["handler_id"]
 
-    await asyncio.sleep(0.1)
-
     # get result
-    response = await client.get(f"/handlers/{handler_id}")
-    assert response.status_code == 500
-    data = response.json()
+    async def _wait_failed() -> dict[str, Any]:
+        response = await client.get(f"/handlers/{handler_id}")
+        assert response.status_code == 500
+        return response.json()
+
+    data = await wait_for_passing(_wait_failed)
     assert "error" in data
     assert "Test error" in data["error"]
     assert data["status"] == "failed"
@@ -881,14 +883,15 @@ async def test_get_handlers_filters_multiple_status_params(
 
 
 @pytest.mark.asyncio
-async def test_post_event_to_running_workflow(client: AsyncClient) -> None:
+async def test_post_event_to_running_workflow(
+    client: AsyncClient, server: WorkflowServer
+) -> None:
     # Start an interactive workflow
     response = await client.post("/workflows/interactive/run-nowait", json={})
     assert response.status_code == 200
     handler_id = response.json()["handler_id"]
 
-    # Wait a bit for workflow to start
-    await asyncio.sleep(0.1)
+    await wait_for_requested_external_event(server._service.store, handler_id)
 
     serializer = JsonSerializer()
     event = ExternalEvent(response="Hello from test")
@@ -908,15 +911,14 @@ async def test_post_event_to_running_workflow(client: AsyncClient) -> None:
 
 @pytest.mark.asyncio
 async def test_post_event_simple_schema_to_running_workflow(
-    client: AsyncClient,
+    client: AsyncClient, server: WorkflowServer
 ) -> None:
     # Start an interactive workflow
     response = await client.post("/workflows/interactive/run-nowait", json={})
     assert response.status_code == 200
     handler_id = response.json()["handler_id"]
 
-    # Wait a bit for workflow to start
-    await asyncio.sleep(0.1)
+    await wait_for_requested_external_event(server._service.store, handler_id)
 
     # Send the event using type/data dict format
     event_str = '{"type": "ExternalEvent", "data": {"response": "Hello from test"}}'
@@ -933,7 +935,7 @@ async def test_post_event_simple_schema_to_running_workflow(
 
 @pytest.mark.asyncio
 async def test_post_event_with_discriminators_to_running_workflow(
-    client: AsyncClient,
+    client: AsyncClient, server: WorkflowServer
 ) -> None:
     """Test posting event using JSON serializer dict format with discriminators."""
     # Start an interactive workflow
@@ -941,8 +943,7 @@ async def test_post_event_with_discriminators_to_running_workflow(
     assert response.status_code == 200
     handler_id = response.json()["handler_id"]
 
-    # Wait a bit for workflow to start
-    await asyncio.sleep(0.1)
+    await wait_for_requested_external_event(server._service.store, handler_id)
 
     # Send event as a dict with discriminators (not as a string)
     # This is the format returned by JsonSerializer().serialize_value()
@@ -1062,7 +1063,9 @@ async def test_post_event_missing_event_data(client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
-async def test_handler_datetime_fields_progress(client: AsyncClient) -> None:
+async def test_handler_datetime_fields_progress(
+    client: AsyncClient, server: WorkflowServer
+) -> None:
     # Start interactive workflow which waits for an external event
     response = await client.post("/workflows/interactive/run-nowait", json={})
     assert response.status_code == 200
@@ -1078,8 +1081,9 @@ async def test_handler_datetime_fields_progress(client: AsyncClient) -> None:
     assert started_at_1 <= updated_at_1
     assert item["completed_at"] is None
 
+    await wait_for_requested_external_event(server._service.store, handler_id)
+
     # Send an external event to progress the workflow and update timestamps
-    await asyncio.sleep(0.01)
     serializer = JsonSerializer()
     event = ExternalEvent(response="ts-check")
     event_str = serializer.serialize(event)
@@ -1339,8 +1343,7 @@ async def test_stream_events_after_sequence_now_receives_future_events(
         start_resp = await client.post("/workflows/interactive/run-nowait", json={})
         handler_id = start_resp.json()["handler_id"]
 
-        # Wait until some events are stored (at least the internal dispatch)
-        await asyncio.sleep(0.1)
+        await wait_for_requested_external_event(store, handler_id)
 
         # Count events currently in the store
         found = await store.query(HandlerQuery(handler_id_in=[handler_id]))

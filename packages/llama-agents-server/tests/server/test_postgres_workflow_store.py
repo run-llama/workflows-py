@@ -14,6 +14,7 @@ from llama_agents.server._store.abstract_workflow_store import (
     Status,
 )
 from llama_agents.server._store.postgres_workflow_store import PostgresWorkflowStore
+from server_test_fixtures import wait_for_passing  # type: ignore[import]
 from workflows.events import Event, StopEvent
 
 
@@ -97,15 +98,19 @@ async def test_on_notify_wakes_condition() -> None:
     condition = store._get_or_create_condition("run-1")
 
     woken = False
+    waiting = asyncio.Event()
 
     async def waiter() -> None:
         nonlocal woken
         async with condition:
+            waiting.set()
             await condition.wait()
             woken = True
 
     task = asyncio.create_task(waiter())
-    await asyncio.sleep(0.01)
+    await waiting.wait()
+    async with condition:
+        pass
 
     # Simulate the NOTIFY callback
     store._on_notify(MagicMock(), 0, "wf_events", "run-1")
@@ -191,25 +196,24 @@ async def test_integration_subscribe_events(postgres_dsn: str) -> None:
 
         run_id = "pg-run-sub"
 
-        async def append_events() -> None:
-            await asyncio.sleep(0.05)
-            await store.append_event(run_id, _make_event())
-            await asyncio.sleep(0.05)
-            await store.append_event(run_id, _make_event())
-            await asyncio.sleep(0.05)
-            await store.append_event(run_id, _make_stop_event())
-
         async def subscribe() -> list[object]:
             collected = []
             async for event in store.subscribe_events(run_id):
                 collected.append(event)
             return collected
 
-        append_task = asyncio.create_task(append_events())
         subscribe_task = asyncio.create_task(subscribe())
 
+        async def subscribed() -> None:
+            assert run_id in store._conditions
+
+        await wait_for_passing(subscribed, max_duration=2.0, interval=0.01)
+
+        await store.append_event(run_id, _make_event())
+        await store.append_event(run_id, _make_event())
+        await store.append_event(run_id, _make_stop_event())
+
         collected = await asyncio.wait_for(subscribe_task, timeout=5.0)
-        await append_task
 
         assert len(collected) == 3
     finally:

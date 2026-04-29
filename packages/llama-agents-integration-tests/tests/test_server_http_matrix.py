@@ -20,11 +20,11 @@ from llama_agents.server import MemoryWorkflowStore, SqliteWorkflowStore, Workfl
 from llama_agents_integration_tests.server_test_utils import (
     ExternalEvent,
     InteractiveWorkflow,
-    RequestedExternalEvent,
     SimpleTestWorkflow,
     StreamingWorkflow,
     live_server,
     wait_for_passing,
+    wait_for_requested_external_event_stream,
 )
 from testcontainers.postgres import PostgresContainer
 from workflows import Context, Workflow, step
@@ -240,15 +240,11 @@ async def test_streaming_and_interactive(
     started = await client.run_workflow_nowait("InteractiveWorkflow")
     handler_id = started.handler_id
 
-    saw_prompt = False
-    async for ev in client.get_workflow_events(handler_id):
-        event = ev.load_event()
-        if isinstance(event, RequestedExternalEvent):
-            saw_prompt = True
-            sent = await client.send_event(handler_id, ExternalEvent(response="pong"))
-            assert sent.status == "sent"
-            break
-    assert saw_prompt
+    await wait_for_requested_external_event_stream(
+        client, handler_id, label=type(server._workflow_store).__name__
+    )
+    sent = await client.send_event(handler_id, ExternalEvent(response="pong"))
+    assert sent.status == "sent"
 
     async def check_completed() -> str:
         handler = await client.get_handler(handler_id)
@@ -271,20 +267,16 @@ async def test_reconnect_stream(
     started = await client.run_workflow_nowait("InteractiveWorkflow")
     handler_id = started.handler_id
 
-    saw_prompt = False
-    events_before = 0
-    async for ev in client.get_workflow_events(handler_id):
-        events_before += 1
-        event = ev.load_event()
-        if isinstance(event, RequestedExternalEvent):
-            saw_prompt = True
-            break
-    assert saw_prompt
+    prompt_cursor = await wait_for_requested_external_event_stream(
+        client, handler_id, label=type(server._workflow_store).__name__
+    )
 
     stop_seen = asyncio.Event()
 
     async def consume_again() -> None:
-        async for ev in client.get_workflow_events(handler_id):
+        async for ev in client.get_workflow_events(
+            handler_id, after_sequence=prompt_cursor
+        ):
             event = ev.load_event()
             if isinstance(event, StopEvent):
                 stop_seen.set()

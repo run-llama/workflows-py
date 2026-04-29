@@ -878,7 +878,7 @@ async def test_control_loop_stop_before_delay_uses_upcoming_sleep(
 ) -> None:
     """Test that stop_before_delay stops before the next sleep crosses the limit."""
     test_plugin, _ = test_plugin_with_time_machine
-    retry_delay = 0.01
+    retry_delay = 0.2
 
     class AlwaysFailsWorkflow(Workflow):
         attempt_count = 0
@@ -886,7 +886,7 @@ async def test_control_loop_stop_before_delay_uses_upcoming_sleep(
         @step(
             retry_policy=retry_policy(
                 wait=wait_fixed(retry_delay),
-                stop=stop_before_delay(0.03),
+                stop=stop_before_delay(0.6),
             )
         )
         async def always_fails(self, ev: StartEvent) -> StopEvent:
