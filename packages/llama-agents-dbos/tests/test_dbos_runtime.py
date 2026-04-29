@@ -369,3 +369,49 @@ def test_launch_sync_raises_with_executor_lease() -> None:
 
     with pytest.raises(RuntimeError, match="_experimental_executor_lease"):
         runtime.launch_sync()
+
+
+def test_resolve_pool_sizes_explicit_config() -> None:
+    """When pool_size is set in config it wins over DBOS sys_db config."""
+    runtime = DBOSRuntime(pool_size=7)
+    min_size, max_size = runtime._resolve_pool_sizes()
+    assert min_size == 7
+    assert max_size == 7
+
+
+def test_resolve_pool_sizes_explicit_min_and_max() -> None:
+    runtime = DBOSRuntime(pool_size=8, pool_min_size=2)
+    min_size, max_size = runtime._resolve_pool_sizes()
+    assert min_size == 2
+    assert max_size == 8
+
+
+def test_resolve_pool_sizes_min_clamped_to_max() -> None:
+    runtime = DBOSRuntime(pool_size=4, pool_min_size=10)
+    min_size, max_size = runtime._resolve_pool_sizes()
+    assert min_size == 4
+    assert max_size == 4
+
+
+def test_resolve_pool_sizes_falls_back_to_dbos_sys_db_pool_size() -> None:
+    """Without explicit config, picks up DBOS's configured sys_db pool_size."""
+    runtime = DBOSRuntime()
+    fake_dbos = SimpleNamespace(
+        _config={"sys_db_engine_kwargs": {"pool_size": 17}},
+    )
+    with patch("llama_agents.dbos.runtime._get_dbos_instance", return_value=fake_dbos):
+        min_size, max_size = runtime._resolve_pool_sizes()
+    assert max_size == 17
+    assert min_size == 17
+
+
+def test_resolve_pool_sizes_falls_back_to_constant_when_dbos_unavailable() -> None:
+    """If DBOS isn't constructed, defaults to the library's fallback constant."""
+    runtime = DBOSRuntime()
+    with patch(
+        "llama_agents.dbos.runtime._get_dbos_instance",
+        side_effect=RuntimeError("not constructed"),
+    ):
+        min_size, max_size = runtime._resolve_pool_sizes()
+    assert max_size == 10
+    assert min_size == 10

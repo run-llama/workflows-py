@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncGenerator
+from typing import Any
 
 import asyncpg
 import pytest
@@ -42,6 +43,25 @@ def make_manager(
         heartbeat_interval=heartbeat_interval,
         lease_timeout=lease_timeout,
     )
+
+
+def test_owns_pool_when_no_factory_provided() -> None:
+    mgr = ExecutorLeaseManager(dsn="postgresql://x/y", pool_size=1)
+    assert mgr._owns_pool is True
+    assert mgr._external_ensure_pool is None
+
+
+def test_borrows_pool_when_ensure_pool_provided() -> None:
+    async def factory() -> Any:
+        raise AssertionError("not called in this test")
+
+    mgr = ExecutorLeaseManager(
+        dsn="postgresql://x/y",
+        pool_size=1,
+        ensure_pool=factory,
+    )
+    assert mgr._owns_pool is False
+    assert mgr._external_ensure_pool is factory
 
 
 @pytest.mark.docker

@@ -202,7 +202,15 @@ class DBOSRuntimeConfig(TypedDict, total=False):
     schema: str | None
     state_table_name: str
     journal_table_name: str
+    pool_size: int
+    pool_min_size: int
     _experimental_executor_lease: ExecutorLeaseConfig | None
+
+
+# Final fallback if neither config nor DBOS sys_db config can be read.
+# Matches asyncpg's stock create_pool default (10) and the previous hardcoded
+# value used here.
+_DEFAULT_POOL_SIZE_FALLBACK = 10
 
 
 DEFAULT_STATE_TABLE_NAME = STATE_TABLE_NAME
@@ -270,6 +278,13 @@ class DBOSRuntime(Runtime):
                     to force no schema even on PostgreSQL.
                 state_table_name: State table name. Default "workflow_state".
                 journal_table_name: Journal table name. Default "workflow_journal".
+                pool_size: Maximum size of the asyncpg pool shared across the
+                    runtime, workflow store, and (when configured) executor
+                    lease manager. Defaults to DBOS's configured ``sys_db``
+                    pool_size at launch, falling back to 10 when DBOS config
+                    is unavailable.
+                pool_min_size: Minimum size of the asyncpg pool. Defaults to
+                    ``pool_size``.
                 _experimental_executor_lease: Lease-based executor identity.
                     When set, the runtime acquires a named slot from a
                     Postgres-backed pool on launch and uses it as the DBOS
@@ -415,6 +430,33 @@ class DBOSRuntime(Runtime):
         self._sql_engine = sys_db.engine
         return self._sql_engine
 
+    def _resolve_pool_sizes(self) -> tuple[int, int]:
+        """Return ``(min_size, max_size)`` for the asyncpg pool.
+
+        Resolution order for max:
+          1. ``pool_size`` from DBOSRuntimeConfig.
+          2. DBOS's configured sys_db pool_size, if DBOS is constructed.
+          3. ``_DEFAULT_POOL_SIZE_FALLBACK``.
+
+        Min defaults to ``pool_min_size`` if explicitly set, else equals max.
+        """
+        max_size = self.config.get("pool_size")
+        if max_size is None:
+            try:
+                dbos_inst = _get_dbos_instance()
+                sys_kwargs = dbos_inst._config.get("sys_db_engine_kwargs") or {}
+                max_size = sys_kwargs.get("pool_size")
+            except Exception:
+                max_size = None
+        if max_size is None:
+            max_size = _DEFAULT_POOL_SIZE_FALLBACK
+
+        min_size = self.config.get("pool_min_size", max_size)
+        # Clamp min ≤ max defensively in case both were set.
+        if min_size > max_size:
+            min_size = max_size
+        return min_size, max_size
+
     async def _ensure_pool(self) -> asyncpg.Pool:
         """Get or lazily create the asyncpg connection pool.
 
@@ -429,7 +471,12 @@ class DBOSRuntime(Runtime):
                 raise RuntimeError(
                     "No asyncpg DSN configured. Either not launched or using sqlite dialect."
                 )
-            self._pool = await asyncpg.create_pool(dsn=self._dsn)
+            min_size, max_size = self._resolve_pool_sizes()
+            self._pool = await asyncpg.create_pool(
+                dsn=self._dsn,
+                min_size=min_size,
+                max_size=max_size,
+            )
             return self._pool
 
     async def run_migrations(self) -> None:
@@ -633,7 +680,13 @@ class DBOSRuntime(Runtime):
                 logger.info(
                     "Using PostgresWorkflowStore (asyncpg) for workflow storage"
                 )
-                return PostgresWorkflowStore(dsn=dsn, schema=schema)
+                # Share the runtime's asyncpg pool — PostgresWorkflowStore
+                # borrows it via the factory and never owns its lifecycle.
+                return PostgresWorkflowStore(
+                    dsn=dsn,
+                    schema=schema,
+                    ensure_pool=self._ensure_pool,
+                )
 
             db_path = str(engine.url.database) if engine.url.database else ":memory:"
             logger.info("Using SqliteWorkflowStore for workflow storage")
@@ -706,6 +759,21 @@ class DBOSRuntime(Runtime):
         if self._dbos_launched:
             return  # Already launched
 
+        # Set self._dsn early when the system database is postgres so the
+        # shared asyncpg pool is reachable before DBOS.launch completes
+        # (executor lease pre-launch path needs this). Best-effort — if DBOS
+        # isn't constructed yet (e.g. tests that monkeypatch the launch path),
+        # _finalize_launch will populate self._dsn after launch completes.
+        try:
+            dbos_inst_pre = _get_dbos_instance()
+            sys_db_url = dbos_inst_pre._config.get("system_database_url", "") or ""
+            if sys_db_url and not sys_db_url.startswith("sqlite"):
+                self._dsn = sys_db_url
+        except Exception:
+            logger.debug(
+                "Could not pre-resolve DSN before DBOS construction", exc_info=True
+            )
+
         # Acquire executor lease if configured.
         # Migrations must run first so the executor_leases table exists.
         lease_config = self.config.get("_experimental_executor_lease")
@@ -748,6 +816,9 @@ class DBOSRuntime(Runtime):
                 lease_timeout=lease_config.get("lease_timeout", 30.0),
                 slot_prefix=lease_config.get("slot_prefix", "executor"),
                 schema=schema,
+                # Share the runtime's asyncpg pool — the lease manager borrows
+                # it and never owns its lifecycle.
+                ensure_pool=self._ensure_pool,
             )
             acquire_timeout = lease_config.get("acquire_timeout", 60.0)
             await self._lease_manager.acquire(timeout=acquire_timeout)
@@ -915,10 +986,12 @@ class DBOSRuntime(Runtime):
                 else self._workflow_store
             )
             if isinstance(inner, PostgresWorkflowStore):
-                pool = inner._pool
-                if pool is not None:
+                # The runtime owns the asyncpg pool now; the workflow store
+                # only holds a borrowed reference. Just null out its handles —
+                # the runtime's terminate above already tore down the pool.
+                if inner._owns_pool and inner._pool is not None:
                     try:
-                        pool.terminate()
+                        inner._pool.terminate()
                     except Exception:
                         logger.debug(
                             "Failed to terminate workflow store pool during destroy",
