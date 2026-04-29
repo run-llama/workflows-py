@@ -35,6 +35,36 @@ Skip when the change is fully covered by pytest, or when the failure mode is in 
 
 Ask the user which backend before drafting the matrix. The answer changes which rows are realistic.
 
+## Test project scaffolds
+
+Some QA needs a real on-disk project (anything that reads `cwd` — e.g., `deployments template`, `serve`, `apply -f` once it lands, anything that consults `pyproject.toml`'s `[tool.llamadeploy]` block, the `.env`, or git state). Use `llamactl init` into a temp dir rather than hand-rolling files or reusing your dev tree.
+
+```bash
+WORK=$(mktemp -d -t llamactl-qa.XXXXXX)
+uv run llamactl init --no-interactive --template basic --dir "$WORK/app"
+```
+
+What you get:
+
+- A scaffolded project with `pyproject.toml` ([tool.llamadeploy] block), `.env.template`, `src/`, `tests/`.
+- An initial git commit (`init` runs `git init` + commit). `is_git_repo` is true; `git_ref` is `main`; no remote.
+- No `.env` (only `.env.template`). Copy/edit if a row needs `available_secrets` populated: `cp "$WORK/app/.env.template" "$WORK/app/.env"` then append e.g. `OPENAI_API_KEY=test`.
+- Available templates: `basic-ui`, `showcase`, `document-qa`, `extraction-review`, `classify-extract-sec`, `extract-reconcile-invoice`, `basic`, `document_parsing`, `human_in_the_loop`, `invoice_extraction`, `rag`, `web_scraping`. `basic` is fastest and has no required secrets — use it unless the row needs a template that lists required secrets.
+
+For rows that need a non-git directory: `mktemp -d` and don't init. For rows that need a remote: `git -C "$WORK/app" remote add origin https://github.com/<you>/qa.git`. Don't push.
+
+Run commands from inside the project: `(cd "$WORK/app" && llamactl deployments template)`. Don't `cd` in the parent shell — keeps rows independent. Capture full paths in the report so the reader can recreate.
+
+Cleanup is `rm -rf "$WORK"` at the end of the run. Mention it in the report's footer.
+
+If a row needs to **commit** changes (e.g., to test git-state-dependent behavior), do it inside the temp tree with a fresh `user.email` / `user.name` so the host's git config doesn't bleed in:
+
+```bash
+git -C "$WORK/app" -c user.email=qa@example.com -c user.name=qa commit -am "<msg>"
+```
+
+Don't try to make this temp project deployable to a real backend in the same run as offline QA. If a row genuinely needs a server-side deployment, target an existing one in the test project (see the next section); creating a new one from a throwaway repo couples two flows that fail independently.
+
 ## llamactl mental model
 
 The bits that matter when designing a matrix.
@@ -195,6 +225,7 @@ The inline chat reply is one or two sentences pointing at the file. Don't restat
 - `tee` ate a row of a multi-line table once during a run. Use shell `>` redirect for QA captures, not `tee`, when you need every line preserved.
 - `serve` vs tilt. `llamactl serve` runs the appserver locally with no kubernetes. Tilt runs the full cloud stack in kind. Different scopes; pick one.
 - Don't leak IDs. Deployment and org IDs are fine in your terminal and in `thoughts/`, not fine in a public PR description. Strip or alias them in anything that might leave the repo.
+- Worktree venv mismatch. When QAing a worktree branch, the parent shell's `VIRTUAL_ENV` often points at the main repo's `.venv` (the worktree-specific one shadows it). `uv run` then warns and ignores the worktree env, silently using a stale binary. Either `unset VIRTUAL_ENV` once at the top of your session, or invoke the worktree's binary directly (`.venv/bin/llamactl`) for QA captures. The worktree binary is the one with the diff under test.
 
 ## Self-update
 
