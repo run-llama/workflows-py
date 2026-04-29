@@ -41,9 +41,7 @@ class UnresolvedVarsError(ValueError):
 
     def __init__(self, names: list[str]) -> None:
         self.names = sorted(set(names))
-        super().__init__(
-            "Unset environment variable(s): " + ", ".join(self.names)
-        )
+        super().__init__("Unset environment variable(s): " + ", ".join(self.names))
 
 
 class ApplyYamlError(ValueError):
@@ -84,6 +82,7 @@ def resolve_env_vars(
 
     def _walk(v: Any) -> Any:
         if isinstance(v, str):
+
             def _sub(m: re.Match[str]) -> str:
                 name = m.group(1)
                 if name in env_map:
@@ -154,9 +153,7 @@ def parse_apply_yaml(
     try:
         apply = DeploymentApply.model_validate(resolved)
     except ValidationError as exc:
-        raise ApplyYamlError(
-            _format_source(source, _format_validation(exc))
-        ) from exc
+        raise ApplyYamlError(_format_source(source, _format_validation(exc))) from exc
 
     return ParsedApply(name=name, apply=apply)
 

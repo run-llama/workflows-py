@@ -59,9 +59,7 @@ def test_apply_with_name_calls_apply_endpoint_and_prints_updated(
     client = _client_mock(apply_result=(deployment, False))
 
     with patch_project_client(client):
-        result = runner.invoke(
-            app, ["deployments", "apply", "-f", str(yaml_file)]
-        )
+        result = runner.invoke(app, ["deployments", "apply", "-f", str(yaml_file)])
 
     assert result.exit_code == 0, result.output
     assert "updated" in result.output
@@ -83,9 +81,7 @@ def test_apply_create_prints_created_when_server_signals_201(
     client = _client_mock(apply_result=(deployment, True))
 
     with patch_project_client(client):
-        result = runner.invoke(
-            app, ["deployments", "apply", "-f", str(yaml_file)]
-        )
+        result = runner.invoke(app, ["deployments", "apply", "-f", str(yaml_file)])
 
     assert result.exit_code == 0, result.output
     assert "created" in result.output
@@ -102,9 +98,7 @@ def test_apply_without_name_falls_back_to_create_with_display_name(
     client = _client_mock(create_result=deployment)
 
     with patch_project_client(client):
-        result = runner.invoke(
-            app, ["deployments", "apply", "-f", str(yaml_file)]
-        )
+        result = runner.invoke(app, ["deployments", "apply", "-f", str(yaml_file)])
 
     assert result.exit_code == 0, result.output
     assert "created" in result.output
@@ -125,9 +119,7 @@ def test_apply_without_name_or_display_name_errors(
     client = _client_mock()
 
     with patch_project_client(client):
-        result = runner.invoke(
-            app, ["deployments", "apply", "-f", str(yaml_file)]
-        )
+        result = runner.invoke(app, ["deployments", "apply", "-f", str(yaml_file)])
 
     assert result.exit_code != 0
     assert "name" in result.output and "display_name" in result.output
@@ -139,11 +131,7 @@ def test_apply_unresolved_var_errors_with_grouped_names(
     runner = CliRunner()
     yaml_file = tmp_path / "d.yaml"
     yaml_file.write_text(
-        "name: my-app\n"
-        "git_ref: ${BRANCH}\n"
-        "secrets:\n"
-        "  A: ${MISS_A}\n"
-        "  B: ${MISS_B}\n"
+        "name: my-app\ngit_ref: ${BRANCH}\nsecrets:\n  A: ${MISS_A}\n  B: ${MISS_B}\n"
     )
     monkeypatch.delenv("BRANCH", raising=False)
     monkeypatch.delenv("MISS_A", raising=False)
@@ -151,9 +139,7 @@ def test_apply_unresolved_var_errors_with_grouped_names(
     client = _client_mock()
 
     with patch_project_client(client):
-        result = runner.invoke(
-            app, ["deployments", "apply", "-f", str(yaml_file)]
-        )
+        result = runner.invoke(app, ["deployments", "apply", "-f", str(yaml_file)])
 
     assert result.exit_code != 0
     assert "BRANCH" in result.output
@@ -194,9 +180,7 @@ def test_apply_dry_run_prints_resolved_payload_and_skips_api(
     client.create_deployment.assert_not_called()
 
 
-def test_apply_dry_run_server_is_reserved(
-    patched_auth: Any, tmp_path: Path
-) -> None:
+def test_apply_dry_run_server_is_reserved(patched_auth: Any, tmp_path: Path) -> None:
     runner = CliRunner()
     yaml_file = tmp_path / "d.yaml"
     yaml_file.write_text("name: my-app\n")
@@ -271,9 +255,7 @@ def test_delete_filename_and_argument_are_mutually_exclusive(
     assert "either" in result.output.lower() or "not both" in result.output.lower()
 
 
-def test_delete_filename_without_name_errors(
-    patched_auth: Any, tmp_path: Path
-) -> None:
+def test_delete_filename_without_name_errors(patched_auth: Any, tmp_path: Path) -> None:
     runner = CliRunner()
     yaml_file = tmp_path / "d.yaml"
     yaml_file.write_text("display_name: My App\n")

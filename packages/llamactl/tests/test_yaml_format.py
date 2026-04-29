@@ -73,9 +73,7 @@ def test_unresolved_vars_strict_raises_with_all_names() -> None:
 
 
 def test_unresolved_vars_non_strict_keeps_literal() -> None:
-    resolved, missing = resolve_env_vars(
-        {"git_ref": "${BRANCH}"}, env={}, strict=False
-    )
+    resolved, missing = resolve_env_vars({"git_ref": "${BRANCH}"}, env={}, strict=False)
     assert resolved == {"git_ref": "${BRANCH}"}
     assert missing == ["BRANCH"]
 
