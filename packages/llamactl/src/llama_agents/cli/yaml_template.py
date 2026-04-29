@@ -21,7 +21,6 @@ plain-safe check; PyYAML handles the few values that need actual quoting.
 
 from __future__ import annotations
 
-import re
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
@@ -144,73 +143,21 @@ def _docs(info: FieldInfo | None) -> tuple[str, ...]:
     return ()
 
 
-# YAML 1.1 reserved words that must not be emitted as plain scalars (they'd
-# round-trip as bool / null on parse). Includes the YAML 1.2 trio plus the
-# 1.1-only yes/no/on/off (PyYAML's default loader still resolves these).
-_PLAIN_RESERVED = frozenset(
-    word
-    for base in ("true", "false", "null", "yes", "no", "on", "off", "~")
-    for word in (base, base.title(), base.upper())
-)
-# Strict enough to match anything PyYAML's default resolver would coerce to
-# int or float.
-_NUMERIC_RE = re.compile(
-    r"^[-+]?(\.[0-9]+|[0-9]+(\.[0-9]*)?)([eE][-+]?[0-9]+)?$"
-)
-
-
-def _plain_safe(value: str) -> bool:
-    """Return True if ``value`` is safe as a plain (unquoted) YAML scalar in
-    block context.
-
-    Encodes YAML's plain-scalar rules directly rather than asking PyYAML to
-    decide — PyYAML's emitter is over-conservative for our use (it quotes
-    values containing flow indicators like ``${...}`` even though we never
-    emit in flow context). The schema is fixed; the rules are short.
-    """
-    if not value:
-        return False
-    if value in _PLAIN_RESERVED:
-        return False
-    if _NUMERIC_RE.match(value):
-        return False
-    if value[0] in "!&*[]{,#|>%@`\"'":
-        return False
-    if value[0] in "?:-" and (len(value) == 1 or value[1] in " \t"):
-        return False
-    if value[0] in " \t" or value[-1] in " \t:":
-        return False
-    if "\n" in value or "\t" in value:
-        return False
-    if ": " in value or " #" in value:
-        return False
-    return True
-
-
 def _scalar(value: Any) -> str:
     """Render ``value`` as a YAML scalar suitable for the right-hand side of
-    a key line."""
+    a key line.
+
+    Delegates to PyYAML in mapping context (``{"_": value}``) so its
+    emitter applies block-context rules — plain for ``${VAR}``, URLs,
+    versions; quoted for reserved words / flow chars / values containing
+    ``: `` or `` #``. Two carve-outs: ``None`` emits as ``~`` for parity
+    with the required-tilde rendering, and ``""`` emits as ``""`` so the
+    push-mode signal isn't hidden as PyYAML's default ``''``.
+    """
     if value is None:
         return "~"
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    if isinstance(value, (int, float)):
-        return str(value)
-    if isinstance(value, str):
-        # Push-mode sentinel: emit visibly so the signal isn't hidden.
-        if value == "":
-            return '""'
-        if _plain_safe(value):
-            return value
-        # Anything not plain-safe goes through PyYAML's quoter.
-        text = yaml.safe_dump(
-            value, default_flow_style=True, width=1 << 30, allow_unicode=True
-        ).rstrip()
-        if text.endswith("\n..."):
-            text = text[:-4].rstrip()
-        elif text.endswith("..."):
-            text = text[:-3].rstrip()
-        return text
-    raise TypeError(
-        f"unsupported scalar type for YAML rendering: {type(value).__name__}"
-    )
+    if value == "":
+        return '""'
+    return yaml.safe_dump(
+        {"_": value}, default_flow_style=False, width=1 << 30, allow_unicode=True
+    ).rstrip()[3:]
