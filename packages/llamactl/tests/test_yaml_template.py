@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import yaml as pyyaml
 from llama_agents.cli.display import (
+    SECRET_MASK,
     DeploymentDisplay,
     DeploymentSpec,
     DeploymentStatus,
@@ -16,8 +17,8 @@ from llama_agents.cli.yaml_template import render
 def _full_display() -> DeploymentDisplay:
     return DeploymentDisplay(
         name="my-app",
+        generate_name="My App",
         spec=DeploymentSpec(
-            display_name="My App",
             repo_url="https://github.com/example/repo",
             deployment_file_path="llama_deploy.yaml",
             git_ref="main",
@@ -43,10 +44,7 @@ def test_render_emits_name_and_spec_in_declaration_order() -> None:
     spec_idx = out.index("spec:")
     assert name_idx < spec_idx
     body = out[spec_idx:]
-    # ``display_name`` renders as commented ``# generateName:`` (always); the
-    # remaining spec fields render at their python-named keys.
     fields_in_order = [
-        "# generateName:",
         "repo_url:",
         "deployment_file_path:",
         "git_ref:",
@@ -64,9 +62,37 @@ def test_render_emits_name_and_spec_in_declaration_order() -> None:
 def test_render_attaches_doc_marker_text_above_each_set_field() -> None:
     out = render(_full_display())
     assert "## Stable id for the deployment" in out
-    # The display_name Doc explains the generateName / name relationship.
-    assert "## name takes precedence" in out
     assert "## Branch, tag, or commit SHA to deploy" in out
+
+
+def test_render_omits_generate_name_when_not_scaffolded() -> None:
+    """``scaffold_generate_name=False`` (default) skips the field entirely —
+    no comment block, no commented-out line."""
+    out = render(_full_display())
+    assert "generate_name" not in out
+    assert "name takes precedence" not in out
+
+
+def test_render_emits_generate_name_commented_when_scaffolded() -> None:
+    """``scaffold_generate_name=True`` emits a commented identity-tier line
+    with the ``Doc`` block above; the value is the model field's value."""
+    out = render(_full_display(), scaffold_generate_name=True)
+    assert "## name takes precedence" in out
+    assert "# generate_name: My App" in out
+    # Commented-out (not authoritative).
+    assert "\ngenerate_name:" not in out
+
+
+def test_render_uses_name_example_for_unset_top_level_keys() -> None:
+    """``name=None`` and (with scaffold) ``generate_name=None`` both fall back
+    to the ``name_example`` argument."""
+    out = render(
+        DeploymentDisplay(name=None, spec=DeploymentSpec()),
+        name_example="cwd-name",
+        scaffold_generate_name=True,
+    )
+    assert "# name: cwd-name" in out
+    assert "# generate_name: cwd-name" in out
 
 
 def test_render_partial_spec_emits_unset_fields_as_commented_examples() -> None:
@@ -74,18 +100,13 @@ def test_render_partial_spec_emits_unset_fields_as_commented_examples() -> None:
     with a doc above, in declaration order inside the spec block."""
     display = DeploymentDisplay(
         name="my-app",
-        spec=DeploymentSpec(display_name="My App"),
+        spec=DeploymentSpec(),
     )
     out = render(display)
-    # ``display_name`` is always commented-out; its set value surfaces as the
-    # example value under the ``generateName`` alias.
-    assert "\n  # generateName: My App" in out
-    # Unset fields appear commented in declaration order.
     assert "  # repo_url:" in out
     assert "  # git_ref: main" in out
     assert "  # secrets:" in out
     assert "    # MY_SECRET: ${MY_SECRET}" in out
-    # Doc comments are still emitted above commented-out fields.
     git_ref_idx = out.index("  # git_ref:")
     assert "## Branch, tag, or commit SHA to deploy." in out[:git_ref_idx]
 
@@ -97,7 +118,6 @@ def test_render_required_unset_emits_tilde_with_required_line() -> None:
     )
     out = render(display, required=("repo_url",))
     assert "  repo_url: ~" in out
-    # Required marker line appears as a ## comment above the field.
     repo_idx = out.index("  repo_url: ~")
     assert "## Required — set before `apply`." in out[:repo_idx]
 
@@ -116,20 +136,6 @@ def test_render_unset_top_level_name_is_commented() -> None:
     assert not out.startswith("name:")
 
 
-def test_render_display_name_always_commented_under_generate_name_alias() -> None:
-    """Even with a value set, ``display_name`` renders as commented
-    ``# generateName: <value>`` — never as an authoritative spec key."""
-    display = DeploymentDisplay(
-        name="my-app",
-        spec=DeploymentSpec(display_name="my-app"),
-    )
-    out = render(display)
-    assert "  # generateName: my-app" in out
-    # No uncommented display_name or generateName key in the spec block.
-    assert "  display_name:" not in out
-    assert "  generateName:" not in out
-
-
 def test_render_alternatives_emit_commented_line_under_set_field() -> None:
     display = DeploymentDisplay(
         name="my-app",
@@ -146,13 +152,11 @@ def test_render_alternatives_emit_commented_line_under_set_field() -> None:
     )
     repo_idx = out.index('  repo_url: ""')
     after = out[repo_idx:]
-    # Alternative line follows immediately after the set repo_url line.
     next_line = after.splitlines()[1]
     assert (
         next_line
         == "  # repo_url: https://github.com/owner/repo  # auto-detected from your git remotes"
     )
-    # YAML loadability is preserved (alternative is a comment).
     parsed = pyyaml.safe_load(out)
     assert parsed["spec"]["repo_url"] == ""
 
@@ -171,8 +175,6 @@ def test_render_alternatives_ignored_for_unset_field() -> None:
             "repo_url": ("https://github.com/owner/repo", "detected"),
         },
     )
-    # No annotated alternative line appears (the only `# repo_url:` line is the
-    # commented-out example, with no `# detected` annotation).
     assert "# detected" not in out
 
 
@@ -196,7 +198,6 @@ def test_render_multi_line_doc_emits_one_comment_per_chunk() -> None:
         idx = head.find(marker)
         assert idx > last, f"missing or out-of-order: {marker!r}\nin:\n{head}"
         last = idx
-    # All Doc lines are indented to the spec level (2 spaces).
     for marker in expected_lines:
         assert f"  {marker}" in head
 
@@ -226,7 +227,6 @@ def test_render_secret_comments_attach_inside_secrets_block() -> None:
     display = DeploymentDisplay(
         name="my-app",
         spec=DeploymentSpec(
-            display_name="My App",
             secrets={"API_KEY": "${API_KEY}", "OTHER": "x"},
         ),
     )
@@ -243,20 +243,70 @@ def test_render_empty_string_repo_url_is_double_quoted() -> None:
     """Empty repo_url is meaningful (push-mode signal). Render explicit ``""``."""
     display = DeploymentDisplay(
         name="my-app",
-        spec=DeploymentSpec(display_name="My App", repo_url=""),
+        spec=DeploymentSpec(repo_url=""),
     )
     out = render(display)
     assert 'repo_url: ""' in out
+
+
+def test_render_deployment_file_path_dot_is_quoted() -> None:
+    """Bare-dot path renders as ``"."`` so the value reads as a path string."""
+    display = DeploymentDisplay(
+        name="my-app",
+        spec=DeploymentSpec(deployment_file_path="."),
+    )
+    out = render(display)
+    assert 'deployment_file_path: "."' in out
+
+
+def test_render_strips_secret_mask_sentinels() -> None:
+    """``SECRET_MASK`` values inside ``secrets`` are dropped before render —
+    the mask must never round-trip into apply input."""
+    display = DeploymentDisplay(
+        name="my-app",
+        spec=DeploymentSpec(
+            secrets={"REAL": "${REAL}", "MASKED": SECRET_MASK},
+        ),
+    )
+    out = render(display)
+    assert SECRET_MASK not in out
+    assert "MASKED" not in out
+    # The remaining real secret is still rendered.
+    assert "REAL: ${REAL}" in out
+
+
+def test_render_drops_secrets_block_when_only_masks() -> None:
+    display = DeploymentDisplay(
+        name="my-app",
+        spec=DeploymentSpec(
+            secrets={"ONLY_MASKED": SECRET_MASK},
+        ),
+    )
+    out = render(display)
+    # No uncommented secrets block — falls into the unset/example branch.
+    assert "  secrets:\n    ONLY_MASKED" not in out
+    assert SECRET_MASK not in out
+    # Commented-out example is what surfaces.
+    assert "  # secrets:" in out
+
+
+def test_render_strips_personal_access_token_mask() -> None:
+    display = DeploymentDisplay(
+        name="my-app",
+        spec=DeploymentSpec(personal_access_token=SECRET_MASK),
+    )
+    out = render(display)
+    assert SECRET_MASK not in out
+    # Falls through to the commented example.
+    assert "  # personal_access_token:" in out
 
 
 def test_render_output_is_yaml_safe_loadable() -> None:
     out = render(_full_display())
     parsed = pyyaml.safe_load(out)
     assert parsed["name"] == "my-app"
-    # ``display_name`` is rendered as commented ``generateName`` — neither
-    # key is present in the parsed YAML.
     assert "display_name" not in parsed["spec"]
-    assert "generateName" not in parsed["spec"]
+    assert "generate_name" not in parsed["spec"]
     assert "status" not in parsed
 
 
@@ -272,7 +322,6 @@ def test_render_output_with_required_and_alternatives_is_yaml_safe_loadable() ->
         field_alternatives={"repo_url": ("https://example.com/x", "detected")},
     )
     parsed = pyyaml.safe_load(out)
-    # ~ → None for required; commented top-level name parses as missing.
     assert "name" not in parsed
     assert parsed["spec"]["git_ref"] is None
     assert parsed["spec"]["repo_url"] == ""

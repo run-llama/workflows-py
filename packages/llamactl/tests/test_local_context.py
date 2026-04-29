@@ -137,7 +137,7 @@ required_env_vars: ["API_KEY", "PORT"]
     # github URL is preferred over bitbucket.
     assert ctx.repo_url == "https://github.com/user/repo"
     assert ctx.git_ref == "develop"
-    assert ctx.display_name == "my-app"
+    assert ctx.generate_name == "my-app"
     assert ctx.available_secrets == {"API_KEY": "secret", "PORT": "8080"}
     assert sorted(ctx.required_secret_names) == ["API_KEY", "PORT"]
     # cwd == git_root → no nested deployment_file_path.
@@ -184,7 +184,7 @@ def test_gather_with_invalid_config_records_warning(
 def test_gather_skips_default_named_config(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """When the config name is the default, ``display_name`` is left unset."""
+    """When the config name is the default, ``generate_name`` is left unset."""
     monkeypatch.chdir(tmp_path)
     (tmp_path / "llama_deploy.yaml").write_text(
         """
@@ -194,4 +194,4 @@ workflows:
     )
     monkeypatch.setattr("llama_agents.cli.local_context.is_git_repo", lambda: False)
     ctx = gather_local_context()
-    assert ctx.display_name is None
+    assert ctx.generate_name is None

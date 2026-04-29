@@ -43,7 +43,7 @@ class LocalContext:
     is_git_repo: bool = False
     repo_url: str | None = None
     git_ref: str | None = None
-    display_name: str | None = None
+    generate_name: str | None = None
     deployment_file_path: str | None = None
     available_secrets: dict[str, str] = field(default_factory=dict)
     required_secret_names: list[str] = field(default_factory=list)
@@ -59,7 +59,7 @@ def gather_local_context() -> LocalContext:
     """
 
     warnings: list[str] = []
-    display_name: str | None = None
+    generate_name: str | None = None
     deployment_file_path: str | None = None
     required_secret_names: list[str] = []
 
@@ -67,7 +67,7 @@ def gather_local_context() -> LocalContext:
     try:
         config = read_deployment_config(Path("."), Path("."))
         if config.name != DEFAULT_DEPLOYMENT_NAME:
-            display_name = config.name
+            generate_name = config.name
         required_secret_names = list(config.required_env_vars)
     except Exception:
         warnings.append("Could not parse local deployment config. It may be invalid.")
@@ -97,7 +97,7 @@ def gather_local_context() -> LocalContext:
         is_git_repo=has_git,
         repo_url=repo_url,
         git_ref=git_ref,
-        display_name=display_name,
+        generate_name=generate_name,
         deployment_file_path=deployment_file_path,
         available_secrets=available_secrets,
         required_secret_names=required_secret_names,

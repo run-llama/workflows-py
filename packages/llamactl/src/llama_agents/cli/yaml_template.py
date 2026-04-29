@@ -2,8 +2,10 @@
 # Copyright (c) 2026 LlamaIndex Inc.
 """Render a :class:`DeploymentDisplay` as commented apply-shaped YAML.
 
-One ``render()`` walks ``DeploymentSpec.model_fields`` in declaration order
-and appends lines to a list. Each spec field renders in one of three states:
+One ``render()`` walks ``DeploymentDisplay``'s top-level identity fields
+(``name``, optionally ``generate_name``) and then ``DeploymentSpec.model_fields``
+in declaration order, appending lines to a list. Each spec field renders in
+one of three states:
 
 * **set** — ``<key>: <scalar>`` (uncommented), with the field's
   :class:`~llama_agents.cli.display.Doc` text as ``## …`` lines above.
@@ -13,17 +15,24 @@ and appends lines to a list. Each spec field renders in one of three states:
 * **unset** — ``# <key>: <example>`` (commented out one-liner) with the doc
   above. The schema-fixed ``_EXAMPLES`` table supplies the example value.
 
-The top-level ``name`` follows the set / unset split (no ``required`` path —
-the server slugifies an id when ``name`` is omitted, so a missing top-level
-``name`` is never an apply blocker). The ``display_name`` spec field is a
-special case: it always renders commented-out under its serialization alias
-``generateName``, regardless of model value, since the canonical id is the
-top-level ``name`` and ``generateName`` is opt-in slug-seed input.
+Top-level ``name`` follows the set / unset split (no required path — the
+server slugifies an id when ``name`` is omitted, so a missing top-level
+``name`` is never an apply blocker). ``generate_name`` is special-cased: the
+caller opts in via ``scaffold_generate_name`` (only the offline ``deployments
+template`` flow does), and when emitted it always renders commented-out under
+the identity-tier comment block.
 
 A small ``field_alternatives`` mapping lets the caller surface a
 commented-out alternative under a *set* field (used to suggest the detected
-git remote under an empty ``repo_url``). Scalar quoting is a hand-rolled
-plain-safe check; PyYAML handles the few values that need actual quoting.
+git remote under an empty ``repo_url``). Scalar quoting delegates to PyYAML;
+``"."`` for ``deployment_file_path`` is force-quoted so the value reads as a
+path rather than a YAML float-ish ambiguity.
+
+Mask sentinels (``SECRET_MASK``) inside ``secrets`` and on
+``personal_access_token`` are stripped before rendering — the same filter
+:func:`~llama_agents.cli.display._strip_masks` applies to ``-o yaml`` /
+``-o json`` output, so a ``get -o template | apply`` round-trip can't push a
+literal ``********`` back as the value.
 """
 
 from __future__ import annotations
@@ -32,24 +41,20 @@ from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
 import yaml
-from llama_agents.cli.display import DeploymentDisplay, DeploymentSpec, Doc
+from llama_agents.cli.display import (
+    DeploymentDisplay,
+    DeploymentSpec,
+    Doc,
+    _strip_masks,
+)
 from pydantic.fields import FieldInfo
 
 _INDENT = "  "
 _MARKER = "## "
 _REQUIRED = "Required — set before `apply`."
 
-# Example value shown above the top-level ``name`` key when it is unset. The
-# top-level ``name`` lives on ``DeploymentDisplay``, not ``DeploymentSpec`` —
-# kept out of ``_EXAMPLES`` to avoid confusing the spec-field iteration.
-_NAME_EXAMPLE = "my-app"
-
 # Per-field example values shown when a spec field is unset (rendered commented).
-# Keyed by the python field name on ``DeploymentSpec`` (matches
-# ``model_fields`` iteration); the rendered YAML key may differ when the field
-# has a serialization alias (e.g. ``display_name`` → ``generateName``).
 _EXAMPLES: dict[str, Any] = {
-    "display_name": "My App",
     # The push-mode sentinel (``""``) is documented separately via
     # :data:`~llama_agents.cli.display.PUSH_MODE_REPO_URL`; the example here
     # shows a real URL so a user uncommenting the line gets a working shape.
@@ -70,12 +75,15 @@ def render(
     secret_comments: Mapping[str, str] = {},
     field_alternatives: Mapping[str, tuple[str, str]] = {},
     required: Iterable[str] = (),
+    name_example: str = "my-app",
+    scaffold_generate_name: bool = False,
 ) -> str:
     """Render ``display`` as a commented apply-shaped YAML string.
 
     Args:
         display: The deployment to render. ``status`` is unconditionally
-            omitted; only ``name`` and ``spec`` reach the output.
+            omitted; only ``name``, ``generate_name``, and ``spec`` reach the
+            output.
         head: Lines emitted at the top of the output as ``## `` comments,
             before ``name:``. An empty-string entry becomes a bare ``##``.
         secret_comments: Map of secret name → comment text. Each becomes a
@@ -89,8 +97,15 @@ def render(
         required: Field names (python attribute names on ``DeploymentSpec``)
             to force-emit as ``<key>: ~`` with a ``## Required …`` marker
             even when unset. The top-level ``name`` is *not* supported here —
-            it has no required path. ``display_name`` is silently ignored
-            (always commented-out as ``generateName``).
+            it has no required path.
+        name_example: Example value rendered for an unset top-level ``name``
+            (and ``generate_name`` when it has no model value). Defaults to
+            ``"my-app"``; the offline template command passes the cwd name.
+        scaffold_generate_name: When ``True``, emit a commented-out
+            ``# generate_name: <value>`` line at the identity tier with the
+            field's ``Doc`` block above. When ``False`` (the default), the
+            field is omitted entirely. Only the offline ``deployments
+            template`` flow opts in; ``get -o template`` does not.
     """
     required_set = set(required)
     out: list[str] = []
@@ -101,33 +116,27 @@ def render(
     name_docs = _docs(DeploymentDisplay.model_fields["name"])
     out.extend(_doc_lines(name_docs, indent=""))
     if display.name is None:
-        out.append(f"# name: {_NAME_EXAMPLE}")
+        out.append(f"# name: {name_example}")
     else:
         out.append(f"name: {_scalar(display.name)}")
 
+    if scaffold_generate_name:
+        gn_docs = _docs(DeploymentDisplay.model_fields["generate_name"])
+        out.extend(_doc_lines(gn_docs, indent=""))
+        gn_value = display.generate_name or name_example
+        out.append(f"# generate_name: {_scalar(gn_value)}")
+
     out.append("spec:")
-    # ``by_alias=True`` so ``display_name`` lands as ``generateName`` in the
-    # rendered YAML. The dump is keyed by alias; we look it up by alias below.
-    spec_set = display.spec.model_dump(mode="json", exclude_none=True, by_alias=True)
+    spec_dump = display.spec.model_dump(mode="json", exclude_none=True)
+    spec_set = _strip_masks(spec_dump)
 
     for fname, finfo in DeploymentSpec.model_fields.items():
-        yaml_key = finfo.serialization_alias or fname
         out.extend(_doc_lines(_docs(finfo), indent=_INDENT))
 
-        # Special case: ``display_name`` (a.k.a. ``generateName``) is always
-        # rendered commented-out. The canonical id is the top-level ``name``;
-        # ``generateName`` is a slug seed users opt into. When the model has a
-        # value (e.g. ``from_response``), surface it as the example so the
-        # user sees what's currently set without making the line authoritative.
-        if fname == "display_name":
-            value = spec_set.get(yaml_key, _EXAMPLES.get(fname, ""))
-            out.append(f"{_INDENT}# {yaml_key}: {_scalar(value)}")
-            continue
-
-        if yaml_key in spec_set:
-            value = spec_set[yaml_key]
+        if fname in spec_set:
+            value = spec_set[fname]
             if fname == "secrets" and isinstance(value, dict):
-                out.append(f"{_INDENT}{yaml_key}:")
+                out.append(f"{_INDENT}{fname}:")
                 for sname, sval in value.items():
                     if sname in secret_comments:
                         out.extend(
@@ -138,23 +147,23 @@ def render(
                         )
                     out.append(f"{_INDENT * 2}{sname}: {_scalar(sval)}")
             else:
-                out.append(f"{_INDENT}{yaml_key}: {_scalar(value)}")
+                out.append(f"{_INDENT}{fname}: {_scalar(value, key=fname)}")
                 alt = field_alternatives.get(fname)
                 if alt is not None:
                     alt_value, alt_note = alt
                     note = f"  # {alt_note}" if alt_note else ""
-                    out.append(f"{_INDENT}# {yaml_key}: {alt_value}{note}")
+                    out.append(f"{_INDENT}# {fname}: {alt_value}{note}")
         elif fname in required_set:
             out.append(f"{_INDENT}{_MARKER}{_REQUIRED}")
-            out.append(f"{_INDENT}{yaml_key}: ~")
+            out.append(f"{_INDENT}{fname}: ~")
         else:
             example = _EXAMPLES.get(fname, "")
             if isinstance(example, dict):
-                out.append(f"{_INDENT}# {yaml_key}:")
+                out.append(f"{_INDENT}# {fname}:")
                 for k, v in example.items():
                     out.append(f"{_INDENT * 2}# {k}: {_scalar(v)}")
             else:
-                out.append(f"{_INDENT}# {yaml_key}: {_scalar(example)}")
+                out.append(f"{_INDENT}# {fname}: {_scalar(example, key=fname)}")
 
     return "\n".join(out) + "\n"
 
@@ -174,21 +183,25 @@ def _docs(info: FieldInfo | None) -> tuple[str, ...]:
     return ()
 
 
-def _scalar(value: Any) -> str:
+def _scalar(value: Any, *, key: str | None = None) -> str:
     """Render ``value`` as a YAML scalar suitable for the right-hand side of
     a key line.
 
     Delegates to PyYAML in mapping context (``{"_": value}``) so its
     emitter applies block-context rules — plain for ``${VAR}``, URLs,
     versions; quoted for reserved words / flow chars / values containing
-    ``: `` or `` #``. Two carve-outs: ``None`` emits as ``~`` for parity
-    with the required-tilde rendering, and ``""`` emits as ``""`` so the
-    push-mode signal isn't hidden as PyYAML's default ``''``.
+    ``: `` or `` #``. Carve-outs: ``None`` emits as ``~`` for parity with
+    the required-tilde rendering, ``""`` emits as ``""`` so the push-mode
+    signal isn't hidden as PyYAML's default ``''``, and
+    ``deployment_file_path: "."`` is force-quoted so the bare-dot reads as
+    a path string rather than YAML's slightly-ambiguous plain scalar.
     """
     if value is None:
         return "~"
     if value == "":
         return '""'
+    if key == "deployment_file_path" and value == ".":
+        return '"."'
     return yaml.safe_dump(
         {"_": value}, default_flow_style=False, width=1 << 30, allow_unicode=True
     ).rstrip()[3:]

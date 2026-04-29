@@ -34,7 +34,7 @@ from llama_agents.core.schema.deployments import (
     ReleaseHistoryItem,
 )
 from llama_agents.core.schema.projects import OrgSummary
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict
 from typing_extensions import Annotated
 
 SECRET_MASK = "********"
@@ -42,6 +42,29 @@ SECRET_MASK = "********"
 # Sentinel value of ``DeploymentSpec.repo_url`` indicating push-mode (the CLI
 # pushes the local working tree on apply rather than pointing at a remote).
 PUSH_MODE_REPO_URL = ""
+
+
+def _strip_masks(spec_data: dict[str, Any]) -> dict[str, Any]:
+    """Remove :data:`SECRET_MASK` sentinels from a serialized spec dict.
+
+    - ``secrets``: drop entries whose value equals the mask; drop the key
+      entirely if no entries remain.
+    - ``personal_access_token``: drop the key if its value equals the mask.
+
+    The filter runs at the emit boundary so masked values never leak back
+    into apply input via ``get | edit | apply`` round-trips.
+    """
+    out = dict(spec_data)
+    secrets = out.get("secrets")
+    if isinstance(secrets, dict):
+        filtered = {k: v for k, v in secrets.items() if v != SECRET_MASK}
+        if filtered:
+            out["secrets"] = filtered
+        else:
+            out.pop("secrets", None)
+    if out.get("personal_access_token") == SECRET_MASK:
+        out.pop("personal_access_token", None)
+    return out
 
 
 @dataclass(frozen=True)
@@ -212,24 +235,8 @@ class DeploymentSpec(BaseModel):
     than mixed into ``secrets`` so the apply input shape is explicit.
     """
 
-    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+    model_config = ConfigDict(extra="forbid")
 
-    # ``display_name`` is the slug seed the server hashes into a unique id when
-    # top-level ``name`` is unset. The YAML surface renames it to ``generateName``
-    # via the serialization alias; the apply parser accepts both keys via the
-    # validation alias. The wire field name (``display_name``) is unchanged.
-    display_name: Annotated[
-        str | None,
-        Doc(
-            "name takes precedence: setting top-level 'name' upserts a deployment by that exact id.\n"
-            "If 'name' is unset, this generateName is slugified by the server into a unique id.\n"
-            "A 'name' conflict (taken or reserved) errors with no retry."
-        ),
-    ] = Field(
-        default=None,
-        serialization_alias="generateName",
-        validation_alias=AliasChoices("display_name", "generateName"),
-    )
     repo_url: Annotated[
         str | None,
         Column("REPO", format=gh_short, default="-"),
@@ -325,6 +332,19 @@ class DeploymentDisplay(BaseModel):
         Column("NAME", default="-"),
         Doc("Stable id for the deployment. Immutable on update."),
     ] = None
+    # Slug seed used by the server when top-level ``name`` is unset. Surfaced
+    # at the identity tier (sibling to ``name``) since it answers a
+    # what-id-do-I-get question, not an editable-spec question. Wire-side
+    # the field is still ``display_name`` on ``DeploymentResponse``; the CLI
+    # flattens at :meth:`from_response`.
+    generate_name: Annotated[
+        str | None,
+        Doc(
+            "name takes precedence; setting top-level 'name' upserts by that id.\n"
+            "If 'name' is unset, generate_name is slugified by the server into a "
+            "unique id (conflicts on 'name' error with no retry)."
+        ),
+    ] = None
     spec: DeploymentSpec
     status: DeploymentStatus | None = None
 
@@ -337,7 +357,6 @@ class DeploymentDisplay(BaseModel):
         )
         pat = SECRET_MASK if r.has_personal_access_token else None
         spec = DeploymentSpec(
-            display_name=r.display_name,
             repo_url=r.repo_url,
             deployment_file_path=r.deployment_file_path,
             git_ref=r.git_ref,
@@ -353,19 +372,24 @@ class DeploymentDisplay(BaseModel):
             project_id=r.project_id,
             warning=r.warning,
         )
-        return cls(name=r.id, spec=spec, status=status)
+        return cls(name=r.id, generate_name=r.display_name, spec=spec, status=status)
 
     def to_output_dict(self) -> dict[str, Any]:
         """Return the dict shape used for JSON/YAML rendering.
 
-        Omits fields inside ``spec`` whose value is None (e.g., unset
-        ``personal_access_token``, empty ``secrets``). The nested ``status``
-        block is preserved verbatim so its ``warning`` key remains explicit
-        even when ``null``.
+        Omits fields inside ``spec`` whose value is None and strips the
+        ``SECRET_MASK`` sentinel from ``secrets`` and ``personal_access_token``
+        so a ``get | edit | apply`` round-trip can't push a literal ``********``
+        back as the value. ``generate_name`` is emitted at the top level only
+        when set. The nested ``status`` block is preserved verbatim so its
+        ``warning`` key remains explicit even when ``null``.
         """
         spec_data = self.spec.model_dump(mode="json")
-        spec_data = {k: v for k, v in spec_data.items() if v is not None}
-        data: dict[str, Any] = {"name": self.name, "spec": spec_data}
+        spec_data = _strip_masks({k: v for k, v in spec_data.items() if v is not None})
+        data: dict[str, Any] = {"name": self.name}
+        if self.generate_name is not None:
+            data["generate_name"] = self.generate_name
+        data["spec"] = spec_data
         if self.status is not None:
             data["status"] = self.status.model_dump(mode="json")
         return data

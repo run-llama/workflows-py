@@ -186,7 +186,7 @@ def template_deployment() -> None:
     """Print an apply-shaped YAML scaffold for a new deployment.
 
     Reads the local working tree (git remote and ref, deployment config,
-    .env, required secrets) and emits a YAML scaffold with ``#!`` instruction
+    .env, required secrets) and emits a YAML scaffold with ``##`` instruction
     comments. Edit the output, then run ``llamactl deployments apply -f
     <file>``. Offline by design — no auth profile required.
     """
@@ -200,7 +200,6 @@ def template_deployment() -> None:
     if ctx.is_git_repo:
         # In-git: defaults are filled in; nothing forced as required.
         spec = DeploymentSpec(
-            display_name=ctx.display_name or cwd_name,
             repo_url=PUSH_MODE_REPO_URL,
             deployment_file_path=ctx.deployment_file_path,
             git_ref=ctx.git_ref,
@@ -210,7 +209,7 @@ def template_deployment() -> None:
         required: tuple[str, ...] = ()
     else:
         # Outside a git repo: ``repo_url`` is the only required apply input —
-        # ``name``/``generateName`` either get user-supplied or server-defaulted.
+        # ``name`` and ``generate_name`` either get user-supplied or server-defaulted.
         spec = DeploymentSpec(
             appserver_version=ctx.installed_appserver_version,
             secrets=secrets,
@@ -218,8 +217,12 @@ def template_deployment() -> None:
         required = ("repo_url",)
 
     # ``name=None`` renders the top-level key commented-out (an example shape
-    # the user opts into); the server assigns a slugified id when omitted.
-    display = DeploymentDisplay(name=None, spec=spec)
+    # the user opts into); ``generate_name`` is similarly opt-in via the
+    # ``scaffold_generate_name`` flag below. The server assigns a slugified id
+    # when both are omitted.
+    display = DeploymentDisplay(
+        name=None, generate_name=ctx.generate_name or cwd_name, spec=spec
+    )
 
     head: list[str] = [f"WARNING: {warning}" for warning in ctx.warnings]
     if ctx.warnings:
@@ -261,6 +264,8 @@ def template_deployment() -> None:
             secret_comments=secret_comments,
             field_alternatives=field_alternatives,
             required=required,
+            name_example=cwd_name,
+            scaffold_generate_name=True,
         ),
         nl=False,
     )

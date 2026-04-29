@@ -62,6 +62,13 @@ required_env_vars: ["API_KEY", "DB_URL"]
     assert result.exit_code == 0, result.output
 
     out = result.output
+    # Identity tier: both keys commented-out; ``generate_name`` carries the
+    # config-derived name (``my-app`` from llama_deploy.yaml).
+    assert "\n# name: " in out
+    assert "# generate_name: my-app" in out
+    # Spec block has no legacy display_name / generateName.
+    assert "  display_name:" not in out
+    assert "generateName" not in out
     # Push-mode signal: empty repo_url, double-quoted.
     assert 'repo_url: ""' in out
     # Detected remote alternative line follows directly under the empty repo_url.
@@ -119,6 +126,7 @@ def test_template_outside_git_repo_emits_banner_and_required_tildes(
 ) -> None:
     monkeypatch.chdir(tmp_path)
     _patch_git(monkeypatch, is_repo=False)
+    cwd_name = tmp_path.name
 
     runner = CliRunner()
     result = runner.invoke(app, ["deployments", "template"])
@@ -131,15 +139,20 @@ def test_template_outside_git_repo_emits_banner_and_required_tildes(
     assert any("═══" in line for line in head_lines), out
 
     # ``repo_url`` is the only required-tilde field outside a git repo;
-    # ``name`` and ``generateName`` are commented-out (server defaults the id).
+    # ``name`` and ``generate_name`` are commented-out (server defaults the id).
     assert "  repo_url: ~" in out
     repo_idx = out.index("  repo_url: ~")
     assert "## Required — set before `apply`." in out[:repo_idx]
 
-    # Top-level name renders as a commented-out example.
-    assert "\n# name: my-app" in out
-    # generateName is commented-out under the spec block.
-    assert "  # generateName: My App" in out
+    # Top-level identity tier: both keys commented-out, cwd-derived defaults.
+    assert f"\n# name: {cwd_name}" in out
+    assert f"# generate_name: {cwd_name}" in out
+    # No uncommented identity-tier line.
+    assert "\nname:" not in out
+    assert "\ngenerate_name:" not in out
+    # Spec block does NOT contain the legacy display_name / generateName.
+    assert "  # generateName" not in out
+    assert "  display_name:" not in out
 
     # Other unset fields render as commented-out one-liners in declaration
     # order inside the spec block.
@@ -156,8 +169,8 @@ def test_template_outside_git_repo_emits_banner_and_required_tildes(
     # YAML round-trip: required ~ parses to None; commented keys are absent.
     parsed = pyyaml.safe_load(out)
     assert "name" not in parsed
+    assert "generate_name" not in parsed
     assert "display_name" not in parsed["spec"]
-    assert "generateName" not in parsed["spec"]
     assert parsed["spec"]["repo_url"] is None
 
 
