@@ -159,9 +159,7 @@ def _emit_set_field(
         for sname, sval in value.items():
             if sname in secret_comments:
                 out.extend(
-                    _doc_lines(
-                        secret_comments[sname].split("\n"), indent=_INDENT * 2
-                    )
+                    _doc_lines(secret_comments[sname].split("\n"), indent=_INDENT * 2)
                 )
             out.append(f"{_INDENT * 2}{sname}: {_scalar(sval)}")
         return
