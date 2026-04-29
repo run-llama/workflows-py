@@ -6,10 +6,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
-from collections.abc import Awaitable, Callable
 
 import asyncpg
 from llama_agents.dbos.journal.crud import _qualified_table_ref
+from llama_agents.server._pool import PoolProvider
 
 logger = logging.getLogger(__name__)
 
@@ -19,18 +19,16 @@ class ExecutorLeaseManager:
 
     def __init__(
         self,
-        dsn: str,
+        pool: PoolProvider,
         # ``pool_size`` here is the executor slot count (rows in
-        # executor_leases), NOT the asyncpg connection pool size. The asyncpg
-        # pool is configured on the runtime and shared via ``ensure_pool``.
+        # executor_leases), NOT the asyncpg connection pool size.
         pool_size: int,
         heartbeat_interval: float = 10.0,
         lease_timeout: float = 30.0,
         slot_prefix: str = "executor",
         schema: str = "dbos",
-        ensure_pool: Callable[[], Awaitable[asyncpg.Pool]] | None = None,
     ) -> None:
-        self._dsn = dsn
+        self._pool_provider = pool
         self._pool_size = pool_size
         self._heartbeat_interval = heartbeat_interval
         self._lease_timeout = lease_timeout
@@ -39,7 +37,6 @@ class ExecutorLeaseManager:
 
         self._holder = str(uuid.uuid4())
         self._table = _qualified_table_ref("executor_leases", schema)
-        self._external_ensure_pool = ensure_pool
         self._pool: asyncpg.Pool | None = None
         self._slot_id: str | None = None
         self._heartbeat_task: asyncio.Task[None] | None = None
@@ -70,10 +67,7 @@ class ExecutorLeaseManager:
                 )
 
     async def acquire(self, timeout: float | None = None) -> str:
-        if self._external_ensure_pool is not None:
-            self._pool = await self._external_ensure_pool()
-        else:
-            self._pool = await asyncpg.create_pool(dsn=self._dsn)
+        self._pool = await self._pool_provider.get()
         await self._seed_slots()
 
         poll = 0.1
@@ -112,8 +106,7 @@ class ExecutorLeaseManager:
                         return slot_id
 
             if timeout is not None and elapsed >= timeout:
-                if self._external_ensure_pool is None:
-                    await self._pool.close()
+                await self._pool_provider.close()
                 self._pool = None
                 raise TimeoutError(
                     f"Could not acquire executor lease within {timeout}s"
@@ -148,8 +141,7 @@ class ExecutorLeaseManager:
         self._slot_id = None
 
         if self._pool is not None:
-            if self._external_ensure_pool is None:
-                await self._pool.close()
+            await self._pool_provider.close()
             self._pool = None
 
     async def _heartbeat_loop(self) -> None:

@@ -8,7 +8,7 @@ import contextlib
 import json
 import logging
 import weakref
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncIterator
 from datetime import datetime, timezone
 from typing import Any, Sequence, cast
 
@@ -17,6 +17,7 @@ from llama_agents.client.protocol.serializable_events import EventEnvelopeWithMe
 from workflows.context import JsonSerializer
 from workflows.context.serializers import BaseSerializer
 
+from .._pool import PoolProvider
 from .abstract_workflow_store import (
     AbstractWorkflowStore,
     HandlerQuery,
@@ -53,15 +54,13 @@ class PostgresWorkflowStore(AbstractWorkflowStore):
         pool_min_size: int = 2,
         pool_max_size: int = 10,
         auto_migrate: bool = True,
-        ensure_pool: Callable[[], Awaitable[asyncpg.Pool]] | None = None,
+        pool: PoolProvider | None = None,
     ) -> None:
         """Construct a PostgresWorkflowStore.
 
-        When ``ensure_pool`` is provided, the store borrows the asyncpg pool
-        from the factory and never creates or closes one of its own. The
-        ``pool_min_size`` / ``pool_max_size`` kwargs are then unused. When
-        ``ensure_pool`` is ``None``, the store owns its pool: it creates one
-        in :py:meth:`start` and closes it in :py:meth:`close`.
+        When ``pool`` is provided, the provider controls ownership semantics.
+        When it is omitted, the store owns a lazily-created asyncpg pool using
+        the provided DSN and pool size settings.
         """
         self._dsn = dsn
         self._schema = schema
@@ -71,7 +70,11 @@ class PostgresWorkflowStore(AbstractWorkflowStore):
         self._pool_min_size = pool_min_size
         self._pool_max_size = pool_max_size
         self._auto_migrate = auto_migrate
-        self._external_ensure_pool = ensure_pool
+        self._pool_provider = pool or PoolProvider.create(
+            dsn,
+            min_size=pool_min_size,
+            max_size=pool_max_size,
+        )
         self._pool: asyncpg.Pool | None = None
         self._listen_conn: asyncpg.Connection | None = None
         self._conditions: weakref.WeakValueDictionary[str, asyncio.Condition] = (
@@ -110,14 +113,7 @@ class PostgresWorkflowStore(AbstractWorkflowStore):
             return
         # Reset for re-start after a close().
         self._closing = False
-        if self._external_ensure_pool is not None:
-            self._pool = await self._external_ensure_pool()
-        else:
-            self._pool = await asyncpg.create_pool(
-                self._dsn,
-                min_size=self._pool_min_size,
-                max_size=self._pool_max_size,
-            )
+        self._pool = await self._pool_provider.get()
         if self._auto_migrate:
             await self.run_migrations()
         await self._setup_listener()
@@ -258,8 +254,7 @@ class PostgresWorkflowStore(AbstractWorkflowStore):
                 )
             self._listen_conn = None
         if self._pool is not None:
-            if self._external_ensure_pool is None:
-                await self._pool.close()
+            await self._pool_provider.close()
             self._pool = None
 
     async def _ensure_pool(self) -> asyncpg.Pool:

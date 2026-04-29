@@ -22,6 +22,7 @@ from llama_agents.client.protocol.serializable_events import (
     EventEnvelopeWithMetadata,
 )
 from llama_agents.dbos._store import POSTGRES_MIGRATION_SOURCE, SQLITE_MIGRATION_SOURCE
+from llama_agents.server._pool import PoolProvider
 from llama_agents.server._runtime.event_interceptor import EventInterceptorDecorator
 from llama_agents.server._runtime.persistence_runtime import TickPersistenceDecorator
 from llama_agents.server._store import (
@@ -650,8 +651,9 @@ class DBOSRuntime(Runtime):
             journal_table_name=self.config.get(
                 "journal_table_name", DEFAULT_JOURNAL_TABLE_NAME
             ),
-            ensure_pool=self._ensure_pool if self._dsn is not None else None,
-            pool=self._pool,
+            pool=PoolProvider.borrowed(self._ensure_pool)
+            if self._dsn is not None
+            else None,
             db_path=self._db_path,
         )
 
@@ -689,7 +691,7 @@ class DBOSRuntime(Runtime):
                 return PostgresWorkflowStore(
                     dsn=dsn,
                     schema=schema,
-                    ensure_pool=self._ensure_pool,
+                    pool=PoolProvider.borrowed(self._ensure_pool),
                 )
 
             db_path = str(engine.url.database) if engine.url.database else ":memory:"
@@ -814,13 +816,12 @@ class DBOSRuntime(Runtime):
                 logger.info("Database migrations completed (pre-lease)")
 
             self._lease_manager = ExecutorLeaseManager(
-                dsn=dsn,
+                pool=PoolProvider.borrowed(self._ensure_pool),
                 pool_size=pool_size,
                 heartbeat_interval=lease_config.get("heartbeat_interval", 10.0),
                 lease_timeout=lease_config.get("lease_timeout", 30.0),
                 slot_prefix=lease_config.get("slot_prefix", "executor"),
                 schema=schema,
-                ensure_pool=self._ensure_pool,
             )
             acquire_timeout = lease_config.get("acquire_timeout", 60.0)
             await self._lease_manager.acquire(timeout=acquire_timeout)
@@ -982,22 +983,7 @@ class DBOSRuntime(Runtime):
                 else self._workflow_store
             )
             if isinstance(inner, PostgresWorkflowStore):
-                inner._closing = True
-                if (
-                    inner._reconnect_task is not None
-                    and not inner._reconnect_task.done()
-                ):
-                    inner._reconnect_task.cancel()
-                if inner._external_ensure_pool is None and inner._pool is not None:
-                    try:
-                        inner._pool.terminate()
-                    except Exception:
-                        logger.debug(
-                            "Failed to terminate workflow store pool during destroy",
-                            exc_info=True,
-                        )
-                inner._pool = None
-                inner._listen_conn = None
+                await inner.close()
             self._workflow_store = None
         if self._pool is not None:
             try:
@@ -1016,8 +1002,6 @@ class DBOSRuntime(Runtime):
         if destroy_dbos:
             DBOS.destroy()
 
-
-EnsurePoolFn = Callable[[], Awaitable[asyncpg.Pool]]
 
 _IO_STREAM_PUBLISHED_EVENTS_NAME = "published_events"
 _IO_STREAM_TICK_TOPIC = "ticks"
@@ -1043,8 +1027,7 @@ class InternalDBOSAdapter(InternalRunAdapter):
         schema: str | None = None,
         state_table_name: str = DEFAULT_STATE_TABLE_NAME,
         journal_table_name: str = DEFAULT_JOURNAL_TABLE_NAME,
-        ensure_pool: EnsurePoolFn | None = None,
-        pool: asyncpg.Pool | None = None,
+        pool: PoolProvider | None = None,
         db_path: str | None = None,
     ) -> None:
         self._run_id = run_id
@@ -1053,8 +1036,8 @@ class InternalDBOSAdapter(InternalRunAdapter):
         self._schema = schema
         self._state_table_name = state_table_name
         self._journal_table_name = journal_table_name
-        self._ensure_pool = ensure_pool
-        self._resolved_pool: asyncpg.Pool | None = pool
+        self._pool_provider = pool
+        self._resolved_pool: asyncpg.Pool | None = None
         self._db_path = db_path
         self._closed = False
         self._shutdown_event = asyncio.Event()
@@ -1128,11 +1111,11 @@ class InternalDBOSAdapter(InternalRunAdapter):
         """Resolve the asyncpg pool, lazily creating it via the runtime callback."""
         if self._resolved_pool is not None:
             return self._resolved_pool
-        if self._ensure_pool is None:
+        if self._pool_provider is None:
             raise RuntimeError(
                 "No asyncpg pool configured. Either not launched or using sqlite dialect."
             )
-        self._resolved_pool = await self._ensure_pool()
+        self._resolved_pool = await self._pool_provider.get()
         return self._resolved_pool
 
     def _get_or_create_state_store(self) -> StateStore[Any]:
@@ -1243,7 +1226,7 @@ class InternalDBOSAdapter(InternalRunAdapter):
             WaitForNextTaskResult with completed task and newly started NamedTasks.
         """
         # Resolve pool before journal creation (needed for postgres)
-        if self._ensure_pool is not None and self._resolved_pool is None:
+        if self._pool_provider is not None and self._resolved_pool is None:
             await self._resolve_pool()
 
         # Load journal before starting pending coroutines so the orphan purge

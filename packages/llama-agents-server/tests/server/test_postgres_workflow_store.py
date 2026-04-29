@@ -9,6 +9,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from llama_agents.client.protocol.serializable_events import EventEnvelopeWithMetadata
+from llama_agents.server._pool import PoolProvider
 from llama_agents.server._store.abstract_workflow_store import (
     HandlerQuery,
     PersistentHandler,
@@ -123,7 +124,7 @@ async def test_close_without_start_is_safe() -> None:
 async def test_borrowed_pool_not_closed_on_close(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """When constructed with ensure_pool, the borrowed pool is never closed."""
+    """When constructed with a borrowed provider, the borrowed pool is never closed."""
     fake_pool = MagicMock()
     fake_pool.close = MagicMock()  # would be awaited if called
     factory_calls = 0
@@ -141,7 +142,7 @@ async def test_borrowed_pool_not_closed_on_close(
 
     store = PostgresWorkflowStore(
         dsn="postgresql://localhost/test",
-        ensure_pool=factory,
+        pool=PoolProvider.borrowed(factory),
         auto_migrate=False,
     )
 
