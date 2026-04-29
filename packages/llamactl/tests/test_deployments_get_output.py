@@ -464,3 +464,54 @@ def test_deployments_get_wide_includes_extra_columns(patched_auth: Any) -> None:
     # Wide columns slot into their natural positions, interleaved.
     # APPSERVER (spec) should appear before PHASE (status).
     assert header.index("APPSERVER") < header.index("PHASE")
+
+
+def test_deployments_get_template_single_emits_apply_shape(patched_auth: Any) -> None:
+    runner = CliRunner()
+    deployments = [
+        make_deployment(
+            "my-app",
+            secret_names=["OPENAI_API_KEY"],
+            has_personal_access_token=True,
+            appserver_version="0.5.0",
+        )
+    ]
+    client_mock = _make_client_mock(deployments)
+    with patch_project_client(client_mock):
+        result = runner.invoke(
+            app,
+            ["deployments", "get", "my-app", "--no-interactive", "-o", "template"],
+        )
+    assert result.exit_code == 0, result.output
+    out = result.output
+    parsed = yaml.safe_load(out)
+    assert parsed["name"] == "my-app"
+    assert "spec" in parsed
+    # Status is omitted from template output unconditionally.
+    assert "status" not in parsed
+    assert "phase" not in out
+    # Doc comments above fields.
+    assert "#! Stable id for the deployment" in out
+    # Masked secrets / PAT round-trip verbatim — apply will treat these as no-ops.
+    assert parsed["spec"]["secrets"]["OPENAI_API_KEY"] == "********"
+    assert parsed["spec"]["personal_access_token"] == "********"
+
+
+def test_deployments_get_template_no_name_errors(patched_auth: Any) -> None:
+    """``deployments get -o template`` without a deployment name errors clearly."""
+    runner = CliRunner()
+    # No client interaction expected — fail fast before list_deployments.
+    result = runner.invoke(
+        app, ["deployments", "get", "--no-interactive", "-o", "template"]
+    )
+    assert result.exit_code != 0
+    assert "template requires a deployment name" in result.output
+
+
+def test_other_commands_reject_template_mode(patched_auth: Any) -> None:
+    """``-o template`` is only meaningful for ``deployments get``."""
+    runner = CliRunner()
+    result = runner.invoke(app, ["auth", "list", "-o", "template"])
+    # The choice is accepted but render_output rejects it with a clear message.
+    assert result.exit_code != 0
+    assert "only supported for" in result.output or "template" in result.output
