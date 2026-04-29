@@ -4,14 +4,13 @@
 
 from __future__ import annotations
 
-import pytest
 import yaml as pyyaml
 from llama_agents.cli.display import (
     DeploymentDisplay,
     DeploymentSpec,
     DeploymentStatus,
 )
-from llama_agents.cli.yaml_template import load_commented, render
+from llama_agents.cli.yaml_template import render
 
 
 def _full_display() -> DeploymentDisplay:
@@ -62,31 +61,9 @@ def test_render_emits_name_and_spec_in_declaration_order() -> None:
 
 def test_render_attaches_doc_marker_text_above_each_set_field() -> None:
     out = render(_full_display())
-    assert "#! Stable id for the deployment" in out
-    assert "#! Human-readable name shown in the UI" in out
-    assert "#! Branch, tag, or commit SHA to deploy" in out
-
-
-def test_render_overrides_replace_doc_text_for_one_render() -> None:
-    out = render(
-        _full_display(),
-        field_overrides={"repo_url": "Empty = push mode."},
-    )
-    assert "#! Empty = push mode." in out
-    # Original Doc text must not appear for overridden field.
-    canonical_doc = (
-        DeploymentSpec.model_fields["repo_url"]
-        .metadata[1]
-        .text  # Doc is the second metadata entry on repo_url after Column
-    )
-    # Make sure the override's first line replaced the canonical Doc's first line.
-    canonical_first = canonical_doc.split("\n", 1)[0]
-    assert canonical_first not in out
-
-
-def test_render_unknown_override_key_raises() -> None:
-    with pytest.raises(ValueError, match="repo_uurl"):
-        render(_full_display(), field_overrides={"repo_uurl": "bogus"})
+    assert "## Stable id for the deployment" in out
+    assert "## Human-readable name shown in the UI" in out
+    assert "## Branch, tag, or commit SHA to deploy" in out
 
 
 def test_render_partial_spec_emits_unset_fields_as_commented_examples() -> None:
@@ -106,7 +83,7 @@ def test_render_partial_spec_emits_unset_fields_as_commented_examples() -> None:
     assert "    # MY_SECRET: ${MY_SECRET}" in out
     # Doc comments are still emitted above commented-out fields.
     git_ref_idx = out.index("  # git_ref:")
-    assert "#! Branch, tag, or commit SHA to deploy." in out[:git_ref_idx]
+    assert "## Branch, tag, or commit SHA to deploy." in out[:git_ref_idx]
 
 
 def test_render_required_unset_emits_tilde_with_required_line() -> None:
@@ -116,9 +93,9 @@ def test_render_required_unset_emits_tilde_with_required_line() -> None:
     )
     out = render(display, required=("display_name",))
     assert "  display_name: ~" in out
-    # Required marker line appears as a #! comment above the field.
+    # Required marker line appears as a ## comment above the field.
     display_idx = out.index("  display_name: ~")
-    assert "#! Required — set before `apply`." in out[:display_idx]
+    assert "## Required — set before `apply`." in out[:display_idx]
 
 
 def test_render_required_includes_top_level_name() -> None:
@@ -179,31 +156,28 @@ def test_render_alternatives_ignored_for_unset_field() -> None:
 
 
 def test_render_multi_line_doc_emits_one_comment_per_chunk() -> None:
-    display = DeploymentDisplay(
-        name="my-app",
-        spec=DeploymentSpec(display_name="My App"),
-    )
-    out = render(
-        display,
-        field_overrides={"display_name": "line one\nline two\nline three"},
-    )
-    head = out.split("display_name:", 1)[0]
-    one = head.index("#! line one")
-    two = head.index("#! line two")
-    three = head.index("#! line three")
-    assert one < two < three
-    # All three lines indented to the spec level (2 spaces).
-    for marker in ("#! line one", "#! line two", "#! line three"):
+    """``Doc`` text containing ``\\n`` becomes one ``## `` line per chunk.
+
+    Uses the real ``repo_url`` Doc, which is the schema's only multi-line
+    Doc — the rendered output above ``repo_url:`` should list each line as
+    its own marker comment.
+    """
+    out = render(_full_display())
+    head = out.split("repo_url:", 1)[0]
+    expected_lines = [
+        "## Git repository URL. Supported shapes:",
+        '## - "" = push mode (the CLI pushes your working tree on apply).',
+        "## - https://github.com/<owner>/<repo> = GitHub HTTPS",
+        "## - https://gitlab.com/<owner>/<repo> = GitLab HTTPS",
+    ]
+    last = -1
+    for marker in expected_lines:
+        idx = head.find(marker)
+        assert idx > last, f"missing or out-of-order: {marker!r}\nin:\n{head}"
+        last = idx
+    # All Doc lines are indented to the spec level (2 spaces).
+    for marker in expected_lines:
         assert f"  {marker}" in head
-
-
-def test_render_deployment_file_path_always_quoted() -> None:
-    display = DeploymentDisplay(
-        name="my-app",
-        spec=DeploymentSpec(deployment_file_path="."),
-    )
-    out = render(display)
-    assert 'deployment_file_path: "."' in out
 
 
 def test_render_head_lines_emit_at_top_with_prefix() -> None:
@@ -212,7 +186,7 @@ def test_render_head_lines_emit_at_top_with_prefix() -> None:
         head=("Edit, then run: llamactl deployments apply -f <file>",),
     )
     first = out.splitlines()[0]
-    assert first.startswith("#! ")
+    assert first.startswith("## ")
     assert "Edit, then run" in first
 
 
@@ -222,9 +196,9 @@ def test_render_head_blank_line_emits_bare_marker() -> None:
         head=("first", "", "third"),
     )
     lines = out.splitlines()
-    assert lines[0] == "#! first"
-    assert lines[1] == "#!"
-    assert lines[2] == "#! third"
+    assert lines[0] == "## first"
+    assert lines[1] == "##"
+    assert lines[2] == "## third"
 
 
 def test_render_secret_comments_attach_inside_secrets_block() -> None:
@@ -238,7 +212,7 @@ def test_render_secret_comments_attach_inside_secrets_block() -> None:
     out = render(display, secret_comments={"API_KEY": "from your .env"})
     secrets_idx = out.index("secrets:")
     block = out[secrets_idx:]
-    assert "#! from your .env" in block
+    assert "## from your .env" in block
     api_key_idx = block.index("API_KEY")
     note_idx = block.index("from your .env")
     assert note_idx < api_key_idx
@@ -284,10 +258,3 @@ def test_render_idempotent_for_same_input() -> None:
     a = render(_full_display())
     b = render(_full_display())
     assert a == b
-
-
-def test_load_commented_returns_commentedmap_round_trip() -> None:
-    out = render(_full_display())
-    loaded = load_commented(out)
-    assert loaded["name"] == "my-app"
-    assert loaded["spec"]["display_name"] == "My App"

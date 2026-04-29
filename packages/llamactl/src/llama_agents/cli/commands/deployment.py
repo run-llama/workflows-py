@@ -25,7 +25,12 @@ from rich import print as rprint
 
 from ..app import app, console
 from ..client import get_project_client, project_client_context
-from ..display import DeploymentDisplay, DeploymentSpec, ReleaseDisplay
+from ..display import (
+    PUSH_MODE_REPO_URL,
+    DeploymentDisplay,
+    DeploymentSpec,
+    ReleaseDisplay,
+)
 from ..local_context import gather_local_context
 from ..log_format import parse_log_body, render_plain
 from ..options import (
@@ -45,7 +50,6 @@ from ..utils.git_push import (
     internal_push_refspec,
     push_to_remote,
 )
-from ..yaml_template import PUSH_MODE_REPO_URL
 from ..yaml_template import render as render_yaml_template
 
 

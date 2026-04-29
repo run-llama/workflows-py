@@ -491,7 +491,7 @@ def test_deployments_get_template_single_emits_apply_shape(patched_auth: Any) ->
     assert "status" not in parsed
     assert "phase" not in out
     # Doc comments above fields.
-    assert "#! Stable id for the deployment" in out
+    assert "## Stable id for the deployment" in out
     # Masked secrets / PAT round-trip verbatim — apply will treat these as no-ops.
     assert parsed["spec"]["secrets"]["OPENAI_API_KEY"] == "********"
     assert parsed["spec"]["personal_access_token"] == "********"

@@ -39,6 +39,10 @@ from typing_extensions import Annotated
 
 SECRET_MASK = "********"
 
+# Sentinel value of ``DeploymentSpec.repo_url`` indicating push-mode (the CLI
+# pushes the local working tree on apply rather than pointing at a remote).
+PUSH_MODE_REPO_URL = ""
+
 
 @dataclass(frozen=True)
 class Doc:

@@ -76,7 +76,7 @@ required_env_vars: ["API_KEY", "DB_URL"]
     assert "API_KEY: ${API_KEY}" in out
     assert "DB_URL: ${DB_URL}" in out
     # `from your .env` annotation above the matched secret (and only it).
-    assert "#! from your .env\n    API_KEY:" in out, out
+    assert "## from your .env\n    API_KEY:" in out, out
     # Missing-from-.env secret carries the explicit "not in your .env" comment.
     assert "Not in your .env" in out, out
     assert "Not in your .env — add it before `apply`" in out
@@ -108,10 +108,10 @@ def test_template_emits_local_context_warnings(
     lines = result.output.splitlines()
     assert (
         lines[0]
-        == "#! WARNING: Could not parse local deployment config. It may be invalid."
+        == "## WARNING: Could not parse local deployment config. It may be invalid."
     )
-    assert lines[1] == "#!"
-    assert lines[2] == "#! Edit, then run: llamactl deployments apply -f <file>"
+    assert lines[1] == "##"
+    assert lines[2] == "## Edit, then run: llamactl deployments apply -f <file>"
 
 
 def test_template_outside_git_repo_emits_banner_and_required_tildes(
@@ -125,7 +125,7 @@ def test_template_outside_git_repo_emits_banner_and_required_tildes(
     assert result.exit_code == 0, result.output
 
     out = result.output
-    head_lines = [line for line in out.splitlines() if line.startswith("#!")]
+    head_lines = [line for line in out.splitlines() if line.startswith("##")]
     # Banner present.
     assert any("NOT IN A GIT REPO" in line for line in head_lines), out
     assert any("═══" in line for line in head_lines), out
@@ -137,7 +137,7 @@ def test_template_outside_git_repo_emits_banner_and_required_tildes(
     for required_key in ("name: ~", "display_name: ~", "repo_url: ~"):
         idx = out.index(required_key)
         # Required marker appears in the doc block above each required field.
-        assert "#! Required — set before `apply`." in out[:idx]
+        assert "## Required — set before `apply`." in out[:idx]
 
     # Other unset fields render as commented-out one-liners in declaration
     # order inside the spec block.
