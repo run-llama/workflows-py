@@ -103,7 +103,8 @@ def _do_get(
     a single-row table for that deployment. Never launches the TUI; for a
     live view use ``deployments logs --follow``.
     """
-    if output.lower() == "template" and not deployment_id:
+    mode = output.lower()
+    if mode == "template" and not deployment_id:
         raise click.ClickException("-o template requires a deployment name")
 
     validate_authenticated_profile(interactive)
@@ -117,7 +118,7 @@ def _do_get(
         if not deployment_id:
             deployments = asyncio.run(client.list_deployments())
 
-            if not deployments and output == "text":
+            if not deployments and mode == "text":
                 rprint(
                     f"[{WARNING}]No deployments found for project {client.project_id}[/]"
                 )
@@ -129,7 +130,7 @@ def _do_get(
 
         deployment = asyncio.run(client.get_deployment(deployment_id))
         display = DeploymentDisplay.from_response(deployment)
-        if output.lower() == "template":
+        if mode == "template":
             click.echo(render_yaml_template(display), nl=False)
             return
         render_output(display, output)

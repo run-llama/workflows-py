@@ -44,7 +44,7 @@ SECRET_MASK = "********"
 PUSH_MODE_REPO_URL = ""
 
 
-def _strip_masks(spec_data: dict[str, Any]) -> dict[str, Any]:
+def strip_masks(spec_data: dict[str, Any]) -> dict[str, Any]:
     """Remove :data:`SECRET_MASK` sentinels from a serialized spec dict.
 
     - ``secrets``: drop entries whose value equals the mask; drop the key
@@ -72,15 +72,15 @@ class Doc:
     """Marker placed in a field's ``Annotated[]`` metadata to attach a doc comment.
 
     Consumed by the YAML template renderer (``cli.yaml_template.render``):
-    each ``Doc(text)`` becomes one ``#! <text>`` line per ``\\n``-separated
+    each ``Doc(text)`` becomes one ``## <text>`` line per ``\\n``-separated
     chunk above the field's key in the rendered output. ``Doc`` coexists with
     :class:`Column` on the same field and is read independently via
     ``isinstance`` filtering of ``field.metadata``.
 
     Args:
-        text: The comment body. Rendered verbatim, prefixed with ``#! ``. May
+        text: The comment body. Rendered verbatim, prefixed with ``## ``. May
             contain ``\\n`` for multi-line guidance — each line emits as its
-            own ``#!`` comment in the output.
+            own ``##`` comment in the output.
     """
 
     text: str
@@ -385,7 +385,7 @@ class DeploymentDisplay(BaseModel):
         ``warning`` key remains explicit even when ``null``.
         """
         spec_data = self.spec.model_dump(mode="json")
-        spec_data = _strip_masks({k: v for k, v in spec_data.items() if v is not None})
+        spec_data = strip_masks({k: v for k, v in spec_data.items() if v is not None})
         data: dict[str, Any] = {"name": self.name}
         if self.generate_name is not None:
             data["generate_name"] = self.generate_name

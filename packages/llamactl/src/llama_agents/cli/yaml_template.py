@@ -30,7 +30,7 @@ path rather than a YAML float-ish ambiguity.
 
 Mask sentinels (``SECRET_MASK``) inside ``secrets`` and on
 ``personal_access_token`` are stripped before rendering — the same filter
-:func:`~llama_agents.cli.display._strip_masks` applies to ``-o yaml`` /
+:func:`~llama_agents.cli.display.strip_masks` applies to ``-o yaml`` /
 ``-o json`` output, so a ``get -o template | apply`` round-trip can't push a
 literal ``********`` back as the value.
 """
@@ -45,7 +45,7 @@ from llama_agents.cli.display import (
     DeploymentDisplay,
     DeploymentSpec,
     Doc,
-    _strip_masks,
+    strip_masks,
 )
 from pydantic.fields import FieldInfo
 
@@ -128,7 +128,7 @@ def render(
 
     out.append("spec:")
     spec_dump = display.spec.model_dump(mode="json", exclude_none=True)
-    spec_set = _strip_masks(spec_dump)
+    spec_set = strip_masks(spec_dump)
 
     for fname, finfo in DeploymentSpec.model_fields.items():
         out.extend(_doc_lines(_docs(finfo), indent=_INDENT))
