@@ -199,7 +199,6 @@ def template_deployment() -> None:
         secrets = {name: f"${{{name}}}" for name in ctx.required_secret_names}
 
     if ctx.is_git_repo:
-        # In-git: defaults are filled in; nothing forced as required.
         spec = DeploymentSpec(
             repo_url=PUSH_MODE_REPO_URL,
             deployment_file_path=ctx.deployment_file_path,
@@ -209,18 +208,12 @@ def template_deployment() -> None:
         )
         required: tuple[str, ...] = ()
     else:
-        # Outside a git repo: ``repo_url`` is the only required apply input —
-        # ``name`` and ``generate_name`` either get user-supplied or server-defaulted.
         spec = DeploymentSpec(
             appserver_version=ctx.installed_appserver_version,
             secrets=secrets,
         )
         required = ("repo_url",)
 
-    # ``name=None`` renders the top-level key commented-out (an example shape
-    # the user opts into); ``generate_name`` is similarly opt-in via the
-    # ``scaffold_generate_name`` flag below. The server assigns a slugified id
-    # when both are omitted.
     display = DeploymentDisplay(
         name=None, generate_name=ctx.generate_name or cwd_name, spec=spec
     )

@@ -134,38 +134,54 @@ def render(
         out.extend(_doc_lines(_docs(finfo), indent=_INDENT))
 
         if fname in spec_set:
-            value = spec_set[fname]
-            if fname == "secrets" and isinstance(value, dict):
-                out.append(f"{_INDENT}{fname}:")
-                for sname, sval in value.items():
-                    if sname in secret_comments:
-                        out.extend(
-                            _doc_lines(
-                                secret_comments[sname].split("\n"),
-                                indent=_INDENT * 2,
-                            )
-                        )
-                    out.append(f"{_INDENT * 2}{sname}: {_scalar(sval)}")
-            else:
-                out.append(f"{_INDENT}{fname}: {_scalar(value, key=fname)}")
-                alt = field_alternatives.get(fname)
-                if alt is not None:
-                    alt_value, alt_note = alt
-                    note = f"  # {alt_note}" if alt_note else ""
-                    out.append(f"{_INDENT}# {fname}: {alt_value}{note}")
+            _emit_set_field(
+                out, fname, spec_set[fname], secret_comments, field_alternatives
+            )
         elif fname in required_set:
             out.append(f"{_INDENT}{_MARKER}{_REQUIRED}")
             out.append(f"{_INDENT}{fname}: ~")
         else:
-            example = _EXAMPLES.get(fname, "")
-            if isinstance(example, dict):
-                out.append(f"{_INDENT}# {fname}:")
-                for k, v in example.items():
-                    out.append(f"{_INDENT * 2}# {k}: {_scalar(v)}")
-            else:
-                out.append(f"{_INDENT}# {fname}: {_scalar(example, key=fname)}")
+            _emit_unset_field(out, fname)
 
     return "\n".join(out) + "\n"
+
+
+def _emit_set_field(
+    out: list[str],
+    fname: str,
+    value: Any,
+    secret_comments: Mapping[str, str],
+    field_alternatives: Mapping[str, tuple[str, str]],
+) -> None:
+    """Append lines for a spec field that has a value."""
+    if fname == "secrets" and isinstance(value, dict):
+        out.append(f"{_INDENT}{fname}:")
+        for sname, sval in value.items():
+            if sname in secret_comments:
+                out.extend(
+                    _doc_lines(
+                        secret_comments[sname].split("\n"), indent=_INDENT * 2
+                    )
+                )
+            out.append(f"{_INDENT * 2}{sname}: {_scalar(sval)}")
+        return
+    out.append(f"{_INDENT}{fname}: {_scalar(value, key=fname)}")
+    alt = field_alternatives.get(fname)
+    if alt is not None:
+        alt_value, alt_note = alt
+        note = f"  # {alt_note}" if alt_note else ""
+        out.append(f"{_INDENT}# {fname}: {alt_value}{note}")
+
+
+def _emit_unset_field(out: list[str], fname: str) -> None:
+    """Append a commented-out example line for an unset spec field."""
+    example = _EXAMPLES.get(fname, "")
+    if isinstance(example, dict):
+        out.append(f"{_INDENT}# {fname}:")
+        for k, v in example.items():
+            out.append(f"{_INDENT * 2}# {k}: {_scalar(v)}")
+    else:
+        out.append(f"{_INDENT}# {fname}: {_scalar(example, key=fname)}")
 
 
 def _doc_lines(docs: Iterable[str], *, indent: str) -> list[str]:
