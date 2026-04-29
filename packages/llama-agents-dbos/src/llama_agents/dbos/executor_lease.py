@@ -40,7 +40,6 @@ class ExecutorLeaseManager:
         self._holder = str(uuid.uuid4())
         self._table = _qualified_table_ref("executor_leases", schema)
         self._external_ensure_pool = ensure_pool
-        self._owns_pool = ensure_pool is None
         self._pool: asyncpg.Pool | None = None
         self._slot_id: str | None = None
         self._heartbeat_task: asyncio.Task[None] | None = None
@@ -57,7 +56,6 @@ class ExecutorLeaseManager:
         return self._lease_lost_event
 
     async def _seed_slots(self) -> None:
-        """Ensure slot rows exist in the executor_leases table."""
         assert self._pool is not None
         async with self._pool.acquire() as conn:
             for i in range(self._pool_size):
@@ -114,7 +112,7 @@ class ExecutorLeaseManager:
                         return slot_id
 
             if timeout is not None and elapsed >= timeout:
-                if self._owns_pool:
+                if self._external_ensure_pool is None:
                     await self._pool.close()
                 self._pool = None
                 raise TimeoutError(
@@ -150,7 +148,7 @@ class ExecutorLeaseManager:
         self._slot_id = None
 
         if self._pool is not None:
-            if self._owns_pool:
+            if self._external_ensure_pool is None:
                 await self._pool.close()
             self._pool = None
 

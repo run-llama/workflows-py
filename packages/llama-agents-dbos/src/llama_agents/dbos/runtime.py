@@ -816,8 +816,6 @@ class DBOSRuntime(Runtime):
                 lease_timeout=lease_config.get("lease_timeout", 30.0),
                 slot_prefix=lease_config.get("slot_prefix", "executor"),
                 schema=schema,
-                # Share the runtime's asyncpg pool — the lease manager borrows
-                # it and never owns its lifecycle.
                 ensure_pool=self._ensure_pool,
             )
             acquire_timeout = lease_config.get("acquire_timeout", 60.0)
@@ -956,7 +954,6 @@ class DBOSRuntime(Runtime):
                 pass
             self._lease_watch_task = None
 
-        # Release executor lease if held
         if self._lease_manager is not None:
             await self._lease_manager.release()
             self._lease_manager = None
@@ -989,7 +986,7 @@ class DBOSRuntime(Runtime):
                 # The runtime owns the asyncpg pool now; the workflow store
                 # only holds a borrowed reference. Just null out its handles —
                 # the runtime's terminate above already tore down the pool.
-                if inner._owns_pool and inner._pool is not None:
+                if inner._external_ensure_pool is None and inner._pool is not None:
                     try:
                         inner._pool.terminate()
                     except Exception:

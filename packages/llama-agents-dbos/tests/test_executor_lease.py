@@ -45,9 +45,8 @@ def make_manager(
     )
 
 
-def test_owns_pool_when_no_factory_provided() -> None:
+def test_creates_own_pool_when_no_factory_provided() -> None:
     mgr = ExecutorLeaseManager(dsn="postgresql://x/y", pool_size=1)
-    assert mgr._owns_pool is True
     assert mgr._external_ensure_pool is None
 
 
@@ -60,7 +59,6 @@ def test_borrows_pool_when_ensure_pool_provided() -> None:
         pool_size=1,
         ensure_pool=factory,
     )
-    assert mgr._owns_pool is False
     assert mgr._external_ensure_pool is factory
 
 

@@ -72,7 +72,6 @@ class PostgresWorkflowStore(AbstractWorkflowStore):
         self._pool_max_size = pool_max_size
         self._auto_migrate = auto_migrate
         self._external_ensure_pool = ensure_pool
-        self._owns_pool = ensure_pool is None
         self._pool: asyncpg.Pool | None = None
         self._listen_conn: asyncpg.Connection | None = None
         self._conditions: weakref.WeakValueDictionary[str, asyncio.Condition] = (
@@ -255,7 +254,7 @@ class PostgresWorkflowStore(AbstractWorkflowStore):
                 )
             self._listen_conn = None
         if self._pool is not None:
-            if self._owns_pool:
+            if self._external_ensure_pool is None:
                 await self._pool.close()
             self._pool = None
 
