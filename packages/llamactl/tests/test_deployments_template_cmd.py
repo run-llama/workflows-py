@@ -76,17 +76,23 @@ required_env_vars: ["API_KEY", "DB_URL"]
     after = out[repo_idx:]
     next_line = after.splitlines()[1]
     assert "# repo_url: https://github.com/user/repo" in next_line
-    assert "auto-detected from your git remotes" in next_line
+    assert "## auto-detected from your git remotes" in next_line
     # Detected branch.
     assert "git_ref: develop" in out
     # Required secrets rendered as ${VAR}.
     assert "API_KEY: ${API_KEY}" in out
     assert "DB_URL: ${DB_URL}" in out
-    # `from your .env` annotation above the matched secret (and only it).
-    assert "## from your .env\n    API_KEY:" in out, out
+    # Set-mode secret annotations are trailing comments on the secret lines.
+    api_line = next(line for line in out.splitlines() if "API_KEY:" in line)
+    assert api_line.startswith("    API_KEY: ${API_KEY}")
+    assert api_line.endswith("## from your .env")
+    assert "    ## from your .env" not in out, out
     # Missing-from-.env secret carries the explicit "not in your .env" comment.
-    assert "Not in your .env" in out, out
-    assert "Not in your .env — add it before `apply`" in out
+    db_line = next(line for line in out.splitlines() if "DB_URL:" in line)
+    assert db_line.startswith("    DB_URL: ${DB_URL}")
+    assert db_line.endswith("## not in your .env — add it before apply")
+    assert "Not in your .env" not in out
+    assert "before `apply`" not in out
     # No "Optional fields" tail block — single-pass rendering.
     assert "Optional fields" not in out
     # Output parses as YAML when comments are stripped.
@@ -121,7 +127,7 @@ def test_template_emits_local_context_warnings(
     assert lines[2] == "## Edit, then run: llamactl deployments apply -f <file>"
 
 
-def test_template_outside_git_repo_emits_banner_and_required_tildes(
+def test_template_outside_git_repo_emits_compact_head_and_required_tildes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.chdir(tmp_path)
@@ -133,16 +139,24 @@ def test_template_outside_git_repo_emits_banner_and_required_tildes(
     assert result.exit_code == 0, result.output
 
     out = result.output
-    head_lines = [line for line in out.splitlines() if line.startswith("##")]
-    # Banner present.
-    assert any("NOT IN A GIT REPO" in line for line in head_lines), out
-    assert any("═══" in line for line in head_lines), out
+    lines = out.splitlines()
+    assert lines[0] == "## Edit, then run: llamactl deployments apply -f <file>"
+    assert lines[1] == "##"
+    assert (
+        lines[2]
+        == "## NOT IN A GIT REPO — set repo_url, or cd into a working tree and re-run."
+    )
+    assert "═══" not in out
+    assert "Set repo_url below before running apply." not in out
 
     # ``repo_url`` is the only required-tilde field outside a git repo;
     # ``name`` and ``generate_name`` are commented-out (server defaults the id).
     assert "  repo_url: ~" in out
     repo_idx = out.index("  repo_url: ~")
-    assert "## Required — set before `apply`." in out[:repo_idx]
+    assert (
+        '  ## REQUIRED. "" = push your local working tree on apply.' in out[:repo_idx]
+    )
+    assert "## Required — set before `apply`." not in out
 
     # Top-level identity tier: both keys commented-out, cwd-derived defaults.
     assert f"\n# name: {cwd_name}" in out
@@ -172,6 +186,41 @@ def test_template_outside_git_repo_emits_banner_and_required_tildes(
     assert "generate_name" not in parsed
     assert "display_name" not in parsed["spec"]
     assert parsed["spec"]["repo_url"] is None
+
+
+def test_template_emits_blank_lines_between_output_sections(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    _patch_git(monkeypatch, is_repo=False)
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["deployments", "template"])
+    assert result.exit_code == 0, result.output
+
+    lines = result.output.splitlines()
+    assert lines[0] == "## Edit, then run: llamactl deployments apply -f <file>"
+    assert lines[1] == "##"
+    assert lines[3] == ""
+
+    generate_name_idx = next(
+        i for i, line in enumerate(lines) if line.startswith("# generate_name:")
+    )
+    spec_idx = lines.index("spec:")
+    assert lines[spec_idx - 1] == ""
+    assert spec_idx > generate_name_idx
+
+    repo_doc_idx = next(
+        i for i, line in enumerate(lines) if line.startswith("  ## REQUIRED.")
+    )
+    deploy_path_group_idx = next(
+        i
+        for i, line in enumerate(lines)
+        if line.startswith("  # deployment_file_path:")
+        or "pyproject.toml or llama_deploy.yaml" in line
+    )
+    assert lines[deploy_path_group_idx - 1] == ""
+    assert deploy_path_group_idx > repo_doc_idx
 
 
 def test_template_does_not_require_auth_profile(

@@ -87,6 +87,13 @@ class Doc:
 
 
 @dataclass(frozen=True)
+class TrailingDoc:
+    """Marker for a short YAML note rendered after a field's scalar value."""
+
+    text: str
+
+
+@dataclass(frozen=True)
 class Column:
     """Marker placed in a field's ``Annotated[]`` metadata to declare a column.
 
@@ -241,52 +248,41 @@ class DeploymentSpec(BaseModel):
         str | None,
         Column("REPO", format=gh_short, default="-"),
         Doc(
-            "Git repository URL. Supported shapes:\n"
-            '- "" = push mode (the CLI pushes your working tree on apply).\n'
-            "- https://github.com/<owner>/<repo> = GitHub HTTPS (private repos use a GitHub App).\n"
-            "- https://gitlab.com/<owner>/<repo> = GitLab HTTPS (private repos use personal_access_token).\n"
-            "- https://git.example.com/<owner>/<repo> = any other HTTP repo (private repos use personal_access_token).\n"
-            "- internal:// = previously pushed in push mode; reuses the existing internal repo."
+            '"" = push your local working tree on apply.\n'
+            '"internal://" = reuse a previously-pushed working tree.\n'
+            "https://… = remote git URL (GitHub, GitLab, etc.)."
         ),
     ] = None
     deployment_file_path: Annotated[
         str | None,
-        Doc("Path to your deployment config: pyproject.toml or llama_deploy.yaml."),
+        TrailingDoc("pyproject.toml or llama_deploy.yaml"),
     ] = None
     git_ref: Annotated[
         str | None,
         Column("GIT_REF", default="-"),
-        Doc("Branch, tag, or commit SHA to deploy."),
     ] = None
     appserver_version: Annotated[
         str | None,
         Column("APPSERVER", default="-", wide=True),
-        Doc(
-            "Pin the appserver image to a specific version.\n"
-            "Defaults to the version of `llama-agents-appserver` installed locally."
-        ),
+        TrailingDoc("auto-pinned from local install"),
     ] = None
     # No Column: suspended state is already visible via status.phase.
     suspended: Annotated[
         bool | None,
-        Doc("If true, scale the deployment to zero without deleting it."),
+        TrailingDoc("scale to zero without deleting"),
     ] = None
     # ``str | None`` value type matches ``DeploymentUpdate.secrets`` on the wire:
     # null values delete on apply.
     secrets: Annotated[
         dict[str, str | None] | None,
         Doc(
-            "Secret env vars. Use ${VAR} to reference your local environment.\n"
-            "Values are masked on read after apply — set, don't expect to read back."
+            "Secret env vars. ${VAR} reads from your local environment at apply time.\n"
+            "Values are masked after apply — set them, don't expect to read back."
         ),
     ] = None
     personal_access_token: Annotated[
         str | None,
-        Doc(
-            "Token for private-repo access; sent to the server as `Authorization: token <value>`.\n"
-            "For GitHub, this is a Personal Access Token; for GitLab, a project/group access token.\n"
-            "Leave unset for internal:// or public repos."
-        ),
+        TrailingDoc("private-repo access (GitHub PAT, GitLab access token)"),
     ] = None
 
 
@@ -337,14 +333,7 @@ class DeploymentDisplay(BaseModel):
     # what-id-do-I-get question, not an editable-spec question. Wire-side
     # the field is still ``display_name`` on ``DeploymentResponse``; the CLI
     # flattens at :meth:`from_response`.
-    generate_name: Annotated[
-        str | None,
-        Doc(
-            "name takes precedence; setting top-level 'name' upserts by that id.\n"
-            "If 'name' is unset, generate_name is slugified by the server into a "
-            "unique id (conflicts on 'name' error with no retry)."
-        ),
-    ] = None
+    generate_name: str | None = None
     spec: DeploymentSpec
     status: DeploymentStatus | None = None
 

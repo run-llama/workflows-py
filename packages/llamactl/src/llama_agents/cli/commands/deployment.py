@@ -226,11 +226,8 @@ def template_deployment() -> None:
         head.extend(
             [
                 "",
-                "═══════════════════════════════════════════════════════════════",
-                "NOT IN A GIT REPO",
-                "═══════════════════════════════════════════════════════════════",
-                "Set repo_url below before running apply.",
-                "Or `cd` into a working tree and re-run this command.",
+                "NOT IN A GIT REPO — set repo_url, or cd into a working tree "
+                "and re-run.",
             ]
         )
 
@@ -246,10 +243,7 @@ def template_deployment() -> None:
         if name_ in ctx.available_secrets:
             secret_comments[name_] = "from your .env"
         else:
-            secret_comments[name_] = (
-                "Not in your .env — add it before `apply`, "
-                "or drop it from required_env_vars."
-            )
+            secret_comments[name_] = "not in your .env — add it before apply"
 
     click.echo(
         render_yaml_template(

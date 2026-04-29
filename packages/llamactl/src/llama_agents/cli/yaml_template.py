@@ -45,13 +45,18 @@ from llama_agents.cli.display import (
     DeploymentDisplay,
     DeploymentSpec,
     Doc,
+    TrailingDoc,
     strip_masks,
 )
 from pydantic.fields import FieldInfo
 
 _INDENT = "  "
 _MARKER = "## "
-_REQUIRED = "Required — set before `apply`."
+_TRAILING_COLUMN = 45
+_SCAFFOLD_IDENTITY_DOCS = (
+    "Set 'name' for a stable id, or 'generate_name' to let the server pick a",
+    "unique id from this slug. Leave both unset → server generates from cwd.",
+)
 
 # Per-field example values shown when a spec field is unset (rendered commented).
 _EXAMPLES: dict[str, Any] = {
@@ -87,11 +92,11 @@ def render(
         head: Lines emitted at the top of the output as ``## `` comments,
             before ``name:``. An empty-string entry becomes a bare ``##``.
         secret_comments: Map of secret name → comment text. Each becomes a
-            ``## `` line above the matching key inside the ``secrets:``
+            trailing ``## `` note on the matching key inside the ``secrets:``
             block. Ignored when ``secrets`` is unset.
         field_alternatives: Map of field name → ``(suggestion, annotation)``.
             For each *set* field listed, a commented-out
-            ``# <field>: <suggestion>  # <annotation>`` line is emitted
+            ``# <field>: <suggestion>  ## <annotation>`` line is emitted
             directly under the field. Silently ignored for fields in the
             ``required`` or ``unset`` states.
         required: Field names (python attribute names on ``DeploymentSpec``)
@@ -102,8 +107,8 @@ def render(
             (and ``generate_name`` when it has no model value). Defaults to
             ``"my-app"``; the offline template command passes the cwd name.
         scaffold_generate_name: When ``True``, emit a commented-out
-            ``# generate_name: <value>`` line at the identity tier with the
-            field's ``Doc`` block above. When ``False`` (the default), the
+            ``# generate_name: <value>`` line at the identity tier. When
+            ``False`` (the default), the
             field is omitted entirely. Only the offline ``deployments
             template`` flow opts in; ``get -o template`` does not.
     """
@@ -112,36 +117,54 @@ def render(
 
     for line in head:
         out.append("##" if line == "" else f"{_MARKER}{line}")
+    if head:
+        out.append("")
 
-    name_docs = _docs(DeploymentDisplay.model_fields["name"])
-    out.extend(_doc_lines(name_docs, indent=""))
+    if scaffold_generate_name:
+        out.extend(_doc_lines(_SCAFFOLD_IDENTITY_DOCS, indent=""))
+    else:
+        name_docs = _docs(DeploymentDisplay.model_fields["name"])
+        out.extend(_doc_lines(name_docs, indent=""))
     if display.name is None:
         out.append(f"# name: {name_example}")
     else:
         out.append(f"name: {_scalar(display.name)}")
 
     if scaffold_generate_name:
-        gn_docs = _docs(DeploymentDisplay.model_fields["generate_name"])
-        out.extend(_doc_lines(gn_docs, indent=""))
         gn_value = display.generate_name or name_example
         out.append(f"# generate_name: {_scalar(gn_value)}")
 
+    out.append("")
     out.append("spec:")
     spec_dump = display.spec.model_dump(mode="json", exclude_none=True)
     spec_set = strip_masks(spec_dump)
 
-    for fname, finfo in DeploymentSpec.model_fields.items():
-        out.extend(_doc_lines(_docs(finfo), indent=_INDENT))
+    for idx, (fname, finfo) in enumerate(DeploymentSpec.model_fields.items()):
+        if idx > 0 and fname in {
+            "deployment_file_path",
+            "secrets",
+            "personal_access_token",
+        }:
+            out.append("")
+
+        docs = _docs(finfo)
+        if fname in required_set and fname not in spec_set:
+            docs = _required_docs(docs)
+        out.extend(_doc_lines(docs, indent=_INDENT))
 
         if fname in spec_set:
             _emit_set_field(
-                out, fname, spec_set[fname], secret_comments, field_alternatives
+                out,
+                fname,
+                spec_set[fname],
+                finfo,
+                secret_comments,
+                field_alternatives,
             )
         elif fname in required_set:
-            out.append(f"{_INDENT}{_MARKER}{_REQUIRED}")
-            out.append(f"{_INDENT}{fname}: ~")
+            out.append(_with_trailing(f"{_INDENT}{fname}: ~", _trailing_doc(finfo)))
         else:
-            _emit_unset_field(out, fname)
+            _emit_unset_field(out, fname, finfo)
 
     return "\n".join(out) + "\n"
 
@@ -150,6 +173,7 @@ def _emit_set_field(
     out: list[str],
     fname: str,
     value: Any,
+    finfo: FieldInfo,
     secret_comments: Mapping[str, str],
     field_alternatives: Mapping[str, tuple[str, str]],
 ) -> None:
@@ -157,21 +181,26 @@ def _emit_set_field(
     if fname == "secrets" and isinstance(value, dict):
         out.append(f"{_INDENT}{fname}:")
         for sname, sval in value.items():
-            if sname in secret_comments:
-                out.extend(
-                    _doc_lines(secret_comments[sname].split("\n"), indent=_INDENT * 2)
+            out.append(
+                _with_trailing(
+                    f"{_INDENT * 2}{sname}: {_scalar(sval)}",
+                    _one_line(secret_comments.get(sname)),
+                    align=False,
                 )
-            out.append(f"{_INDENT * 2}{sname}: {_scalar(sval)}")
+            )
         return
-    out.append(f"{_INDENT}{fname}: {_scalar(value, key=fname)}")
+    out.append(
+        _with_trailing(
+            f"{_INDENT}{fname}: {_scalar(value, key=fname)}", _trailing_doc(finfo)
+        )
+    )
     alt = field_alternatives.get(fname)
     if alt is not None:
         alt_value, alt_note = alt
-        note = f"  # {alt_note}" if alt_note else ""
-        out.append(f"{_INDENT}# {fname}: {alt_value}{note}")
+        out.append(_with_trailing(f"{_INDENT}# {fname}: {alt_value}", alt_note))
 
 
-def _emit_unset_field(out: list[str], fname: str) -> None:
+def _emit_unset_field(out: list[str], fname: str, finfo: FieldInfo) -> None:
     """Append a commented-out example line for an unset spec field."""
     example = _EXAMPLES.get(fname, "")
     if isinstance(example, dict):
@@ -179,7 +208,12 @@ def _emit_unset_field(out: list[str], fname: str) -> None:
         for k, v in example.items():
             out.append(f"{_INDENT * 2}# {k}: {_scalar(v)}")
     else:
-        out.append(f"{_INDENT}# {fname}: {_scalar(example, key=fname)}")
+        out.append(
+            _with_trailing(
+                f"{_INDENT}# {fname}: {_scalar(example, key=fname)}",
+                _trailing_doc(finfo),
+            )
+        )
 
 
 def _doc_lines(docs: Iterable[str], *, indent: str) -> list[str]:
@@ -195,6 +229,38 @@ def _docs(info: FieldInfo | None) -> tuple[str, ...]:
         if isinstance(marker, Doc):
             return tuple(marker.text.split("\n"))
     return ()
+
+
+def _trailing_doc(info: FieldInfo | None) -> str | None:
+    """Return the first ``TrailingDoc`` marker text on ``info``."""
+    if info is None:
+        return None
+    for marker in info.metadata:
+        if isinstance(marker, TrailingDoc):
+            return marker.text
+    return None
+
+
+def _required_docs(docs: tuple[str, ...]) -> tuple[str, ...]:
+    """Prefix required state onto the first doc line, or emit a fallback."""
+    if not docs:
+        return ("REQUIRED.",)
+    first, *rest = docs
+    return (f"REQUIRED. {first}", *rest)
+
+
+def _one_line(value: str | None) -> str | None:
+    if value is None:
+        return None
+    return " ".join(value.split())
+
+
+def _with_trailing(line: str, note: str | None, *, align: bool = True) -> str:
+    """Append an aligned trailing ``##`` note when ``note`` is present."""
+    if not note:
+        return line
+    gap = max(2, _TRAILING_COLUMN - len(line)) if align else 2
+    return f"{line}{' ' * gap}{_MARKER}{note}"
 
 
 def _scalar(value: Any, *, key: str | None = None) -> str:
