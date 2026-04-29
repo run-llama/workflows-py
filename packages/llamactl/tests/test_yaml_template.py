@@ -43,8 +43,10 @@ def test_render_emits_name_and_spec_in_declaration_order() -> None:
     spec_idx = out.index("spec:")
     assert name_idx < spec_idx
     body = out[spec_idx:]
+    # ``display_name`` renders as commented ``# generateName:`` (always); the
+    # remaining spec fields render at their python-named keys.
     fields_in_order = [
-        "display_name:",
+        "# generateName:",
         "repo_url:",
         "deployment_file_path:",
         "git_ref:",
@@ -62,7 +64,8 @@ def test_render_emits_name_and_spec_in_declaration_order() -> None:
 def test_render_attaches_doc_marker_text_above_each_set_field() -> None:
     out = render(_full_display())
     assert "## Stable id for the deployment" in out
-    assert "## Human-readable name shown in the UI" in out
+    # The display_name Doc explains the generateName / name relationship.
+    assert "## name takes precedence" in out
     assert "## Branch, tag, or commit SHA to deploy" in out
 
 
@@ -74,8 +77,9 @@ def test_render_partial_spec_emits_unset_fields_as_commented_examples() -> None:
         spec=DeploymentSpec(display_name="My App"),
     )
     out = render(display)
-    # The set field is uncommented.
-    assert "\n  display_name: My App" in out
+    # ``display_name`` is always commented-out; its set value surfaces as the
+    # example value under the ``generateName`` alias.
+    assert "\n  # generateName: My App" in out
     # Unset fields appear commented in declaration order.
     assert "  # repo_url:" in out
     assert "  # git_ref: main" in out
@@ -91,22 +95,39 @@ def test_render_required_unset_emits_tilde_with_required_line() -> None:
         name="my-app",
         spec=DeploymentSpec(),
     )
-    out = render(display, required=("display_name",))
-    assert "  display_name: ~" in out
+    out = render(display, required=("repo_url",))
+    assert "  repo_url: ~" in out
     # Required marker line appears as a ## comment above the field.
-    display_idx = out.index("  display_name: ~")
-    assert "## Required — set before `apply`." in out[:display_idx]
+    repo_idx = out.index("  repo_url: ~")
+    assert "## Required — set before `apply`." in out[:repo_idx]
 
 
-def test_render_required_includes_top_level_name() -> None:
+def test_render_unset_top_level_name_is_commented() -> None:
+    """``DeploymentDisplay.name=None`` renders the top-level key commented-out
+    (the server slugifies an id when ``name`` is unset on apply)."""
     display = DeploymentDisplay(
-        name="placeholder",
+        name=None,
         spec=DeploymentSpec(),
     )
-    out = render(display, required=("name",))
-    assert "\nname: ~" in out or out.startswith("name: ~")
-    # The placeholder string must not leak.
-    assert "placeholder" not in out
+    out = render(display)
+    assert "\n# name: my-app" in out or out.startswith("# name: my-app")
+    # No bare ``name:`` line at the top level.
+    assert "\nname:" not in out
+    assert not out.startswith("name:")
+
+
+def test_render_display_name_always_commented_under_generate_name_alias() -> None:
+    """Even with a value set, ``display_name`` renders as commented
+    ``# generateName: <value>`` — never as an authoritative spec key."""
+    display = DeploymentDisplay(
+        name="my-app",
+        spec=DeploymentSpec(display_name="my-app"),
+    )
+    out = render(display)
+    assert "  # generateName: my-app" in out
+    # No uncommented display_name or generateName key in the spec block.
+    assert "  display_name:" not in out
+    assert "  generateName:" not in out
 
 
 def test_render_alternatives_emit_commented_line_under_set_field() -> None:
@@ -232,25 +253,28 @@ def test_render_output_is_yaml_safe_loadable() -> None:
     out = render(_full_display())
     parsed = pyyaml.safe_load(out)
     assert parsed["name"] == "my-app"
-    assert parsed["spec"]["display_name"] == "My App"
+    # ``display_name`` is rendered as commented ``generateName`` — neither
+    # key is present in the parsed YAML.
+    assert "display_name" not in parsed["spec"]
+    assert "generateName" not in parsed["spec"]
     assert "status" not in parsed
 
 
 def test_render_output_with_required_and_alternatives_is_yaml_safe_loadable() -> None:
     display = DeploymentDisplay(
-        name="placeholder",
+        name=None,
         spec=DeploymentSpec(repo_url=""),
     )
     out = render(
         display,
         head=("hint",),
-        required=("name", "display_name"),
+        required=("git_ref",),
         field_alternatives={"repo_url": ("https://example.com/x", "detected")},
     )
     parsed = pyyaml.safe_load(out)
-    # ~ → None
-    assert parsed["name"] is None
-    assert parsed["spec"]["display_name"] is None
+    # ~ → None for required; commented top-level name parses as missing.
+    assert "name" not in parsed
+    assert parsed["spec"]["git_ref"] is None
     assert parsed["spec"]["repo_url"] == ""
 
 

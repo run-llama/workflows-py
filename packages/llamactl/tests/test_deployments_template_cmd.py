@@ -130,14 +130,16 @@ def test_template_outside_git_repo_emits_banner_and_required_tildes(
     assert any("NOT IN A GIT REPO" in line for line in head_lines), out
     assert any("═══" in line for line in head_lines), out
 
-    # name / display_name / repo_url are forced to ~ with a Required marker.
-    assert "\nname: ~" in out
-    assert "  display_name: ~" in out
+    # ``repo_url`` is the only required-tilde field outside a git repo;
+    # ``name`` and ``generateName`` are commented-out (server defaults the id).
     assert "  repo_url: ~" in out
-    for required_key in ("name: ~", "display_name: ~", "repo_url: ~"):
-        idx = out.index(required_key)
-        # Required marker appears in the doc block above each required field.
-        assert "## Required — set before `apply`." in out[:idx]
+    repo_idx = out.index("  repo_url: ~")
+    assert "## Required — set before `apply`." in out[:repo_idx]
+
+    # Top-level name renders as a commented-out example.
+    assert "\n# name: my-app" in out
+    # generateName is commented-out under the spec block.
+    assert "  # generateName: My App" in out
 
     # Other unset fields render as commented-out one-liners in declaration
     # order inside the spec block.
@@ -151,10 +153,11 @@ def test_template_outside_git_repo_emits_banner_and_required_tildes(
     # No "Optional fields" tail block.
     assert "Optional fields" not in out
 
-    # YAML round-trip: ~ parses to None, no key-string left over.
+    # YAML round-trip: required ~ parses to None; commented keys are absent.
     parsed = pyyaml.safe_load(out)
-    assert parsed["name"] is None
-    assert parsed["spec"]["display_name"] is None
+    assert "name" not in parsed
+    assert "display_name" not in parsed["spec"]
+    assert "generateName" not in parsed["spec"]
     assert parsed["spec"]["repo_url"] is None
 
 

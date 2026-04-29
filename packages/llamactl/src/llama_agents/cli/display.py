@@ -34,7 +34,7 @@ from llama_agents.core.schema.deployments import (
     ReleaseHistoryItem,
 )
 from llama_agents.core.schema.projects import OrgSummary
-from pydantic import BaseModel, ConfigDict
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 from typing_extensions import Annotated
 
 SECRET_MASK = "********"
@@ -212,10 +212,23 @@ class DeploymentSpec(BaseModel):
     than mixed into ``secrets`` so the apply input shape is explicit.
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
-    display_name: Annotated[str | None, Doc("Human-readable name shown in the UI.")] = (
-        None
+    # ``display_name`` is the slug seed the server hashes into a unique id when
+    # top-level ``name`` is unset. The YAML surface renames it to ``generateName``
+    # via the serialization alias; the apply parser accepts both keys via the
+    # validation alias. The wire field name (``display_name``) is unchanged.
+    display_name: Annotated[
+        str | None,
+        Doc(
+            "name takes precedence: setting top-level 'name' upserts a deployment by that exact id.\n"
+            "If 'name' is unset, this generateName is slugified by the server into a unique id.\n"
+            "A 'name' conflict (taken or reserved) errors with no retry."
+        ),
+    ] = Field(
+        default=None,
+        serialization_alias="generateName",
+        validation_alias=AliasChoices("display_name", "generateName"),
     )
     repo_url: Annotated[
         str | None,
@@ -304,11 +317,14 @@ class DeploymentDisplay(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    # ``None`` is used by the ``deployments template`` command to render the
+    # top-level key as a commented-out example; ``from_response`` always
+    # populates it from the wire id.
     name: Annotated[
-        str,
-        Column("NAME"),
+        str | None,
+        Column("NAME", default="-"),
         Doc("Stable id for the deployment. Immutable on update."),
-    ]
+    ] = None
     spec: DeploymentSpec
     status: DeploymentStatus | None = None
 

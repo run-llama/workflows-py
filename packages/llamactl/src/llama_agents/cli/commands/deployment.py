@@ -199,29 +199,27 @@ def template_deployment() -> None:
 
     if ctx.is_git_repo:
         # In-git: defaults are filled in; nothing forced as required.
-        display_name = ctx.display_name or cwd_name
         spec = DeploymentSpec(
-            display_name=display_name,
+            display_name=ctx.display_name or cwd_name,
             repo_url=PUSH_MODE_REPO_URL,
             deployment_file_path=ctx.deployment_file_path,
             git_ref=ctx.git_ref,
             appserver_version=ctx.installed_appserver_version,
             secrets=secrets,
         )
-        name = display_name or "my-app"
         required: tuple[str, ...] = ()
     else:
-        # Outside a git repo: name/display_name/repo_url are unknowable, so
-        # surface them as `~` with a Required marker rather than guessing.
+        # Outside a git repo: ``repo_url`` is the only required apply input —
+        # ``name``/``generateName`` either get user-supplied or server-defaulted.
         spec = DeploymentSpec(
             appserver_version=ctx.installed_appserver_version,
             secrets=secrets,
         )
-        # Placeholder; suppressed in render output via the required path.
-        name = "my-app"
-        required = ("name", "display_name", "repo_url")
+        required = ("repo_url",)
 
-    display = DeploymentDisplay(name=name, spec=spec)
+    # ``name=None`` renders the top-level key commented-out (an example shape
+    # the user opts into); the server assigns a slugified id when omitted.
+    display = DeploymentDisplay(name=None, spec=spec)
 
     head: list[str] = [f"WARNING: {warning}" for warning in ctx.warnings]
     if ctx.warnings:
@@ -234,7 +232,7 @@ def template_deployment() -> None:
                 "═══════════════════════════════════════════════════════════════",
                 "NOT IN A GIT REPO",
                 "═══════════════════════════════════════════════════════════════",
-                "Set name, display_name, and repo_url below before running apply.",
+                "Set repo_url below before running apply.",
                 "Or `cd` into a working tree and re-run this command.",
             ]
         )
@@ -292,9 +290,7 @@ def create_deployment(
         rprint(f"[{WARNING}]Cancelled[/]")
         return
 
-    rprint(
-        f"[green]Created deployment: {deployment_form.display_name} (id: {deployment_form.id})[/green]"
-    )
+    rprint(f"[green]Created deployment: {deployment_form.id}[/green]")
 
 
 @deployments.command("configure-git-remote")
@@ -424,7 +420,7 @@ def edit_deployment(
             return
 
         rprint(
-            f"[green]Successfully updated deployment: {updated_deployment.display_name}[/green]"
+            f"[green]Successfully updated deployment: {updated_deployment.id}[/green]"
         )
 
     except Exception as e:
@@ -499,7 +495,6 @@ def refresh_deployment(
 
         client = get_project_client(project_id_override=project)
         current_deployment = asyncio.run(client.get_deployment(deployment_id))
-        deployment_name = current_deployment.display_name
         old_git_sha = current_deployment.git_sha or ""
 
         # For internal repos, push local code first so the server has the
@@ -511,7 +506,7 @@ def refresh_deployment(
             )
 
         # Re-resolves the branch to the latest commit SHA.
-        with console.status(f"Refreshing {deployment_name}..."):
+        with console.status(f"Refreshing {deployment_id}..."):
             updated_deployment = asyncio.run(
                 client.update_deployment(
                     deployment_id,
@@ -802,12 +797,11 @@ def select_deployment(
 
     choices = []
     for deployment in deployments:
-        display_name = deployment.display_name
         deployment_id = deployment.id
         status = deployment.status
         choices.append(
             questionary.Choice(
-                title=f"{display_name} ({deployment_id}) - {status}",
+                title=f"{deployment_id} - {status}",
                 value=deployment_id,
             )
         )

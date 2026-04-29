@@ -13,6 +13,13 @@ and appends lines to a list. Each spec field renders in one of three states:
 * **unset** — ``# <key>: <example>`` (commented out one-liner) with the doc
   above. The schema-fixed ``_EXAMPLES`` table supplies the example value.
 
+The top-level ``name`` follows the set / unset split (no ``required`` path —
+the server slugifies an id when ``name`` is omitted, so a missing top-level
+``name`` is never an apply blocker). The ``display_name`` spec field is a
+special case: it always renders commented-out under its serialization alias
+``generateName``, regardless of model value, since the canonical id is the
+top-level ``name`` and ``generateName`` is opt-in slug-seed input.
+
 A small ``field_alternatives`` mapping lets the caller surface a
 commented-out alternative under a *set* field (used to suggest the detected
 git remote under an empty ``repo_url``). Scalar quoting is a hand-rolled
@@ -32,7 +39,15 @@ _INDENT = "  "
 _MARKER = "## "
 _REQUIRED = "Required — set before `apply`."
 
-# Per-field example values shown when a field is unset (rendered commented).
+# Example value shown above the top-level ``name`` key when it is unset. The
+# top-level ``name`` lives on ``DeploymentDisplay``, not ``DeploymentSpec`` —
+# kept out of ``_EXAMPLES`` to avoid confusing the spec-field iteration.
+_NAME_EXAMPLE = "my-app"
+
+# Per-field example values shown when a spec field is unset (rendered commented).
+# Keyed by the python field name on ``DeploymentSpec`` (matches
+# ``model_fields`` iteration); the rendered YAML key may differ when the field
+# has a serialization alias (e.g. ``display_name`` → ``generateName``).
 _EXAMPLES: dict[str, Any] = {
     "display_name": "My App",
     # The push-mode sentinel (``""``) is documented separately via
@@ -71,9 +86,11 @@ def render(
             ``# <field>: <suggestion>  # <annotation>`` line is emitted
             directly under the field. Silently ignored for fields in the
             ``required`` or ``unset`` states.
-        required: Field names to force-emit as ``<field>: ~`` with a
-            ``## Required …`` marker even when unset. Supports the
-            top-level ``name`` and any ``DeploymentSpec`` field.
+        required: Field names (python attribute names on ``DeploymentSpec``)
+            to force-emit as ``<key>: ~`` with a ``## Required …`` marker
+            even when unset. The top-level ``name`` is *not* supported here —
+            it has no required path. ``display_name`` is silently ignored
+            (always commented-out as ``generateName``).
     """
     required_set = set(required)
     out: list[str] = []
@@ -83,22 +100,34 @@ def render(
 
     name_docs = _docs(DeploymentDisplay.model_fields["name"])
     out.extend(_doc_lines(name_docs, indent=""))
-    if "name" in required_set:
-        out.append(f"{_MARKER}{_REQUIRED}")
-        out.append("name: ~")
+    if display.name is None:
+        out.append(f"# name: {_NAME_EXAMPLE}")
     else:
         out.append(f"name: {_scalar(display.name)}")
 
     out.append("spec:")
-    spec_set = display.spec.model_dump(mode="json", exclude_none=True)
+    # ``by_alias=True`` so ``display_name`` lands as ``generateName`` in the
+    # rendered YAML. The dump is keyed by alias; we look it up by alias below.
+    spec_set = display.spec.model_dump(mode="json", exclude_none=True, by_alias=True)
 
     for fname, finfo in DeploymentSpec.model_fields.items():
+        yaml_key = finfo.serialization_alias or fname
         out.extend(_doc_lines(_docs(finfo), indent=_INDENT))
 
-        if fname in spec_set:
-            value = spec_set[fname]
+        # Special case: ``display_name`` (a.k.a. ``generateName``) is always
+        # rendered commented-out. The canonical id is the top-level ``name``;
+        # ``generateName`` is a slug seed users opt into. When the model has a
+        # value (e.g. ``from_response``), surface it as the example so the
+        # user sees what's currently set without making the line authoritative.
+        if fname == "display_name":
+            value = spec_set.get(yaml_key, _EXAMPLES.get(fname, ""))
+            out.append(f"{_INDENT}# {yaml_key}: {_scalar(value)}")
+            continue
+
+        if yaml_key in spec_set:
+            value = spec_set[yaml_key]
             if fname == "secrets" and isinstance(value, dict):
-                out.append(f"{_INDENT}secrets:")
+                out.append(f"{_INDENT}{yaml_key}:")
                 for sname, sval in value.items():
                     if sname in secret_comments:
                         out.extend(
@@ -109,23 +138,23 @@ def render(
                         )
                     out.append(f"{_INDENT * 2}{sname}: {_scalar(sval)}")
             else:
-                out.append(f"{_INDENT}{fname}: {_scalar(value)}")
+                out.append(f"{_INDENT}{yaml_key}: {_scalar(value)}")
                 alt = field_alternatives.get(fname)
                 if alt is not None:
                     alt_value, alt_note = alt
                     note = f"  # {alt_note}" if alt_note else ""
-                    out.append(f"{_INDENT}# {fname}: {alt_value}{note}")
+                    out.append(f"{_INDENT}# {yaml_key}: {alt_value}{note}")
         elif fname in required_set:
             out.append(f"{_INDENT}{_MARKER}{_REQUIRED}")
-            out.append(f"{_INDENT}{fname}: ~")
+            out.append(f"{_INDENT}{yaml_key}: ~")
         else:
             example = _EXAMPLES.get(fname, "")
             if isinstance(example, dict):
-                out.append(f"{_INDENT}# {fname}:")
+                out.append(f"{_INDENT}# {yaml_key}:")
                 for k, v in example.items():
                     out.append(f"{_INDENT * 2}# {k}: {_scalar(v)}")
             else:
-                out.append(f"{_INDENT}# {fname}: {_scalar(example)}")
+                out.append(f"{_INDENT}# {yaml_key}: {_scalar(example)}")
 
     return "\n".join(out) + "\n"
 
