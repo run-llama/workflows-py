@@ -26,6 +26,8 @@ from llama_agents.core.iter_utils import (
 from llama_agents.core.schema import LogEvent
 from llama_agents.core.schema.deployments import (
     INTERNAL_CODE_REPO_SCHEME,
+    DeploymentApply,
+    DeploymentCreate,
     DeploymentHistoryResponse,
     DeploymentResponse,
     DeploymentUpdate,
@@ -397,6 +399,72 @@ class DeploymentService(AbstractDeploymentsService):
         if validated is not None and validated.error_message:
             updated_deployment.warning = validated.error_message
         return updated_deployment
+
+    @override
+    async def apply_deployment(
+        self,
+        project_id: str,
+        deployment_id: str,
+        apply_data: DeploymentApply,
+    ) -> tuple[DeploymentResponse, bool]:
+        """Declarative create-or-update for a deployment by stable id."""
+        try:
+            await self._get_deployment_or_raise(project_id, deployment_id)
+        except DeploymentNotFoundError:
+            if not apply_data.display_name:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        "display_name is required when creating a new deployment "
+                        f"(no deployment '{deployment_id}' exists in project)."
+                    ),
+                )
+            create_data = DeploymentCreate(
+                id=deployment_id,
+                display_name=apply_data.display_name,
+                repo_url=apply_data.repo_url or "",
+                deployment_file_path=apply_data.deployment_file_path,
+                git_ref=apply_data.git_ref,
+                personal_access_token=apply_data.personal_access_token,
+                # On create, ``DeploymentCreate.secrets`` is ``dict[str, str]``;
+                # drop any ``None`` values (deletion semantics make no sense
+                # against a brand-new deployment).
+                secrets=(
+                    {k: v for k, v in apply_data.secrets.items() if v is not None}
+                    if apply_data.secrets is not None
+                    else None
+                ),
+                appserver_version=apply_data.appserver_version,
+            )
+            created = await self.create_deployment(
+                project_id=project_id, deployment_data=create_data
+            )
+            # ``suspended=True`` on create is unusual but supported via a
+            # follow-up update so the K8s spec reflects the requested state.
+            if apply_data.suspended:
+                created = await self.update_deployment(
+                    project_id=project_id,
+                    deployment_id=created.id,
+                    update_data=DeploymentUpdate(suspended=True),
+                )
+            return created, True
+
+        update_data = DeploymentUpdate(
+            display_name=apply_data.display_name,
+            repo_url=apply_data.repo_url,
+            deployment_file_path=apply_data.deployment_file_path,
+            git_ref=apply_data.git_ref,
+            personal_access_token=apply_data.personal_access_token,
+            secrets=apply_data.secrets,
+            appserver_version=apply_data.appserver_version,
+            suspended=apply_data.suspended,
+        )
+        updated = await self.update_deployment(
+            project_id=project_id,
+            deployment_id=deployment_id,
+            update_data=update_data,
+        )
+        return updated, False
 
     @override
     async def handle_git_request(

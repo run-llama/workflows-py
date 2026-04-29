@@ -383,6 +383,51 @@ class DeploymentUpdate(Base):
         )
 
 
+class DeploymentApply(Base):
+    """
+    Declarative apply payload for ``PUT /deployments/{deployment_id}``.
+
+    Strict subset of ``DeploymentCreate`` ∪ ``DeploymentUpdate`` minus imperative
+    or service-managed fields (``rebuild``, ``bump_to_latest_appserver``,
+    ``git_sha``, ``static_assets_path``, ``image_tag``). The deployment id is
+    carried in the URL path, not the body.
+
+    Secrets follow ``DeploymentUpdate`` semantics: string values add/update,
+    ``None`` values remove. Absent fields are left untouched on existing
+    deployments.
+    """
+
+    display_name: str | None = Field(
+        default=None, description="User-facing display label"
+    )
+    repo_url: str | None = Field(
+        default=None, description="Git repository URL for the deployment source"
+    )
+    deployment_file_path: str | None = Field(
+        default=None,
+        description="Path to the deployment config file within the repository",
+    )
+    git_ref: str | None = Field(
+        default=None, description="Git reference (branch, tag, or commit) to deploy"
+    )
+    personal_access_token: str | None = Field(
+        default=None, description="Personal access token for private repo access"
+    )
+    secrets: dict[str, str | None] | None = Field(
+        default=None,
+        description="Secret updates: string values add/update, null values remove",
+    )
+    appserver_version: str | None = Field(
+        default=None,
+        description="Appserver version to use (e.g. '0.4.2'). "
+        "If omitted, server may set based on client version.",
+    )
+    suspended: bool | None = Field(
+        default=None,
+        description="Set to true to suspend (scale to 0), false to resume",
+    )
+
+
 class DeploymentUpdateResult(Base):
     """
     Result of applying a DeploymentUpdate to a LlamaDeploymentSpec.

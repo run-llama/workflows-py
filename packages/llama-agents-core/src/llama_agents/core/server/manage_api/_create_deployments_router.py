@@ -153,6 +153,29 @@ def create_v1beta1_deployments_router(
         except DeploymentNotFoundError as e:
             raise HTTPException(status_code=404, detail=str(e))
 
+    @router.put("/{deployment_id}", response_model=schema.DeploymentResponse)
+    async def apply_deployment(
+        project_id: Annotated[str, Depends(get_project_id)],
+        deployment_id: str,
+        apply_data: schema.DeploymentApply,
+    ) -> Response:
+        """Declarative create-or-update for a deployment by stable id.
+
+        Returns ``201`` when a new deployment was created and ``200`` when an
+        existing one was updated.
+        """
+        deployment_response, created = await deployments_service.apply_deployment(
+            project_id=project_id,
+            deployment_id=deployment_id,
+            apply_data=apply_data,
+        )
+
+        return Response(
+            content=deployment_response.model_dump_json(),
+            status_code=201 if created else 200,
+            media_type="application/json",
+        )
+
     @router.patch("/{deployment_id}", response_model=schema.DeploymentResponse)
     async def update_deployment(
         project_id: Annotated[str, Depends(get_project_id)],

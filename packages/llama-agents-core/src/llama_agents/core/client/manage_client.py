@@ -14,6 +14,7 @@ from llama_agents.core.schema.backups import (
     RestoreResponse,
 )
 from llama_agents.core.schema.deployments import (
+    DeploymentApply,
     DeploymentCreate,
     DeploymentHistoryResponse,
     DeploymentResponse,
@@ -258,6 +259,31 @@ class ProjectClient(BaseClient):
         )
         _raise_for_status(response)
         return DeploymentResponse.model_validate(response.json())
+
+    async def apply_deployment(
+        self,
+        deployment_id: str,
+        apply_data: DeploymentApply,
+    ) -> tuple[DeploymentResponse, bool]:
+        """Declarative create-or-update for a deployment by stable id.
+
+        Sends only the fields the caller explicitly set so unmentioned fields
+        on the server are left untouched. ``secrets`` with ``None`` values
+        pass through verbatim to trigger server-side deletion.
+
+        Returns ``(deployment, created)`` where ``created`` is ``True`` when
+        the server signalled a new deployment (HTTP 201) and ``False`` when
+        an existing one was updated (HTTP 200).
+        """
+        response = await self.client.put(
+            f"/api/v1beta1/deployments/{deployment_id}",
+            params={"project_id": self.project_id},
+            json=apply_data.model_dump(exclude_unset=True),
+        )
+        _raise_for_status(response)
+        return DeploymentResponse.model_validate(response.json()), (
+            response.status_code == 201
+        )
 
     async def get_deployment_history(
         self, deployment_id: str

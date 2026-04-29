@@ -149,6 +149,33 @@ class AbstractDeploymentsService(ABC):
         ...
 
     @abstractmethod
+    async def apply_deployment(
+        self,
+        project_id: str,
+        deployment_id: str,
+        apply_data: schema.DeploymentApply,
+    ) -> tuple[DeploymentResponse, bool]:
+        """
+        Declarative create-or-update for a deployment by stable id.
+
+        If a deployment with ``deployment_id`` exists in the project, the
+        non-None fields of ``apply_data`` are applied as a patch (delegating
+        to ``update_deployment``). If no deployment exists, a new one is
+        created with ``id=deployment_id`` (delegating to ``create_deployment``).
+        Creating a new deployment requires ``apply_data.display_name``.
+
+        Args:
+            project_id: The ID of the project the deployment lives in
+            deployment_id: The stable id (URL path component) to upsert
+            apply_data: The declarative payload
+
+        Returns:
+            ``(deployment, created)`` where ``created`` is True when a new
+            deployment was created and False when an existing one was updated.
+        """
+        ...
+
+    @abstractmethod
     async def get_deployment_history(
         self, project_id: str, deployment_id: str
     ) -> DeploymentHistoryResponse:

@@ -732,3 +732,213 @@ async def test_handle_git_request_allows_push_mode_deployments(
     await_args = mock_handle_git_request.await_args
     assert await_args is not None
     assert await_args.kwargs["storage"] is mock_code_repo_storage
+
+
+# --- apply (declarative upsert) ---
+
+
+@patch(
+    "llama_agents.control_plane.manage_api.deployments_service.DeploymentService.update_deployment",
+    new_callable=AsyncMock,
+)
+@patch(
+    "llama_agents.control_plane.manage_api.deployments_service.DeploymentService.create_deployment",
+    new_callable=AsyncMock,
+)
+@patch(
+    "llama_agents.control_plane.manage_api.deployments_service.k8s_client.get_deployment",
+    new_callable=AsyncMock,
+)
+@pytest.mark.asyncio
+async def test_apply_deployment_creates_when_missing(
+    mock_get_deployment: AsyncMock,
+    mock_create: AsyncMock,
+    mock_update: AsyncMock,
+) -> None:
+    """Missing deployment + display_name → delegates to create_deployment with explicit id."""
+    mock_get_deployment.return_value = None
+    created = _make_deployment(display_name="my-app")
+    mock_create.return_value = created
+
+    response, was_created = await deployments_service.apply_deployment(
+        project_id="proj-1",
+        deployment_id="my-app",
+        apply_data=schema.DeploymentApply(
+            display_name="my-app",
+            repo_url="https://example.com/repo.git",
+            git_ref="main",
+            secrets={"FOO": "bar", "BAZ": None},
+        ),
+    )
+
+    assert was_created is True
+    assert response.id == "my-app"
+    mock_create.assert_awaited_once()
+    assert mock_create.await_args is not None
+    create_kwargs = mock_create.await_args.kwargs
+    assert create_kwargs["project_id"] == "proj-1"
+    create_data = create_kwargs["deployment_data"]
+    assert create_data.id == "my-app"
+    assert create_data.display_name == "my-app"
+    assert create_data.repo_url == "https://example.com/repo.git"
+    assert create_data.git_ref == "main"
+    # ``None`` secret values are dropped on create — deletion semantics are
+    # only meaningful against existing state.
+    assert create_data.secrets == {"FOO": "bar"}
+    mock_update.assert_not_awaited()
+
+
+@patch(
+    "llama_agents.control_plane.manage_api.deployments_service.DeploymentService.update_deployment",
+    new_callable=AsyncMock,
+)
+@patch(
+    "llama_agents.control_plane.manage_api.deployments_service.DeploymentService.create_deployment",
+    new_callable=AsyncMock,
+)
+@patch(
+    "llama_agents.control_plane.manage_api.deployments_service.k8s_client.get_deployment",
+    new_callable=AsyncMock,
+)
+@pytest.mark.asyncio
+async def test_apply_deployment_updates_when_present(
+    mock_get_deployment: AsyncMock,
+    mock_create: AsyncMock,
+    mock_update: AsyncMock,
+) -> None:
+    """Existing deployment → delegates to update_deployment with patch fields."""
+    existing = _make_deployment(display_name="my-app")
+    mock_get_deployment.return_value = existing
+    mock_update.return_value = existing.model_copy(update={"git_ref": "v2"})
+
+    response, was_created = await deployments_service.apply_deployment(
+        project_id="proj-1",
+        deployment_id="my-app",
+        apply_data=schema.DeploymentApply(
+            git_ref="v2",
+            secrets={"FOO": "bar", "DROP_ME": None},
+        ),
+    )
+
+    assert was_created is False
+    assert response.git_ref == "v2"
+    mock_update.assert_awaited_once()
+    assert mock_update.await_args is not None
+    update_kwargs = mock_update.await_args.kwargs
+    assert update_kwargs["project_id"] == "proj-1"
+    assert update_kwargs["deployment_id"] == "my-app"
+    update_data = update_kwargs["update_data"]
+    # Absent fields stay None so update_deployment doesn't clobber them.
+    assert update_data.git_ref == "v2"
+    assert update_data.repo_url is None
+    assert update_data.display_name is None
+    # Null secret values pass through verbatim — deletion handled in
+    # apply_deployment_update downstream.
+    assert update_data.secrets == {"FOO": "bar", "DROP_ME": None}
+    mock_create.assert_not_awaited()
+
+
+@patch(
+    "llama_agents.control_plane.manage_api.deployments_service.DeploymentService.create_deployment",
+    new_callable=AsyncMock,
+)
+@patch(
+    "llama_agents.control_plane.manage_api.deployments_service.k8s_client.get_deployment",
+    new_callable=AsyncMock,
+)
+@pytest.mark.asyncio
+async def test_apply_deployment_missing_display_name_on_create_returns_422(
+    mock_get_deployment: AsyncMock,
+    mock_create: AsyncMock,
+) -> None:
+    """No deployment + no display_name → 422; create is never called."""
+    mock_get_deployment.return_value = None
+
+    with pytest.raises(HTTPException) as exc_info:
+        await deployments_service.apply_deployment(
+            project_id="proj-1",
+            deployment_id="my-app",
+            apply_data=schema.DeploymentApply(git_ref="main"),
+        )
+
+    assert exc_info.value.status_code == 422
+    assert "display_name" in str(exc_info.value.detail)
+    mock_create.assert_not_awaited()
+
+
+@patch(
+    "llama_agents.control_plane.manage_api.deployments_service.DeploymentService.update_deployment",
+    new_callable=AsyncMock,
+)
+@patch(
+    "llama_agents.control_plane.manage_api.deployments_service.DeploymentService.create_deployment",
+    new_callable=AsyncMock,
+)
+@patch(
+    "llama_agents.control_plane.manage_api.deployments_service.k8s_client.get_deployment",
+    new_callable=AsyncMock,
+)
+@pytest.mark.asyncio
+async def test_apply_deployment_create_with_suspended_follows_up_with_update(
+    mock_get_deployment: AsyncMock,
+    mock_create: AsyncMock,
+    mock_update: AsyncMock,
+) -> None:
+    """``suspended=True`` on create issues a follow-up update so K8s reflects it."""
+    mock_get_deployment.return_value = None
+    created = _make_deployment(display_name="my-app")
+    mock_create.return_value = created
+    mock_update.return_value = created.model_copy(update={"suspended": True})
+
+    response, was_created = await deployments_service.apply_deployment(
+        project_id="proj-1",
+        deployment_id="my-app",
+        apply_data=schema.DeploymentApply(
+            display_name="my-app",
+            suspended=True,
+        ),
+    )
+
+    assert was_created is True
+    assert response.suspended is True
+    mock_create.assert_awaited_once()
+    mock_update.assert_awaited_once()
+    assert mock_update.await_args is not None
+    update_kwargs = mock_update.await_args.kwargs
+    assert update_kwargs["update_data"].suspended is True
+
+
+@patch(
+    "llama_agents.control_plane.manage_api.deployments_service.DeploymentService.update_deployment",
+    new_callable=AsyncMock,
+)
+@patch(
+    "llama_agents.control_plane.manage_api.deployments_service.k8s_client.get_deployment",
+    new_callable=AsyncMock,
+)
+@pytest.mark.asyncio
+async def test_apply_deployment_project_mismatch_creates_with_explicit_id(
+    mock_get_deployment: AsyncMock,
+    mock_update: AsyncMock,
+) -> None:
+    """A deployment owned by a different project is invisible to apply.
+
+    The current project gets a fresh create attempt rather than a 409.
+    """
+    mock_get_deployment.return_value = _make_deployment(project_id="other")
+
+    with patch(
+        "llama_agents.control_plane.manage_api.deployments_service.DeploymentService.create_deployment",
+        new_callable=AsyncMock,
+    ) as mock_create:
+        mock_create.return_value = _make_deployment(
+            project_id="proj-1", display_name="my-app"
+        )
+        _, was_created = await deployments_service.apply_deployment(
+            project_id="proj-1",
+            deployment_id="my-app",
+            apply_data=schema.DeploymentApply(display_name="my-app"),
+        )
+
+    assert was_created is True
+    mock_update.assert_not_awaited()

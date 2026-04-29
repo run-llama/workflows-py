@@ -7,6 +7,7 @@ from .backups import (
 )
 from .base import Base
 from .deployments import (
+    DeploymentApply,
     DeploymentCreate,
     DeploymentHistoryResponse,
     DeploymentResponse,
@@ -35,6 +36,7 @@ __all__ = [
     "RestoreResponse",
     "Base",
     "LogEvent",
+    "DeploymentApply",
     "DeploymentCreate",
     "DeploymentResponse",
     "DeploymentUpdate",
