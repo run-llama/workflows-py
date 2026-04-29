@@ -17,6 +17,7 @@ from llama_agents.cli.styles import WARNING
 from llama_agents.core.schema import LogEvent
 from llama_agents.core.schema.deployments import (
     INTERNAL_CODE_REPO_SCHEME,
+    DeploymentCreate,
     DeploymentHistoryResponse,
     DeploymentResponse,
     DeploymentUpdate,
@@ -49,6 +50,11 @@ from ..utils.git_push import (
     get_deployment_git_url,
     internal_push_refspec,
     push_to_remote,
+)
+from ..yaml_format import (
+    ApplyYamlError,
+    UnresolvedVarsError,
+    parse_apply_yaml,
 )
 from ..yaml_template import render as render_yaml_template
 
@@ -268,6 +274,112 @@ def template_deployment() -> None:
     )
 
 
+@deployments.command("apply")
+@global_options
+@click.option(
+    "-f",
+    "--filename",
+    "filename",
+    required=True,
+    type=click.File("r"),
+    help="YAML file or `-` for stdin.",
+)
+@click.option(
+    "--dry-run",
+    "dry_run",
+    is_flag=False,
+    flag_value="client",
+    default=None,
+    type=click.Choice(["client", "server"], case_sensitive=False),
+    help=(
+        "Validate without applying. `client` (the default with bare flag) "
+        "prints the resolved payload; `server` is reserved for a future "
+        "server-side dry-run."
+    ),
+)
+@project_option
+def apply_deployment(
+    filename: click.utils.LazyFile,
+    dry_run: str | None,
+    project: str | None,
+) -> None:
+    """Apply a deployment declaratively from a YAML file.
+
+    With ``name:`` in the YAML the command upserts by stable id (server
+    creates when missing, updates when present). Without ``name:`` but with
+    ``display_name:`` it falls through to the existing create endpoint with
+    a server-generated id. ``${VAR}`` references resolve from the local
+    environment; missing names are surfaced as a single grouped error.
+    Non-interactive by design — run ``llamactl auth login`` first.
+    """
+    # ``yaml`` is unused on the auth-fail / unset-var paths and the import
+    # is held to a no-llamactl-startup budget by tests/test_cli_imports.py.
+    import yaml as pyyaml
+
+    validate_authenticated_profile(interactive=False)
+
+    source = filename.name if filename.name != "<stdin>" else "-"
+    try:
+        text = filename.read()
+        parsed = parse_apply_yaml(text, source=source)
+    except (ApplyYamlError, UnresolvedVarsError) as exc:
+        raise click.ClickException(str(exc))
+
+    if dry_run is not None and dry_run.lower() == "server":
+        raise click.ClickException("server-side dry-run not yet supported")
+
+    if dry_run is not None and dry_run.lower() == "client":
+        payload: dict[str, object] = {}
+        if parsed.name:
+            payload["name"] = parsed.name
+        payload.update(parsed.apply.model_dump(exclude_unset=True))
+        click.echo(pyyaml.safe_dump(payload, sort_keys=False), nl=False)
+        return
+
+    try:
+        client = get_project_client(project_id_override=project)
+
+        if parsed.name:
+            updated, created = asyncio.run(
+                client.apply_deployment(parsed.name, parsed.apply)
+            )
+            verb = "created" if created else "updated"
+            rprint(f"[green]{verb}[/green] {updated.id}")
+            return
+
+        if not parsed.apply.display_name:
+            raise click.ClickException(
+                "YAML must include `name` (for upsert by stable id) or "
+                "`display_name` (to create with auto-generated name)"
+            )
+
+        # Fallthrough: no stable id → existing create endpoint, server picks
+        # the id. ``DeploymentCreate.secrets`` is ``dict[str, str]`` so drop
+        # any ``None`` values (deletion semantics make no sense on create).
+        secrets_for_create: dict[str, str] | None = None
+        if parsed.apply.secrets is not None:
+            secrets_for_create = {
+                k: v for k, v in parsed.apply.secrets.items() if v is not None
+            }
+        create_data = DeploymentCreate(
+            display_name=parsed.apply.display_name,
+            repo_url=parsed.apply.repo_url or "",
+            deployment_file_path=parsed.apply.deployment_file_path,
+            git_ref=parsed.apply.git_ref,
+            personal_access_token=parsed.apply.personal_access_token,
+            secrets=secrets_for_create,
+            appserver_version=parsed.apply.appserver_version,
+        )
+        created_dep = asyncio.run(client.create_deployment(create_data))
+        rprint(f"[green]created[/green] {created_dep.id}")
+
+    except click.ClickException:
+        raise
+    except Exception as e:
+        rprint(f"[red]Error: {e}[/red]")
+        raise click.Abort()
+
+
 @deployments.command("create")
 @global_options
 @interactive_option
@@ -353,16 +465,45 @@ def configure_git_remote_cmd(
 @deployments.command("delete")
 @global_options
 @click.argument("deployment_id", required=False, type=DeploymentType())
+@click.option(
+    "-f",
+    "--filename",
+    "filename",
+    type=click.File("r"),
+    default=None,
+    help=(
+        "Read the deployment `name` from a YAML file (`-` for stdin) instead "
+        "of a positional argument. Mutually exclusive with the argument."
+    ),
+)
 @project_option
 @interactive_option
 def delete_deployment(
-    deployment_id: str | None, interactive: bool, project: str | None
+    deployment_id: str | None,
+    filename: click.utils.LazyFile | None,
+    interactive: bool,
+    project: str | None,
 ) -> None:
-    """Delete a deployment"""
+    """Delete a deployment by id or by ``name:`` in a YAML file."""
     # Keep this import local: the helper imports `questionary`, which import-time
     # profiling showed is a noticeable CLI startup cost. Avoid other local
     # imports unless instrumentation shows they are slow.
     from ..interactive_prompts.utils import confirm_action
+
+    if filename is not None and deployment_id:
+        raise click.ClickException("specify either `<deployment_id>` or `-f`, not both")
+
+    if filename is not None:
+        source = filename.name if filename.name != "<stdin>" else "-"
+        try:
+            parsed = parse_apply_yaml(filename.read(), source=source)
+        except (ApplyYamlError, UnresolvedVarsError) as exc:
+            raise click.ClickException(str(exc))
+        if not parsed.name:
+            raise click.ClickException(
+                f"{source}: YAML must include `name` to delete by reference"
+            )
+        deployment_id = parsed.name
 
     validate_authenticated_profile(interactive)
     try:

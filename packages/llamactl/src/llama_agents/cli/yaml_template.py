@@ -101,10 +101,12 @@ def render(
                 out.append(f"{_INDENT}secrets:")
                 for sname, sval in value.items():
                     if sname in secret_comments:
-                        out.extend(_doc_lines(
-                            secret_comments[sname].split("\n"),
-                            indent=_INDENT * 2,
-                        ))
+                        out.extend(
+                            _doc_lines(
+                                secret_comments[sname].split("\n"),
+                                indent=_INDENT * 2,
+                            )
+                        )
                     out.append(f"{_INDENT * 2}{sname}: {_scalar(sval)}")
             else:
                 out.append(f"{_INDENT}{fname}: {_scalar(value)}")
