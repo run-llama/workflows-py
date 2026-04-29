@@ -983,7 +983,10 @@ class DBOSRuntime(Runtime):
             )
             if isinstance(inner, PostgresWorkflowStore):
                 inner._closing = True
-                if inner._reconnect_task is not None and not inner._reconnect_task.done():
+                if (
+                    inner._reconnect_task is not None
+                    and not inner._reconnect_task.done()
+                ):
                     inner._reconnect_task.cancel()
                 if inner._external_ensure_pool is None and inner._pool is not None:
                     try:
