@@ -14,12 +14,15 @@ from types import SimpleNamespace
 from typing import Any, Generator, cast
 from unittest.mock import patch
 
+import asyncpg
 import pytest
 from dbos import DBOS, DBOSConfig
 from llama_agents.dbos import DBOSRuntime
 from llama_agents.dbos.journal.crud import SqliteJournalCrud
 from llama_agents.dbos.journal.task_journal import TaskJournal
 from llama_agents.dbos.runtime import InternalDBOSAdapter
+from llama_agents.server._pool import PoolProvider
+from llama_agents.server._store.postgres_state_store import PostgresStateStore
 from pydantic import Field
 from sqlalchemy.engine import Engine
 from workflows.context import Context
@@ -38,6 +41,27 @@ def _fake_sqlite_engine() -> Engine:
             url=SimpleNamespace(database=":memory:"),
         ),
     )
+
+
+def test_postgres_adapter_uses_resolved_pool_for_sync_state_store() -> None:
+    pool = cast(asyncpg.Pool, object())
+
+    async def factory() -> asyncpg.Pool:
+        raise AssertionError("resolved pool should be used synchronously")
+
+    adapter = InternalDBOSAdapter(
+        run_id="run-1",
+        engine=cast(
+            Engine, SimpleNamespace(dialect=SimpleNamespace(name="postgresql"))
+        ),
+        pool=PoolProvider.borrowed(factory),
+        resolved_pool=pool,
+    )
+
+    state_store = adapter.get_state_store()
+
+    assert isinstance(state_store, PostgresStateStore)
+    assert state_store._pool is pool
 
 
 @pytest.fixture(scope="module")

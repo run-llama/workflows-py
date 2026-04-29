@@ -654,6 +654,7 @@ class DBOSRuntime(Runtime):
             pool=PoolProvider.borrowed(self._ensure_pool)
             if self._dsn is not None
             else None,
+            resolved_pool=self._pool,
             db_path=self._db_path,
         )
 
@@ -1028,6 +1029,7 @@ class InternalDBOSAdapter(InternalRunAdapter):
         state_table_name: str = DEFAULT_STATE_TABLE_NAME,
         journal_table_name: str = DEFAULT_JOURNAL_TABLE_NAME,
         pool: PoolProvider | None = None,
+        resolved_pool: asyncpg.Pool | None = None,
         db_path: str | None = None,
     ) -> None:
         self._run_id = run_id
@@ -1037,7 +1039,7 @@ class InternalDBOSAdapter(InternalRunAdapter):
         self._state_table_name = state_table_name
         self._journal_table_name = journal_table_name
         self._pool_provider = pool
-        self._resolved_pool: asyncpg.Pool | None = None
+        self._resolved_pool = resolved_pool
         self._db_path = db_path
         self._closed = False
         self._shutdown_event = asyncio.Event()
