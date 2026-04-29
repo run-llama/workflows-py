@@ -126,15 +126,19 @@ class PostgresWorkflowStore(AbstractWorkflowStore):
         """Set up a dedicated connection for LISTEN/NOTIFY."""
         assert self._pool is not None
         conn = cast(asyncpg.Connection, await self._pool.acquire())
-        await conn.add_listener(self._notify_channel, self._on_notify)
-        # Recover from network blips / Postgres restarts.
         try:
-            conn.add_termination_listener(self._on_listen_termination)
-        except AttributeError:
-            # asyncpg < 0.27 (or a stub during tests) may not expose this.
-            logger.debug(
-                "Connection.add_termination_listener unavailable; LISTEN reconnect disabled"
-            )
+            await conn.add_listener(self._notify_channel, self._on_notify)
+            # Recover from network blips / Postgres restarts.
+            try:
+                conn.add_termination_listener(self._on_listen_termination)
+            except AttributeError:
+                # asyncpg < 0.27 (or a stub during tests) may not expose this.
+                logger.debug(
+                    "Connection.add_termination_listener unavailable; LISTEN reconnect disabled"
+                )
+        except Exception:
+            await self._pool.release(conn)
+            raise
         self._listen_conn = conn
 
     def _on_notify(

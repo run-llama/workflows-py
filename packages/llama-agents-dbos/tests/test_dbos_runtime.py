@@ -393,6 +393,14 @@ def test_resolve_pool_sizes_min_clamped_to_max() -> None:
     assert max_size == 4
 
 
+def test_resolve_pool_sizes_floor_at_two() -> None:
+    """pool_size=1 is bumped to 2 so the LISTEN connection doesn't starve queries."""
+    runtime = DBOSRuntime(pool_size=1)
+    min_size, max_size = runtime._resolve_pool_sizes()
+    assert max_size == 2
+    assert min_size == 2
+
+
 def test_resolve_pool_sizes_falls_back_to_dbos_sys_db_pool_size() -> None:
     """Without explicit config, picks up DBOS's configured sys_db pool_size."""
     runtime = DBOSRuntime()

@@ -450,6 +450,10 @@ class DBOSRuntime(Runtime):
                 max_size = None
         if max_size is None:
             max_size = _DEFAULT_POOL_SIZE_FALLBACK
+        # The workflow store permanently holds one connection for LISTEN/NOTIFY,
+        # so the pool must have at least 2 to avoid deadlocking queries.
+        if max_size < 2:
+            max_size = 2
 
         min_size = self.config.get("pool_min_size", max_size)
         # Clamp min ≤ max defensively in case both were set.
@@ -968,14 +972,9 @@ class DBOSRuntime(Runtime):
         self._dsn = None
         self._db_path = None
         self._schema = None
-        if self._pool is not None:
-            try:
-                self._pool.terminate()
-            except Exception:
-                logger.debug(
-                    "Failed to terminate asyncpg pool during destroy", exc_info=True
-                )
-            self._pool = None
+        # Shut down the workflow store's listener before terminating the pool.
+        # Otherwise pool.terminate() kills the LISTEN connection, which fires
+        # _on_listen_termination and spawns a reconnect task during shutdown.
         if self._workflow_store is not None:
             inner = (
                 self._workflow_store._inner
@@ -983,9 +982,9 @@ class DBOSRuntime(Runtime):
                 else self._workflow_store
             )
             if isinstance(inner, PostgresWorkflowStore):
-                # The runtime owns the asyncpg pool now; the workflow store
-                # only holds a borrowed reference. Just null out its handles —
-                # the runtime's terminate above already tore down the pool.
+                inner._closing = True
+                if inner._reconnect_task is not None and not inner._reconnect_task.done():
+                    inner._reconnect_task.cancel()
                 if inner._external_ensure_pool is None and inner._pool is not None:
                     try:
                         inner._pool.terminate()
@@ -997,6 +996,14 @@ class DBOSRuntime(Runtime):
                 inner._pool = None
                 inner._listen_conn = None
             self._workflow_store = None
+        if self._pool is not None:
+            try:
+                self._pool.terminate()
+            except Exception:
+                logger.debug(
+                    "Failed to terminate asyncpg pool during destroy", exc_info=True
+                )
+            self._pool = None
         # Wait for cancelled tasks to unwind before destroying DBOS.
         tasks_to_cancel = [t for t in self._tasks if not t.done()]
         for task in tasks_to_cancel:
