@@ -17,6 +17,7 @@ from llama_agents.client.protocol.serializable_events import EventEnvelopeWithMe
 from workflows.context import JsonSerializer
 from workflows.context.serializers import BaseSerializer
 
+from .._pool import PoolProvider
 from .abstract_workflow_store import (
     AbstractWorkflowStore,
     HandlerQuery,
@@ -30,6 +31,10 @@ from .postgres_state_store import PostgresStateStore
 logger = logging.getLogger(__name__)
 
 _TICK_PAGE_SIZE = 100
+
+# Bounds for the LISTEN-connection reconnect backoff.
+_LISTEN_RECONNECT_INITIAL_DELAY = 0.5
+_LISTEN_RECONNECT_MAX_DELAY = 30.0
 
 
 def _utc_now() -> datetime:
@@ -49,7 +54,14 @@ class PostgresWorkflowStore(AbstractWorkflowStore):
         pool_min_size: int = 2,
         pool_max_size: int = 10,
         auto_migrate: bool = True,
+        pool: PoolProvider | None = None,
     ) -> None:
+        """Construct a PostgresWorkflowStore.
+
+        When ``pool`` is provided, the provider controls ownership semantics.
+        When it is omitted, the store owns a lazily-created asyncpg pool using
+        the provided DSN and pool size settings.
+        """
         self._dsn = dsn
         self._schema = schema
         self.poll_interval = poll_interval
@@ -58,11 +70,20 @@ class PostgresWorkflowStore(AbstractWorkflowStore):
         self._pool_min_size = pool_min_size
         self._pool_max_size = pool_max_size
         self._auto_migrate = auto_migrate
+        self._pool_provider = pool or PoolProvider.create(
+            dsn,
+            min_size=pool_min_size,
+            max_size=pool_max_size,
+        )
         self._pool: asyncpg.Pool | None = None
         self._listen_conn: asyncpg.Connection | None = None
         self._conditions: weakref.WeakValueDictionary[str, asyncio.Condition] = (
             weakref.WeakValueDictionary()
         )
+        # LISTEN reconnect bookkeeping.
+        self._closing = False
+        self._reconnect_lock = asyncio.Lock()
+        self._reconnect_task: asyncio.Task[None] | None = None
 
     @property
     def _handlers_ref(self) -> str:
@@ -87,14 +108,12 @@ class PostgresWorkflowStore(AbstractWorkflowStore):
         return self._events_table_name
 
     async def start(self) -> None:
-        """Create the connection pool, run migrations if enabled, and set up LISTEN."""
+        """Resolve the connection pool, run migrations if enabled, and set up LISTEN."""
         if self._pool is not None:
             return
-        self._pool = await asyncpg.create_pool(
-            self._dsn,
-            min_size=self._pool_min_size,
-            max_size=self._pool_max_size,
-        )
+        # Reset for re-start after a close().
+        self._closing = False
+        self._pool = await self._pool_provider.get()
         if self._auto_migrate:
             await self.run_migrations()
         await self._setup_listener()
@@ -103,7 +122,19 @@ class PostgresWorkflowStore(AbstractWorkflowStore):
         """Set up a dedicated connection for LISTEN/NOTIFY."""
         assert self._pool is not None
         conn = cast(asyncpg.Connection, await self._pool.acquire())
-        await conn.add_listener(self._notify_channel, self._on_notify)
+        try:
+            await conn.add_listener(self._notify_channel, self._on_notify)
+            # Recover from network blips / Postgres restarts.
+            try:
+                conn.add_termination_listener(self._on_listen_termination)
+            except AttributeError:
+                # asyncpg < 0.27 (or a stub during tests) may not expose this.
+                logger.debug(
+                    "Connection.add_termination_listener unavailable; LISTEN reconnect disabled"
+                )
+        except Exception:
+            await self._pool.release(conn)
+            raise
         self._listen_conn = conn
 
     def _on_notify(
@@ -124,8 +155,90 @@ class PostgresWorkflowStore(AbstractWorkflowStore):
         async with condition:
             condition.notify_all()
 
+    def _wake_all_subscribers(self) -> None:
+        """Wake every active condition so subscribe_events re-queries.
+
+        Used after a LISTEN reconnect — we may have missed NOTIFYs while the
+        listener connection was down. The polling fallback in
+        ``subscribe_events`` would catch them within ``poll_interval``; this
+        just makes recovery immediate.
+        """
+        # Snapshot to avoid mutation-during-iteration on the WeakValueDictionary.
+        for cond in list(self._conditions.values()):
+            asyncio.ensure_future(self._notify_condition(cond))
+
+    def _on_listen_termination(self, connection: asyncpg.Connection) -> None:
+        """asyncpg termination callback — schedule a reconnect.
+
+        Fires for normal close too, so we guard with ``self._closing``. The
+        callback runs on asyncpg's internal task; do real work via
+        ``ensure_future``.
+        """
+        if self._closing:
+            return
+        if self._reconnect_task is not None and not self._reconnect_task.done():
+            return  # already reconnecting
+        try:
+            self._reconnect_task = asyncio.ensure_future(self._reconnect_listener())
+        except RuntimeError:
+            # No running loop (e.g. termination during shutdown). Nothing to do.
+            logger.debug("No running loop to schedule LISTEN reconnect")
+
+    async def _reconnect_listener(self) -> None:
+        """Reconnect the LISTEN connection with bounded exponential backoff.
+
+        On success, wakes every subscribe_events consumer so they re-query
+        immediately rather than waiting for the polling fallback.
+        """
+        async with self._reconnect_lock:
+            if self._closing or self._pool is None:
+                return
+
+            logger.warning("LISTEN connection dropped; reconnecting")
+
+            # Release the dead conn back to the pool. asyncpg handles already-
+            # closed connections gracefully on release.
+            if self._listen_conn is not None:
+                try:
+                    await self._pool.release(self._listen_conn)
+                except Exception:
+                    logger.debug(
+                        "Failed to release dead listen connection", exc_info=True
+                    )
+                self._listen_conn = None
+
+            delay = _LISTEN_RECONNECT_INITIAL_DELAY
+            while not self._closing:
+                try:
+                    await self._setup_listener()
+                except Exception:
+                    logger.warning(
+                        "LISTEN reconnect attempt failed; retrying in %.1fs",
+                        delay,
+                        exc_info=True,
+                    )
+                    try:
+                        await asyncio.sleep(delay)
+                    except asyncio.CancelledError:
+                        return
+                    delay = min(delay * 2, _LISTEN_RECONNECT_MAX_DELAY)
+                    continue
+
+                logger.info("LISTEN connection re-established")
+                self._wake_all_subscribers()
+                return
+
     async def close(self) -> None:
-        """Tear down the LISTEN connection and close the pool."""
+        """Tear down the LISTEN connection and close the pool (if owned)."""
+        # Block any in-flight reconnect coroutine from re-installing the listener.
+        self._closing = True
+        if self._reconnect_task is not None and not self._reconnect_task.done():
+            self._reconnect_task.cancel()
+            try:
+                await self._reconnect_task
+            except (asyncio.CancelledError, Exception):
+                pass
+        self._reconnect_task = None
         if self._listen_conn is not None:
             try:
                 await self._listen_conn.remove_listener(
@@ -141,7 +254,7 @@ class PostgresWorkflowStore(AbstractWorkflowStore):
                 )
             self._listen_conn = None
         if self._pool is not None:
-            await self._pool.close()
+            await self._pool_provider.close()
             self._pool = None
 
     async def _ensure_pool(self) -> asyncpg.Pool:

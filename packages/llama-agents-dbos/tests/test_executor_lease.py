@@ -6,10 +6,12 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import AsyncGenerator
+from typing import cast
 
 import asyncpg
 import pytest
 from llama_agents.dbos.executor_lease import ExecutorLeaseManager
+from llama_agents.server._pool import PoolProvider
 from llama_agents.server._store.postgres.migrate import run_migrations
 
 
@@ -36,12 +38,22 @@ def make_manager(
     lease_timeout: float = 5.0,
 ) -> ExecutorLeaseManager:
     return ExecutorLeaseManager(
-        dsn=dsn,
+        pool=PoolProvider.create(dsn, min_size=1, max_size=5),
         pool_size=pool_size,
         schema="test_lease",
         heartbeat_interval=heartbeat_interval,
         lease_timeout=lease_timeout,
     )
+
+
+def test_requires_pool_provider() -> None:
+    provider = PoolProvider.borrowed(
+        lambda: asyncio.sleep(0, result=cast(asyncpg.Pool, object()))
+    )
+
+    mgr = ExecutorLeaseManager(pool=provider, pool_size=1)
+
+    assert mgr._pool_provider is provider
 
 
 @pytest.mark.docker
