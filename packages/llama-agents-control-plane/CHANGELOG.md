@@ -1,5 +1,13 @@
 # llama-agents-control-plane
 
+## 0.12.1
+
+### Patch Changes
+
+- 463c79d: Add `follow=false` query param on `GET /deployments/{id}/logs` so clients can fetch currently-available logs and exit. The default stays `follow=true`; existing streaming consumers are unchanged.
+- Updated dependencies [463c79d]
+  - llama-agents-core@0.10.1
+
 ## 0.12.0
 
 ### Minor Changes

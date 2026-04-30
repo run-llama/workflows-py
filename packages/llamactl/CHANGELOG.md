@@ -1,5 +1,21 @@
 # llamactl
 
+## 0.9.0
+
+### Minor Changes
+
+- 491e2d2: `auth list`, `auth env list`, and `auth organizations` now support `-o text|json|yaml|wide`. Plain-text tables replace the Rich-styled tables; JSON/YAML output round-trips. `auth list` no longer leaks `api_key` or OIDC tokens — `auth_type` reports `token`/`oidc`/`none`.
+- ec88970: `deployments get` now shows one deployment with a name and lists all of them without; adds `-o text|json|yaml|wide`, `--project`, and a new `deployments logs` command.
+- 9cee98d: `deployments history` now supports `-o text|json|yaml|wide` and `--project <id>`. Text output uses 7-char short SHAs and Z-suffixed UTC timestamps; JSON keeps full SHAs. `deployments rollback --git-sha` now offers shell completion from the deployment's history.
+
+### Patch Changes
+
+- 0c6afcd: Editing a push-mode (Local repo) deployment now pushes local code before calling update, so switching branches or saving new commits works on the first try and the server resolves git_ref to the actual latest SHA.
+- 91516a5: `llamactl auth login` now prints a friendly hint pointing to `llamactl auth token` when the server has no OIDC browser-login configured, instead of dumping a raw 400 from the discovery endpoint.
+- Updated dependencies [463c79d]
+  - llama-agents-core@0.10.1
+  - llama-agents-appserver@0.11.3
+
 ## 0.8.0
 
 ### Minor Changes
