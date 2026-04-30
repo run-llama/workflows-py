@@ -25,9 +25,7 @@ from llama_agents.core.schema.deployments import (
 )
 
 
-def _client_mock(
-    current: DeploymentResponse, updated: DeploymentResponse
-) -> MagicMock:
+def _client_mock(current: DeploymentResponse, updated: DeploymentResponse) -> MagicMock:
     """ProjectClient stand-in for the update flow."""
 
     async def _get(
