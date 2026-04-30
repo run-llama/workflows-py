@@ -17,7 +17,6 @@ from llama_agents.cli.yaml_format import (
     resolve_env_vars,
 )
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -342,7 +341,6 @@ def test_create_excludes_unset_fields() -> None:
     """)
     display = parse_apply_yaml(doc)
     payload = apply_payload_to_create(display)
-    dumped = payload.model_dump()
     # git_ref was not set, so it should default / not be explicitly configured
     assert payload.git_ref is None
 

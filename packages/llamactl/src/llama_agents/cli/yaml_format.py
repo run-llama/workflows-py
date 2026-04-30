@@ -15,10 +15,9 @@ import re
 from typing import Any
 
 import yaml
-from pydantic import ValidationError
-
-from llama_agents.cli.display import SECRET_MASK, DeploymentDisplay, DeploymentSpec
+from llama_agents.cli.display import SECRET_MASK, DeploymentDisplay
 from llama_agents.core.schema.deployments import DeploymentCreate, DeploymentUpdate
+from pydantic import ValidationError
 
 _ENV_VAR_RE = re.compile(r"\$\{([^}]+)\}")
 

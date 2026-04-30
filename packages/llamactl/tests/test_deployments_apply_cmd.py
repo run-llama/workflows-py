@@ -4,9 +4,10 @@
 
 from __future__ import annotations
 
+import subprocess
 import textwrap
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
@@ -15,7 +16,6 @@ from conftest import make_deployment, patch_project_client
 from llama_agents.cli.app import app
 from llama_agents.core.schema.deployments import DeploymentResponse
 from llama_agents.core.schema.git_validation import RepositoryValidationResponse
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -60,7 +60,9 @@ def _apply_client_mock(
 
         client.get_deployment = AsyncMock(side_effect=_get)
     else:
-        client.get_deployment = AsyncMock(side_effect=lambda *a, **kw: (_ for _ in ()).throw(_http_404()))
+        client.get_deployment = AsyncMock(
+            side_effect=lambda *a, **kw: (_ for _ in ()).throw(_http_404())
+        )
 
     if created:
         client.create_deployment = AsyncMock(return_value=created)
@@ -106,9 +108,7 @@ MINIMAL_UPDATE_YAML = textwrap.dedent("""\
 # ---------------------------------------------------------------------------
 
 
-def test_apply_creates_when_not_found(
-    patched_auth: Any, tmp_path: Any
-) -> None:
+def test_apply_creates_when_not_found(patched_auth: Any, tmp_path: Any) -> None:
     runner = CliRunner()
     f = tmp_path / "deploy.yaml"
     f.write_text(MINIMAL_CREATE_YAML)
@@ -128,9 +128,7 @@ def test_apply_creates_when_not_found(
 # ---------------------------------------------------------------------------
 
 
-def test_apply_updates_when_exists(
-    patched_auth: Any, tmp_path: Any
-) -> None:
+def test_apply_updates_when_exists(patched_auth: Any, tmp_path: Any) -> None:
     runner = CliRunner()
     f = tmp_path / "deploy.yaml"
     f.write_text(MINIMAL_UPDATE_YAML)
@@ -173,9 +171,7 @@ def test_apply_reads_stdin(patched_auth: Any) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_apply_generate_name_only(
-    patched_auth: Any, tmp_path: Any
-) -> None:
+def test_apply_generate_name_only(patched_auth: Any, tmp_path: Any) -> None:
     runner = CliRunner()
     yaml_text = textwrap.dedent("""\
         generateName: My App
@@ -229,9 +225,7 @@ def test_apply_generate_name_aliases_produce_same_create(
 # ---------------------------------------------------------------------------
 
 
-def test_apply_409_surfaces_error(
-    patched_auth: Any, tmp_path: Any
-) -> None:
+def test_apply_409_surfaces_error(patched_auth: Any, tmp_path: Any) -> None:
     runner = CliRunner()
     f = tmp_path / "deploy.yaml"
     f.write_text(MINIMAL_CREATE_YAML)
@@ -254,18 +248,14 @@ def test_apply_409_surfaces_error(
 # ---------------------------------------------------------------------------
 
 
-def test_apply_dry_run_named(
-    patched_auth: Any, tmp_path: Any
-) -> None:
+def test_apply_dry_run_named(patched_auth: Any, tmp_path: Any) -> None:
     runner = CliRunner()
     f = tmp_path / "deploy.yaml"
     f.write_text(MINIMAL_CREATE_YAML)
 
     client = _apply_client_mock()
     with patch_project_client(client):
-        result = runner.invoke(
-            app, ["deployments", "apply", "-f", str(f), "--dry-run"]
-        )
+        result = runner.invoke(app, ["deployments", "apply", "-f", str(f), "--dry-run"])
 
     assert result.exit_code == 0, result.output
     client.get_deployment.assert_not_called()
@@ -275,9 +265,7 @@ def test_apply_dry_run_named(
     assert "upsert" in result.output.lower()
 
 
-def test_apply_dry_run_generate_name_only(
-    patched_auth: Any, tmp_path: Any
-) -> None:
+def test_apply_dry_run_generate_name_only(patched_auth: Any, tmp_path: Any) -> None:
     runner = CliRunner()
     yaml_text = textwrap.dedent("""\
         generateName: My App
@@ -289,9 +277,7 @@ def test_apply_dry_run_generate_name_only(
 
     client = _apply_client_mock()
     with patch_project_client(client):
-        result = runner.invoke(
-            app, ["deployments", "apply", "-f", str(f), "--dry-run"]
-        )
+        result = runner.invoke(app, ["deployments", "apply", "-f", str(f), "--dry-run"])
 
     assert result.exit_code == 0, result.output
     client.get_deployment.assert_not_called()
@@ -305,9 +291,7 @@ def test_apply_dry_run_generate_name_only(
 # ---------------------------------------------------------------------------
 
 
-def test_apply_dry_run_server_errors(
-    patched_auth: Any, tmp_path: Any
-) -> None:
+def test_apply_dry_run_server_errors(patched_auth: Any, tmp_path: Any) -> None:
     runner = CliRunner()
     f = tmp_path / "deploy.yaml"
     f.write_text(MINIMAL_CREATE_YAML)
@@ -369,7 +353,10 @@ def test_apply_name_without_generate_name_404_errors(
         result = runner.invoke(app, ["deployments", "apply", "-f", str(f)])
 
     assert result.exit_code != 0
-    assert "generate_name" in result.output.lower() or "generatename" in result.output.lower()
+    assert (
+        "generate_name" in result.output.lower()
+        or "generatename" in result.output.lower()
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -411,7 +398,7 @@ def test_apply_push_mode_skips_validate_repository(
 
     client = _apply_client_mock()
     with patch_project_client(client):
-        result = runner.invoke(app, ["deployments", "apply", "-f", str(f)])
+        result = runner.invoke(app, ["deployments", "apply", "-f", str(f), "--no-push"])
 
     assert result.exit_code == 0, result.output
     client.validate_repository.assert_not_called()
@@ -437,7 +424,9 @@ def test_apply_env_var_resolves(
     f.write_text(yaml_text)
 
     client = _apply_client_mock(
-        created=make_deployment("env-app", repo_url="https://github.com/env-resolved/repo")
+        created=make_deployment(
+            "env-app", repo_url="https://github.com/env-resolved/repo"
+        )
     )
     with patch_project_client(client):
         result = runner.invoke(app, ["deployments", "apply", "-f", str(f)])
@@ -480,9 +469,7 @@ def test_apply_unresolved_env_var_errors(
 # ---------------------------------------------------------------------------
 
 
-def test_delete_from_file(
-    patched_auth: Any, tmp_path: Any
-) -> None:
+def test_delete_from_file(patched_auth: Any, tmp_path: Any) -> None:
     runner = CliRunner()
     yaml_text = textwrap.dedent("""\
         name: doomed-app
@@ -553,3 +540,267 @@ def test_delete_reads_stdin(patched_auth: Any) -> None:
     client.delete_deployment.assert_called_once()
     call_args = client.delete_deployment.call_args
     assert call_args[0][0] == "stdin-app"
+
+
+# ---------------------------------------------------------------------------
+# Push-mode sync (Phase 3)
+# ---------------------------------------------------------------------------
+
+
+def _push_mode_client(
+    *,
+    existing_repo_url: str = "internal://",
+    deployment_id: str = "my-app",
+) -> MagicMock:
+    """Client mock for a push-mode deployment."""
+    existing = make_deployment(deployment_id, repo_url=existing_repo_url)
+    client = _apply_client_mock(existing=existing)
+    client.update_deployment = AsyncMock(return_value=existing)
+    return client
+
+
+def test_apply_push_mode_create_does_save_then_push(
+    patched_auth: Any, tmp_path: Any
+) -> None:
+    """Create with repo_url="" → save first (POST), then push."""
+    runner = CliRunner()
+    yaml_text = textwrap.dedent("""\
+        generate_name: My App
+        spec:
+          repo_url: ""
+          git_ref: main
+    """)
+    f = tmp_path / "deploy.yaml"
+    f.write_text(yaml_text)
+
+    client = _apply_client_mock()
+    with (
+        patch_project_client(client),
+        patch(
+            "llama_agents.cli.commands.deployment.configure_git_remote",
+            return_value="llamaagents-new-app",
+        ) as mock_configure,
+        patch(
+            "llama_agents.cli.commands.deployment.push_to_remote",
+            return_value=subprocess.CompletedProcess([], 0),
+        ) as mock_push,
+        patch(
+            "llama_agents.cli.commands.deployment.get_api_key",
+            return_value="test-key",
+        ),
+    ):
+        result = runner.invoke(app, ["deployments", "apply", "-f", str(f)])
+
+    assert result.exit_code == 0, result.output
+    assert "created new-app" in result.output
+    # Push happened after create
+    client.create_deployment.assert_called_once()
+    mock_configure.assert_called_once()
+    mock_push.assert_called_once()
+
+
+def test_apply_push_mode_update_does_push_then_save(
+    patched_auth: Any, tmp_path: Any
+) -> None:
+    """Existing push-mode + desired push-mode → push first, then save."""
+    runner = CliRunner()
+    yaml_text = textwrap.dedent("""\
+        name: my-app
+        spec:
+          git_ref: feature-branch
+    """)
+    f = tmp_path / "deploy.yaml"
+    f.write_text(yaml_text)
+
+    client = _push_mode_client()
+    with (
+        patch_project_client(client),
+        patch(
+            "llama_agents.cli.commands.deployment.configure_git_remote",
+            return_value="llamaagents-my-app",
+        ),
+        patch(
+            "llama_agents.cli.commands.deployment.push_to_remote",
+            return_value=subprocess.CompletedProcess([], 0),
+        ) as mock_push,
+        patch(
+            "llama_agents.cli.commands.deployment.get_api_key",
+            return_value="test-key",
+        ),
+    ):
+        result = runner.invoke(app, ["deployments", "apply", "-f", str(f)])
+
+    assert result.exit_code == 0, result.output
+    assert "updated my-app" in result.output
+    # Push happened before update
+    mock_push.assert_called_once()
+    client.update_deployment.assert_called_once()
+
+
+def test_apply_push_then_save_push_failure_aborts(
+    patched_auth: Any, tmp_path: Any
+) -> None:
+    """Push-then-save: if push fails, update must NOT be called."""
+    runner = CliRunner()
+    yaml_text = textwrap.dedent("""\
+        name: my-app
+        spec:
+          git_ref: main
+    """)
+    f = tmp_path / "deploy.yaml"
+    f.write_text(yaml_text)
+
+    client = _push_mode_client()
+    with (
+        patch_project_client(client),
+        patch(
+            "llama_agents.cli.commands.deployment.configure_git_remote",
+            return_value="llamaagents-my-app",
+        ),
+        patch(
+            "llama_agents.cli.commands.deployment.push_to_remote",
+            return_value=subprocess.CompletedProcess([], 1, stderr=b"push rejected"),
+        ),
+        patch(
+            "llama_agents.cli.commands.deployment.get_api_key",
+            return_value="test-key",
+        ),
+    ):
+        result = runner.invoke(app, ["deployments", "apply", "-f", str(f)])
+
+    assert result.exit_code != 0
+    assert "push failed" in result.output.lower() or "push rejected" in result.output
+    # Update must NOT have been called
+    client.update_deployment.assert_not_called()
+
+
+def test_apply_save_then_push_push_failure_shows_recovery(
+    patched_auth: Any, tmp_path: Any
+) -> None:
+    """Save-then-push: if push fails after save, show recovery hint."""
+    runner = CliRunner()
+    yaml_text = textwrap.dedent("""\
+        generate_name: My App
+        spec:
+          repo_url: ""
+    """)
+    f = tmp_path / "deploy.yaml"
+    f.write_text(yaml_text)
+
+    client = _apply_client_mock()
+    with (
+        patch_project_client(client),
+        patch(
+            "llama_agents.cli.commands.deployment.configure_git_remote",
+            return_value="llamaagents-new-app",
+        ),
+        patch(
+            "llama_agents.cli.commands.deployment.push_to_remote",
+            return_value=subprocess.CompletedProcess([], 1, stderr=b"auth failed"),
+        ),
+        patch(
+            "llama_agents.cli.commands.deployment.get_api_key",
+            return_value="test-key",
+        ),
+    ):
+        result = runner.invoke(app, ["deployments", "apply", "-f", str(f)])
+
+    assert result.exit_code != 0
+    # Save succeeded — the create line should be in output
+    assert "created new-app" in result.output
+    # Recovery hint
+    assert "re-run" in result.output.lower()
+
+
+def test_apply_no_push_skips_push_with_warning(
+    patched_auth: Any, tmp_path: Any
+) -> None:
+    """--no-push skips push and prints a warning."""
+    runner = CliRunner()
+    yaml_text = textwrap.dedent("""\
+        name: my-app
+        spec:
+          git_ref: main
+    """)
+    f = tmp_path / "deploy.yaml"
+    f.write_text(yaml_text)
+
+    client = _push_mode_client()
+    with (
+        patch_project_client(client),
+        patch(
+            "llama_agents.cli.commands.deployment.push_to_remote",
+        ) as mock_push,
+    ):
+        result = runner.invoke(app, ["deployments", "apply", "-f", str(f), "--no-push"])
+
+    assert result.exit_code == 0, result.output
+    assert "updated my-app" in result.output
+    # Push was NOT called
+    mock_push.assert_not_called()
+
+
+def test_apply_external_to_push_mode_does_save_then_push(
+    patched_auth: Any, tmp_path: Any
+) -> None:
+    """Switching from external repo to push-mode → save then push."""
+    runner = CliRunner()
+    yaml_text = textwrap.dedent("""\
+        name: my-app
+        spec:
+          repo_url: ""
+    """)
+    f = tmp_path / "deploy.yaml"
+    f.write_text(yaml_text)
+
+    # Existing deployment has an external repo
+    client = _push_mode_client(existing_repo_url="https://github.com/org/repo")
+    with (
+        patch_project_client(client),
+        patch(
+            "llama_agents.cli.commands.deployment.configure_git_remote",
+            return_value="llamaagents-my-app",
+        ),
+        patch(
+            "llama_agents.cli.commands.deployment.push_to_remote",
+            return_value=subprocess.CompletedProcess([], 0),
+        ) as mock_push,
+        patch(
+            "llama_agents.cli.commands.deployment.get_api_key",
+            return_value="test-key",
+        ),
+    ):
+        result = runner.invoke(app, ["deployments", "apply", "-f", str(f)])
+
+    assert result.exit_code == 0, result.output
+    assert "updated my-app" in result.output
+    # Save happened first (update), then push
+    client.update_deployment.assert_called_once()
+    mock_push.assert_called_once()
+
+
+def test_apply_push_to_external_does_save_only(
+    patched_auth: Any, tmp_path: Any
+) -> None:
+    """Switching from push-mode to external → save only, no push."""
+    runner = CliRunner()
+    yaml_text = textwrap.dedent("""\
+        name: my-app
+        spec:
+          repo_url: https://github.com/org/new-repo
+    """)
+    f = tmp_path / "deploy.yaml"
+    f.write_text(yaml_text)
+
+    client = _push_mode_client()
+    with (
+        patch_project_client(client),
+        patch(
+            "llama_agents.cli.commands.deployment.push_to_remote",
+        ) as mock_push,
+    ):
+        result = runner.invoke(app, ["deployments", "apply", "-f", str(f)])
+
+    assert result.exit_code == 0, result.output
+    assert "updated my-app" in result.output
+    mock_push.assert_not_called()

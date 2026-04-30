@@ -351,7 +351,8 @@ def configure_git_remote_cmd(
 @global_options
 @click.argument("deployment_id", required=False, type=DeploymentType())
 @click.option(
-    "-f", "--filename",
+    "-f",
+    "--filename",
     default=None,
     type=click.File("r"),
     help="Path to YAML file; name is read from the file. Mutually exclusive with positional ID.",
@@ -402,10 +403,69 @@ def delete_deployment(
         raise click.Abort()
 
 
+def _apply_push(
+    client: Any,
+    deployment_id: str,
+    git_ref: str | None,
+    project_id_override: str | None,
+) -> None:
+    """Push local code to the deployment's internal bare repo.
+
+    Used in the push-then-save flow (existing push-mode → push-mode update)
+    and also called by ``_apply_push_after_save`` for the save-then-push flow.
+    Raises ``click.ClickException`` on failure — caller must not continue.
+    """
+    api_key = get_api_key()
+    git_url = get_deployment_git_url(client.base_url, deployment_id)
+    remote_name = configure_git_remote(
+        git_url, api_key, client.project_id, deployment_id
+    )
+    local_ref, target_ref = internal_push_refspec(git_ref)
+    with console.status("pushing code..."):
+        push_result = push_to_remote(
+            remote_name, local_ref=local_ref, target_ref=target_ref
+        )
+    if push_result.returncode != 0:
+        stderr = push_result.stderr.decode(errors="replace").strip()
+        raise click.ClickException(
+            f"push failed: {stderr}\n"
+            f"To debug, try: llamactl deployments configure-git-remote {deployment_id}"
+        )
+
+
+def _apply_push_after_save(
+    client: Any,
+    deployment_id: str,
+    git_ref: str | None,
+    no_push: bool,
+    project_id_override: str | None,
+) -> None:
+    """Push after a successful create/update (bootstrap push).
+
+    On failure, print the error and a recovery hint but do NOT exit — the
+    save already succeeded and the user needs to know. Exit non-zero by
+    raising at the end.
+    """
+    if no_push:
+        click.echo(
+            "push skipped (--no-push); deployment may be in a half-deployed state",
+            err=True,
+        )
+        return
+    try:
+        _apply_push(client, deployment_id, git_ref, project_id_override)
+    except click.ClickException as exc:
+        click.echo(str(exc.message), err=True)
+        raise click.ClickException(
+            "re-run `llamactl deployments apply -f <file>` to retry the push"
+        ) from exc
+
+
 @deployments.command("apply")
 @global_options
 @click.option(
-    "-f", "--filename",
+    "-f",
+    "--filename",
     required=True,
     type=click.File("r"),
     help="Path to YAML file, or '-' for stdin.",
@@ -486,14 +546,13 @@ def apply_deployment(
     # Deferred: llamactl startup budget avoids importing httpx at module level
     import httpx
 
-    existing_id: str | None = None
+    existing: DeploymentResponse | None = None
     is_update = False
 
     try:
         if display.name is not None:
             try:
                 existing = asyncio.run(client.get_deployment(display.name))
-                existing_id = existing.id
                 is_update = True
             except httpx.HTTPStatusError as exc:
                 if exc.response.status_code == 404:
@@ -514,34 +573,99 @@ def apply_deployment(
                 )
 
         # -- 6. Pre-flight validate-repository ---------------------------
+        repo_url = display.spec.repo_url
         skip_validation = (
             dry_run is not None
-            or display.spec.repo_url is None
-            or display.spec.repo_url == ""
+            or repo_url is None
+            or repo_url == ""
             or (is_update and "repo_url" not in display.spec.model_fields_set)
         )
-        if not skip_validation:
-            result = asyncio.run(
+        if not skip_validation and repo_url is not None:
+            vr = asyncio.run(
                 client.validate_repository(
-                    repo_url=display.spec.repo_url,
-                    deployment_id=existing_id,
+                    repo_url=repo_url,
+                    deployment_id=existing.id if existing else None,
                     pat=display.spec.personal_access_token,
                 )
             )
-            if not result.accessible:
-                raise click.ClickException(result.message)
+            if not vr.accessible:
+                raise click.ClickException(vr.message)
 
-        # -- 7. Translate and call ---------------------------------------
-        if is_update:
-            payload = apply_payload_to_update(display)
-            response = asyncio.run(
-                client.update_deployment(display.name, payload)
-            )
-            click.echo(f"updated {response.id}")
+        # -- 7. Determine push ordering ------------------------------------
+        # current_is_push: existing deployment uses the internal bare repo.
+        # desired_is_push: YAML says repo_url="" (push mode).
+        # Order matrix (see plan Phase 3):
+        #   (no deployment, push)    → save then push (bootstrap)
+        #   (push, push)             → push then save (PR #581: bare repo
+        #                              must hold new ref before update resolves)
+        #   (external, push)         → save then push (switch into push mode)
+        #   (*, external)            → save only
+        #   (*, same-as-current)     → save only (repo_url omitted in YAML)
+        current_is_push = (
+            existing is not None and existing.repo_url == INTERNAL_CODE_REPO_SCHEME
+        )
+
+        if "repo_url" not in display.spec.model_fields_set:
+            desired_is_push = current_is_push
+        elif display.spec.repo_url == "":
+            desired_is_push = True
         else:
+            desired_is_push = False
+
+        needs_push = desired_is_push
+        push_before_save = current_is_push and desired_is_push
+
+        # Pre-flight: verify CWD is a git working tree when push is needed.
+        if needs_push and not no_push:
+            git_check = subprocess.run(
+                ["git", "rev-parse", "--git-dir"], capture_output=True
+            )
+            if git_check.returncode != 0:
+                raise click.ClickException(
+                    "not in a git repository; push-mode requires a working "
+                    "tree. Use --no-push to skip."
+                )
+
+        # -- 8. Execute: translate, push, and call -------------------------
+        deployment_name = display.name  # non-None when is_update is True
+        if push_before_save:
+            assert existing is not None and deployment_name is not None
+            # PUSH-THEN-SAVE: existing push-mode → push-mode update.
+            if no_push:
+                click.echo(
+                    "push skipped (--no-push); deployment may be in a "
+                    "half-deployed state",
+                    err=True,
+                )
+            else:
+                _apply_push(
+                    client,
+                    existing.id,
+                    display.spec.git_ref or existing.git_ref,
+                    project,
+                )
+            payload = apply_payload_to_update(display)
+            response = asyncio.run(client.update_deployment(deployment_name, payload))
+            click.echo(f"updated {response.id}")
+        elif is_update:
+            assert deployment_name is not None
+            # UPDATE (save-only or save-then-push).
+            payload = apply_payload_to_update(display)
+            response = asyncio.run(client.update_deployment(deployment_name, payload))
+            click.echo(f"updated {response.id}")
+            if needs_push:
+                _apply_push_after_save(
+                    client, response.id, display.spec.git_ref, no_push, project
+                )
+        else:
+            # CREATE (save-only or save-then-push).
             payload = apply_payload_to_create(display)
             response = asyncio.run(client.create_deployment(payload))
             click.echo(f"created {response.id}")
+            if needs_push:
+                _apply_push_after_save(
+                    client, response.id, display.spec.git_ref, no_push, project
+                )
 
     except ApplyYamlError as exc:
         raise click.ClickException(str(exc)) from exc
