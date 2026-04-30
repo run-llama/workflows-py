@@ -9,6 +9,7 @@ git ref, reads the config, and runs your app.
 import asyncio
 import subprocess
 from pathlib import Path
+from typing import Any
 
 import click
 from llama_agents.cli.commands.auth import validate_authenticated_profile
@@ -49,6 +50,13 @@ from ..utils.git_push import (
     get_deployment_git_url,
     internal_push_refspec,
     push_to_remote,
+)
+from ..yaml_format import (
+    ApplyYamlError,
+    apply_payload_to_create,
+    apply_payload_to_update,
+    parse_apply_yaml,
+    parse_delete_yaml_name,
 )
 from ..yaml_template import render as render_yaml_template
 
@@ -342,16 +350,34 @@ def configure_git_remote_cmd(
 @deployments.command("delete")
 @global_options
 @click.argument("deployment_id", required=False, type=DeploymentType())
+@click.option(
+    "-f",
+    "--filename",
+    default=None,
+    type=click.File("r"),
+    help="Path to YAML file; name is read from the file. Mutually exclusive with positional ID.",
+)
 @project_option
 @interactive_option
 def delete_deployment(
-    deployment_id: str | None, interactive: bool, project: str | None
+    deployment_id: str | None, filename: Any, interactive: bool, project: str | None
 ) -> None:
     """Delete a deployment"""
     # Keep this import local: the helper imports `questionary`, which import-time
     # profiling showed is a noticeable CLI startup cost. Avoid other local
     # imports unless instrumentation shows they are slow.
     from ..interactive_prompts.utils import confirm_action
+
+    if filename is not None and deployment_id is not None:
+        raise click.ClickException(
+            "--filename and deployment ID are mutually exclusive"
+        )
+
+    if filename is not None:
+        try:
+            deployment_id = parse_delete_yaml_name(filename.read())
+        except ApplyYamlError as exc:
+            raise click.ClickException(str(exc)) from exc
 
     validate_authenticated_profile(interactive)
     try:
@@ -375,6 +401,280 @@ def delete_deployment(
     except Exception as e:
         rprint(f"[red]Error: {e}[/red]")
         raise click.Abort()
+
+
+def _apply_push(
+    client: Any,
+    deployment_id: str,
+    git_ref: str | None,
+    project_id_override: str | None,
+) -> None:
+    """Push local code to the deployment's internal bare repo.
+
+    Used in the push-then-save flow (existing push-mode → push-mode update)
+    and also called by ``_apply_push_after_save`` for the save-then-push flow.
+    Raises ``click.ClickException`` on failure — caller must not continue.
+    """
+    api_key = get_api_key()
+    git_url = get_deployment_git_url(client.base_url, deployment_id)
+    remote_name = configure_git_remote(
+        git_url, api_key, client.project_id, deployment_id
+    )
+    local_ref, target_ref = internal_push_refspec(git_ref)
+    with console.status("pushing code..."):
+        push_result = push_to_remote(
+            remote_name, local_ref=local_ref, target_ref=target_ref
+        )
+    if push_result.returncode != 0:
+        stderr = push_result.stderr.decode(errors="replace").strip()
+        raise click.ClickException(
+            f"push failed: {stderr}\n"
+            f"To debug, try: llamactl deployments configure-git-remote {deployment_id}"
+        )
+
+
+def _apply_push_after_save(
+    client: Any,
+    deployment_id: str,
+    git_ref: str | None,
+    no_push: bool,
+    project_id_override: str | None,
+) -> None:
+    """Push after a successful create/update (bootstrap push).
+
+    On failure, print the error and a recovery hint but do NOT exit — the
+    save already succeeded and the user needs to know. Exit non-zero by
+    raising at the end.
+    """
+    if no_push:
+        click.echo(
+            "push skipped (--no-push); deployment may be in a half-deployed state",
+            err=True,
+        )
+        return
+    try:
+        _apply_push(client, deployment_id, git_ref, project_id_override)
+    except click.ClickException as exc:
+        click.echo(str(exc.message), err=True)
+        raise click.ClickException(
+            "re-run `llamactl deployments apply -f <file>` to retry the push"
+        ) from exc
+
+
+@deployments.command("apply")
+@global_options
+@click.option(
+    "-f",
+    "--filename",
+    required=True,
+    type=click.File("r"),
+    help="Path to YAML file, or '-' for stdin.",
+)
+@click.option(
+    "--dry-run",
+    "dry_run",
+    is_flag=False,
+    flag_value="client",
+    default=None,
+    help="Validate and print the resolved payload without making API calls. "
+    "Use --dry-run=server to reserve the surface for server-side dry-run (not yet supported).",
+)
+@click.option(
+    "--no-push",
+    is_flag=True,
+    default=False,
+    help="Skip git push for push-mode deployments.",
+)
+@output_option
+@project_option
+def apply_deployment(
+    filename: click.utils.LazyFile,
+    dry_run: str | None,
+    no_push: bool,
+    output: str,
+    project: str | None,
+) -> None:
+    """Apply a deployment from a YAML file.
+
+    Creates the deployment if it doesn't exist, or updates it if it does.
+    Reads the file (or stdin with ``-f -``), resolves ``${VAR}`` references
+    from the environment, and issues the appropriate API call.
+    """
+    # -- 1. Parse --------------------------------------------------------
+    text = filename.read()
+    try:
+        display = parse_apply_yaml(text)
+    except ApplyYamlError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    # -- 2. Dry-run short-circuit ----------------------------------------
+    if dry_run == "server":
+        raise click.ClickException("server-side dry-run not yet supported")
+
+    if dry_run == "client":
+        if display.name:
+            verdict = f"would upsert deployment '{display.name}'"
+        elif display.generate_name:
+            verdict = (
+                f"would create new deployment with generateName "
+                f"'{display.generate_name}' (server will assign id)"
+            )
+        else:
+            raise click.ClickException(
+                "YAML must include top-level 'name' or 'generateName'"
+            )
+
+        # Deferred: only needed on the dry-run path
+        import yaml
+
+        click.echo(
+            yaml.safe_dump(
+                display.spec.model_dump(mode="json", exclude_unset=True),
+                sort_keys=False,
+            )
+        )
+        click.echo(verdict)
+        return
+
+    # -- 3. Auth validation ----------------------------------------------
+    validate_authenticated_profile(interactive=False)
+
+    # -- 4. Client setup -------------------------------------------------
+    client = get_project_client(project_id_override=project)
+
+    # -- 5. Identity routing ---------------------------------------------
+    # Deferred: llamactl startup budget avoids importing httpx at module level
+    import httpx
+
+    existing: DeploymentResponse | None = None
+    is_update = False
+
+    try:
+        if display.name is not None:
+            try:
+                existing = asyncio.run(client.get_deployment(display.name))
+                is_update = True
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code == 404:
+                    # Will create with explicit id=display.name
+                    if display.generate_name is None:
+                        raise click.ClickException(
+                            "deployment not found and no generateName provided "
+                            "for create"
+                        ) from exc
+                else:
+                    raise
+        else:
+            if display.generate_name:
+                pass  # CREATE with id=None
+            else:
+                raise click.ClickException(
+                    "YAML must include top-level 'name' or 'generateName'"
+                )
+
+        # -- 6. Pre-flight validate-repository ---------------------------
+        repo_url = display.spec.repo_url
+        skip_validation = (
+            dry_run is not None
+            or repo_url is None
+            or repo_url == ""
+            or (is_update and "repo_url" not in display.spec.model_fields_set)
+        )
+        if not skip_validation and repo_url is not None:
+            vr = asyncio.run(
+                client.validate_repository(
+                    repo_url=repo_url,
+                    deployment_id=existing.id if existing else None,
+                    pat=display.spec.personal_access_token,
+                )
+            )
+            if not vr.accessible:
+                raise click.ClickException(vr.message)
+
+        # -- 7. Determine push ordering ------------------------------------
+        # current_is_push: existing deployment uses the internal bare repo.
+        # desired_is_push: YAML says repo_url="" (push mode).
+        # Order matrix (see plan Phase 3):
+        #   (no deployment, push)    → save then push (bootstrap)
+        #   (push, push)             → push then save (PR #581: bare repo
+        #                              must hold new ref before update resolves)
+        #   (external, push)         → save then push (switch into push mode)
+        #   (*, external)            → save only
+        #   (*, same-as-current)     → save only (repo_url omitted in YAML)
+        current_is_push = (
+            existing is not None and existing.repo_url == INTERNAL_CODE_REPO_SCHEME
+        )
+
+        if "repo_url" not in display.spec.model_fields_set:
+            desired_is_push = current_is_push
+        elif display.spec.repo_url == "":
+            desired_is_push = True
+        else:
+            desired_is_push = False
+
+        needs_push = desired_is_push
+        push_before_save = current_is_push and desired_is_push
+
+        # Pre-flight: verify CWD is a git working tree when push is needed.
+        if needs_push and not no_push:
+            git_check = subprocess.run(
+                ["git", "rev-parse", "--git-dir"], capture_output=True
+            )
+            if git_check.returncode != 0:
+                raise click.ClickException(
+                    "not in a git repository; push-mode requires a working "
+                    "tree. Use --no-push to skip."
+                )
+
+        # -- 8. Execute: translate, push, and call -------------------------
+        deployment_name = display.name  # non-None when is_update is True
+        if push_before_save:
+            assert existing is not None and deployment_name is not None
+            # PUSH-THEN-SAVE: existing push-mode → push-mode update.
+            if no_push:
+                click.echo(
+                    "push skipped (--no-push); deployment may be in a "
+                    "half-deployed state",
+                    err=True,
+                )
+            else:
+                _apply_push(
+                    client,
+                    existing.id,
+                    display.spec.git_ref or existing.git_ref,
+                    project,
+                )
+            payload = apply_payload_to_update(display)
+            response = asyncio.run(client.update_deployment(deployment_name, payload))
+            click.echo(f"updated {response.id}")
+        elif is_update:
+            assert deployment_name is not None
+            # UPDATE (save-only or save-then-push).
+            payload = apply_payload_to_update(display)
+            response = asyncio.run(client.update_deployment(deployment_name, payload))
+            click.echo(f"updated {response.id}")
+            if needs_push:
+                _apply_push_after_save(
+                    client, response.id, display.spec.git_ref, no_push, project
+                )
+        else:
+            # CREATE (save-only or save-then-push).
+            payload = apply_payload_to_create(display)
+            response = asyncio.run(client.create_deployment(payload))
+            click.echo(f"created {response.id}")
+            if needs_push:
+                _apply_push_after_save(
+                    client, response.id, display.spec.git_ref, no_push, project
+                )
+
+    except ApplyYamlError as exc:
+        raise click.ClickException(str(exc)) from exc
+    except click.ClickException:
+        raise
+    except httpx.HTTPStatusError:
+        raise
+    except Exception as exc:
+        raise click.ClickException(str(exc)) from exc
 
 
 @deployments.command("edit")
