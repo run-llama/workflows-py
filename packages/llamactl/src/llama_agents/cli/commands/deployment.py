@@ -331,8 +331,9 @@ def edit_deployment(
 
 def _push_internal_for_update(
     deployment_id: str,
-    git_ref: str | None = None,
-    project_id_override: str | None = None,
+    git_ref: str | None,
+    base_url: str,
+    project_id: str,
 ) -> None:
     """Push local code to the internal repo before updating.
 
@@ -348,12 +349,9 @@ def _push_internal_for_update(
         )
         return
 
-    client = get_project_client(project_id_override=project_id_override)
     api_key = get_api_key()
-    git_url = get_deployment_git_url(client.base_url, deployment_id)
-    remote_name = configure_git_remote(
-        git_url, api_key, client.project_id, deployment_id
-    )
+    git_url = get_deployment_git_url(base_url, deployment_id)
+    remote_name = configure_git_remote(git_url, api_key, project_id, deployment_id)
     local_ref, target_ref = internal_push_refspec(git_ref)
     with console.status("Pushing code..."):
         push_result = push_to_remote(
@@ -394,28 +392,30 @@ def refresh_deployment(
             rprint(f"[{WARNING}]No deployment selected[/]")
             return
 
-        client = get_project_client(project_id_override=project)
-        current_deployment = asyncio.run(client.get_deployment(deployment_id))
-        deployment_name = current_deployment.display_name
+        # Single asyncio.run with one client: reusing a ProjectClient across
+        # two asyncio.run calls binds the underlying httpx pool to a closed
+        # loop and the next request raises "Event loop is closed".
+        async def _do_update() -> tuple[DeploymentResponse, DeploymentResponse]:
+            async with project_client_context(project_id_override=project) as client:
+                current = await client.get_deployment(deployment_id)
+                effective_git_ref = git_ref or current.git_ref
+                if current.repo_url == INTERNAL_CODE_REPO_SCHEME:
+                    _push_internal_for_update(
+                        deployment_id,
+                        effective_git_ref,
+                        base_url=client.base_url,
+                        project_id=client.project_id,
+                    )
+                with console.status(f"Refreshing {current.display_name}..."):
+                    updated = await client.update_deployment(
+                        deployment_id,
+                        DeploymentUpdate(git_ref=effective_git_ref),
+                    )
+                return current, updated
+
+        current_deployment, updated_deployment = asyncio.run(_do_update())
+
         old_git_sha = current_deployment.git_sha or ""
-
-        # For internal repos, push local code first so the server has the
-        # latest commits to resolve against.
-        effective_git_ref = git_ref or current_deployment.git_ref
-        if current_deployment.repo_url == INTERNAL_CODE_REPO_SCHEME:
-            _push_internal_for_update(
-                deployment_id, effective_git_ref, project_id_override=project
-            )
-
-        # Re-resolves the branch to the latest commit SHA.
-        with console.status(f"Refreshing {deployment_name}..."):
-            updated_deployment = asyncio.run(
-                client.update_deployment(
-                    deployment_id,
-                    DeploymentUpdate(git_ref=effective_git_ref),
-                )
-            )
-
         new_git_sha = updated_deployment.git_sha or ""
         old_short = short_sha(old_git_sha) if old_git_sha else "-"
         new_short = short_sha(new_git_sha) if new_git_sha else "-"
