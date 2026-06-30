@@ -5,6 +5,6 @@
   "license": "MIT",
   "scripts": {},
   "dependencies": {
-    "llama-index-workflows": "workspace:*"
+    "llama-index-workflows": "workspace:^"
   }
 }

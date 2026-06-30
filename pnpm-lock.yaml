@@ -15,13 +15,13 @@ importers:
   charts/llama-agents:
     dependencies:
       llama-agents-appserver:
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../../packages/llama-agents-appserver
       llama-agents-control-plane:
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../../packages/llama-agents-control-plane
       llama-agents-operator:
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../../operator
 
   charts/llama-agents-crds: {}
@@ -31,28 +31,28 @@ importers:
   packages/llama-agents-agentcore:
     dependencies:
       llama-agents-appserver:
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../llama-agents-appserver
       llama-agents-core:
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../llama-agents-core
 
   packages/llama-agents-appserver:
     dependencies:
       llama-agents-core:
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../llama-agents-core
 
   packages/llama-agents-client:
     dependencies:
       llama-index-workflows:
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../llama-index-workflows
 
   packages/llama-agents-control-plane:
     dependencies:
       llama-agents-core:
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../llama-agents-core
 
   packages/llama-agents-core: {}
@@ -62,10 +62,10 @@ importers:
   packages/llama-agents-server:
     dependencies:
       llama-agents-client:
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../llama-agents-client
       llama-index-workflows:
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../llama-index-workflows
 
   packages/llama-index-utils-workflow: {}
@@ -75,10 +75,10 @@ importers:
   packages/llamactl:
     dependencies:
       llama-agents-appserver:
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../llama-agents-appserver
       llama-agents-core:
-        specifier: workspace:*
+        specifier: workspace:^
         version: link:../llama-agents-core
 
 packages:

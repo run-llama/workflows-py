@@ -3,7 +3,7 @@
   "version": "0.10.3",
   "private": false,
   "dependencies": {
-    "llama-agents-core": "workspace:*",
-    "llama-agents-appserver": "workspace:*"
+    "llama-agents-core": "workspace:^",
+    "llama-agents-appserver": "workspace:^"
   }
 }

@@ -5,7 +5,7 @@
     "pypi": false
   },
   "dependencies": {
-    "llama-agents-core": "workspace:*"
+    "llama-agents-core": "workspace:^"
   },
   "docker": {
     "dockerfile": "docker/Dockerfile",
