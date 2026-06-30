@@ -1,5 +1,12 @@
 # llama-index-workflows
 
+## 2.22.2
+
+### Patch Changes
+
+- 8be81d5: Reloading a failed workflow no longer crashes when the failure exception can't be rebuilt.
+- 0dff2cc: Fix crashes during ctx.store edits when state holds non-deepcopyable objects
+
 ## 2.22.1
 
 ### Patch Changes

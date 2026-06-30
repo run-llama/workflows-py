@@ -1,5 +1,14 @@
 # llama-agents-server
 
+## 0.6.3
+
+### Patch Changes
+
+- Updated dependencies [8be81d5]
+- Updated dependencies [0dff2cc]
+  - llama-index-workflows@2.22.2
+  - llama-agents-client@0.3.11
+
 ## 0.6.2
 
 ### Patch Changes
