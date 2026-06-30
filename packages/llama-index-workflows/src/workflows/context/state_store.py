@@ -9,6 +9,7 @@ import json
 import uuid
 import warnings
 from contextlib import asynccontextmanager
+from copy import deepcopy
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -562,6 +563,40 @@ class DictState(DictLikeModel):
 MODEL_T = TypeVar("MODEL_T", bound=BaseModel, default=DictState)  # type: ignore[reportGeneralTypeIssues]
 
 
+def _copy_value_for_edit(value: Any) -> Any:
+    """Deep-copy a single state value, or keep the live reference if it can't be.
+
+    State can hold live workflow objects (memory, LLM clients) that wrap thread
+    locks, modules, or sockets and raise on ``deepcopy``. Those are shared live
+    handles, so there is nothing to isolate by copying — preserve the reference
+    instead of failing the edit.
+    """
+    try:
+        return deepcopy(value)
+    except Exception:
+        return value
+
+
+def copy_state_for_edit(state: MODEL_T) -> MODEL_T:
+    """Return an isolated copy of state for an ``edit_state`` block.
+
+    ``edit_state`` mutates a copy so lockless readers keep seeing committed
+    state until the block commits. Ordinary data entries are deep-copied for
+    that isolation; entries holding non-deepcopyable live objects are kept by
+    reference (see ``_copy_value_for_edit``) so the edit cannot crash on them.
+
+    Typed (non-``DictState``) state copies whole-model; if that model holds a
+    non-deepcopyable field, fall back to a shallow copy rather than crash.
+    """
+    if isinstance(state, DictState):
+        copied = {key: _copy_value_for_edit(value) for key, value in state.items()}
+        return cast(MODEL_T, DictState(**copied))
+    try:
+        return state.model_copy(deep=True)
+    except Exception:
+        return state.model_copy()
+
+
 @runtime_checkable
 class StateStore(Protocol[MODEL_T]):
     """Protocol defining the public async state store interface.
@@ -999,7 +1034,7 @@ class InMemoryStateStore(StateStoreFacade[MODEL_T]):
         # the block commits (matching durable backends, where each load
         # decodes a fresh instance from the committed row).
         state = await self._load_state(storage)
-        return state.model_copy(deep=True)
+        return copy_state_for_edit(state)
 
     def to_dict(self, serializer: "BaseSerializer") -> dict[str, Any]:
         """Serialize the state and model metadata for persistence.

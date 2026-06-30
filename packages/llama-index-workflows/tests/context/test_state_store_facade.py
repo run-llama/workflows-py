@@ -156,6 +156,33 @@ async def test_edit_state_isolates_nested_mutables_until_commit() -> None:
 
 
 @pytest.mark.asyncio
+async def test_edit_state_preserves_non_deepcopyable_values_by_reference() -> None:
+    """Edits must not crash on live objects that cannot be deep-copied.
+
+    Regression for issues 709/710: an unpicklable value (memory, an LLM client
+    wrapping a thread lock) stored in state used to blow up the whole-state deep
+    copy with ``TypeError: cannot pickle ...``. Such values are shared live
+    handles, so they are kept by reference while ordinary entries stay isolated.
+    """
+
+    class Undeepcopyable:
+        def __deepcopy__(self, memo: dict[int, Any]) -> Undeepcopyable:
+            raise TypeError("cannot pickle this object")
+
+    client = Undeepcopyable()
+    store = InMemoryStateStore(DictState(client=client, nums=[1]))
+
+    async with store.edit_state() as state:
+        assert state["client"] is client
+        state["nums"].append(2)
+        # Ordinary entries are still isolated: the read sees committed state.
+        assert await store.get("nums") == [1]
+
+    assert await store.get("client") is client
+    assert await store.get("nums") == [1, 2]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("durable", [False, True])
 async def test_get_inside_edit_state(durable: bool) -> None:
     store: Any = (

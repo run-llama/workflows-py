@@ -5,12 +5,69 @@ by llama-index agents, including state persistence across steps and
 access from within tool functions.
 """
 
+import threading
+
 from conftest import WorkflowFactory
 from llama_agents_integration_tests.helpers import (
     make_text_response,
     make_tool_call_response,
 )
+from llama_index.core.base.llms.types import ChatMessage, MessageRole
+from llama_index.core.memory import Memory
 from workflows import Context
+
+
+async def test_agent_workflow_accepts_memory_object(
+    create_workflow: WorkflowFactory,
+) -> None:
+    """Regression for issue 709: workflow.run(memory=...) with a live Memory.
+
+    The in-memory edit copy deep-copies the whole live state, which recurses
+    into the Memory object's unserializable internals (sqlalchemy/aiosqlite/
+    tiktoken) and raises ``TypeError: cannot pickle 'module' object``.
+    """
+    workflow = create_workflow(responses=[make_text_response("Done")])
+    memory = Memory.from_defaults(
+        chat_history=[ChatMessage(role=MessageRole.USER, content="earlier turn")]
+    )
+
+    result = await workflow.run(user_msg="hi", memory=memory)
+
+    assert result.response.content == "Done"
+
+
+async def test_store_set_accepts_non_serializable_object(
+    create_workflow: WorkflowFactory,
+) -> None:
+    """Regression for issue 710: ctx.store.set with an unpicklable live object.
+
+    Storing an object that wraps a thread lock (e.g. an LLM client) used to
+    raise ``TypeError: cannot pickle '_thread.lock' object`` from the edit-time
+    whole-state deep copy. The object is kept by reference instead.
+    """
+    lock = threading.Lock()
+    captured = None
+
+    async def stash_client(ctx: Context) -> str:
+        nonlocal captured
+        await ctx.store.set("client", lock)
+        captured = await ctx.store.get("client")
+        return "stored"
+
+    workflow = create_workflow(
+        tools=[stash_client],
+        responses=[
+            make_tool_call_response("stash_client"),
+            make_text_response("Done"),
+        ],
+    )
+
+    handler = workflow.run(user_msg="stash it")
+    async for _ in handler.stream_events():
+        pass
+    await handler
+
+    assert captured is lock
 
 
 async def test_initial_state_accessible_in_tool(
