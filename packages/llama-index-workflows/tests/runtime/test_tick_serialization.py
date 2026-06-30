@@ -12,6 +12,7 @@ from workflows.events import (
     Event,
     StartEvent,
     StopEvent,
+    UnreconstructedException,
     _deserialize_event,
     _deserialize_event_type,
     _deserialize_exception,
@@ -130,7 +131,8 @@ def test_exception_roundtrip_unimportable() -> None:
     exc = CustomError("oops")
     serialized = _serialize_exception(exc)
     result = _deserialize_exception(serialized)
-    assert type(result) is Exception
+    assert isinstance(result, UnreconstructedException)
+    assert result.original_type == serialized["exception_type"]
     assert str(result) == "oops"
 
 
@@ -272,7 +274,7 @@ def test_tick_step_result_with_failed_unimportable_exception() -> None:
     assert isinstance(result, TickStepResult)
     r = result.result[0]
     assert isinstance(r, StepWorkerFailed)
-    assert type(r.exception) is Exception
+    assert isinstance(r.exception, UnreconstructedException)
     assert str(r.exception) == "oops"
     assert r.failed_at == failed_at
 

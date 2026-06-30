@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import base64
+import contextvars
 import json
 import pickle
 from abc import ABC, abstractmethod
@@ -13,6 +14,16 @@ from typing import Any
 from pydantic import BaseModel
 
 from .utils import get_qualified_name, import_module_from_qualified_name
+
+# Threads the active serializer's allowlist into nested field validators during
+# deserialization. Pydantic's `model_validate(context=...)` is not a reliable
+# channel here: the event models (`DictLikeModel`) define a custom `__init__`,
+# which makes pydantic drop the validation context before nested field
+# validators run. A ContextVar is set around `model_validate` and read by the
+# exception reconstruction in `events.py`.
+allowed_type_names_var: contextvars.ContextVar[frozenset[str] | None] = (
+    contextvars.ContextVar("allowed_type_names", default=None)
+)
 
 
 class BaseSerializer(ABC):
@@ -149,7 +160,11 @@ class JsonSerializer(BaseSerializer):
             if data.get("__is_pydantic") and data.get("qualified_name"):
                 self._validate_qualified_name(data["qualified_name"])
                 module_class = import_module_from_qualified_name(data["qualified_name"])
-                return module_class.model_validate(data["value"])
+                token = allowed_type_names_var.set(self._allowed_type_names)
+                try:
+                    return module_class.model_validate(data["value"])
+                finally:
+                    allowed_type_names_var.reset(token)
             elif data.get("__is_component") and data.get("qualified_name"):
                 self._validate_qualified_name(data["qualified_name"])
                 module_class = import_module_from_qualified_name(data["qualified_name"])

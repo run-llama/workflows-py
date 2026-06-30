@@ -18,7 +18,7 @@ from pydantic import (
     model_serializer,
 )
 
-from workflows.context.serializers import JsonSerializer
+from workflows.context.serializers import JsonSerializer, allowed_type_names_var
 from workflows.context.utils import import_module_from_qualified_name
 
 
@@ -200,15 +200,77 @@ def _serialize_exception(exc: Exception) -> dict[str, Any]:
     }
 
 
+class UnreconstructedException(Exception):
+    """Stand-in for an exception that could not be faithfully rebuilt after a
+    serialization boundary.
+
+    Reconstructing a persisted exception only ever has its type name and message
+    to work with. When the original type cannot be imported, is disallowed by the
+    serializer's allowlist, or rejects a single-argument ``cls(message)`` call,
+    this type is returned instead so the reload never crashes. The original
+    qualified type name is kept on ``original_type`` as a diagnostic breadcrumb.
+
+    ``str(exc)`` equals the original message (no type prefix) so a re-serialize ->
+    re-deserialize cycle does not double-wrap the message. ``original_type`` is
+    attribute-only and is dropped on re-serialization, since serialization keeps
+    only the type name and message.
+    """
+
+    def __init__(self, message: str, *, original_type: str | None = None) -> None:
+        super().__init__(message)
+        self.original_type = original_type
+
+    def __repr__(self) -> str:
+        return (
+            f"UnreconstructedException(original_type={self.original_type!r}, "
+            f"{self.args[0]!r})"
+        )
+
+
+_UNRECONSTRUCTED_EXCEPTION_NAME = (
+    f"{UnreconstructedException.__module__}.{UnreconstructedException.__qualname__}"
+)
+
+
+def _exception_type_permitted(exc_type: str) -> bool:
+    """Whether an exception type may be imported for reconstruction.
+
+    ``builtins.*`` exceptions are always permitted (already loaded, no import side
+    effects). The framework's own breadcrumb type is always permitted so a
+    degraded exception round-trips stably under any allowlist rather than
+    degrading into a self-referential breadcrumb. With no allowlist active the
+    check is permissive, matching the opt-in nature of ``allowed_types``.
+    Otherwise the type must be in the allowlist; a miss returns ``False`` so the
+    caller degrades without ever importing the type.
+    """
+    if exc_type.startswith("builtins."):
+        return True
+    if exc_type == _UNRECONSTRUCTED_EXCEPTION_NAME:
+        return True
+    allowed = allowed_type_names_var.get()
+    if allowed is None:
+        return True
+    return exc_type in allowed
+
+
 def _deserialize_exception(data: Any) -> Exception:
     if isinstance(data, Exception):
         return data
+    exc_type = data["exception_type"]
     exc_message = data["exception_message"]
+    if not _exception_type_permitted(exc_type):
+        return UnreconstructedException(exc_message, original_type=exc_type)
     try:
-        exc_cls = import_module_from_qualified_name(data["exception_type"])
+        exc_cls = import_module_from_qualified_name(exc_type)
+        # Only construct genuine exception types. The qualified name comes from a
+        # serialized blob and could resolve to any callable (e.g. ``builtins.eval``,
+        # which the ``builtins`` allowlist exemption would otherwise permit) —
+        # calling it with the message would be arbitrary code execution.
+        if not (isinstance(exc_cls, type) and issubclass(exc_cls, Exception)):
+            return UnreconstructedException(exc_message, original_type=exc_type)
         return exc_cls(exc_message)
-    except (ImportError, AttributeError, ValueError):
-        return Exception(exc_message)
+    except Exception:
+        return UnreconstructedException(exc_message, original_type=exc_type)
 
 
 SerializableException = Annotated[

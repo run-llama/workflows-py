@@ -1,15 +1,18 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 LlamaIndex Inc.
 
+import json
 from http.client import HTTPException
 from typing import Any, cast
 
 import pytest
 from pydantic import PrivateAttr
 from workflows.context import JsonSerializer
+from workflows.context.utils import import_module_from_qualified_name
 from workflows.events import (
     Event,
     StopEvent,
+    UnreconstructedException,
     WorkflowCancelledEvent,
     WorkflowFailedEvent,
     WorkflowTimedOutEvent,
@@ -320,3 +323,145 @@ def test_workflow_failed_event_with_nested_exception_type() -> None:
     assert isinstance(ev.exception, HTTPException)
     assert ev.attempts == 5
     assert ev.elapsed_seconds == 10.0
+
+
+def _failed_event(exception: Exception) -> WorkflowFailedEvent:
+    return WorkflowFailedEvent(
+        step_name="step",
+        exception=exception,
+        attempts=1,
+        elapsed_seconds=0.1,
+    )
+
+
+def _roundtrip(
+    ev: WorkflowFailedEvent, serializer: JsonSerializer | None = None
+) -> WorkflowFailedEvent:
+    serializer = serializer or JsonSerializer()
+    return cast(WorkflowFailedEvent, serializer.deserialize(serializer.serialize(ev)))
+
+
+def test_message_only_exception_roundtrips_by_type() -> None:
+    """Importable single-arg exceptions still reconstruct as their real type."""
+    restored = _roundtrip(_failed_event(HTTPException("Connection refused")))
+    assert type(restored.exception) is HTTPException
+    assert str(restored.exception) == "Connection refused"
+
+
+def test_multi_arg_ctor_exception_degrades_to_breadcrumb() -> None:
+    """An importable exception whose ctor rejects ``cls(message)`` degrades
+    instead of crashing the reload (the old uncaught-TypeError path)."""
+    exc = json.JSONDecodeError("Expecting value", "doc", 0)
+    restored = _roundtrip(_failed_event(exc))
+    assert isinstance(restored.exception, UnreconstructedException)
+    assert restored.exception.original_type == "json.decoder.JSONDecodeError"
+    assert str(restored.exception) == str(exc)
+
+
+def test_unimportable_exception_degrades_to_breadcrumb() -> None:
+    """A type that cannot be re-imported (``<locals>`` qualname) degrades to the
+    breadcrumb type rather than a bare ``Exception``."""
+
+    def make_local_exception() -> type[Exception]:
+        class LocalError(Exception):
+            pass
+
+        return LocalError
+
+    local_exc = make_local_exception()("boom")
+    restored = _roundtrip(_failed_event(local_exc))
+    assert isinstance(restored.exception, UnreconstructedException)
+    assert restored.exception.original_type is not None
+    assert "LocalError" in restored.exception.original_type
+    assert str(restored.exception) == "boom"
+
+
+def test_unreconstructed_exception_reserializes_without_double_wrapping() -> None:
+    """Re-serializing a degraded exception keeps the message intact; the
+    breadcrumb type itself reconstructs cleanly with ``original_type`` reset."""
+    serializer = JsonSerializer()
+    once = _roundtrip(_failed_event(json.JSONDecodeError("Expecting value", "doc", 0)))
+    assert isinstance(once.exception, UnreconstructedException)
+
+    twice = _roundtrip(once, serializer)
+    assert isinstance(twice.exception, UnreconstructedException)
+    assert str(twice.exception) == str(once.exception)
+    # serialize keeps only type + message, so original_type is dropped on re-roundtrip
+    assert twice.exception.original_type is None
+
+
+def test_unreconstructed_exception_reserializes_under_active_allowlist() -> None:
+    """The breadcrumb type itself is always permitted, so a degraded exception
+    round-trips stably even under an allowlist that does not list it (rather than
+    degrading into a self-referential breadcrumb)."""
+    serializer = JsonSerializer(allowed_types=[WorkflowFailedEvent])
+    once = _roundtrip(
+        _failed_event(json.JSONDecodeError("Expecting value", "doc", 0)), serializer
+    )
+    assert isinstance(once.exception, UnreconstructedException)
+
+    twice = _roundtrip(once, serializer)
+    assert isinstance(twice.exception, UnreconstructedException)
+    assert str(twice.exception) == str(once.exception)
+    assert twice.exception.original_type is None
+
+
+def test_allowlist_set_still_reconstructs_builtin_exceptions() -> None:
+    """builtins are exempt from the allowlist and reconstruct as their real type."""
+    serializer = JsonSerializer(allowed_types=[WorkflowFailedEvent])
+    restored = _roundtrip(_failed_event(ValueError("bad value")), serializer)
+    assert type(restored.exception) is ValueError
+    assert str(restored.exception) == "bad value"
+
+
+def test_no_allowlist_reconstructs_non_builtin_exception() -> None:
+    """With no allowlist, non-builtin exception reconstruction stays permissive."""
+    restored = _roundtrip(_failed_event(HTTPException("Connection refused")))
+    assert type(restored.exception) is HTTPException
+
+
+def test_disallowed_non_builtin_exception_degrades_without_importing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A non-builtin exception outside the allowlist degrades and is never
+    imported — the allowlist is a real boundary for exception types."""
+    serializer = JsonSerializer(allowed_types=[WorkflowFailedEvent])
+    blob = serializer.serialize(_failed_event(HTTPException("nope")))
+
+    imported: list[str] = []
+
+    def spy(name: str) -> Any:
+        imported.append(name)
+        return import_module_from_qualified_name(name)
+
+    monkeypatch.setattr("workflows.events.import_module_from_qualified_name", spy)
+
+    restored = cast(WorkflowFailedEvent, serializer.deserialize(blob))
+    assert isinstance(restored.exception, UnreconstructedException)
+    assert restored.exception.original_type == "http.client.HTTPException"
+    assert str(restored.exception) == "nope"
+    assert "http.client.HTTPException" not in imported
+
+
+def test_non_exception_type_is_never_called() -> None:
+    """A serialized blob naming a non-exception builtin (e.g. ``builtins.eval``)
+    must not be invoked — reconstruction only ever constructs real exceptions."""
+    blob = json.dumps(
+        {
+            "__is_pydantic": True,
+            "qualified_name": "workflows.events.WorkflowFailedEvent",
+            "value": {
+                "step_name": "x",
+                "exception": {
+                    "exception_type": "builtins.eval",
+                    "exception_message": "1 + 1",
+                },
+                "attempts": 1,
+                "elapsed_seconds": 0.1,
+            },
+        }
+    )
+    restored = cast(WorkflowFailedEvent, JsonSerializer().deserialize(blob))
+    assert isinstance(restored.exception, UnreconstructedException)
+    assert restored.exception.original_type == "builtins.eval"
+    assert str(restored.exception) == "1 + 1"
