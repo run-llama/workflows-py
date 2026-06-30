@@ -10,7 +10,23 @@ from llama_agents_integration_tests.helpers import (
     make_text_response,
     make_tool_call_response,
 )
+from llama_index.core.base.llms.types import ChatMessage, MessageRole
+from llama_index.core.memory import Memory
 from workflows import Context
+
+
+async def test_agent_workflow_accepts_memory_object(
+    create_workflow: WorkflowFactory,
+) -> None:
+    """Test that workflow.run accepts the public Memory implementation."""
+    workflow = create_workflow(responses=[make_text_response("Done")])
+    memory = Memory.from_defaults(
+        chat_history=[ChatMessage(role=MessageRole.USER, content="earlier turn")]
+    )
+
+    result = await workflow.run(user_msg="hi", memory=memory)
+
+    assert result.response.content == "Done"
 
 
 async def test_initial_state_accessible_in_tool(

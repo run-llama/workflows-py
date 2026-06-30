@@ -156,6 +156,24 @@ async def test_edit_state_isolates_nested_mutables_until_commit() -> None:
 
 
 @pytest.mark.asyncio
+async def test_edit_state_preserves_known_unserializable_keys() -> None:
+    class Undeepcopyable:
+        def __deepcopy__(self, memo: dict[int, Any]) -> Undeepcopyable:
+            raise TypeError("cannot copy")
+
+    memory = Undeepcopyable()
+    store = InMemoryStateStore(DictState(memory=memory, nums=[1]))
+
+    async with store.edit_state() as state:
+        assert state["memory"] is memory
+        state["nums"].append(2)
+        assert await store.get("nums") == [1]
+
+    assert await store.get("memory") is memory
+    assert await store.get("nums") == [1, 2]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("durable", [False, True])
 async def test_get_inside_edit_state(durable: bool) -> None:
     store: Any = (

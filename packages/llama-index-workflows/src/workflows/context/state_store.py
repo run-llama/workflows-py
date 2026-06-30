@@ -9,6 +9,7 @@ import json
 import uuid
 import warnings
 from contextlib import asynccontextmanager
+from copy import deepcopy
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -562,6 +563,25 @@ class DictState(DictLikeModel):
 MODEL_T = TypeVar("MODEL_T", bound=BaseModel, default=DictState)  # type: ignore[reportGeneralTypeIssues]
 
 
+def copy_state_for_edit(
+    state: MODEL_T,
+    known_unserializable_keys: tuple[str, ...] = KNOWN_UNSERIALIZABLE_KEYS,
+) -> MODEL_T:
+    """Copy state for isolated in-memory edits.
+
+    DictState can hold live workflow objects such as memory. Those objects are
+    intentionally skipped by state serialization and may not be deepcopy-able,
+    so preserve them by reference while deep-copying ordinary state entries.
+    """
+    if isinstance(state, DictState):
+        copied = {
+            key: value if key in known_unserializable_keys else deepcopy(value)
+            for key, value in state.items()
+        }
+        return cast(MODEL_T, DictState(**copied))
+    return state.model_copy(deep=True)
+
+
 @runtime_checkable
 class StateStore(Protocol[MODEL_T]):
     """Protocol defining the public async state store interface.
@@ -999,7 +1019,7 @@ class InMemoryStateStore(StateStoreFacade[MODEL_T]):
         # the block commits (matching durable backends, where each load
         # decodes a fresh instance from the committed row).
         state = await self._load_state(storage)
-        return state.model_copy(deep=True)
+        return copy_state_for_edit(state)
 
     def to_dict(self, serializer: "BaseSerializer") -> dict[str, Any]:
         """Serialize the state and model metadata for persistence.
