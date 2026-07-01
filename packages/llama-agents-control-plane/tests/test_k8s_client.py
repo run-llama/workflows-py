@@ -39,6 +39,11 @@ else:
 @pytest.fixture
 def mock_k8s() -> Generator[MagicMock, None, None]:
     with patch("llama_agents.control_plane.k8s_client._k8s_client") as mock_k8s:
+        # The streaming CoreV1Api is a separate real client (its own connection
+        # pool) but backs the same fake apiserver in tests; alias it so pod-log
+        # streaming stubs set on k8s_core_v1 are observed regardless of which
+        # client the code uses.
+        mock_k8s.k8s_core_v1_streaming = mock_k8s.k8s_core_v1
         yield mock_k8s
 
 

@@ -173,8 +173,9 @@ Partial inline (one of `accessKey`/`secretKey` set) is a template error.
 | controlPlane.container.env | list | `[]` | Extra environment variables for the control plane container |
 | controlPlane.container.envFrom | list | `[]` | Extra envFrom sources (secretRef, configMapRef) for the control plane container |
 | controlPlane.container.resources | object | `{requests: {cpu: 100m, memory: 256Mi, ephemeral-storage: 500Mi}}` | Resource requests/limits for the control plane container |
-| controlPlane.container.startupProbe | object | `{}` | Startup probe configuration |
-| controlPlane.container.livenessProbe | object | `{}` | Liveness probe configuration |
+| controlPlane.container.startupProbe | object | `{httpGet: {path: /readyz, port: http}, periodSeconds: 5, failureThreshold: 30}` | Startup probe configuration. Checks `/readyz`, which exercises the kube-apiserver read path (not just process liveness) — generous failureThreshold to cover slow boots without false negatives. |
+| controlPlane.container.readinessProbe | object | `{httpGet: {path: /readyz, port: http}, periodSeconds: 10, timeoutSeconds: 8, failureThreshold: 2}` | Readiness probe configuration. Pulls a pod with a wedged kube-apiserver connection out of Service rotation quickly. |
+| controlPlane.container.livenessProbe | object | `{httpGet: {path: /readyz, port: http}, periodSeconds: 15, timeoutSeconds: 8, failureThreshold: 4}` | Liveness probe configuration. Restarts a pod with a wedged kube-apiserver connection; failureThreshold gives ~60s of sustained failure so a brief apiserver blip doesn't trigger a cascading restart across every replica. |
 | controlPlane.deployment.annotations | object | `{}` | Annotations for the control plane Deployment |
 | controlPlane.deployment.podAnnotations | object | `{}` | Annotations for the control plane pod template |
 | controlPlane.service.type | string | `"ClusterIP"` | Control plane Service type |

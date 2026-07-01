@@ -18,6 +18,44 @@ class ControlPlaneSettings(BaseSettings):
         alias="KUBERNETES_NAMESPACE",
     )
 
+    # Kubernetes client connection pools. Short control-plane reads (CRDs, secrets,
+    # events, pod lists) share one pool; long-lived log streams get their own so they
+    # cannot starve reads. urllib3 defaults to 4 per pool, which is too small once a
+    # handful of log streams are open concurrently.
+    k8s_connection_pool_maxsize: int = Field(
+        default=32,
+        description="Max warm connections for the shared control-plane kube-apiserver client",
+        alias="K8S_CONNECTION_POOL_MAXSIZE",
+    )
+    k8s_streaming_connection_pool_maxsize: int = Field(
+        default=16,
+        description="Max warm connections for the dedicated log-streaming kube-apiserver client",
+        alias="K8S_STREAMING_CONNECTION_POOL_MAXSIZE",
+    )
+
+    # Kubernetes client request timeouts. The generated client blocks forever on a
+    # half-open apiserver connection unless a timeout is passed on every call; these
+    # apply a default so a dead connection fails fast and gets retried on a fresh one
+    # instead of wedging the calling thread.
+    k8s_request_timeout_seconds: float = Field(
+        default=20.0,
+        description=(
+            "Default request timeout (seconds) for short control-plane kube-apiserver "
+            "reads/writes (CRDs, secrets, events, pod lists). Generous on purpose: the "
+            "failure mode is infinite hangs, not slow reads."
+        ),
+        alias="K8S_REQUEST_TIMEOUT_SECONDS",
+    )
+    k8s_streaming_connect_timeout_seconds: float = Field(
+        default=10.0,
+        description=(
+            "Connect-only timeout (seconds) for the log-streaming kube-apiserver "
+            "client. Only bounds establishing the connection; the read timeout stays "
+            "unbounded so a live `follow=True` log tail is never killed mid-stream."
+        ),
+        alias="K8S_STREAMING_CONNECT_TIMEOUT_SECONDS",
+    )
+
     # Default appserver image tag (set by Helm chart via DEFAULT_APPSERVER_IMAGE_TAG)
     default_appserver_image_tag: str = Field(
         default="",

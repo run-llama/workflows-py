@@ -11,6 +11,8 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from prometheus_fastapi_instrumentator import Instrumentator
 
+from ..k8s_client import check_k8s_connectivity
+from ..k8s_metrics import register_k8s_pool_metrics
 from ..lifecycle import shutdown_event
 from .backup_v1beta1 import router as backup_v1beta1
 from .deployments_v1beta1 import router as deployments_v1beta1
@@ -47,6 +49,7 @@ def _handle_shutdown_signal(signum: int, frame: FrameType | None = None) -> None
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     # Startup
     global _PREV_SIGNAL_HANDLERS
+    register_k8s_pool_metrics()
     shutdown_event.clear()
     for _sig in (signal.SIGINT, signal.SIGTERM):
         prev_handler = signal.getsignal(_sig)
@@ -90,3 +93,22 @@ app.include_router(backup_v1beta1)
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/readyz")
+async def readyz() -> JSONResponse:
+    """Readiness/liveness check that actually exercises the kube-apiserver path.
+
+    Unlike `/health`, this fails when the pod's k8s client is wedged (dead/half-open
+    apiserver connection), so a wedged pod is pulled out of rotation instead of
+    staying there indefinitely because nothing checked k8s.
+    """
+    try:
+        await check_k8s_connectivity()
+    except Exception:
+        logger.warning("readyz: kube-apiserver check failed", exc_info=True)
+        return JSONResponse(
+            status_code=503,
+            content={"status": "unhealthy", "reason": "kube-apiserver check failed"},
+        )
+    return JSONResponse(status_code=200, content={"status": "ok"})

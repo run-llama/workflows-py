@@ -76,12 +76,40 @@ controlPlane:
         cpu: 100m
         memory: 256Mi
         ephemeral-storage: 500Mi
-    # -- Startup probe configuration
+    # -- Startup probe configuration. Checks `/readyz`, which exercises the
+    # kube-apiserver read path (not just process liveness) — generous
+    # failureThreshold to cover slow boots without false negatives.
+    # @default -- `{httpGet: {path: /readyz, port: http}, periodSeconds: 5, failureThreshold: 30}`
     # @section -- Control Plane
-    startupProbe: {}
-    # -- Liveness probe configuration
+    startupProbe:
+      httpGet:
+        path: /readyz
+        port: http
+      periodSeconds: 5
+      failureThreshold: 30
+    # -- Readiness probe configuration. Pulls a pod with a wedged kube-apiserver
+    # connection out of Service rotation quickly.
+    # @default -- `{httpGet: {path: /readyz, port: http}, periodSeconds: 10, timeoutSeconds: 8, failureThreshold: 2}`
     # @section -- Control Plane
-    livenessProbe: {}
+    readinessProbe:
+      httpGet:
+        path: /readyz
+        port: http
+      periodSeconds: 10
+      timeoutSeconds: 8
+      failureThreshold: 2
+    # -- Liveness probe configuration. Restarts a pod with a wedged kube-apiserver
+    # connection; failureThreshold gives ~60s of sustained failure so a brief
+    # apiserver blip doesn't trigger a cascading restart across every replica.
+    # @default -- `{httpGet: {path: /readyz, port: http}, periodSeconds: 15, timeoutSeconds: 8, failureThreshold: 4}`
+    # @section -- Control Plane
+    livenessProbe:
+      httpGet:
+        path: /readyz
+        port: http
+      periodSeconds: 15
+      timeoutSeconds: 8
+      failureThreshold: 4
   deployment:
     # -- Annotations for the control plane Deployment
     # @section -- Control Plane

@@ -101,6 +101,10 @@ spec:
         startupProbe:
           {{- toYaml .Values.controlPlane.container.startupProbe | nindent 10 }}
         {{- end }}
+        {{- if .Values.controlPlane.container.readinessProbe }}
+        readinessProbe:
+          {{- toYaml .Values.controlPlane.container.readinessProbe | nindent 10 }}
+        {{- end }}
         {{- if .Values.controlPlane.container.livenessProbe }}
         livenessProbe:
           {{- toYaml .Values.controlPlane.container.livenessProbe | nindent 10 }}

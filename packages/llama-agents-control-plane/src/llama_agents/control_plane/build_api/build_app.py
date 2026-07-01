@@ -26,6 +26,7 @@ from llama_agents.control_plane.git._git_service import (
     GitRepository,
     InaccessibleRepository,
 )
+from llama_agents.control_plane.k8s_metrics import register_k8s_pool_metrics
 from llama_agents.core.git.git_util import GitAccessError, _check_hostname_not_private
 from llama_agents.core.schema.deployments import (
     INTERNAL_CODE_REPO_SCHEME,
@@ -39,6 +40,7 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI) -> AsyncIterator[None]:
+    register_k8s_pool_metrics()
     if build_artifact_storage is None:
         logger.warning(
             "S3_BUCKET is not set — build artifact storage is disabled, /health will report unhealthy"
@@ -83,6 +85,29 @@ async def health() -> Response:
         )
     return Response(
         content='{"status": "ok", "service": "build-api"}',
+        status_code=200,
+        media_type="application/json",
+    )
+
+
+@build_app.get("/readyz")
+async def readyz() -> Response:
+    """Readiness check that actually exercises the kube-apiserver path.
+
+    This process shares the same k8s client (and thread pool) as the manage API, so a
+    wedged apiserver connection affects both.
+    """
+    try:
+        await k8s_client.check_k8s_connectivity()
+    except Exception:
+        logger.warning("readyz: kube-apiserver check failed", exc_info=True)
+        return Response(
+            content='{"status": "unhealthy", "reason": "kube-apiserver check failed"}',
+            status_code=503,
+            media_type="application/json",
+        )
+    return Response(
+        content='{"status": "ok"}',
         status_code=200,
         media_type="application/json",
     )
