@@ -87,8 +87,10 @@ class _TimeoutApiClient(ApiClient):
     def request(self, *args: Any, _request_timeout: Any = None, **kwargs: Any) -> Any:
         # `_request_timeout` is always keyword (see ApiClient.__call_api). Stubs omit
         # `request` from the curated surface, so cast like the rest of this module.
+        if _request_timeout is None:
+            _request_timeout = self._default_timeout
         return cast(Any, super()).request(
-            *args, _request_timeout=_request_timeout or self._default_timeout, **kwargs
+            *args, _request_timeout=_request_timeout, **kwargs
         )
 
 

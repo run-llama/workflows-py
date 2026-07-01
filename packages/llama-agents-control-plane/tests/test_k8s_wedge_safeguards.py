@@ -120,6 +120,17 @@ def test_timeout_api_client_preserves_explicit_timeout() -> None:
     assert base_request.call_args.kwargs["_request_timeout"] == (1.0, None)
 
 
+def test_timeout_api_client_preserves_falsy_explicit_timeout() -> None:
+    """A falsy-but-explicit `_request_timeout` (e.g. `0`) must not be treated as
+    unset — only `None` means "caller didn't pass one"."""
+    client = _TimeoutApiClient(
+        default_request_timeout=17.0, configuration=Configuration()
+    )
+    with patch.object(ApiClient, "request") as base_request:
+        client.request("GET", "http://example.test", _request_timeout=0)
+    assert base_request.call_args.kwargs["_request_timeout"] == 0
+
+
 @pytest.mark.asyncio
 async def test_stream_container_logs_uses_connect_only_timeout(
     mock_k8s: MagicMock,

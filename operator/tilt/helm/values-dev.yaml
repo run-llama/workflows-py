@@ -44,6 +44,7 @@ controlPlane:
         path: /livez
         port: 8000
       periodSeconds: 10
+      timeoutSeconds: 5
   hpa:
     enabled: false
   objectStorage:
