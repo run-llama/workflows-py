@@ -1,3 +1,4 @@
+import json
 import logging
 import re
 import tempfile
@@ -89,23 +90,14 @@ async def health() -> Response:
 
 
 async def _k8s_health_response() -> Response:
-    """Shared body for `/readyz` and `/livez`: 200 if the apiserver answers, else 503.
-
-    Shares the same k8s client and thread pool as the manage API, so a wedged
-    apiserver connection shows up on both.
+    """Shares the same k8s client and thread pool as the manage API, so a wedged
+    apiserver connection shows up on both. See `k8s_health_check` for the check
+    itself, shared with the manage API so pass/fail logic can't drift between them.
     """
-    try:
-        await k8s_client.check_k8s_connectivity()
-    except Exception:
-        logger.warning("kube-apiserver health check failed", exc_info=True)
-        return Response(
-            content='{"status": "unhealthy", "reason": "kube-apiserver check failed"}',
-            status_code=503,
-            media_type="application/json",
-        )
+    status_code, body = await k8s_client.k8s_health_check()
     return Response(
-        content='{"status": "ok"}',
-        status_code=200,
+        content=json.dumps(body),
+        status_code=status_code,
         media_type="application/json",
     )
 

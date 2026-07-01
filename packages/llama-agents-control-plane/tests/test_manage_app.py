@@ -26,7 +26,7 @@ K8S_PROBES = ["/readyz", "/livez"]
 @pytest.mark.parametrize("endpoint", K8S_PROBES)
 async def test_k8s_probe_returns_200_when_healthy(endpoint: str) -> None:
     with patch(
-        "llama_agents.control_plane.manage_api.manage_app.check_k8s_connectivity",
+        "llama_agents.control_plane.k8s_client.check_k8s_connectivity",
         AsyncMock(return_value=None),
     ):
         async with httpx.AsyncClient(
@@ -42,7 +42,7 @@ async def test_k8s_probe_returns_200_when_healthy(endpoint: str) -> None:
 async def test_k8s_probe_returns_503_when_check_fails(endpoint: str) -> None:
     """A wedged kube-apiserver connection must fail the probe, not report 200."""
     with patch(
-        "llama_agents.control_plane.manage_api.manage_app.check_k8s_connectivity",
+        "llama_agents.control_plane.k8s_client.check_k8s_connectivity",
         AsyncMock(side_effect=TimeoutError("simulated wedge")),
     ):
         async with httpx.AsyncClient(

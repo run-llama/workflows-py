@@ -11,7 +11,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from prometheus_fastapi_instrumentator import Instrumentator
 
-from ..k8s_client import check_k8s_connectivity
+from ..k8s_client import k8s_health_check
 from ..lifecycle import shutdown_event
 from .backup_v1beta1 import router as backup_v1beta1
 from .deployments_v1beta1 import router as deployments_v1beta1
@@ -94,24 +94,12 @@ async def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
-async def _k8s_health_response() -> JSONResponse:
-    """Shared body for `/readyz` and `/livez`: 200 if the apiserver answers, else 503."""
-    try:
-        await check_k8s_connectivity()
-    except Exception:
-        logger.warning("kube-apiserver health check failed", exc_info=True)
-        return JSONResponse(
-            status_code=503,
-            content={"status": "unhealthy", "reason": "kube-apiserver check failed"},
-        )
-    return JSONResponse(status_code=200, content={"status": "ok"})
-
-
 @app.get("/readyz")
 async def readyz() -> JSONResponse:
     """Readiness: exercises the kube-apiserver path so a pod with a wedged
     connection is pulled from Service rotation instead of serving errors."""
-    return await _k8s_health_response()
+    status_code, body = await k8s_health_check()
+    return JSONResponse(status_code=status_code, content=body)
 
 
 @app.get("/livez")
@@ -119,4 +107,5 @@ async def livez() -> JSONResponse:
     """Liveness: same kube-apiserver check, so a pod whose client pool is dead and
     won't self-recover gets restarted. Probe damping (sustained failure, not a
     single miss) keeps a brief apiserver blip from restarting every replica."""
-    return await _k8s_health_response()
+    status_code, body = await k8s_health_check()
+    return JSONResponse(status_code=status_code, content=body)

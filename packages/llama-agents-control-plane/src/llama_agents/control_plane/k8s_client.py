@@ -283,6 +283,21 @@ async def check_k8s_connectivity() -> None:
     )
 
 
+async def k8s_health_check() -> tuple[int, dict[str, str]]:
+    """Shared `/readyz`/`/livez` body for both ASGI apps: (status_code, response body).
+
+    Both apps wrap this in their own Response type rather than sharing one, since
+    they use different response classes; centralizing the check itself is what
+    keeps their pass/fail logic from drifting independently.
+    """
+    try:
+        await check_k8s_connectivity()
+    except Exception:
+        logger.warning("kube-apiserver health check failed", exc_info=True)
+        return 503, {"status": "unhealthy", "reason": "kube-apiserver check failed"}
+    return 200, {"status": "ok"}
+
+
 async def validate_deployment_id(deployment_id: str) -> bool:
     """Check if a deployment ID is available (returns True if available)"""
     try:
