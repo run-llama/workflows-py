@@ -28,7 +28,7 @@ controlPlane:
         cpu: "2000m"
     startupProbe:
       httpGet:
-        path: /readyz
+        path: /health
         port: 8000
       periodSeconds: 1
       timeoutSeconds: 2
@@ -41,7 +41,7 @@ controlPlane:
       timeoutSeconds: 5
     livenessProbe:
       httpGet:
-        path: /readyz
+        path: /livez
         port: 8000
       periodSeconds: 10
   hpa:

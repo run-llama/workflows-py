@@ -1,5 +1,5 @@
 """Tests for the kube-apiserver wedge safeguards: request timeouts and the
-k8s-checking readiness probe (`check_k8s_connectivity` / `/readyz`).
+k8s-checking health probes (`check_k8s_connectivity` behind `/readyz` and `/livez`).
 """
 
 from __future__ import annotations
@@ -50,10 +50,13 @@ def mock_k8s() -> Generator[MagicMock, None, None]:
 
 
 def test_control_client_gets_default_timeout(initialized_client: K8sClient) -> None:
-    """The shared control pool gets a default request timeout from settings."""
+    """The shared control pool gets a default (connect, read) timeout from settings."""
     control = initialized_client._control_api_client
     assert isinstance(control, _TimeoutApiClient)
-    assert control._default_request_timeout == settings.k8s_request_timeout_seconds
+    assert control._default_timeout == (
+        settings.k8s_request_timeout_seconds,
+        settings.k8s_request_timeout_seconds,
+    )
 
 
 def test_streaming_client_has_no_default_timeout(initialized_client: K8sClient) -> None:
@@ -161,29 +164,23 @@ async def test_stream_container_logs_retries_on_connect_failure(
 
 @pytest.mark.asyncio
 async def test_check_k8s_connectivity_success(mock_k8s: MagicMock) -> None:
-    """A healthy apiserver read completes without raising."""
-    mock_k8s.namespace = "llama-agents"
-    mock_k8s.k8s_custom_objects.list_namespaced_custom_object.return_value = {
-        "items": []
-    }
+    """A healthy `GET /version` completes without raising, with a short timeout."""
+    mock_k8s.k8s_version.get_code.return_value = object()
 
     await check_k8s_connectivity()
 
-    mock_k8s.k8s_custom_objects.list_namespaced_custom_object.assert_called_once()
-    _, kwargs = mock_k8s.k8s_custom_objects.list_namespaced_custom_object.call_args
-    assert kwargs["plural"] == "llamadeployments"
-    assert kwargs["limit"] == 1
+    mock_k8s.k8s_version.get_code.assert_called_once()
+    _, kwargs = mock_k8s.k8s_version.get_code.call_args
+    timeout = settings.k8s_health_check_timeout_seconds
+    assert kwargs["_request_timeout"] == (timeout, timeout)
 
 
 @pytest.mark.asyncio
 async def test_check_k8s_connectivity_propagates_api_errors(
     mock_k8s: MagicMock,
 ) -> None:
-    """A failed apiserver read is surfaced to the caller (readyz treats it as down)."""
-    mock_k8s.namespace = "llama-agents"
-    mock_k8s.k8s_custom_objects.list_namespaced_custom_object.side_effect = (
-        ApiException(status=500)
-    )
+    """A failed apiserver read is surfaced to the caller (probes treat it as down)."""
+    mock_k8s.k8s_version.get_code.side_effect = ApiException(status=500)
 
     with pytest.raises(ApiException):
         await check_k8s_connectivity()
@@ -193,8 +190,7 @@ async def test_check_k8s_connectivity_propagates_api_errors(
 async def test_check_k8s_connectivity_times_out_on_a_wedged_connection(
     mock_k8s: MagicMock,
 ) -> None:
-    """A hung call (the actual wedge symptom) must not block readyz forever."""
-    mock_k8s.namespace = "llama-agents"
+    """A hung call (the actual wedge symptom) must not block the probe forever."""
 
     # Simulate the wedge as an immediate timeout rather than a real sleep, so the
     # test doesn't depend on wall-clock settings.k8s_request_timeout_seconds. Close

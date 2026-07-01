@@ -76,19 +76,20 @@ controlPlane:
         cpu: 100m
         memory: 256Mi
         ephemeral-storage: 500Mi
-    # -- Startup probe configuration. Checks `/readyz`, which exercises the
-    # kube-apiserver read path (not just process liveness) — generous
-    # failureThreshold to cover slow boots without false negatives.
-    # @default -- `{httpGet: {path: /readyz, port: http}, periodSeconds: 5, failureThreshold: 30}`
+    # -- Startup probe configuration. Checks `/health`, a cheap process-liveness
+    # endpoint with no k8s dependency, so a pod is marked started as soon as the
+    # process is up; generous failureThreshold covers slow boots.
+    # @default -- `{httpGet: {path: /health, port: http}, periodSeconds: 5, failureThreshold: 30}`
     # @section -- Control Plane
     startupProbe:
       httpGet:
-        path: /readyz
+        path: /health
         port: http
       periodSeconds: 5
       failureThreshold: 30
-    # -- Readiness probe configuration. Pulls a pod with a wedged kube-apiserver
-    # connection out of Service rotation quickly.
+    # -- Readiness probe configuration. Checks `/readyz`, which round-trips the
+    # kube-apiserver, so a pod with a wedged connection is pulled out of Service
+    # rotation quickly and returns on its own once the connection recovers.
     # @default -- `{httpGet: {path: /readyz, port: http}, periodSeconds: 10, timeoutSeconds: 8, failureThreshold: 2}`
     # @section -- Control Plane
     readinessProbe:
@@ -98,14 +99,15 @@ controlPlane:
       periodSeconds: 10
       timeoutSeconds: 8
       failureThreshold: 2
-    # -- Liveness probe configuration. Restarts a pod with a wedged kube-apiserver
-    # connection; failureThreshold gives ~60s of sustained failure so a brief
+    # -- Liveness probe configuration. Checks `/livez` (same kube-apiserver
+    # round-trip as `/readyz`) to restart a pod whose client pool is dead and won't
+    # self-recover; failureThreshold gives ~60s of sustained failure so a brief
     # apiserver blip doesn't trigger a cascading restart across every replica.
-    # @default -- `{httpGet: {path: /readyz, port: http}, periodSeconds: 15, timeoutSeconds: 8, failureThreshold: 4}`
+    # @default -- `{httpGet: {path: /livez, port: http}, periodSeconds: 15, timeoutSeconds: 8, failureThreshold: 4}`
     # @section -- Control Plane
     livenessProbe:
       httpGet:
-        path: /readyz
+        path: /livez
         port: http
       periodSeconds: 15
       timeoutSeconds: 8

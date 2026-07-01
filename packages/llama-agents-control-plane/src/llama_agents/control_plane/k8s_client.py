@@ -32,6 +32,7 @@ from kubernetes.client import (
     NetworkingV1Api,
     V1Pod,
     V1ReplicaSet,
+    VersionApi,
 )
 from kubernetes.client.api_client import ApiClient
 from kubernetes.client.configuration import Configuration
@@ -67,52 +68,27 @@ R = TypeVar("R")
 
 
 class _TimeoutApiClient(ApiClient):
-    """ApiClient that fills in a default request timeout when a call doesn't set one.
+    """ApiClient that applies a default (connect, read) timeout to every call.
 
-    The generated kubernetes client only enforces a timeout when a caller passes
-    ``_request_timeout`` explicitly (see ``kubernetes.client.rest.RESTClientObject``);
-    otherwise urllib3 blocks forever. A half-open apiserver connection then wedges the
-    calling thread permanently instead of failing and retrying on a fresh connection.
-    Applying the default here, at the ApiClient boundary, covers every CRD/secret/list
-    call without threading ``_request_timeout=`` through each call site individually.
+    The kubernetes client only bounds a request when the caller passes
+    ``_request_timeout``; with nothing set, urllib3 blocks forever and a half-open
+    apiserver connection wedges the calling thread. No Configuration-level default
+    exists, and rest.py passes ``timeout=None`` explicitly (clobbering any pool
+    default), so fill it in at ``request()`` — the chokepoint every generated call
+    funnels through — instead of threading ``_request_timeout=`` through each site.
     """
 
     def __init__(self, default_request_timeout: float, **kwargs: Any) -> None:
         super().__init__(**kwargs)
-        self._default_request_timeout = default_request_timeout
+        # rest.py builds a urllib3 Timeout only from an int or a 2-tuple, never a
+        # bare float (`isinstance(20.0, int)` is False), so store the tuple form.
+        self._default_timeout = (default_request_timeout, default_request_timeout)
 
-    def request(
-        self,
-        method: str,
-        url: str,
-        query_params: Any = None,
-        headers: Any = None,
-        post_params: Any = None,
-        body: Any = None,
-        _preload_content: bool = True,
-        _request_timeout: Any = None,
-    ) -> Any:
-        if _request_timeout is None:
-            # kubernetes/client/rest.py only builds a urllib3 Timeout when
-            # `_request_timeout` is an `int` or a 2-tuple — `isinstance(20.0, int)`
-            # is False, so passing a bare float here silently no-ops (verified
-            # against the installed client). Always pass a (connect, read) tuple.
-            _request_timeout = (
-                self._default_request_timeout,
-                self._default_request_timeout,
-            )
-        # The kubernetes stubs omit `request` from the curated ApiClient surface
-        # (it's client-internal); cast like the rest of this module does for the
-        # library's incomplete typing.
+    def request(self, *args: Any, _request_timeout: Any = None, **kwargs: Any) -> Any:
+        # `_request_timeout` is always keyword (see ApiClient.__call_api). Stubs omit
+        # `request` from the curated surface, so cast like the rest of this module.
         return cast(Any, super()).request(
-            method,
-            url,
-            query_params=query_params,
-            headers=headers,
-            post_params=post_params,
-            body=body,
-            _preload_content=_preload_content,
-            _request_timeout=_request_timeout,
+            *args, _request_timeout=_request_timeout or self._default_timeout, **kwargs
         )
 
 
@@ -147,6 +123,7 @@ class K8sClient:
         self._k8s_custom_objects: CustomObjectsApi | None = None
         self._k8s_networking_v1: NetworkingV1Api | None = None
         self._k8s_apps_v1: AppsV1Api | None = None
+        self._k8s_version: VersionApi | None = None
         self._k8s_initialized = False
 
     def _get_namespace(self) -> str:
@@ -230,20 +207,8 @@ class K8sClient:
                 api_client=self._control_api_client
             )
             self._k8s_apps_v1 = client.AppsV1Api(api_client=self._control_api_client)
+            self._k8s_version = client.VersionApi(api_client=self._control_api_client)
             self._k8s_initialized = True
-
-    def iter_pool_clients(self) -> dict[str, ApiClient]:
-        """Live ApiClients keyed by logical name, for pool metrics.
-
-        Returns an empty dict before initialization so the metrics collector can
-        run at any time without forcing client construction.
-        """
-        clients: dict[str, ApiClient] = {}
-        if self._control_api_client is not None:
-            clients["control"] = self._control_api_client
-        if self._streaming_api_client is not None:
-            clients["streaming"] = self._streaming_api_client
-        return clients
 
     @property
     def k8s_core_v1(self) -> CoreV1Api:
@@ -285,41 +250,34 @@ class K8sClient:
         assert self._k8s_apps_v1 is not None
         return self._k8s_apps_v1
 
+    @property
+    def k8s_version(self) -> VersionApi:
+        """VersionApi backed by the control pool, for the `/version` health probe."""
+        self._ensure_k8s_client()
+        assert self._k8s_version is not None
+        return self._k8s_version
+
 
 # Global k8s client instance
 _k8s_client = K8sClient()
 
 
 async def check_k8s_connectivity() -> None:
-    """Exercise the kube-apiserver read path used by `/readyz`.
+    """Round-trip the kube-apiserver through the control pool for `/readyz` and `/livez`.
 
-    Raises on failure or timeout; callers treat any exception as "not ready". Does a
-    cheap CustomObjectsApi list through the control pool — the same call path
-    `get_deployment_crd`/`get_deployments` use. A blind `/health` never touches k8s, so
-    a pod with a wedged apiserver connection would otherwise keep reporting 200.
+    Raises on failure or timeout; the probes treat any exception as unhealthy. `GET
+    /version` is the lightest real apiserver call — no etcd list, no RBAC — so it
+    catches a dead or wedged connection without load. A blind `/health` never touches
+    k8s, so a wedged pod would otherwise keep reporting 200. The short per-call
+    timeout keeps a slow-but-alive apiserver from reading as a wedge; `wait_for`
+    bounds the coroutine even if the underlying thread can't be cancelled.
     """
-    timeout = settings.k8s_request_timeout_seconds
-    # The kubernetes stubs' curated signature omits client-internal kwargs like
-    # `_request_timeout` (same reason `stream_container_logs` below casts
-    # `read_namespaced_pod_log`); loosen the type so we can still pass it explicitly.
-    list_custom_objects = cast(
-        Callable[..., Any],
-        _k8s_client.k8s_custom_objects.list_namespaced_custom_object,
-    )
+    timeout = settings.k8s_health_check_timeout_seconds
+    # Stubs omit `_request_timeout` from the curated signature; cast to pass it.
+    get_code = cast(Callable[..., Any], _k8s_client.k8s_version.get_code)
     await asyncio.wait_for(
-        asyncio.to_thread(
-            list_custom_objects,
-            group="deploy.llamaindex.ai",
-            version="v1",
-            namespace=_k8s_client.namespace,
-            plural="llamadeployments",
-            limit=1,
-            # A bare float here would silently no-op (see _TimeoutApiClient.request)
-            # — kubernetes/client/rest.py only builds a urllib3 Timeout for `int` or
-            # a 2-tuple, never a `float`. Always pass (connect, read) explicitly.
-            _request_timeout=(timeout, timeout),
-        ),
-        timeout=timeout + 5,
+        asyncio.to_thread(get_code, _request_timeout=(timeout, timeout)),
+        timeout=timeout + 2,
     )
 
 
@@ -1242,11 +1200,10 @@ async def stream_container_logs(
             tail_lines=tail_lines,
             timestamps=True,
             _preload_content=False,
-            # Connect-only timeout: fails fast if the apiserver is unreachable when
-            # opening the stream, without bounding the read — `read=None` disables
-            # urllib3's read timeout so a live `follow=True` tail is never killed
-            # mid-stream. Do not add a read timeout here; that's the one call site
-            # that must stay unbounded.
+            # Connect-only timeout: fail fast if the apiserver is unreachable, but
+            # `read=None` keeps the read unbounded so a live `follow=True` tail is
+            # never killed mid-stream. This is the one call site that must not have a
+            # read timeout.
             _request_timeout=(settings.k8s_streaming_connect_timeout_seconds, None),
         )
 
@@ -1257,12 +1214,9 @@ async def stream_container_logs(
 
         return cancel, _to_generator(resp)
     except (ApiException, HTTPError) as e:
-        # Non-fatal conditions, retried the same way below: the container isn't
-        # ready yet (400/404 from the apiserver), or the connect-only timeout set
-        # above tripped because the apiserver was briefly unreachable when opening
-        # the stream (raised as a urllib3 HTTPError — e.g.
-        # ConnectTimeoutError/MaxRetryError — not an ApiException). Any other
-        # ApiException status is a real API error and still propagates.
+        # Retry the same way for two non-fatal cases: the container isn't ready yet
+        # (400/404), or the connect-only timeout tripped opening the stream (a
+        # urllib3 HTTPError, not an ApiException). Any other ApiException propagates.
         if isinstance(e, ApiException) and e.status not in (400, 404):
             raise
 

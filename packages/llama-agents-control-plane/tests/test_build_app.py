@@ -38,8 +38,13 @@ async def test_health_returns_200_when_s3_configured() -> None:
     assert data["service"] == "build-api"
 
 
+# /readyz and /livez share one k8s-checking body, so both are exercised here.
+K8S_PROBES = ["/readyz", "/livez"]
+
+
 @pytest.mark.anyio
-async def test_readyz_returns_200_when_k8s_is_healthy() -> None:
+@pytest.mark.parametrize("endpoint", K8S_PROBES)
+async def test_k8s_probe_returns_200_when_healthy(endpoint: str) -> None:
     with patch(
         "llama_agents.control_plane.build_api.build_app.k8s_client.check_k8s_connectivity",
         AsyncMock(return_value=None),
@@ -47,14 +52,15 @@ async def test_readyz_returns_200_when_k8s_is_healthy() -> None:
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=build_app), base_url="http://test"
         ) as client:
-            response = await client.get("/readyz")
+            response = await client.get(endpoint)
     assert response.status_code == 200
     assert response.json()["status"] == "ok"
 
 
 @pytest.mark.anyio
-async def test_readyz_returns_503_when_k8s_check_fails() -> None:
-    """A wedged kube-apiserver connection must fail /readyz, not report 200."""
+@pytest.mark.parametrize("endpoint", K8S_PROBES)
+async def test_k8s_probe_returns_503_when_check_fails(endpoint: str) -> None:
+    """A wedged kube-apiserver connection must fail the probe, not report 200."""
     with patch(
         "llama_agents.control_plane.build_api.build_app.k8s_client.check_k8s_connectivity",
         AsyncMock(side_effect=TimeoutError("simulated wedge")),
@@ -62,6 +68,6 @@ async def test_readyz_returns_503_when_k8s_check_fails() -> None:
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=build_app), base_url="http://test"
         ) as client:
-            response = await client.get("/readyz")
+            response = await client.get(endpoint)
     assert response.status_code == 503
     assert response.json()["status"] == "unhealthy"

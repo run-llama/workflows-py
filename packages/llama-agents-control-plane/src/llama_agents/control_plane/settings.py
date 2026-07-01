@@ -55,6 +55,17 @@ class ControlPlaneSettings(BaseSettings):
         ),
         alias="K8S_STREAMING_CONNECT_TIMEOUT_SECONDS",
     )
+    k8s_health_check_timeout_seconds: float = Field(
+        default=5.0,
+        description=(
+            "Timeout (seconds) for the kube-apiserver round-trip behind the "
+            "`/readyz` and `/livez` probes. Deliberately short and separate from "
+            "`k8s_request_timeout_seconds` so it fits inside the probe's "
+            "`timeoutSeconds`: a merely-slow apiserver stays healthy, a dead one "
+            "fails fast."
+        ),
+        alias="K8S_HEALTH_CHECK_TIMEOUT_SECONDS",
+    )
 
     # Default appserver image tag (set by Helm chart via DEFAULT_APPSERVER_IMAGE_TAG)
     default_appserver_image_tag: str = Field(
