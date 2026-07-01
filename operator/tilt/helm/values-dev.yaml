@@ -41,10 +41,9 @@ controlPlane:
       timeoutSeconds: 5
     livenessProbe:
       httpGet:
-        path: /livez
+        path: /health
         port: 8000
       periodSeconds: 10
-      timeoutSeconds: 5
   hpa:
     enabled: false
   objectStorage:

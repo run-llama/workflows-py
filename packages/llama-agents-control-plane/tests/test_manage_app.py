@@ -9,7 +9,8 @@ from llama_agents.control_plane.manage_api.manage_app import app
 
 @pytest.mark.asyncio
 async def test_health_does_not_touch_k8s() -> None:
-    """`/health` stays a cheap liveness-of-process check, unrelated to k8s."""
+    """`/health` stays a cheap process check, unrelated to k8s; backs startup and
+    liveness so an apiserver outage can't restart every replica at once."""
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=app), base_url="http://test"
     ) as client:
@@ -18,13 +19,8 @@ async def test_health_does_not_touch_k8s() -> None:
     assert response.json() == {"status": "ok"}
 
 
-# /readyz and /livez share one k8s-checking body, so both are exercised here.
-K8S_PROBES = ["/readyz", "/livez"]
-
-
 @pytest.mark.asyncio
-@pytest.mark.parametrize("endpoint", K8S_PROBES)
-async def test_k8s_probe_returns_200_when_healthy(endpoint: str) -> None:
+async def test_readyz_returns_200_when_k8s_is_healthy() -> None:
     with patch(
         "llama_agents.control_plane.k8s_client.check_k8s_connectivity",
         AsyncMock(return_value=None),
@@ -32,15 +28,14 @@ async def test_k8s_probe_returns_200_when_healthy(endpoint: str) -> None:
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app), base_url="http://test"
         ) as client:
-            response = await client.get(endpoint)
+            response = await client.get("/readyz")
     assert response.status_code == 200
     assert response.json()["status"] == "ok"
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("endpoint", K8S_PROBES)
-async def test_k8s_probe_returns_503_when_check_fails(endpoint: str) -> None:
-    """A wedged kube-apiserver connection must fail the probe, not report 200."""
+async def test_readyz_returns_503_when_k8s_check_fails() -> None:
+    """A wedged kube-apiserver connection must fail /readyz, not report 200."""
     with patch(
         "llama_agents.control_plane.k8s_client.check_k8s_connectivity",
         AsyncMock(side_effect=TimeoutError("simulated wedge")),
@@ -48,6 +43,6 @@ async def test_k8s_probe_returns_503_when_check_fails(endpoint: str) -> None:
         async with httpx.AsyncClient(
             transport=httpx.ASGITransport(app=app), base_url="http://test"
         ) as client:
-            response = await client.get(endpoint)
+            response = await client.get("/readyz")
     assert response.status_code == 503
     assert response.json()["status"] == "unhealthy"

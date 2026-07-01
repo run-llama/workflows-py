@@ -90,7 +90,9 @@ app.include_router(backup_v1beta1)
 
 @app.get("/health")
 async def health() -> dict[str, str]:
-    """Process-liveness check with no k8s dependency; backs the startup probe."""
+    """Process check with no k8s dependency; backs the startup and liveness probes.
+    Restarting doesn't fix an apiserver outage, so liveness stays independent of it —
+    only `/readyz` checks k8s."""
     return {"status": "ok"}
 
 
@@ -98,14 +100,5 @@ async def health() -> dict[str, str]:
 async def readyz() -> JSONResponse:
     """Readiness: exercises the kube-apiserver path so a pod with a wedged
     connection is pulled from Service rotation instead of serving errors."""
-    status_code, body = await k8s_health_check()
-    return JSONResponse(status_code=status_code, content=body)
-
-
-@app.get("/livez")
-async def livez() -> JSONResponse:
-    """Liveness: same kube-apiserver check, so a pod whose client pool is dead and
-    won't self-recover gets restarted. Probe damping (sustained failure, not a
-    single miss) keeps a brief apiserver blip from restarting every replica."""
     status_code, body = await k8s_health_check()
     return JSONResponse(status_code=status_code, content=body)

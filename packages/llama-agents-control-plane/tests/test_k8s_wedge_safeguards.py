@@ -1,5 +1,5 @@
 """Tests for the kube-apiserver wedge safeguards: request timeouts and the
-k8s-checking health probes (`check_k8s_connectivity` behind `/readyz` and `/livez`).
+k8s-checking readiness probe (`check_k8s_connectivity` behind `/readyz`).
 """
 
 from __future__ import annotations

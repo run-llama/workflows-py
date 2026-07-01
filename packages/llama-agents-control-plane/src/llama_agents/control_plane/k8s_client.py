@@ -265,9 +265,9 @@ _k8s_client = K8sClient()
 
 
 async def check_k8s_connectivity() -> None:
-    """Round-trip the kube-apiserver through the control pool for `/readyz` and `/livez`.
+    """Round-trip the kube-apiserver through the control pool for `/readyz`.
 
-    Raises on failure or timeout; the probes treat any exception as unhealthy. `GET
+    Raises on failure or timeout; `/readyz` treats any exception as unhealthy. `GET
     /version` is the lightest real apiserver call — no etcd list, no RBAC — so it
     catches a dead or wedged connection without load. A blind `/health` never touches
     k8s, so a wedged pod would otherwise keep reporting 200. The short per-call
@@ -284,7 +284,7 @@ async def check_k8s_connectivity() -> None:
 
 
 async def k8s_health_check() -> tuple[int, dict[str, str]]:
-    """Shared `/readyz`/`/livez` body for both ASGI apps: (status_code, response body).
+    """Shared `/readyz` body for both ASGI apps: (status_code, response body).
 
     Both apps wrap this in their own Response type rather than sharing one, since
     they use different response classes; centralizing the check itself is what

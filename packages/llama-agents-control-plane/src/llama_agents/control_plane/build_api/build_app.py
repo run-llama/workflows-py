@@ -108,12 +108,6 @@ async def readyz() -> Response:
     return await _k8s_health_response()
 
 
-@build_app.get("/livez")
-async def livez() -> Response:
-    """Liveness: same kube-apiserver check, restarts a pod with a dead client pool."""
-    return await _k8s_health_response()
-
-
 # Build Artifact Endpoints
 # ========================
 

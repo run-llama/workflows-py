@@ -99,18 +99,17 @@ controlPlane:
       periodSeconds: 10
       timeoutSeconds: 8
       failureThreshold: 2
-    # -- Liveness probe configuration. Checks `/livez` (same kube-apiserver
-    # round-trip as `/readyz`) to restart a pod whose client pool is dead and won't
-    # self-recover; failureThreshold gives ~60s of sustained failure so a brief
-    # apiserver blip doesn't trigger a cascading restart across every replica.
-    # @default -- `{httpGet: {path: /livez, port: http}, periodSeconds: 15, timeoutSeconds: 8, failureThreshold: 4}`
+    # -- Liveness probe configuration. Checks `/health`, a cheap process check with
+    # no kube-apiserver dependency — restarting doesn't fix an apiserver outage, so
+    # liveness stays independent of it and readiness alone handles a wedged
+    # connection (see `/readyz`).
+    # @default -- `{httpGet: {path: /health, port: http}, periodSeconds: 15, failureThreshold: 4}`
     # @section -- Control Plane
     livenessProbe:
       httpGet:
-        path: /livez
+        path: /health
         port: http
       periodSeconds: 15
-      timeoutSeconds: 8
       failureThreshold: 4
   deployment:
     # -- Annotations for the control plane Deployment

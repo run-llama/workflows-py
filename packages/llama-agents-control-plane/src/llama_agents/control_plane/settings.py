@@ -58,11 +58,10 @@ class ControlPlaneSettings(BaseSettings):
     k8s_health_check_timeout_seconds: float = Field(
         default=5.0,
         description=(
-            "Timeout (seconds) for the kube-apiserver round-trip behind the "
-            "`/readyz` and `/livez` probes. Deliberately short and separate from "
-            "`k8s_request_timeout_seconds` so it fits inside the probe's "
-            "`timeoutSeconds`: a merely-slow apiserver stays healthy, a dead one "
-            "fails fast."
+            "Timeout (seconds) for the kube-apiserver round-trip behind `/readyz`. "
+            "Deliberately short and separate from `k8s_request_timeout_seconds` so "
+            "it fits inside the probe's `timeoutSeconds`: a merely-slow apiserver "
+            "stays healthy, a dead one fails fast."
         ),
         alias="K8S_HEALTH_CHECK_TIMEOUT_SECONDS",
     )
