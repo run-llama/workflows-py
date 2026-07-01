@@ -1,5 +1,13 @@
 # llama-agents
 
+## 0.12.5
+
+### Patch Changes
+
+- b7936a6: Recover control-plane pods automatically when their Kubernetes connection wedges, instead of quietly serving errors.
+- Updated dependencies [b7936a6]
+  - llama-agents-control-plane@0.12.3
+
 ## 0.12.4
 
 ### Patch Changes
