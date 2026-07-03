@@ -44,11 +44,17 @@ class TickStepResult(BaseModel):
         frozen=True, arbitrary_types_allowed=True, populate_by_name=True
     )
     type: Literal["step_result"] = "step_result"
+    # Local (bare) step id within the addressed broker. ``invocation_namespace``
+    # is the invocation path that addresses which broker owns this result.
     step_id: StepId = Field(validation_alias=_STEP_ID_ALIAS)
     worker_id: int
     invocation_namespace: tuple[str, ...] = ()
     event: SerializableEvent
     result: list[Annotated[StepFunctionResult, Discriminator("type")]]
+    # Wall-clock stamp recorded before ``on_tick`` journaling, so replay reads
+    # the same time the live run used instead of the replay clock. Additive:
+    # old journals default to None and fall back to the reducer's ``now``.
+    stamped_at: float | None = None
 
 
 class TickAddEvent(BaseModel):
@@ -59,12 +65,15 @@ class TickAddEvent(BaseModel):
     )
     type: Literal["add_event"] = "add_event"
     event: SerializableEvent
+    # Local (bare) target step within the addressed broker, for a targeted
+    # send. ``origin_namespace`` is the invocation path that addresses which
+    # broker's local routing processes this event.
     step_id: StepId | None = Field(default=None, validation_alias=_STEP_ID_ALIAS)
     bound_events: dict[str, SerializableEvent] | None = None
-    # Namespace of the step (or boundary) that emitted this event. Type-routing
-    # is scoped to this namespace so events emitted inside a child stay in the
-    # child; ``()`` (the default) is the root namespace, preserving the
-    # pre-child wire format for old journals.
+    # Invocation path of the broker whose local routing owns this event. Type-
+    # routing and boundary descent into that broker's child slots both happen
+    # there; ``()`` (the default) is the root broker, preserving the pre-child
+    # wire format for old journals.
     origin_namespace: tuple[str, ...] = ()
     attempts: int | None = None
     first_attempt_at: float | None = None
@@ -72,18 +81,14 @@ class TickAddEvent(BaseModel):
     last_failed_at: float | None = None
     recovery_counts: dict[str, int] = Field(default_factory=dict)
     scope_path: tuple[str, ...] = Field(default_factory=tuple)
-    # Static child target namespace -> minted runtime invocation namespace for
-    # StartEvent routes. Filled before the tick is reduced so replay uses the
-    # same opaque child invocation ids as the live run.
-    child_invocation_namespaces: dict[str, tuple[str, ...]] = Field(
-        default_factory=dict
-    )
     # Collect-invocation work record. A payload-carrying tick is routed
     # directly to the binding's target step, before waiter matching and the
     # member-arrival path.
     collection_release_payload: SerializableCollectionReleasePayload = None
     # Stable identity for this work item when re-delivering suspended work.
     work_item_id: str | None = None
+    # See TickStepResult.stamped_at.
+    stamped_at: float | None = None
 
 
 class TickCancelRun(BaseModel):
@@ -121,20 +126,35 @@ class TickWaiterTimeout(BaseModel):
 
     model_config = ConfigDict(frozen=True, populate_by_name=True)
     type: Literal["waiter_timeout"] = "waiter_timeout"
+    # Local (bare) step id; ``invocation_namespace`` addresses the broker.
     step_id: StepId = Field(validation_alias=_STEP_ID_ALIAS)
     waiter_id: str
     invocation_namespace: tuple[str, ...] = ()
 
 
-class TickNamespaceTimeout(BaseModel):
-    """When processed, times out a single child namespace (not the whole run).
+class TickSessionStart(BaseModel):
+    """Session-start marker journaled at each ``run()`` start and resume.
 
-    Scheduled when the first event routes into a child namespace that declares a
-    ``timeout``. On fire it expires *that child* through the namespaced failure
-    path (so the child's ``@catch_error`` can recover it); only the root timeout
-    (:class:`TickTimeout`) halts the whole run. ``started_at`` pins the activation
-    this tick was scheduled for: if the namespace has since completed or been
-    re-armed, the tick is a stale no-op.
+    Mechanical prep for the phase-2 elapsed-alive timeout budget: it marks the
+    boundary between alive sessions so downtime never accrues into any broker's
+    budget. In phase 1 it is a pure no-op (child deadlines still use the
+    per-broker ``started_at`` clock). Additive to the journal; old journals
+    simply lack it.
+    """
+
+    model_config = ConfigDict(frozen=True)
+    type: Literal["session_start"] = "session_start"
+    stamped_at: float | None = None
+
+
+class TickNamespaceTimeout(BaseModel):
+    """When processed, times out a single child invocation (not the whole run).
+
+    Armed at boundary descent when the child's config declares a ``timeout``. On
+    fire it expires *that child broker* through the child's local ``@catch_error``
+    path; only the root timeout (:class:`TickTimeout`) halts the whole run.
+    ``namespace`` is the child's invocation path; ``started_at`` pins the
+    activation, so a re-armed or already-popped broker makes this a no-op.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -181,6 +201,7 @@ WorkflowTick = Annotated[
     | TickPublishEvent
     | TickTimeout
     | TickWaiterTimeout
+    | TickSessionStart
     | TickNamespaceTimeout
     | TickIdleCheck
     | TickIdleRelease

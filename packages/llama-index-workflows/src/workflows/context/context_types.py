@@ -97,9 +97,6 @@ class SerializedEventAttempt(BaseModel):
     not_before: float | None = None
     # Collection stream scope path (innermost stream id last).
     scope_path: list[str] = Field(default_factory=list)
-    # Runtime invocation namespace. Static StepId keys still identify the step
-    # config; this separates sibling child calls through the same slot.
-    invocation_namespace: list[str] = Field(default_factory=list)
     # Explicit collect invocation payload, serialized only for queued/in-progress
     # list[E] collect executions.
     collection_release_payload: SerializedCollectionReleasePayload | None = None
@@ -135,8 +132,6 @@ class SerializedWaiter(BaseModel):
     # Originating work record: collection stream scope of the suspended work
     # item (innermost stream id last).
     scope_path: list[str] = Field(default_factory=list)
-    # Runtime invocation namespace for the suspended work item.
-    invocation_namespace: list[str] = Field(default_factory=list)
     # For a suspended collect invocation, the release batch to re-invoke with.
     collection_release_payload: SerializedCollectionReleasePayload | None = None
     # Stable identity for the suspended work item, if available.
@@ -166,26 +161,17 @@ class SerializedStepWorkerState(BaseModel):
     # Collected events for ctx.collect_events(), keyed by buffer_id -> [event, ...]
     # Events are serialized strings
     collected_events: dict[str, list[str]] = Field(default_factory=dict)
-    # Non-root invocation collect buffers, keyed by invocation namespace.
-    collected_events_by_invocation: dict[str, dict[str, list[str]]] = Field(
-        default_factory=dict
-    )
     # Pending static multi-parameter fan-in events.
     static_collect_events: list[str] = Field(default_factory=list)
-    # Pending static multi-parameter fan-in events for non-root invocations.
-    static_collect_events_by_invocation: dict[str, list[str]] = Field(
-        default_factory=dict
-    )
     # Active waiters created by ctx.wait_for_event()
     collected_waiters: list[SerializedWaiter] = Field(default_factory=list)
 
 
 class SerializedCollectionStreamInstance(BaseModel):
-    """Serialized representation of an open collection stream."""
+    """Serialized representation of an open collection stream (broker-local)."""
 
     stream_id: str
     source_step: str
-    source_invocation_namespace: list[str] = Field(default_factory=list)
     scope_path: list[str] = Field(default_factory=list)
     open_work_items: int = 0
     accepting_binding_ids: list[str] = Field(default_factory=list)
@@ -229,13 +215,13 @@ class SerializedContext(BaseModel):
     collection_release_states: dict[str, SerializedCollectionReleaseState] = Field(
         default_factory=dict
     )
-    # Per-child namespace timeout activation times, keyed by "child/grandchild".
-    # Additive to v2: older payloads default to no active namespace deadlines.
-    namespace_started: dict[str, float] = Field(default_factory=dict)
-    # Active child invocation namespaces, keyed like namespace_started. These
-    # remain live until the child invocation stops or is terminated, even if the
-    # child is currently idle while waiting for an external targeted event.
-    active_invocation_namespaces: list[str] = Field(default_factory=list)
+    # Live child invocations nested self-similarly, keyed by "slot#N" segment.
+    # Additive to v2: childless snapshots omit it, and never-shipped slim fields
+    # (namespace_started, active_invocation_namespaces) are ignored on load.
+    child_brokers: dict[str, "SerializedChildBroker"] = Field(default_factory=dict)
+    # Per-slot invocation mint counter, persisted so snapshot-resume and full
+    # tick-replay mint identical child ids.
+    child_seq: dict[str, int] = Field(default_factory=dict)
 
     @staticmethod
     def from_v0(v0: SerializedContextV0) -> "SerializedContext":
@@ -355,3 +341,22 @@ class SerializedContext(BaseModel):
         # Older int version markers (e.g. an explicit 0): legacy V0 format.
         v0 = SerializedContextV0.model_validate(data)
         return SerializedContext.from_v0(v0)
+
+
+class SerializedChildBroker(BaseModel):
+    """A nested child invocation inside a serialized broker.
+
+    ``broker`` is the same self-similar :class:`SerializedContext`. The boundary
+    fields record the child's identity in the parent's stream accounting;
+    ``started_at`` is the child's phase-1 deadline clock.
+    """
+
+    slot: str
+    boundary_scope_path: list[str] = Field(default_factory=list)
+    boundary_work_item_id: str | None = None
+    boundary_recovery_counts: dict[str, int] = Field(default_factory=dict)
+    started_at: float | None = None
+    broker: SerializedContext
+
+
+SerializedContext.model_rebuild()
