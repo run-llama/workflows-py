@@ -1058,6 +1058,51 @@ async def test_namespace_round_trip_and_isolation(
 
 
 @pytest.mark.asyncio
+async def test_single_namespace_lookup_beyond_first_search_page(
+    backend: FakeAgentDataBackend, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A namespace lookup filters by run_id AND namespace server-side, so it
+    finds a row even when the run holds more than one search page of rows."""
+    n = 150
+    for i in range(n):
+        s = create_agent_data_state_store(
+            backend, monkeypatch, "run-many", namespace=(f"child#{i}",)
+        )
+        await s.set("k", f"v{i}")
+
+    # A fresh store (no cache) for the last-written namespace must find its row.
+    late = create_agent_data_state_store(
+        backend, monkeypatch, "run-many", namespace=("child#149",)
+    )
+    assert await late.get("k") == "v149"
+
+
+@pytest.mark.asyncio
+async def test_copy_from_handle_copies_every_namespace_across_pages(
+    store: AgentDataStore,
+) -> None:
+    """Copying a run via its durable handle reproduces every namespace row,
+    paginating past the first search page."""
+    n = 150
+    root = store.create_state_store("run-src")
+    await root.set("k", "root")
+    for i in range(n):
+        child = store.create_state_store("run-src", namespace=(f"child#{i}",))
+        await child.set("k", f"v{i}")
+
+    handle = root.to_dict(JsonSerializer())
+    target_root = AgentDataStateStore.from_dict(
+        handle, JsonSerializer(), client=store._client, run_id="run-target"
+    )
+    await target_root.ensure_seeded()
+
+    assert await store.create_state_store("run-target").get("k") == "root"
+    for i in range(n):
+        tchild = store.create_state_store("run-target", namespace=(f"child#{i}",))
+        assert await tchild.get("k") == f"v{i}"
+
+
+@pytest.mark.asyncio
 async def test_pre_namespace_item_reads_as_root(
     backend: FakeAgentDataBackend, monkeypatch: pytest.MonkeyPatch
 ) -> None:
