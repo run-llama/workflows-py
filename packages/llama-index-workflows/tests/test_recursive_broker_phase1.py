@@ -383,7 +383,13 @@ class _TwoBranchChild(Workflow):
 
     @step
     async def slow(self, ev: _SlowSibling) -> _OrphanChildStop:
-        await asyncio.sleep(5)
+        # Swallow the cancellation and keep running past the grace window, so the
+        # task becomes a tracked orphan the runner must log and let go of.
+        try:
+            await asyncio.sleep(5)
+        except asyncio.CancelledError:
+            pass
+        await asyncio.sleep(1.0)
         return _OrphanChildStop()
 
 
@@ -405,9 +411,19 @@ async def test_orphan_task_outliving_cancel_is_handled(
 ) -> None:
     """A child StopEvent tears the subtree down; a sibling coroutine that
     outlives the cancel grace cannot crash the loop — the run still completes
-    cleanly via the child's StopEvent boundary."""
+    cleanly via the child's StopEvent boundary, and the orphan is logged."""
     with caplog.at_level(logging.WARNING, logger="workflows.runtime.control_loop"):
         result = await asyncio.wait_for(
             _TwoBranchParent(child=_TwoBranchChild()).run(), timeout=10
         )
     assert result == "done"
+
+    orphan_warnings = [
+        r
+        for r in caplog.records
+        if r.levelno == logging.WARNING and "outlived" in r.getMessage()
+    ]
+    assert orphan_warnings, "expected a warning for the orphaned task"
+    message = orphan_warnings[0].getMessage()
+    assert "slow" in message
+    assert "child#0" in message

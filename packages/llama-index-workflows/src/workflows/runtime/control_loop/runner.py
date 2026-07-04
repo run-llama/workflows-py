@@ -84,6 +84,10 @@ from workflows.runtime.control_loop.reduce import (
 
 logger = logging.getLogger("workflows.runtime.control_loop")
 
+# Best-effort window to await a cancelled namespace's worker tasks before
+# leaving any survivor untracked (its late result becomes an UnhandledEvent).
+_CANCEL_GRACE_SECONDS = 0.5
+
 
 def _is_shutdown_error(e: BaseException) -> bool:
     if isinstance(e, (asyncio.CancelledError, KeyboardInterrupt)):
@@ -474,24 +478,32 @@ class _ControlLoopRunner:
                 kept.append(pending)
         self._pending_workers = kept
 
-        # Cancel running worker tasks for this namespace.
+        # Cancel running worker tasks for this namespace. Await the cancellation
+        # gather BEFORE dropping tasks from tracking so a task that ignores the
+        # cancel isn't silently forgotten: any survivor is logged, and its late
+        # result descends to a now-popped broker as a loud UnhandledEvent.
         to_cancel = [
             task
-            for task, key in self._task_keys.items()
-            if namespace_startswith(key[1], namespace)
+            for task in self._task_keys
+            if namespace_startswith(self._task_keys[task][1], namespace)
         ]
         for task in to_cancel:
             task.cancel()
-            self.worker_tasks.discard(task)
-            self._task_keys.pop(task, None)
         if to_cancel:
-            try:
-                await asyncio.wait_for(
-                    asyncio.gather(*to_cancel, return_exceptions=True),
-                    timeout=0.5,
+            _, still_running = await asyncio.wait(to_cancel, timeout=_CANCEL_GRACE_SECONDS)
+            for task in still_running:
+                step_id, path, _worker_id = self._task_keys[task]
+                logger.warning(
+                    "Worker task for step %s (path %s) outlived the %ss "
+                    "cancellation grace period and is left untracked; a late "
+                    "result will surface as an UnhandledEvent",
+                    step_id,
+                    path,
+                    _CANCEL_GRACE_SECONDS,
                 )
-            except Exception:
-                pass
+            for task in to_cancel:
+                self.worker_tasks.discard(task)
+                self._task_keys.pop(task, None)
 
     async def cleanup_tasks(self) -> None:
         """Cancel and cleanup all running worker tasks and pending coroutines."""
