@@ -7,9 +7,19 @@ import builtins
 import json
 from typing import Any
 
-from pydantic import BaseModel, ValidationError, model_validator
+from pydantic import (
+    BaseModel,
+    ValidationError,
+    SerializerFunctionWrapHandler,
+    model_serializer,
+    model_validator,
+)
 from workflows.context.utils import import_module_from_qualified_name
-from workflows.events import Event
+from workflows.events import (
+    Event,
+    _set_event_origin_namespace,
+    get_event_origin_namespace,
+)
 
 
 class EventEnvelopeWithMetadata(BaseModel):
@@ -27,6 +37,20 @@ class EventEnvelopeWithMetadata(BaseModel):
     type: str
     types: list[str] | None
 
+    # Invocation path of the publishing child broker; empty for root events.
+    # Stamped only on the streaming/persisted copy — the Event schema itself
+    # never carries it (see workflows.events._origin_namespace).
+    origin_namespace: tuple[str, ...] = ()
+
+    @model_serializer(mode="wrap")
+    def _serialize(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        # Omit ``origin_namespace`` when empty so root events keep the exact
+        # pre-child wire shape (old readers never knew the field).
+        data = handler(self)
+        if not self.origin_namespace:
+            data.pop("origin_namespace", None)
+        return data
+
     def load_event(self, registry: list[type[Event]] = []) -> Event:
         """
         Attempts to load the event data as a python class based on the envelope metadata.
@@ -36,9 +60,12 @@ class EventEnvelopeWithMetadata(BaseModel):
         as_event_envelope = EventEnvelope(
             value=self.value, type=self.type, qualified_name=self.qualified_name
         ).model_dump()
-        return EventEnvelope.parse(
+        event = EventEnvelope.parse(
             client_data=as_event_envelope, registry=registry_lookup
         )
+        if self.origin_namespace:
+            _set_event_origin_namespace(event, tuple(self.origin_namespace))
+        return event
 
     @classmethod
     def from_event(
@@ -60,6 +87,7 @@ class EventEnvelopeWithMetadata(BaseModel):
             else None,
             types=_get_event_subtypes(type(event)),
             type=type(event).__name__,
+            origin_namespace=get_event_origin_namespace(event),
         )
         return envelope
 
