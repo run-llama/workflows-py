@@ -256,6 +256,72 @@ async def test_grandchild_times_out_on_its_own_clock() -> None:
         await handler
 
 
+# --- Fan-out join: one child times out, parent wildcard catch recovers --------
+
+
+class FanChildStart(StartEvent):
+    delay: float = 0.0
+
+
+class FanChildStop(StopEvent):
+    value: int = 0
+
+
+class FanTrigger(Event):
+    k: int
+
+
+class FanDone(Event):
+    value: int = 0
+
+
+class DelayChild(Workflow):
+    @step
+    async def run_child(self, ev: FanChildStart) -> FanChildStop:
+        await asyncio.sleep(ev.delay)
+        return FanChildStop(value=1)
+
+
+class FanTimeoutParent(Workflow):
+    child: DelayChild
+
+    @step
+    async def fan(self, ev: StartEvent) -> list[FanTrigger]:
+        return [FanTrigger(k=0), FanTrigger(k=1)]
+
+    @step
+    async def relay(self, ev: FanTrigger) -> FanChildStart:
+        # k=0 completes immediately; k=1 far outlives the child's timeout.
+        return FanChildStart(delay=0.0 if ev.k == 0 else 100.0)
+
+    @step
+    async def after_child(self, ev: FanChildStop) -> FanDone:
+        return FanDone(value=ev.value)
+
+    @step
+    async def collect(self, ctx: Context, ev: FanDone) -> StopEvent | None:
+        got = ctx.collect_events(ev, [FanDone, FanDone])
+        if got is None:
+            return None
+        return StopEvent(result=sum(c.value for c in got))
+
+    @catch_error
+    async def recover(self, ev: StepFailedEvent) -> FanDone:
+        # The slow child's timeout ascends as a boundary failure; only the
+        # parent's wildcard catch_error catches it, feeding the join a Done.
+        return FanDone(value=100)
+
+
+@pytest.mark.asyncio
+async def test_child_timeout_inside_fanout_recovered_by_parent() -> None:
+    # Two children fanned out over a Take-style join: one completes (value 1),
+    # the other times out and is recovered by the parent's wildcard catch_error
+    # (value 100). The join releases once both Done events arrive.
+    wf = FanTimeoutParent(child=DelayChild(timeout=0.2), timeout=30)
+    result = await asyncio.wait_for(wf.run(), timeout=15)
+    assert result == 101
+
+
 class ResumeSlowChild(Workflow):
     @step
     async def run_child(self, ev: ChildStart) -> ChildStop:
