@@ -4,12 +4,23 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
 
 import httpx
 
 logger = logging.getLogger(__name__)
+
+# A slow-but-alive backend should not be cut at httpx's 5s default, and a
+# transient blip on a *read* should not surface as a hard, permanent-looking
+# failure. Writes are not retried: the Agent Data API has no idempotency keys
+# yet, so replaying a create/update/delete after an ambiguous timeout could
+# duplicate or clobber data. Only idempotent reads opt in to retries.
+_DEFAULT_TIMEOUT = httpx.Timeout(30.0, connect=5.0)
+_MAX_ATTEMPTS = 3
+_RETRY_BACKOFF_BASE = 0.5
+_RETRYABLE_STATUS = frozenset({500, 502, 503, 504})
 
 
 class AgentDataClient:
@@ -30,11 +41,15 @@ class AgentDataClient:
         api_key: str,
         project_id: str,
         deployment_name: str,
+        timeout: httpx.Timeout | float | None = None,
+        max_attempts: int = _MAX_ATTEMPTS,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._api_key = api_key
         self._project_id = project_id
         self._deployment_name = deployment_name
+        self._timeout = _DEFAULT_TIMEOUT if timeout is None else timeout
+        self._max_attempts = max_attempts
         self._shared_client: httpx.AsyncClient | None = None
 
     @property
@@ -58,6 +73,7 @@ class AgentDataClient:
                 base_url=self._base_url,
                 headers=self._headers(),
                 params={"project_id": self._project_id},
+                timeout=self._timeout,
             )
         return self._shared_client
 
@@ -66,6 +82,47 @@ class AgentDataClient:
         if self._shared_client is not None and not self._shared_client.is_closed:
             await self._shared_client.aclose()
             self._shared_client = None
+
+    async def _request(
+        self, method: str, url: str, *, retry: bool = False, **kwargs: Any
+    ) -> httpx.Response:
+        """Issue a request under the configured timeout.
+
+        When ``retry`` is set (idempotent reads only), transient failures
+        (connection/read errors and 5xx) are retried with exponential backoff so
+        a brief backend slowdown does not become a hard, undiagnosable error.
+        Writes pass ``retry=False`` because the API has no idempotency keys yet.
+        Non-retryable responses (4xx) and the final failure are raised.
+        """
+        client = self.http_client()
+        attempts = self._max_attempts if retry else 1
+        last_exc: Exception
+        for attempt in range(attempts):
+            try:
+                resp = await client.request(method, url, **kwargs)
+                resp.raise_for_status()
+                return resp
+            except httpx.HTTPStatusError as exc:
+                if not retry or exc.response.status_code not in _RETRYABLE_STATUS:
+                    raise
+                last_exc = exc
+            except httpx.TransportError as exc:
+                if not retry:
+                    raise
+                last_exc = exc
+            if attempt < attempts - 1:
+                delay = _RETRY_BACKOFF_BASE * (2**attempt)
+                logger.warning(
+                    "Agent Data %s %s failed (attempt %d/%d), retrying in %.1fs: %r",
+                    method,
+                    url,
+                    attempt + 1,
+                    attempts,
+                    delay,
+                    last_exc,
+                )
+                await asyncio.sleep(delay)
+        raise last_exc
 
     async def search(
         self,
@@ -84,9 +141,9 @@ class AgentDataClient:
             body["filter"] = filters
         if order_by:
             body["order_by"] = order_by
-        client = self.http_client()
-        resp = await client.post("/api/v1/beta/agent-data/:search", json=body)
-        resp.raise_for_status()
+        resp = await self._request(
+            "POST", "/api/v1/beta/agent-data/:search", json=body, retry=True
+        )
         return resp.json().get("items", [])
 
     async def create(self, collection: str, data: dict[str, Any]) -> dict[str, Any]:
@@ -96,26 +153,21 @@ class AgentDataClient:
             "collection": collection,
             "data": data,
         }
-        client = self.http_client()
-        resp = await client.post("/api/v1/beta/agent-data", json=body)
-        resp.raise_for_status()
+        resp = await self._request("POST", "/api/v1/beta/agent-data", json=body)
         return resp.json()
 
     async def update_item(self, item_id: str, data: dict[str, Any]) -> dict[str, Any]:
         """Update an existing item by its Agent Data API ID."""
-        client = self.http_client()
-        resp = await client.put(
+        resp = await self._request(
+            "PUT",
             f"/api/v1/beta/agent-data/{item_id}",
             json={"data": data},
         )
-        resp.raise_for_status()
         return resp.json()
 
     async def delete_item(self, item_id: str) -> None:
         """Delete an item by its Agent Data API ID."""
-        client = self.http_client()
-        resp = await client.delete(f"/api/v1/beta/agent-data/{item_id}")
-        resp.raise_for_status()
+        await self._request("DELETE", f"/api/v1/beta/agent-data/{item_id}")
 
     async def delete_many(
         self,
@@ -128,7 +180,5 @@ class AgentDataClient:
             "collection": collection,
             "filter": filters,
         }
-        client = self.http_client()
-        resp = await client.post("/api/v1/beta/agent-data/:delete", json=body)
-        resp.raise_for_status()
+        resp = await self._request("POST", "/api/v1/beta/agent-data/:delete", json=body)
         return resp.json().get("deleted_count", 0)
