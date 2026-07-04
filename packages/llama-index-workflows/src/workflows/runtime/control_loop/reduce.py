@@ -1527,17 +1527,11 @@ def _resolve_waiters(
     commands: list[WorkflowCommand] = []
     waiter_resolved_steps: set[StepId] = set()
     for step_id, step_config in broker.config.steps.items():
-        if tick.step_id is not None:
-            if tick.step_id != step_id:
-                continue
-        elif not step_accepts_event(
-            tick.event,
-            step_config.accepted_events,
-            allow_subclasses=step_config.accept_event_subclasses,
-        ):
-            # Only steps that would accept this event type can have a matching
-            # waiter; the type gate keeps parity with routing.
-            pass
+        # A targeted tick only resolves its addressed step's waiters; an
+        # untargeted tick is matched against every step's waiters below by
+        # ``event_matches`` (per-waiter event type + requirements).
+        if tick.step_id is not None and tick.step_id != step_id:
+            continue
         wait_conditions = broker.workers[step_id].collected_waiters
         for wait_condition in wait_conditions:
             is_match = event_matches(
@@ -1757,7 +1751,6 @@ def _boundary_descend(
         slot=slot,
         state=child_state,
         boundary_scope_path=tuple(tick.scope_path),
-        boundary_work_item_id=tick.work_item_id,
         boundary_recovery_counts=dict(tick.recovery_counts),
     )
     child_tick = tick.model_copy(

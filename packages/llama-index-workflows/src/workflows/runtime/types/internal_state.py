@@ -121,7 +121,6 @@ class ChildBroker:
     slot: str
     state: BrokerState
     boundary_scope_path: tuple[str, ...] = ()
-    boundary_work_item_id: str | None = None
     boundary_recovery_counts: dict[str, int] = field(default_factory=dict)
 
     def _deepcopy(self) -> ChildBroker:
@@ -129,7 +128,6 @@ class ChildBroker:
             slot=self.slot,
             state=self.state.deepcopy(),
             boundary_scope_path=self.boundary_scope_path,
-            boundary_work_item_id=self.boundary_work_item_id,
             boundary_recovery_counts=dict(self.boundary_recovery_counts),
         )
 
@@ -446,7 +444,6 @@ def _broker_to_serialized(
         key: SerializedChildBroker(
             slot=child.slot,
             boundary_scope_path=list(child.boundary_scope_path),
-            boundary_work_item_id=child.boundary_work_item_id,
             boundary_recovery_counts=dict(child.boundary_recovery_counts),
             broker=_broker_to_serialized(child.state, serializer),
         )
@@ -596,7 +593,6 @@ def _load_broker_from_serialized(
             slot=child_entry.slot,
             state=child_state,
             boundary_scope_path=tuple(child_entry.boundary_scope_path),
-            boundary_work_item_id=child_entry.boundary_work_item_id,
             boundary_recovery_counts=dict(child_entry.boundary_recovery_counts),
         )
 

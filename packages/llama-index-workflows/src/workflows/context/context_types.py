@@ -362,7 +362,6 @@ class SerializedChildBroker(BaseModel):
 
     slot: str
     boundary_scope_path: list[str] = Field(default_factory=list)
-    boundary_work_item_id: str | None = None
     boundary_recovery_counts: dict[str, int] = Field(default_factory=dict)
     broker: SerializedContext
 
