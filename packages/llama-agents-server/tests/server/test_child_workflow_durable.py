@@ -17,6 +17,10 @@ from llama_agents.server import (
     WorkflowServer,
 )
 from server_test_fixtures import wait_for_passing  # type: ignore[import]
+from test_durable_runtime import (  # type: ignore[import]
+    wait_handler_idle,
+    wait_handler_status,
+)
 from workflows import Context, Workflow
 from workflows.decorators import step
 from workflows.events import (
@@ -24,11 +28,6 @@ from workflows.events import (
     InputRequiredEvent,
     StartEvent,
     StopEvent,
-)
-
-from test_durable_runtime import (  # type: ignore[import]
-    wait_handler_idle,
-    wait_handler_status,
 )
 
 
@@ -40,14 +39,22 @@ class ChildStop(StopEvent):
     answer: str = ""
 
 
+class ChildAsk(InputRequiredEvent):
+    prefix: str = "child?"
+
+
+class ChildAnswer(HumanResponseEvent):
+    response: str = ""
+
+
 class DurableChild(Workflow):
     @step
-    async def ask(self, ctx: Context, ev: ChildStart) -> InputRequiredEvent:
+    async def ask(self, ctx: Context, ev: ChildStart) -> ChildAsk:
         await ctx.store.set("child_key", "child-value")
-        return InputRequiredEvent(prefix="child?")  # type: ignore[reportCallIssue]
+        return ChildAsk()
 
     @step
-    async def answer(self, ctx: Context, ev: HumanResponseEvent) -> ChildStop:
+    async def answer(self, ctx: Context, ev: ChildAnswer) -> ChildStop:
         await ctx.store.set("answered", ev.response)
         return ChildStop(answer=ev.response)
 
@@ -68,7 +75,9 @@ class DurableParent(Workflow):
 def _make_parent_server(store: SqliteWorkflowStore) -> WorkflowServer:
     server = WorkflowServer(workflow_store=store, idle_timeout=0.01)
     server.add_workflow(
-        "parent", DurableParent(child=DurableChild()), additional_events=[HumanResponseEvent]
+        "parent",
+        DurableParent(child=DurableChild()),
+        additional_events=[HumanResponseEvent],
     )
     return server
 
@@ -130,7 +139,7 @@ async def test_resume_with_suspended_child_waiter_across_restart(
     async with server2.contextmanager():
         await server2._service.send_event(
             handler_id,
-            HumanResponseEvent(response="resolved"),  # type: ignore[reportCallIssue]
+            ChildAnswer(response="resolved"),
             step="child#0/answer",
         )
         handler = await wait_handler_status(sqlite_store, handler_id, "completed")
@@ -269,7 +278,7 @@ def test_event_envelope_origin_namespace_round_trips() -> None:
         get_event_origin_namespace,
     )
 
-    child_event = InputRequiredEvent(prefix="child?")  # type: ignore[reportCallIssue]
+    child_event = ChildAsk()
     _set_event_origin_namespace(child_event, ("child#0",))
     envelope = EventEnvelopeWithMetadata.from_event(child_event)
     assert envelope.origin_namespace == ("child#0",)
@@ -278,7 +287,7 @@ def test_event_envelope_origin_namespace_round_trips() -> None:
     reloaded = EventEnvelopeWithMetadata.model_validate_json(envelope.model_dump_json())
     assert get_event_origin_namespace(reloaded.load_event()) == ("child#0",)
 
-    root_event = InputRequiredEvent(prefix="root?")  # type: ignore[reportCallIssue]
+    root_event = ChildAsk()
     root_envelope = EventEnvelopeWithMetadata.from_event(root_event)
     assert root_envelope.origin_namespace == ()
     # Root events keep the byte-identical pre-child wire shape.

@@ -24,7 +24,6 @@ from workflows.context.state_store import (
     namespaced_seed_payloads,
     namespaced_state_types,
 )
-from workflows.runtime.types.invocation import slot_namespace
 from workflows.events import (
     Event,
     StartEvent,
@@ -38,6 +37,7 @@ from workflows.runtime.runtime_decorators import (
     BaseRuntimeDecorator,
 )
 from workflows.runtime.types.internal_state import BrokerState
+from workflows.runtime.types.invocation import slot_namespace
 from workflows.runtime.types.plugin import (
     ExternalRunAdapter,
     InternalRunAdapter,

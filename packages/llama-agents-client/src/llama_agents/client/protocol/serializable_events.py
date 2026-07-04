@@ -9,8 +9,8 @@ from typing import Any
 
 from pydantic import (
     BaseModel,
-    ValidationError,
     SerializerFunctionWrapHandler,
+    ValidationError,
     model_serializer,
     model_validator,
 )
