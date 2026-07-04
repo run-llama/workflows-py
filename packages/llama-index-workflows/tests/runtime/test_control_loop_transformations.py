@@ -14,7 +14,6 @@ from collections.abc import AsyncIterator
 from typing import cast
 
 import pytest
-from workflows.decorators import StepConfig
 from workflows.errors import WorkflowTimeoutError
 from workflows.events import (
     Event,
@@ -39,16 +38,20 @@ from workflows.retry_policy import (
 from workflows.runtime.control_loop.reduce import (
     _add_or_enqueue_event,
     _check_idle_state,
-    _process_add_event_tick,
     _process_cancel_run_tick,
     _process_publish_event_tick,
-    _process_step_result_tick,
     _process_timeout_tick,
     _reduce_tick,
     rebuild_state_from_ticks,
     rebuild_state_from_ticks_stream,
     replay_ticks_stream,
     rewind_in_progress,
+)
+from workflows.runtime.control_loop.reduce import (
+    _dispatch_add_event as _process_add_event_tick,
+)
+from workflows.runtime.control_loop.reduce import (
+    _dispatch_step_result as _process_step_result_tick,
 )
 from workflows.runtime.types.commands import (
     CommandCompleteRun,
@@ -110,27 +113,14 @@ class OtherEvent(Event):
 @pytest.fixture
 def base_state() -> BrokerState:
     """Create a minimal BrokerState for testing."""
-    step_config = StepConfig(
+    step_config = InternalStepConfig(
         accepted_events=[MyTestEvent, StartEvent],
-        event_name="ev",
-        return_types=[StopEvent, OtherEvent, type(None)],
-        context_parameter="ctx",
         retry_policy=None,
         num_workers=1,
-        resources=[],
     )
     return BrokerState(
         is_running=True,
-        config=BrokerConfig(
-            steps={
-                TEST_STEP: InternalStepConfig(
-                    accepted_events=[MyTestEvent, StartEvent],
-                    retry_policy=None,
-                    num_workers=1,
-                )
-            },
-            timeout=None,
-        ),
+        config=BrokerConfig(steps={TEST_STEP: step_config}, timeout=None),
         workers={
             TEST_STEP: InternalStepWorkerState(
                 queue=[],
@@ -467,18 +457,10 @@ def test_per_step_explicit_routing_accepts_only_matching_types(
 def test_explicit_routing_requires_acceptance(base_state: BrokerState) -> None:
     """Explicit step routing should still require accepted event types."""
     # Add a second step that does NOT accept MyTestEvent
-    other_step_cfg = StepConfig(
-        accepted_events=[StartEvent],
-        event_name="ev",
-        return_types=[StopEvent, OtherEvent, type(None)],
-        context_parameter="ctx",
-        retry_policy=None,
-        num_workers=1,
-        resources=[],
-    )
-    base_state.config.steps[OTHER_STEP] = InternalStepConfig(
+    other_step_cfg = InternalStepConfig(
         accepted_events=[StartEvent], retry_policy=None, num_workers=1
     )
+    base_state.config.steps[OTHER_STEP] = other_step_cfg
     base_state.workers[OTHER_STEP] = InternalStepWorkerState(
         queue=[],
         config=other_step_cfg,
@@ -615,6 +597,7 @@ def test_add_when_capacity_available(base_state: BrokerState) -> None:
         EventAttempt(event=event),
         TEST_STEP,
         base_state.workers[TEST_STEP],
+        (),
         now_seconds=100.0,
     )
 
@@ -639,6 +622,7 @@ def test_enqueue_when_no_capacity(base_state: BrokerState) -> None:
         EventAttempt(event=event),
         TEST_STEP,
         base_state.workers[TEST_STEP],
+        (),
         now_seconds=100.0,
     )
 
@@ -1348,18 +1332,10 @@ def test_check_idle_state_multi_step_not_idle_if_one_has_work(
 ) -> None:
     """With multiple steps, not idle if any step has work."""
     # Add a second step
-    other_step_cfg = StepConfig(
-        accepted_events=[OtherEvent],
-        event_name="ev",
-        return_types=[StopEvent, type(None)],
-        context_parameter="ctx",
-        retry_policy=None,
-        num_workers=1,
-        resources=[],
-    )
-    base_state.config.steps[OTHER_STEP] = InternalStepConfig(
+    other_step_cfg = InternalStepConfig(
         accepted_events=[OtherEvent], retry_policy=None, num_workers=1
     )
+    base_state.config.steps[OTHER_STEP] = other_step_cfg
     base_state.workers[OTHER_STEP] = InternalStepWorkerState(
         queue=[],
         config=other_step_cfg,

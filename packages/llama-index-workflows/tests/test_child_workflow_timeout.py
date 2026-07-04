@@ -26,7 +26,7 @@ from workflows.events import (
     WorkflowTimedOutEvent,
     get_event_origin_namespace,
 )
-from workflows.runtime.types.internal_state import BrokerState
+from workflows.runtime.types.internal_state import BrokerState, ChildBroker
 from workflows.workflow import DEFAULT_TIMEOUT
 
 RESUME_CHILD_STARTED: asyncio.Event | None = None
@@ -198,33 +198,38 @@ class TopOfSlowGrand(Workflow):
 
 
 def test_unset_child_arms_no_deadline_root_keeps_default() -> None:
-    # A child constructed without a timeout defers to its parent: no per-namespace
-    # deadline is armed, while the root still resolves to the 45s default.
+    # A child constructed without a timeout defers to its parent: its config
+    # template carries no deadline, while the root still resolves to the 45s
+    # default. Deadlines arm per-child at descent, keyed on this template.
     state = BrokerState.from_workflow(ParentOfSlowChild(child=SlowChild()))
-    assert state.config.namespace_timeouts == {}
+    assert state.config.child_configs["child"].timeout is None
     assert state.config.timeout == DEFAULT_TIMEOUT
 
 
 def test_explicit_child_timeout_arms_namespace_deadline() -> None:
     state = BrokerState.from_workflow(ParentOfSlowChild(child=SlowChild(timeout=0.1)))
-    assert state.config.namespace_timeouts == {("child",): 0.1}
+    assert state.config.child_configs["child"].timeout == 0.1
 
 
 def test_active_namespace_timeout_activation_round_trips() -> None:
+    # A live child broker's phase-1 deadline clock (``started_at``) survives a
+    # serialize/restore round-trip nested under ``child_brokers``.
     workflow = ParentOfSlowChild(child=SlowChild(timeout=0.1))
     state = BrokerState.from_workflow(workflow)
-    state.namespace_started[("child",)] = 123.0
+    child_state = BrokerState.from_config(state.config.child_configs["child"])
+    child_state.started_at = 123.0
+    state.children["child#0"] = ChildBroker(slot="child", state=child_state)
 
     serialized = state.to_serialized(JsonSerializer())
     restored = BrokerState.from_serialized(serialized, workflow, JsonSerializer())
 
-    assert restored.namespace_started == {("child",): 123.0}
+    assert restored.children["child#0"].state.started_at == 123.0
 
 
 def test_explicit_child_none_timeout_arms_no_deadline() -> None:
     # Explicit None means "no deadline" — same armed state as unset, but chosen.
     state = BrokerState.from_workflow(ParentOfSlowChild(child=SlowChild(timeout=None)))
-    assert state.config.namespace_timeouts == {}
+    assert state.config.child_configs["child"].timeout is None
 
 
 def test_root_timeout_resolution() -> None:

@@ -27,10 +27,9 @@ from workflows.events import (
     StopEvent,
     get_event_origin_namespace,
 )
-from workflows.runtime.control_loop.reduce import terminate_namespace
 from workflows.runtime.types.internal_state import (
     BrokerState,
-    CollectionStreamInstance,
+    ChildBroker,
     EventAttempt,
     _binding_id,
 )
@@ -311,55 +310,34 @@ async def test_root_targeted_send_unchanged() -> None:
 # --- Phase 3: one namespace lifecycle (teardown + bounded timeout recovery) ----
 
 
-def test_terminate_namespace_prefix_matches_descendants_only() -> None:
-    """One teardown clears a namespace and every descendant (prefix match),
-    leaving sibling/ancestor namespaces untouched."""
-    state = BrokerState.from_workflow(
+def test_pop_child_record_drops_descendants_only() -> None:
+    """Liveness is child-record presence, so teardown is popping the record: it
+    drops that child and every descendant broker, leaving sibling/ancestor
+    brokers untouched."""
+    root = BrokerState.from_workflow(
         _GrandParent(mid=_MidChild(grand=_GrandFanChild()))
     )
-    root = StepId((), "start")
-    mid = StepId(("mid",), "start")
-    grand = StepId(("mid", "grand"), "fan")
-    mid_invocation = ("mid#abc",)
-    grand_invocation = ("mid#abc", "grand#def")
-    state.workers[root].queue.append(EventAttempt(event=_Item(n=1)))
-    state.workers[root].collected_events["buf"] = [_Item(n=1)]
-    state.workers[mid].queue.append(
-        EventAttempt(event=_Item(n=1), invocation_namespace=mid_invocation)
-    )
-    state.workers[mid].collected_events_by_invocation[mid_invocation] = {
-        "buf": [_Item(n=1)]
-    }
-    state.workers[grand].queue.append(
-        EventAttempt(event=_Item(n=1), invocation_namespace=grand_invocation)
-    )
-    state.workers[grand].collected_events_by_invocation[grand_invocation] = {
-        "buf": [_Item(n=1)]
-    }
-    state.streams["s-grand"] = CollectionStreamInstance(
-        stream_id="s-grand",
-        source_step=grand,
-        scope_path=(),
-        source_invocation_namespace=grand_invocation,
-        open_work_items=1,
-    )
-    state.namespace_started[()] = 1.0
-    state.namespace_started[mid_invocation] = 1.0
-    state.namespace_started[grand_invocation] = 1.0
+    mid_config = root.config.child_configs["mid"]
+    grand_config = mid_config.child_configs["grand"]
 
-    terminate_namespace(state, mid_invocation)
+    grand_state = BrokerState.from_config(grand_config)
+    grand_state.workers[StepId((), "fan")].queue.append(EventAttempt(event=_Item(n=1)))
+    mid_state = BrokerState.from_config(mid_config)
+    mid_state.workers[StepId((), "start")].queue.append(EventAttempt(event=_Item(n=1)))
+    mid_state.children["grand#def"] = ChildBroker(slot="grand", state=grand_state)
+    root.children["mid#abc"] = ChildBroker(slot="mid", state=mid_state)
 
-    # The child and grandchild are fully cleared.
-    for sid in (mid, grand):
-        assert not state.workers[sid].queue
-        assert not state.workers[sid].collected_events_by_invocation
-    assert mid_invocation not in state.namespace_started
-    assert grand_invocation not in state.namespace_started
-    assert "s-grand" not in state.streams
+    # Root-local work of an ancestor.
+    root.workers[StepId((), "start")].queue.append(EventAttempt(event=_Item(n=1)))
+    assert root.live_child_namespaces() == {("mid#abc",), ("mid#abc", "grand#def")}
+
+    # Teardown: pop the child record; the subtree drops with it.
+    root.children.pop("mid#abc")
+
+    assert "mid#abc" not in root.children
+    assert root.live_child_namespaces() == set()
     # The root (ancestor) is untouched.
-    assert state.workers[root].queue
-    assert state.workers[root].collected_events
-    assert () in state.namespace_started
+    assert root.workers[StepId((), "start")].queue
 
 
 class _OrphanChildStart(StartEvent):

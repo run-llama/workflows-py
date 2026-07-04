@@ -181,14 +181,20 @@ def test_pickled_broker_state_with_legacy_config_keys_normalizes_on_load() -> No
     assert set(recovered.deepcopy().config.steps) == {StepId.root("run_step")}
 
 
-def test_old_pickled_broker_state_without_namespace_started_recovers() -> None:
+def test_old_pickled_broker_state_without_child_fields_recovers() -> None:
+    # A pickle predating the recursive-broker child fields loads with empty
+    # defaults for children/child_seq (and no phase-1 deadline clock).
     state = BrokerState.from_workflow(WithPlainAnnotation())
-    state.__dict__.pop("namespace_started")
+    state.__dict__.pop("children")
+    state.__dict__.pop("child_seq")
+    state.__dict__.pop("started_at")
 
     recovered = pickle.loads(pickle.dumps(state))
 
-    assert recovered.namespace_started == {}
-    assert recovered.deepcopy().namespace_started == {}
+    assert recovered.children == {}
+    assert recovered.child_seq == {}
+    assert recovered.started_at is None
+    assert recovered.deepcopy().children == {}
 
 
 def test_broker_state_string_worker_keys_parse_namespaces() -> None:
