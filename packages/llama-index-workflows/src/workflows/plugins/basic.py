@@ -26,7 +26,12 @@ from workflows.context.state_store import (
     namespaced_state_types,
 )
 from workflows.errors import WorkflowRuntimeError
-from workflows.events import Event, StartEvent, StopEvent
+from workflows.events import (
+    Event,
+    StartEvent,
+    StopEvent,
+    get_event_origin_namespace,
+)
 from workflows.runtime.types.internal_state import BrokerState
 from workflows.runtime.types.plugin import (
     ExternalRunAdapter,
@@ -180,7 +185,13 @@ class ExternalAsyncioAdapter(
             while True:
                 item = await self._queues.publish_queue.get()
                 yield item
-                if isinstance(item, StopEvent):
+                # Only the root StopEvent terminates the stream. A child step can
+                # write its own StopEvent to the stream via write_event_to_stream;
+                # that event carries a child origin namespace and must not
+                # truncate the parent's stream.
+                if isinstance(item, StopEvent) and not get_event_origin_namespace(
+                    item
+                ):
                     break
 
     def replay(self) -> list[WorkflowTick]:

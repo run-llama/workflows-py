@@ -91,6 +91,59 @@ async def test_child_events_surfaced_tagged_with_include_children() -> None:
     assert child_origin[0].startswith("child#")
 
 
+class WriteStopChild(Workflow):
+    @step
+    async def run_child(self, ctx: Context, ev: ChildStart) -> ChildStop:
+        # A child publishing its own StopEvent to the stream must not truncate
+        # the parent's stream: it carries a child origin namespace.
+        ctx.write_event_to_stream(ChildStop())
+        return ChildStop()
+
+
+class WriteStopParent(Workflow):
+    child: WriteStopChild
+
+    @step
+    async def start(self, ctx: Context, ev: StartEvent) -> ChildStart:
+        return ChildStart()
+
+    @step
+    async def finish(self, ctx: Context, ev: ChildStop) -> StopEvent:
+        ctx.write_event_to_stream(ParentPing(msg="after-child"))
+        return StopEvent(result="done")
+
+
+@pytest.mark.asyncio
+async def test_child_stop_written_to_stream_does_not_truncate_parent() -> None:
+    """A child writing its StopEvent to the stream must not end the parent's
+    stream. Root events emitted after the child completes still arrive, and only
+    the root StopEvent terminates."""
+    handler = WriteStopParent(child=WriteStopChild()).run()
+    collected: list[Event] = []
+    async for ev in handler.stream_events(include_children=True):
+        collected.append(ev)
+    await handler
+
+    # The child's StopEvent was surfaced (child origin) but did not terminate.
+    child_stops = [
+        ev
+        for ev in collected
+        if isinstance(ev, ChildStop) and get_event_origin_namespace(ev) != ()
+    ]
+    assert child_stops, "expected the child's streamed StopEvent"
+
+    # A root event emitted after the child completed still arrived.
+    after = next(
+        ev for ev in collected if isinstance(ev, ParentPing) and ev.msg == "after-child"
+    )
+    assert get_event_origin_namespace(after) == ()
+
+    # The final event is the root StopEvent, which terminated the stream.
+    assert isinstance(collected[-1], StopEvent)
+    assert get_event_origin_namespace(collected[-1]) == ()
+    assert collected[-1].result == "done"
+
+
 # --- Grandchild: compound namespace tag ---------------------------------------
 
 
