@@ -189,9 +189,7 @@ class ExternalAsyncioAdapter(
                 # write its own StopEvent to the stream via write_event_to_stream;
                 # that event carries a child origin namespace and must not
                 # truncate the parent's stream.
-                if isinstance(item, StopEvent) and not get_event_origin_namespace(
-                    item
-                ):
+                if isinstance(item, StopEvent) and not get_event_origin_namespace(item):
                     break
 
     def replay(self) -> list[WorkflowTick]:

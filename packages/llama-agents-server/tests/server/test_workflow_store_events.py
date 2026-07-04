@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -19,8 +20,6 @@ from llama_agents_integration_tests.fake_agent_data import (
     create_agent_data_store,
 )
 from server_test_fixtures import wait_for_passing  # type: ignore[import]
-from datetime import datetime, timezone
-
 from workflows.events import (
     Event,
     StopEvent,

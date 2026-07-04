@@ -20,8 +20,10 @@ from __future__ import annotations
 
 import asyncio
 import time
+from typing import Any
 
 import pytest
+import workflows.runtime.control_loop.reduce as reduce_mod
 from workflows import Context, Workflow
 from workflows.context.serializers import JsonSerializer
 from workflows.decorators import catch_error, step
@@ -32,7 +34,6 @@ from workflows.events import (
     StepFailedEvent,
     StopEvent,
 )
-import workflows.runtime.control_loop.reduce as reduce_mod
 from workflows.runtime.control_loop.reduce import (
     _reduce_tick,
     rebuild_state_from_ticks,
@@ -42,6 +43,7 @@ from workflows.runtime.types.commands import (
     CommandCancelNamespace,
     CommandFailWorkflow,
     CommandHalt,
+    WorkflowCommand,
 )
 from workflows.runtime.types.internal_state import BrokerState
 from workflows.runtime.types.ticks import (
@@ -327,11 +329,9 @@ def _spy_boundary_cancels(
     cancels: list[CommandCancelNamespace] = []
     original = reduce_mod._ascend_boundary_failure
 
-    def spy(*args: object, **kwargs: object) -> list[object]:
-        commands = original(*args, **kwargs)  # type: ignore[arg-type]
-        cancels.extend(
-            c for c in commands if isinstance(c, CommandCancelNamespace)
-        )
+    def spy(*args: Any, **kwargs: Any) -> list[WorkflowCommand]:
+        commands = original(*args, **kwargs)
+        cancels.extend(c for c in commands if isinstance(c, CommandCancelNamespace))
         return commands
 
     monkeypatch.setattr(reduce_mod, "_ascend_boundary_failure", spy)

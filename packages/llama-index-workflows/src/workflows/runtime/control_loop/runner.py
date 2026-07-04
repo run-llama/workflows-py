@@ -490,7 +490,9 @@ class _ControlLoopRunner:
         for task in to_cancel:
             task.cancel()
         if to_cancel:
-            _, still_running = await asyncio.wait(to_cancel, timeout=_CANCEL_GRACE_SECONDS)
+            _, still_running = await asyncio.wait(
+                to_cancel, timeout=_CANCEL_GRACE_SECONDS
+            )
             for task in still_running:
                 step_id, path, _worker_id = self._task_keys[task]
                 logger.warning(
