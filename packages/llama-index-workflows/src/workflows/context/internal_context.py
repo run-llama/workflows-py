@@ -25,6 +25,7 @@ from workflows.runtime.types.results import (
     StepWorkerStateContextVar,
     WaitingForEvent,
 )
+from workflows.runtime.types.step_id import StepId
 from workflows.runtime.types.ticks import TickAddEvent
 
 if TYPE_CHECKING:
@@ -199,29 +200,42 @@ class InternalContext(Generic[MODEL_T]):
         return total
 
     def send_event(self, message: Event, step: str | None = None) -> None:
-        """Send an event to trigger another step."""
+        """Send an event to trigger another step.
+
+        A targeted ``send_event(step=...)`` is **broker-local**: the target is a
+        bare step name resolved against the emitting step's own workflow. A
+        child triggers only via the StartEvent it returns; addressing another
+        broker (a child's step, or a parent/root step from inside a child) is
+        rejected loudly.
+        """
         recovery_counts: dict[str, int] = {}
         namespace: tuple[str, ...] = ()
         try:
             step_ctx = StepWorkerStateContextVar.get()
             recovery_counts = dict(step_ctx.retry.recovery_counts)
             # Inherit the emitting step's namespace so the event routes within
-            # the same child (or, for a targeted send, to the named step in this
-            # namespace rather than a root step).
+            # the same broker.
             namespace = step_ctx.namespace
         except LookupError:
             pass
 
-        # Resolve and validate the target relative to the emitting namespace: a
-        # bare name targets a sibling step in this namespace, a "child/answer"
-        # path descends into a child of it.
-        step_id = (
-            self._workflow._resolve_target_step(
-                step, message, slot_namespace(namespace)
-            )
-            if step is not None
-            else None
-        )
+        step_id = None
+        if step is not None:
+            parsed = StepId.from_str(step)
+            if parsed.namespace:
+                raise WorkflowRuntimeError(
+                    f"ctx.send_event(step={step!r}) addresses another broker. A "
+                    "step's targeted send is broker-local: use a bare step name "
+                    "to target a sibling step in the same workflow. Triggering a "
+                    "child happens by returning its StartEvent, not by targeting "
+                    "its steps."
+                )
+            # Validate the bare target against this broker's own step set (the
+            # emitting namespace's static projection), then deliver it locally.
+            base_namespace = slot_namespace(namespace)
+            static_step = "/".join((*base_namespace, parsed.name))
+            self._workflow._resolve_target_step(static_step, message)
+            step_id = StepId((), parsed.name)
 
         self._execute_task(
             self._internal_adapter.send_event(

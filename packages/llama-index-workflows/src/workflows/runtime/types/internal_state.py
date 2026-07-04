@@ -177,13 +177,15 @@ class BrokerState:
 
     def __setstate__(self, state: dict[str, Any]) -> None:
         self.__dict__.update(state)
+        # Defaults for child fields absent from a pre-child pickle. Each call
+        # rebuilds these literals, so the empty dicts are never shared.
         for name, default in (
             ("children", {}),
             ("child_seq", {}),
             ("started_at", None),
         ):
             if name not in state:
-                setattr(self, name, default() if callable(default) else default)
+                setattr(self, name, default)
         self._normalize_worker_keys()
 
     def _normalize_worker_keys(self) -> None:
@@ -290,9 +292,7 @@ class BrokerState:
         return base_state
 
 
-def _broker_state_from_instance(
-    workflow: Workflow, *, is_root: bool
-) -> BrokerState:
+def _broker_state_from_instance(workflow: Workflow, *, is_root: bool) -> BrokerState:
     config = _config_from_instance(workflow, is_root=is_root)
     state = BrokerState.from_config(config)
     state.is_running = False
@@ -347,9 +347,7 @@ def _rehydrate_broker(
     state: BrokerState, path: tuple[str, ...], commands: list[WorkflowTick]
 ) -> None:
     for step_id, worker_state in sorted(state.workers.items(), key=lambda x: str(x[0])):
-        for waiter in sorted(
-            worker_state.collected_waiters, key=lambda x: x.waiter_id
-        ):
+        for waiter in sorted(worker_state.collected_waiters, key=lambda x: x.waiter_id):
             if waiter.has_requirements and not waiter.requirements:
                 commands.append(
                     TickAddEvent(

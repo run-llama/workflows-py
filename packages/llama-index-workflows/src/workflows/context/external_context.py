@@ -138,7 +138,13 @@ class ExternalContext(Generic[MODEL_T, RunResultT]):
         """Send an event into the workflow.
 
         ``step`` is an absolute path from the root: a bare name targets a root
-        step, ``"child/answer"`` targets a step inside a child namespace.
+        step; a child step must be addressed by its *concrete* invocation path
+        (``"child#0/answer"``), taken from the event stream's origin namespace.
+        A static child path (``"child/answer"``) is ambiguous across overlapping
+        invocations and is rejected loudly when the run processes it.
+
+        The tick carries the bare (broker-local) target step id plus the
+        invocation path; the reducer descends that path and routes locally.
         """
         step_id = None
         origin_namespace: tuple[str, ...] = ()
@@ -146,9 +152,11 @@ class ExternalContext(Generic[MODEL_T, RunResultT]):
             parsed = StepId.from_str(step)
             static_namespace = slot_namespace(parsed.namespace)
             static_step = "/".join((*static_namespace, parsed.name))
-            step_id = self._workflow._resolve_target_step(static_step, message)
-            if parsed.namespace != static_namespace:
-                origin_namespace = parsed.namespace
+            # Validate against the static (namespaced) step set; the target is
+            # delivered broker-local (bare step id) into the addressed invocation.
+            self._workflow._resolve_target_step(static_step, message)
+            origin_namespace = parsed.namespace
+            step_id = StepId((), parsed.name)
 
         self._execute_task(
             self._external_adapter.send_event(
@@ -204,7 +212,7 @@ class ExternalContext(Generic[MODEL_T, RunResultT]):
         if self._external_adapter.get_state_store(()) is not None:
             state_data = self._namespaced_state(active_serializer).serialize_tree(
                 active_serializer,
-                child_namespaces=broker_state.live_invocation_namespaces(),
+                child_namespaces=broker_state.live_child_namespaces(),
             )
 
         context = broker_state.to_serialized(active_serializer)

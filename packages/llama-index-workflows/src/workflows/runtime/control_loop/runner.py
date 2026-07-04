@@ -19,6 +19,7 @@ from workflows.events import (
     StopEvent,
     _set_event_origin_namespace,
 )
+from workflows.retry_policy import RetryPolicy
 from workflows.runtime.types.commands import (
     CommandCancelNamespace,
     CommandCompleteRun,
@@ -62,6 +63,7 @@ from workflows.runtime.types.ticks import (
     TickAddEvent,
     TickIdleCheck,
     TickNamespaceTimeout,
+    TickSessionStart,
     TickStepResult,
     TickTimeout,
     TickWaiterTimeout,
@@ -77,7 +79,6 @@ if TYPE_CHECKING:
 from workflows.runtime.control_loop.reduce import (
     _decide_retry_delay,
     _reduce_tick,
-    prepare_tick_for_reduce,
     rewind_in_progress,
 )
 
@@ -92,6 +93,19 @@ def _is_shutdown_error(e: BaseException) -> bool:
         "cannot schedule new futures after shutdown" in msg
         or "Event loop is closed" in msg
     )
+
+
+def _stamp_tick(tick: WorkflowTick, now: float) -> WorkflowTick:
+    """Stamp a tick's journaled timestamp with the live-run clock, if it has one.
+
+    Ticks that carry a ``stamped_at`` field record ``now`` before journaling so a
+    later replay makes the same time-based decisions as the live run instead of
+    reading the replay clock. Ticks without the field (cancel, publish, etc.) and
+    already-stamped ticks pass through unchanged.
+    """
+    if getattr(tick, "stamped_at", "missing") is None:
+        return tick.model_copy(update={"stamped_at": now})
+    return tick
 
 
 async def _single_pull(adapter: InternalRunAdapter) -> WorkflowTick | None:
@@ -159,6 +173,21 @@ class _ControlLoopRunner:
         # Pending worker coroutines not yet started (started by adapter in wait_for_next_task)
         self._pending_workers: list[PendingStart] = []
 
+    def _broker_for_namespace(self, namespace: tuple[str, ...]) -> BrokerState | None:
+        """Descend the broker tree to the invocation that owns ``namespace``.
+
+        Returns ``None`` if any segment is absent — a stale dispatch into a
+        child broker that has since popped (its late result burns off as an
+        UnhandledEvent in the reducer).
+        """
+        broker = self.state
+        for seg in namespace:
+            child = broker.children.get(seg)
+            if child is None:
+                return None
+            broker = child.state
+        return broker
+
     def _resolve_state_view(self, namespace: tuple[str, ...]) -> StateStore | None:
         """Resolve a step's own per-namespace state view from the adapter.
 
@@ -175,21 +204,30 @@ class _ControlLoopRunner:
         heapq.heappush(self.scheduled_wakeups, (at_time, seq, tick))
 
     def schedule_active_namespace_timeouts(self) -> None:
-        """Re-arm child namespace deadlines restored from serialized state."""
-        for namespace, started_at in sorted(self.state.namespace_started.items()):
-            timeout = self.state.config.namespace_timeouts.get(
-                slot_namespace(namespace)
-            )
-            if timeout is None:
-                continue
-            self.schedule_tick(
-                TickNamespaceTimeout(
-                    namespace=namespace,
-                    timeout=timeout,
-                    started_at=started_at,
-                ),
-                at_time=started_at + timeout,
-            )
+        """Re-arm child namespace deadlines restored from serialized state.
+
+        Walks the broker tree: any live child whose broker carries a
+        phase-1 ``started_at`` clock (armed at descent) and a config timeout
+        gets its deadline re-scheduled at ``started_at + timeout``.
+        """
+
+        def walk(broker: BrokerState, path: tuple[str, ...]) -> None:
+            for key, child in sorted(broker.children.items()):
+                child_path = (*path, key)
+                started_at = child.state.started_at
+                timeout = child.state.config.timeout
+                if started_at is not None and timeout is not None:
+                    self.schedule_tick(
+                        TickNamespaceTimeout(
+                            namespace=child_path,
+                            timeout=timeout,
+                            started_at=started_at,
+                        ),
+                        at_time=started_at + timeout,
+                    )
+                walk(child.state, child_path)
+
+        walk(self.state, ())
 
     def next_wakeup_timeout(self, now: float) -> float | None:
         """Calculate timeout until next scheduled wakeup.
@@ -220,25 +258,36 @@ class _ControlLoopRunner:
 
         async def _run_worker() -> TickStepResult:
             worker: InProgressState | None = None
+            retry_policy = None
             try:
-                worker = next(
-                    (
-                        w
-                        for w in self.state.workers[command.step_id].in_progress
-                        if w.worker_id == command.id
-                        and w.invocation_namespace == command.invocation_namespace
-                    ),
-                    None,
+                # Descend to the broker that owns this work item; its in_progress
+                # is keyed by the bare local step id. The registered step-worker
+                # table and instance map stay keyed by the static (slot-name) path.
+                broker = self._broker_for_namespace(command.invocation_namespace)
+                worker_state = (
+                    broker.workers.get(command.step_id) if broker is not None else None
                 )
+                if worker_state is not None:
+                    retry_policy = worker_state.config.retry_policy
+                    worker = next(
+                        (
+                            w
+                            for w in worker_state.in_progress
+                            if w.worker_id == command.id
+                        ),
+                        None,
+                    )
                 if worker is None:
                     raise WorkflowRuntimeError(
                         f"Worker {command.id} not found in in_progress. This should not happen."
                     )
                 snapshot = worker.shared_state
-                step_fn: StepWorkerFunction = self.step_workers[command.step_id]
                 # Bind the bare step name against the instance that owns this
-                # namespace (root -> parent, child slot -> child instance).
+                # namespace (root -> parent, child slot -> child instance). The
+                # step-worker table is keyed by the static slot-name path.
                 static_namespace = slot_namespace(command.invocation_namespace)
+                static_step_id = StepId(static_namespace, command.step_id.name)
+                step_fn: StepWorkerFunction = self.step_workers[static_step_id]
                 instance = self.instances[static_namespace]
                 # Resolve the step's state view now (the backend store/pool is
                 # ready once this coroutine runs) and thread it into the step.
@@ -266,7 +315,9 @@ class _ControlLoopRunner:
                     worker_id=command.id,
                     invocation_namespace=command.invocation_namespace,
                     event=command.event,
-                    result=self._stamp_retry_decisions(command.step_id, worker, result),
+                    result=self._stamp_retry_decisions(
+                        command.step_id, retry_policy, worker, result
+                    ),
                 )
             except Exception as e:
                 if _is_shutdown_error(e):
@@ -284,7 +335,7 @@ class _ControlLoopRunner:
                     invocation_namespace=command.invocation_namespace,
                     event=command.event,
                     result=self._stamp_retry_decisions(
-                        command.step_id, worker, [failed]
+                        command.step_id, retry_policy, worker, [failed]
                     ),
                 )
 
@@ -300,6 +351,7 @@ class _ControlLoopRunner:
     def _stamp_retry_decisions(
         self,
         step_id: StepId,
+        policy: RetryPolicy | None,
         worker: InProgressState | None,
         results: list[StepFunctionResult],
     ) -> list[StepFunctionResult]:
@@ -309,11 +361,12 @@ class _ControlLoopRunner:
         replayable data: re-reducing the journaled tick reads the verdict
         instead of re-invoking policy code (which may have changed between
         the live run and a later replay), and restores the true
-        first_attempt_at instead of the rebuild-time stamp.
+        first_attempt_at instead of the rebuild-time stamp. ``policy`` is the
+        owning broker's step retry policy, resolved by the caller (which already
+        descended to that broker).
         """
         if worker is None:
             return results
-        policy = self.state.workers[step_id].config.retry_policy
         out: list[StepFunctionResult] = []
         for result in results:
             if isinstance(result, StepWorkerFailed) and result.retry_decision is None:
@@ -486,11 +539,18 @@ class _ControlLoopRunner:
             The final StopEvent from the workflow
         """
 
+        start = await self.adapter.get_now()
+
+        # Journal a session-start marker at every run()/resume. Phase 1 reduces
+        # it to a no-op; it marks the alive-session boundary that the phase-2
+        # elapsed-alive budget uses so downtime never accrues. It leads the
+        # journal so replay sees the boundary before any work of this session.
+        self.tick_buffer.insert(0, TickSessionStart(stamped_at=start))
+
         # Queue initial event
         if start_event is not None:
             self.tick_buffer.append(TickAddEvent(event=start_event))
 
-        start = await self.adapter.get_now()
         # Schedule workflow timeout if configured
         if start_with_timeout and self.workflow._timeout is not None:
             # Get initial time
@@ -635,12 +695,15 @@ class _ControlLoopRunner:
                         # so, cancel other workers immediately to prevent them
                         # from writing to the event stream after workflow
                         # completion. A child's StopEvent is only a boundary
-                        # event, so it must not cancel the parent's workers.
+                        # event (its subtree is torn down by CommandCancelNamespace
+                        # at ascent), so it must not cancel the parent's workers.
+                        # Root-ness is the tick's invocation path, not the step id
+                        # (all step ids are now broker-local/bare).
                         for res in tick_result.result:
                             if (
                                 isinstance(res, StepWorkerResult)
                                 and isinstance(res.result, StopEvent)
-                                and tick_result.step_id.is_root
+                                and tick_result.invocation_namespace == ()
                             ):
                                 await self.cleanup_tasks()
                                 break
@@ -660,7 +723,10 @@ class _ControlLoopRunner:
         """Process a single tick and return StopEvent if workflow completes."""
         try:
             start = await self.adapter.get_now()
-            tick = prepare_tick_for_reduce(tick, self.state)
+            # Stamp the live-run time before journaling so replay reads the same
+            # clock the live run used (mechanical prep for the phase-2 alive-time
+            # budget; additive — ticks without the field are untouched).
+            tick = _stamp_tick(tick, start)
             self.state, commands = _reduce_tick(
                 tick, self.state, start, run_id=self.adapter.run_id
             )

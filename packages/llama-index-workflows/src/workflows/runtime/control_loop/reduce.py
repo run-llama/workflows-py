@@ -8,7 +8,7 @@ import inspect
 import logging
 import time
 from collections.abc import AsyncIterable
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from typing import Any
 
@@ -75,7 +75,11 @@ from workflows.runtime.types.internal_state import (
     InProgressState,
     InternalStepWorkerState,
 )
-from workflows.runtime.types.invocation import mint_slot_segment
+from workflows.runtime.types.invocation import (
+    INVOCATION_SEPARATOR,
+    mint_slot_segment,
+    slot_namespace,
+)
 from workflows.runtime.types.results import (
     AddCollectedEvent,
     AddWaiter,
@@ -272,6 +276,27 @@ def _descend(root_state: BrokerState, path: tuple[str, ...]) -> _Descent | None:
 def _is_eligible(attempt: EventAttempt) -> bool:
     """Delayed attempts (not_before set) only become eligible via TickWakeup."""
     return attempt.not_before is None
+
+
+def _is_static_child_path(path: tuple[str, ...]) -> bool:
+    """True when an invocation path names a slot statically, not concretely.
+
+    Concrete invocation segments minted at descent always carry the counter
+    separator (``child#0``); a segment without it (``child``) is a static slot
+    reference that can't identify one of possibly-overlapping invocations.
+    """
+    return any(INVOCATION_SEPARATOR not in seg for seg in path)
+
+
+def _static_step_name(path: tuple[str, ...], step_id: StepId) -> str:
+    """Published step name: the static (slot-name) path plus the local step name.
+
+    Reduction keys steps by their bare local ``StepId``, but everything surfaced
+    to consumers (StepStateChanged, StepFailedEvent, UnhandledEvent) re-prepends
+    the static path — ``child/run`` for a child at ``child#0``, never
+    ``child#0/run``. Root steps (empty path) keep their bare name.
+    """
+    return "/".join((*slot_namespace(path), step_id.name))
 
 
 def _next_work_item_id(state: BrokerState) -> str:
@@ -506,9 +531,7 @@ def _rerun_for_stale_collect_buffer(
         return None
     this_execution.shared_state = replace(
         this_execution.shared_state,
-        collected_events={
-            x: list(y) for x, y in worker_state.collected_events.items()
-        },
+        collected_events={x: list(y) for x, y in worker_state.collected_events.items()},
     )
     return [
         CommandRunWorker(
@@ -785,7 +808,7 @@ def _schedule_retry_or_route_failure(
     should_route = handler is not None and new_count <= handler.max_recoveries
     if should_route and handler_step_id is not None and recovery_key is not None:
         step_failed_event = StepFailedEvent(
-            step_name=str(step_id),
+            step_name=_static_step_name(path, step_id),
             input_event=tick.event,
             exception=exception,
             attempts=total_attempts,
@@ -811,7 +834,7 @@ def _schedule_retry_or_route_failure(
         acc.commands.append(
             CommandPublishEvent(
                 event=WorkflowFailedEvent(
-                    step_name=str(step_id),
+                    step_name=_static_step_name(path, step_id),
                     exception=exception,
                     attempts=total_attempts,
                     elapsed_seconds=elapsed,
@@ -886,9 +909,7 @@ def _resolve_work_item_in_stream(
     elif disposition is WorkDisposition.COMPLETED:
         successors = sum(_count_accepting_steps(state, ev) for ev in emitted_non_stop)
         commands.extend(
-            _adjust_open_work_items(
-                state, enclosing, successors - 1, path, now_seconds
-            )
+            _adjust_open_work_items(state, enclosing, successors - 1, path, now_seconds)
         )
     elif disposition is WorkDisposition.ABSORBED:
         commands.extend(
@@ -922,7 +943,7 @@ def _dispatch_step_result(
                 UnhandledEvent(
                     event_type=event_cls.__name__,
                     qualified_name=f"{event_cls.__module__}.{event_cls.__name__}",
-                    step_name=str(tick.step_id),
+                    step_name=_static_step_name(path, tick.step_id),
                     idle=_check_idle_state(state),
                 ),
                 origin_namespace=path,
@@ -998,7 +1019,7 @@ def _local_step_result(
             # Root StopEvent completes the whole run.
             broker.is_running = False
             _terminate_broker(broker)
-            _publish_step_transition(acc, tick, path, step_name)
+            _publish_step_transition(acc, tick, path)
             acc.commands.append(CommandPublishEvent(event=acc.stop_event))
             acc.commands.append(CommandCompleteRun(result=acc.stop_event))
             return acc.commands, None
@@ -1006,7 +1027,7 @@ def _local_step_result(
         # parent pops the whole subtree, so no local teardown/accounting here.
         broker.is_running = False
         boundary_stop = acc.stop_event
-        _publish_step_transition(acc, tick, path, step_name)
+        _publish_step_transition(acc, tick, path)
         if this_execution in worker_state.in_progress:
             worker_state.in_progress.remove(this_execution)
         return acc.commands, boundary_stop
@@ -1017,7 +1038,7 @@ def _local_step_result(
 
     is_completed = any(indicates_exit(c) for c in acc.commands)
     if acc.step_no_longer_in_progress:
-        _publish_step_transition(acc, tick, path, step_name)
+        _publish_step_transition(acc, tick, path)
         if this_execution in worker_state.in_progress:
             worker_state.in_progress.remove(this_execution)
     if not is_completed:
@@ -1031,14 +1052,13 @@ def _publish_step_transition(
     acc: _StepResultAcc,
     tick: TickStepResult,
     path: tuple[str, ...],
-    step_name: str,
 ) -> None:
     acc.commands.insert(
         0,
         CommandPublishEvent(
             StepStateChanged(
                 step_state=StepState.NOT_RUNNING,
-                name=step_name,
+                name=_static_step_name(path, tick.step_id),
                 input_event_name=str(type(tick.event)),
                 output_event_name=acc.output_event_name,
                 worker_id=str(tick.worker_id),
@@ -1065,9 +1085,7 @@ def _ascend_child_stop(
     """
     parent_broker.children.pop(slot_key, None)
     child_path = (*parent_path, slot_key)
-    commands: list[WorkflowCommand] = [
-        CommandCancelNamespace(namespace=child_path)
-    ]
+    commands: list[WorkflowCommand] = [CommandCancelNamespace(namespace=child_path)]
     enclosing = child.boundary_scope_path[-1] if child.boundary_scope_path else None
     # The child was one work item in the enclosing stream. Its same-scope
     # successors are the parent-local routing of the stop event; count them the
@@ -1175,9 +1193,7 @@ def _add_or_enqueue_event(
         shared_state: StepWorkerState = StepWorkerState(
             step_name=step_id.name,
             collected_events={k: list(v) for k, v in state.collected_events.items()},
-            collected_waiters=[
-                replace(w) for w in state.collected_waiters
-            ],
+            collected_waiters=[replace(w) for w in state.collected_waiters],
             collection_release_payload=event.collection_release_payload._copy()
             if event.collection_release_payload is not None
             else None,
@@ -1212,7 +1228,7 @@ def _add_or_enqueue_event(
             CommandPublishEvent(
                 StepStateChanged(
                     step_state=StepState.RUNNING,
-                    name=str(step_id),
+                    name=_static_step_name(path, step_id),
                     input_event_name=type(event.event).__name__,
                     worker_id=str(id),
                 ),
@@ -1224,7 +1240,7 @@ def _add_or_enqueue_event(
             CommandPublishEvent(
                 StepStateChanged(
                     step_state=StepState.PREPARING,
-                    name=str(step_id),
+                    name=_static_step_name(path, step_id),
                     input_event_name=type(event.event).__name__,
                     worker_id="<enqueued>",
                 ),
@@ -1352,7 +1368,9 @@ def _route_member_to_collect_step(
             broker.is_running = False
             commands.append(
                 CommandPublishEvent(
-                    event=WorkflowFailedEvent(step_name=str(step_id), exception=error)
+                    event=WorkflowFailedEvent(
+                        step_name=_static_step_name(path, step_id), exception=error
+                    )
                 )
             )
             commands.append(CommandFailWorkflow(step_id=step_id, exception=error))
@@ -1511,17 +1529,6 @@ def _boundary_descend(
     key = mint_slot_segment(slot, seq)
     child_path = (*path, key)
     child_state = BrokerState.from_config(child_config)
-    commands: list[WorkflowCommand] = []
-    if child_config.timeout is not None:
-        # Phase-1 absolute-deadline clock: armed once at descent.
-        child_state.started_at = now_seconds
-        commands.append(
-            CommandScheduleNamespaceTimeout(
-                namespace=child_path,
-                timeout=child_config.timeout,
-                started_at=now_seconds,
-            )
-        )
     parent_broker.children[key] = ChildBroker(
         slot=slot,
         state=child_state,
@@ -1539,8 +1546,10 @@ def _boundary_descend(
             "bound_events": None,
         }
     )
-    commands.extend(_local_add_event(child_state, child_path, child_tick, now_seconds))
-    return commands
+    # The child's phase-1 deadline arms inside _local_add_event when the
+    # StartEvent routes into it (the same path that re-arms after a caught
+    # timeout), so descent needs no separate arming here.
+    return _local_add_event(child_state, child_path, child_tick, now_seconds)
 
 
 def _unhandled_event_commands(
@@ -1555,7 +1564,9 @@ def _unhandled_event_commands(
             UnhandledEvent(
                 event_type=event_cls.__name__,
                 qualified_name=f"{event_cls.__module__}.{event_cls.__name__}",
-                step_name=str(tick.step_id) if tick.step_id is not None else None,
+                step_name=_static_step_name(path, tick.step_id)
+                if tick.step_id is not None
+                else None,
                 idle=_check_idle_state(state),
             ),
             origin_namespace=path,
@@ -1600,7 +1611,39 @@ def _local_add_event(
     handled = bool(waiter_resolved_steps) or routed.handled
     if not handled:
         commands.extend(_unhandled_event_commands(tick, broker, path))
+
+    commands.extend(_arm_child_deadline(broker, path, handled, now_seconds))
     return commands
+
+
+def _arm_child_deadline(
+    broker: BrokerState,
+    path: tuple[str, ...],
+    handled: bool,
+    now_seconds: float,
+) -> list[WorkflowCommand]:
+    """Arm this child broker's phase-1 deadline when its clock is not running.
+
+    A timed child broker's deadline arms the first time an event routes into it
+    (at descent) and re-arms after a prior activation expired and was caught (its
+    catch-error handler cleared ``started_at``). The root broker's deadline is
+    the runner's global ``TickTimeout``, never a namespace timeout.
+    """
+    if (
+        not path
+        or not handled
+        or broker.config.timeout is None
+        or broker.started_at is not None
+    ):
+        return []
+    broker.started_at = now_seconds
+    return [
+        CommandScheduleNamespaceTimeout(
+            namespace=path,
+            timeout=broker.config.timeout,
+            started_at=now_seconds,
+        )
+    ]
 
 
 def _dispatch_add_event(
@@ -1615,6 +1658,24 @@ def _dispatch_add_event(
     path = tick.origin_namespace
     descent = _descend(state, path)
     if descent is None:
+        if _is_static_child_path(path):
+            # A static child path (e.g. "child/answer") names a slot, not one of
+            # its possibly-overlapping concrete invocations. Reject loudly rather
+            # than silently dropping — the caller must use "child#N/answer".
+            error = WorkflowRuntimeError(
+                f"Send addressed to static child path {'/'.join(path)!r} is "
+                "ambiguous: it has no concrete child invocation. Use the "
+                "concrete child invocation namespace from the event stream, "
+                "e.g. 'child#0/step'."
+            )
+            state.is_running = False
+            return state, [
+                CommandPublishEvent(
+                    event=WorkflowFailedEvent(step_name="/".join(path), exception=error)
+                ),
+                CommandFailWorkflow(step_id=StepId(path, path[-1]), exception=error),
+            ]
+        # Concrete-but-dead invocation: loud UnhandledEvent (orphan burn-off).
         return state, _unhandled_event_commands(tick, state, path)
     commands = _local_add_event(descent.broker, path, tick, now_seconds)
     return state, commands
