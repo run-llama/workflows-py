@@ -12,6 +12,7 @@ pre-empts a child's shorter one, and vice versa.
 from __future__ import annotations
 
 import asyncio
+import time
 
 import pytest
 from workflows import Context, Workflow
@@ -211,19 +212,21 @@ def test_explicit_child_timeout_arms_namespace_deadline() -> None:
     assert state.config.child_configs["child"].timeout == 0.1
 
 
-def test_active_namespace_timeout_activation_round_trips() -> None:
-    # A live child broker's phase-1 deadline clock (``started_at``) survives a
+def test_child_alive_budget_round_trips() -> None:
+    # A live child broker's elapsed-alive timeout budget survives a
     # serialize/restore round-trip nested under ``child_brokers``.
     workflow = ParentOfSlowChild(child=SlowChild(timeout=0.1))
     state = BrokerState.from_workflow(workflow)
     child_state = BrokerState.from_config(state.config.child_configs["child"])
-    child_state.started_at = 123.0
+    child_state.elapsed_alive = 0.04
+    child_state.last_alive_stamp = 123.0
     state.children["child#0"] = ChildBroker(slot="child", state=child_state)
 
     serialized = state.to_serialized(JsonSerializer())
     restored = BrokerState.from_serialized(serialized, workflow, JsonSerializer())
 
-    assert restored.children["child#0"].state.started_at == 123.0
+    assert restored.children["child#0"].state.elapsed_alive == 0.04
+    assert restored.children["child#0"].state.last_alive_stamp == 123.0
 
 
 def test_explicit_child_none_timeout_arms_no_deadline() -> None:
@@ -275,10 +278,15 @@ class ParentOfResumeSlowChild(Workflow):
 
 
 @pytest.mark.asyncio
-async def test_child_timeout_is_rearmed_from_original_start_on_resume() -> None:
+async def test_child_timeout_budget_survives_resume_with_downtime_forgiven() -> None:
+    # New elapsed-alive semantics (replaces the old absolute-deadline reset): the
+    # child spent almost none of its budget before the run was cancelled, so on
+    # resume — even after downtime far exceeding the timeout — the child keeps its
+    # (near-full) remaining budget rather than firing instantly. Downtime is
+    # forgiven; only alive time counts.
     global RESUME_CHILD_STARTED
     RESUME_CHILD_STARTED = asyncio.Event()
-    workflow = ParentOfResumeSlowChild(child=ResumeSlowChild(timeout=0.2), timeout=30)
+    workflow = ParentOfResumeSlowChild(child=ResumeSlowChild(timeout=0.5), timeout=30)
 
     handler = workflow.run()
     await asyncio.wait_for(RESUME_CHILD_STARTED.wait(), timeout=1)
@@ -286,7 +294,12 @@ async def test_child_timeout_is_rearmed_from_original_start_on_resume() -> None:
     ctx_dict = handler.ctx.to_dict()
     await handler.cancel_run()
 
-    await asyncio.sleep(0.3)
+    # Downtime (1.0s) far exceeds the 0.5s timeout, yet must be forgiven.
+    await asyncio.sleep(1.0)
+    RESUME_CHILD_STARTED = asyncio.Event()
     resumed = workflow.run(ctx=Context.from_dict(workflow, ctx_dict))
+    started = time.monotonic()
     with pytest.raises(WorkflowTimeoutError):
-        await asyncio.wait_for(resumed, timeout=0.1)
+        await asyncio.wait_for(resumed, timeout=3)
+    # Fired on its remaining alive budget (~0.5s), not instantly on the downtime.
+    assert time.monotonic() - started > 0.1

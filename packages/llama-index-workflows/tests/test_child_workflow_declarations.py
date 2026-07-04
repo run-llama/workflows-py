@@ -183,17 +183,19 @@ def test_pickled_broker_state_with_legacy_config_keys_normalizes_on_load() -> No
 
 def test_old_pickled_broker_state_without_child_fields_recovers() -> None:
     # A pickle predating the recursive-broker child fields loads with empty
-    # defaults for children/child_seq (and no phase-1 deadline clock).
+    # defaults for children/child_seq (and an empty elapsed-alive budget).
     state = BrokerState.from_workflow(WithPlainAnnotation())
     state.__dict__.pop("children")
     state.__dict__.pop("child_seq")
-    state.__dict__.pop("started_at")
+    state.__dict__.pop("elapsed_alive")
+    state.__dict__.pop("last_alive_stamp")
 
     recovered = pickle.loads(pickle.dumps(state))
 
     assert recovered.children == {}
     assert recovered.child_seq == {}
-    assert recovered.started_at is None
+    assert recovered.elapsed_alive == 0.0
+    assert recovered.last_alive_stamp is None
     assert recovered.deepcopy().children == {}
 
 

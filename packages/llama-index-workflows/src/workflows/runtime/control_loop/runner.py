@@ -203,27 +203,29 @@ class _ControlLoopRunner:
         self._wakeup_sequence += 1
         heapq.heappush(self.scheduled_wakeups, (at_time, seq, tick))
 
-    def schedule_active_namespace_timeouts(self) -> None:
-        """Re-arm child namespace deadlines restored from serialized state.
+    def schedule_active_namespace_timeouts(self, now: float) -> None:
+        """Re-arm live child deadlines on resume from their elapsed-alive budget.
 
-        Walks the broker tree: any live child whose broker carries a
-        phase-1 ``started_at`` clock (armed at descent) and a config timeout
-        gets its deadline re-scheduled at ``started_at + timeout``.
+        Walks the broker tree: every live child with a config timeout re-arms at
+        ``now + (timeout - elapsed_alive)``. ``elapsed_alive`` is the alive time
+        the child already spent (persisted); the inter-session downtime is
+        forgiven because the session-start marker resets the accrual reference
+        without accruing. A live child in ``children`` is by construction armed
+        (born at descent, or mid-recovery after catching its own timeout).
         """
 
         def walk(broker: BrokerState, path: tuple[str, ...]) -> None:
             for key, child in sorted(broker.children.items()):
                 child_path = (*path, key)
-                started_at = child.state.started_at
                 timeout = child.state.config.timeout
-                if started_at is not None and timeout is not None:
+                if timeout is not None:
+                    remaining = max(0.0, timeout - child.state.elapsed_alive)
                     self.schedule_tick(
                         TickNamespaceTimeout(
                             namespace=child_path,
                             timeout=timeout,
-                            started_at=started_at,
                         ),
-                        at_time=started_at + timeout,
+                        at_time=now + remaining,
                     )
                 walk(child.state, child_path)
 
@@ -445,9 +447,8 @@ class _ControlLoopRunner:
                 TickNamespaceTimeout(
                     namespace=command.namespace,
                     timeout=command.timeout,
-                    started_at=command.started_at,
                 ),
-                at_time=command.started_at + command.timeout,
+                at_time=command.at_time,
             )
             return None
         else:
@@ -551,16 +552,19 @@ class _ControlLoopRunner:
         if start_event is not None:
             self.tick_buffer.append(TickAddEvent(event=start_event))
 
-        # Schedule workflow timeout if configured
+        # Schedule the root timeout on its remaining alive-time budget. Across a
+        # resume the root keeps the alive time it already spent (elapsed_alive),
+        # instead of the old fresh-budget-per-resume reset; downtime is forgiven
+        # by the session-start marker. A fresh run has elapsed_alive == 0, so
+        # this is the full timeout.
         if start_with_timeout and self.workflow._timeout is not None:
-            # Get initial time
-            timeout_time = start + self.workflow._timeout
+            remaining = max(0.0, self.workflow._timeout - self.state.elapsed_alive)
             self.schedule_tick(
                 TickTimeout(timeout=self.workflow._timeout),
-                at_time=timeout_time,
+                at_time=start + remaining,
             )
 
-        self.schedule_active_namespace_timeouts()
+        self.schedule_active_namespace_timeouts(start)
 
         # Resume any in-progress work
         self.state, commands = rewind_in_progress(self.state, start)

@@ -9,6 +9,10 @@ Add in-process child workflow composition with typed child declarations, namespa
 
 Each child invocation runs as a nested workflow with its own isolated state, streams, and waiters. Overlapping invocations of the same child slot get stable, sequential ids (`child#0`, `child#1`), so targeted sends and stream origins can address a specific invocation (`child#0/answer`). A send to a completed invocation produces an `UnhandledEvent` rather than silently re-entering it, and a static child path (`child/answer`) without a concrete invocation is rejected.
 
+Timeouts now measure known-alive time, not wall-clock, at every level (root and every child). A workflow may spend `timeout` seconds of alive time; time while the process is down between a snapshot and its resume is forgiven, so a resumed run keeps the alive budget it already spent instead of resetting. This changes the previous root-timeout behavior, which reset to a fresh full budget on every resume — a long-idle workflow that resumes will no longer get its whole timeout back.
+
+An uncaught failure or timeout inside a child no longer fails the whole run: it surfaces to the parent as a `StepFailedEvent` named for the child's path, eligible for the parent's `@catch_error` (with normal `max_recoveries`), recursing upward. Only a failure uncaught all the way to the root ends the run.
+
 Annotated Workflow attributes are only auto-attached when they use the typed child workflow contract, so existing manual composition with bare StartEvent/StopEvent workflows remains compatible.
 
 Update server, DBOS, and AgentCore runtime adapter compatibility for namespaced step IDs and state-store access.

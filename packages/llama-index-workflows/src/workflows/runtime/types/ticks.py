@@ -135,11 +135,11 @@ class TickWaiterTimeout(BaseModel):
 class TickSessionStart(BaseModel):
     """Session-start marker journaled at each ``run()`` start and resume.
 
-    Mechanical prep for the phase-2 elapsed-alive timeout budget: it marks the
-    boundary between alive sessions so downtime never accrues into any broker's
-    budget. In phase 1 it is a pure no-op (child deadlines still use the
-    per-broker ``started_at`` clock). Additive to the journal; old journals
-    simply lack it.
+    Drives the elapsed-alive timeout budget: it marks the boundary between alive
+    sessions, resetting every broker's ``last_alive_stamp`` without accruing, so
+    the inter-session gap (downtime) never enters any broker's budget — on the
+    snapshot-resume path and the full-journal-replay path identically. Additive
+    to the journal; old (pre-child) journals simply lack it.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -148,20 +148,25 @@ class TickSessionStart(BaseModel):
 
 
 class TickNamespaceTimeout(BaseModel):
-    """When processed, times out a single child invocation (not the whole run).
+    """When processed, checks a single child invocation's alive-time budget.
 
-    Armed at boundary descent when the child's config declares a ``timeout``. On
-    fire it expires *that child broker* through the child's local ``@catch_error``
-    path; only the root timeout (:class:`TickTimeout`) halts the whole run.
-    ``namespace`` is the child's invocation path; ``started_at`` pins the
-    activation, so a re-armed or already-popped broker makes this a no-op.
+    Armed at boundary descent (and re-armed on resume) at the wall-clock time the
+    child's remaining ``timeout - elapsed_alive`` budget would be spent. On fire
+    the reducer accrues the child's alive time from ``stamped_at``; if the budget
+    is truly spent it expires the child (its local ``@catch_error`` first, else a
+    boundary failure ascends to the parent), otherwise it re-arms for the
+    remaining budget. Only the root timeout (:class:`TickTimeout`) halts the whole
+    run. ``namespace`` is the child's invocation path.
     """
 
     model_config = ConfigDict(frozen=True)
     type: Literal["namespace_timeout"] = "namespace_timeout"
     namespace: tuple[str, ...]
     timeout: float
-    started_at: float
+    # See TickStepResult.stamped_at. Stamped before on_tick with the fire time,
+    # so replay accrues the child's alive budget to the same value the live run
+    # asserted budget-spent at.
+    stamped_at: float | None = None
 
 
 class TickIdleCheck(BaseModel):

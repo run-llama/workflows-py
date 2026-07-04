@@ -172,6 +172,12 @@ async def rebuild_state_from_ticks_stream(
     return (await replay_ticks_stream(state, ticks, run_id=run_id)).state
 
 
+# Slack for the alive-budget comparison. Accrual deltas come from one clock, so
+# at a scheduled deadline the accrued budget equals the timeout to within float
+# rounding; the epsilon keeps the "spent" test from missing by an ULP.
+_ALIVE_EPS = 1e-6
+
+
 def _effective_now(tick: WorkflowTick, now_seconds: float) -> float:
     """Prefer a journaled tick timestamp over the reducer's clock.
 
@@ -179,8 +185,63 @@ def _effective_now(tick: WorkflowTick, now_seconds: float) -> float:
     run's time, so replaying it makes the same time-based decisions. Old ticks
     (no stamp) fall back to ``now_seconds``.
     """
-    stamped = getattr(tick, "stamped_at", None)
+    stamped = _tick_stamp(tick)
     return stamped if stamped is not None else now_seconds
+
+
+def _tick_stamp(tick: WorkflowTick) -> float | None:
+    """The tick's journaled wall-clock stamp, or None for unstamped ticks.
+
+    Only stamped ticks (the work + deadline ticks) accrue alive time. Old
+    markerless journals carry no stamps, so they replay with an empty budget and
+    never fire a spurious timeout under the legacy fallback.
+    """
+    return getattr(tick, "stamped_at", None)
+
+
+def _accrue_alive(broker: BrokerState, stamp: float) -> None:
+    """Accrue one broker's known-alive time up to ``stamp``.
+
+    ``elapsed_alive`` gains the gap since the last reference (the process was
+    alive across it); the reference then advances. The session-start marker moves
+    the reference *without* accruing, so inter-session downtime never counts.
+    """
+    if broker.last_alive_stamp is not None:
+        delta = stamp - broker.last_alive_stamp
+        if delta > 0:
+            broker.elapsed_alive += delta
+    broker.last_alive_stamp = stamp
+
+
+def _accrue_descent(descent: _Descent, stamp: float | None) -> None:
+    """Accrue alive time on every broker on the addressed path (root..target).
+
+    A tick addressed to a nested broker is alive time for that broker and every
+    ancestor it descends through, so a parent's budget advances whenever any
+    descendant does work. A quiet parent still reaches its budget because the
+    deadline tick's own accrual captures the final quiet-but-alive gap.
+    """
+    if stamp is None:
+        return
+    for parent_broker, _seg, _child in descent.chain:
+        _accrue_alive(parent_broker, stamp)
+    _accrue_alive(descent.broker, stamp)
+
+
+def _reset_alive_stamps(state: BrokerState, stamp: float | None) -> None:
+    """Session-start reset: advance every broker's accrual reference, no accrual.
+
+    Forgives the inter-session downtime (the gap between the previous session's
+    last tick and this resume) uniformly across the whole broker tree, on both
+    the snapshot-resume and full-journal-replay paths.
+    """
+
+    def walk(broker: BrokerState) -> None:
+        broker.last_alive_stamp = stamp
+        for child in broker.children.values():
+            walk(child.state)
+
+    walk(state)
 
 
 def _reduce_tick(
@@ -204,9 +265,12 @@ def _reduce_tick(
     elif isinstance(tick, TickTimeout):
         state, commands = _process_timeout_tick(tick, init)
     elif isinstance(tick, TickSessionStart):
-        # Phase-1 no-op session marker; phase 2 uses it to bound the alive-time
-        # budget. Never schedules further work.
-        return init, []
+        # Session boundary: advance every broker's accrual reference to this
+        # stamp WITHOUT accruing, so the downtime since the previous session is
+        # forgiven. Never schedules further work.
+        state = init.deepcopy()
+        _reset_alive_stamps(state, _tick_stamp(tick))
+        return state, []
     elif isinstance(tick, TickWaiterTimeout):
         state, commands = _dispatch_waiter_timeout(tick, init, now_seconds)
     elif isinstance(tick, TickNamespaceTimeout):
@@ -486,6 +550,33 @@ class _StepResultAcc:
     stop_event: StopEvent | None = None
     # This execution's completion descended into one or more child brokers.
     boundary_descent: bool = False
+    # This execution failed uncaught inside a child broker; the caller ascends it
+    # to the parent boundary. Only ever set for a non-root broker (a root failure
+    # ends the whole run inline).
+    boundary_failure: _BoundaryFailure | None = None
+
+
+@dataclass
+class _BoundaryFailure:
+    """An uncaught child failure/timeout ascending to its parent boundary.
+
+    Carries what the parent needs to route a ``StepFailedEvent`` named for the
+    child's path, and to publish the right terminal event if it ascends uncaught
+    all the way to the root (a timeout publishes ``WorkflowTimedOutEvent``, a step
+    failure publishes ``WorkflowFailedEvent``).
+    """
+
+    exception: Exception
+    input_event: Event
+    attempts: int
+    elapsed_seconds: float
+    failed_at: float
+    # Static name of the step (or child) where the failure originated, used for
+    # the terminal WorkflowFailedEvent if it ascends uncaught to the root. A step
+    # failure keeps the internal step name (``child/run_child``); a timeout uses
+    # the child's path.
+    origin_step_name: str = ""
+    timed_out_event: WorkflowTimedOutEvent | None = None
 
 
 @dataclass(frozen=True)
@@ -741,10 +832,11 @@ def _schedule_retry_or_route_failure(
     run_id: str | None,
 ) -> None:
     """Handle a failed execution: retry if permitted, route to a broker-local
-    catch_error handler if one applies, otherwise fail the workflow.
+    catch_error handler if one applies, otherwise surface the failure.
 
-    Phase 1 keeps the slim behavior: an uncaught failure fails the whole run.
-    Boundary failure ascent through parent catch chains is phase 2.
+    A root broker's uncaught failure ends the whole run inline. A child broker's
+    uncaught failure is recorded on ``acc`` for the caller to ascend to the
+    parent boundary (routed there through the parent's own catch-error table).
     """
     step_id = tick.step_id
     step_name = str(step_id)
@@ -828,8 +920,8 @@ def _schedule_retry_or_route_failure(
             )
         )
         acc.redelivery_scheduled = True
-    else:
-        # Uncaught: fail the whole run (phase-1 semantics for every level).
+    elif not path:
+        # Root: an uncaught failure ends the whole run.
         state.is_running = False
         acc.commands.append(
             CommandPublishEvent(
@@ -842,6 +934,16 @@ def _schedule_retry_or_route_failure(
             )
         )
         acc.commands.append(CommandFailWorkflow(step_id=step_id, exception=exception))
+    else:
+        # Child: uncaught locally → ascend to the parent as a boundary failure.
+        acc.boundary_failure = _BoundaryFailure(
+            exception=exception,
+            input_event=tick.event,
+            attempts=total_attempts,
+            elapsed_seconds=elapsed,
+            failed_at=result.failed_at,
+            origin_step_name=_static_step_name(path, step_id),
+        )
 
 
 def _resolve_work_item_in_stream(
@@ -950,7 +1052,8 @@ def _dispatch_step_result(
             )
         ]
 
-    commands, stop_event = _local_step_result(
+    _accrue_descent(descent, _tick_stamp(tick))
+    commands, stop_event, failure = _local_step_result(
         descent.broker, path, tick, now_seconds, run_id
     )
 
@@ -968,6 +1071,12 @@ def _dispatch_step_result(
                 now_seconds,
             )
         )
+    elif failure is not None:
+        # Child failed uncaught locally: ascend to the parent boundary (always a
+        # non-root path here, so descent.chain is non-empty).
+        commands.extend(
+            _ascend_boundary_failure(descent.chain, path, failure, now_seconds)
+        )
     return state, commands
 
 
@@ -977,11 +1086,13 @@ def _local_step_result(
     tick: TickStepResult,
     now_seconds: float,
     run_id: str | None,
-) -> tuple[list[WorkflowCommand], StopEvent | None]:
+) -> tuple[list[WorkflowCommand], StopEvent | None, _BoundaryFailure | None]:
     """Reduce one finished execution within its addressed broker.
 
-    Returns (commands, boundary_stop). ``boundary_stop`` is set when a child
-    broker (path != ()) returned its StopEvent, signalling the caller to ascend.
+    Returns ``(commands, boundary_stop, boundary_failure)``. ``boundary_stop`` is
+    set when a child broker (path != ()) returned its StopEvent; ``boundary_
+    failure`` when a child broker failed uncaught locally. Either signals the
+    caller to ascend at the parent boundary; both are ``None`` for the root.
     """
     step_id = tick.step_id
     worker_state = broker.workers[step_id]
@@ -990,7 +1101,7 @@ def _local_step_result(
 
     rerun = _rerun_for_stale_collect_buffer(tick, worker_state, this_execution, path)
     if rerun is not None:
-        return rerun, None
+        return rerun, None, None
 
     fanned_out = any(
         isinstance(x, StepWorkerResult) and x.fanned_out for x in tick.result
@@ -1022,7 +1133,7 @@ def _local_step_result(
             _publish_step_transition(acc, tick, path)
             acc.commands.append(CommandPublishEvent(event=acc.stop_event))
             acc.commands.append(CommandCompleteRun(result=acc.stop_event))
-            return acc.commands, None
+            return acc.commands, None, None
         # Child StopEvent: mark the broker done and let the caller ascend. The
         # parent pops the whole subtree, so no local teardown/accounting here.
         broker.is_running = False
@@ -1030,7 +1141,17 @@ def _local_step_result(
         _publish_step_transition(acc, tick, path)
         if this_execution in worker_state.in_progress:
             worker_state.in_progress.remove(this_execution)
-        return acc.commands, boundary_stop
+        return acc.commands, boundary_stop, None
+
+    if acc.boundary_failure is not None:
+        # Uncaught local failure in a child broker: mark it done and let the
+        # caller ascend at the parent boundary (the parent pops this subtree, so
+        # no local stream accounting is needed here).
+        broker.is_running = False
+        _publish_step_transition(acc, tick, path)
+        if this_execution in worker_state.in_progress:
+            worker_state.in_progress.remove(this_execution)
+        return acc.commands, None, acc.boundary_failure
 
     acc.commands.extend(
         _resolve_work_item_in_stream(tick, broker, path, scope, acc, now_seconds)
@@ -1045,7 +1166,7 @@ def _local_step_result(
         acc.commands.extend(
             _drain_eligible_queue(step_id, worker_state, path, now_seconds)
         )
-    return acc.commands, boundary_stop
+    return acc.commands, boundary_stop, None
 
 
 def _publish_step_transition(
@@ -1102,6 +1223,100 @@ def _ascend_child_stop(
             origin_namespace=parent_path,
             scope_path=child.boundary_scope_path,
             recovery_counts=dict(child.boundary_recovery_counts),
+        )
+    )
+    return commands
+
+
+def _ascend_boundary_failure(
+    chain: list[tuple[BrokerState, str, ChildBroker]],
+    failing_path: tuple[str, ...],
+    failure: _BoundaryFailure,
+    now_seconds: float,
+) -> list[WorkflowCommand]:
+    """Propagate an uncaught child failure/timeout up the parent chain.
+
+    At each level the parent pops the failing child (one path-prefixed
+    CommandCancelNamespace tears its subtree down exactly once) and routes a
+    StepFailedEvent named for the child's path through the parent's OWN wildcard
+    catch-error table with normal ``max_recoveries`` accounting:
+
+    - Caught: the boundary work item lives on as the handler invocation
+      (still-live — no stream adjustment, exactly like a retry redelivery), in
+      ``boundary_scope_path``.
+    - Uncaught: the parent itself becomes the failing boundary to ITS parent,
+      recursing. Uncaught at the root fails the run — publishing the timeout or
+      failure terminal event. ``CommandHalt`` stays reserved for root
+      cancel/root timeout.
+
+    ``chain[i]`` is ``(broker_at_depth_i, slot_key, child_record_at_depth_i+1)``;
+    the failing broker starts at ``failing_path`` (depth ``len(chain)``).
+    """
+    commands: list[WorkflowCommand] = []
+    origin_path = failing_path
+    for i in range(len(chain) - 1, -1, -1):
+        parent_broker, slot_key, child_record = chain[i]
+        parent_path = failing_path[:i]  # the parent broker's own invocation path
+        parent_broker.children.pop(slot_key, None)
+        commands.append(CommandCancelNamespace(namespace=failing_path))
+
+        handler_step_id = _wildcard_catch_error_handler(parent_broker.config)
+        handler = (
+            parent_broker.config.catch_error_handlers.get(handler_step_id)
+            if handler_step_id is not None
+            else None
+        )
+        if handler is not None and handler_step_id is not None:
+            recovery_counts = dict(child_record.boundary_recovery_counts)
+            recovery_key = str(handler_step_id)
+            new_count = recovery_counts.get(recovery_key, 0) + 1
+            if new_count <= handler.max_recoveries:
+                step_failed_event = StepFailedEvent(
+                    step_name="/".join(slot_namespace(failing_path)),
+                    input_event=failure.input_event,
+                    exception=failure.exception,
+                    attempts=failure.attempts,
+                    elapsed_seconds=failure.elapsed_seconds,
+                    failed_at=datetime.fromtimestamp(
+                        failure.failed_at, tz=timezone.utc
+                    ),
+                )
+                commands.append(
+                    CommandQueueEvent(
+                        event=step_failed_event,
+                        step_id=handler_step_id,
+                        origin_namespace=parent_path,
+                        scope_path=child_record.boundary_scope_path,
+                        recovery_counts={**recovery_counts, recovery_key: new_count},
+                    )
+                )
+                return commands
+        # Uncaught at this level: the parent becomes the failing boundary upward.
+        failing_path = parent_path
+
+    # Reached the root uncaught: fail the whole run.
+    root = chain[0][0]
+    root.is_running = False
+    if failure.timed_out_event is not None:
+        commands.append(
+            CommandPublishEvent(event=failure.timed_out_event, origin_namespace=())
+        )
+    else:
+        commands.append(
+            CommandPublishEvent(
+                event=WorkflowFailedEvent(
+                    step_name=failure.origin_step_name
+                    or "/".join(slot_namespace(origin_path)),
+                    exception=failure.exception,
+                    attempts=failure.attempts,
+                    elapsed_seconds=failure.elapsed_seconds,
+                )
+            )
+        )
+    commands.append(
+        CommandFailWorkflow(
+            step_id=StepId(origin_path, origin_path[-1] if origin_path else ""),
+            exception=failure.exception,
         )
     )
     return commands
@@ -1546,10 +1761,9 @@ def _boundary_descend(
             "bound_events": None,
         }
     )
-    # The child's phase-1 deadline arms inside _local_add_event when the
-    # StartEvent routes into it (the same path that re-arms after a caught
-    # timeout), so descent needs no separate arming here.
-    return _local_add_event(child_state, child_path, child_tick, now_seconds)
+    commands = _local_add_event(child_state, child_path, child_tick, now_seconds)
+    commands.extend(_arm_child_deadline(child_state, child_path, now_seconds))
+    return commands
 
 
 def _unhandled_event_commands(
@@ -1612,36 +1826,32 @@ def _local_add_event(
     if not handled:
         commands.extend(_unhandled_event_commands(tick, broker, path))
 
-    commands.extend(_arm_child_deadline(broker, path, handled, now_seconds))
     return commands
 
 
 def _arm_child_deadline(
     broker: BrokerState,
     path: tuple[str, ...],
-    handled: bool,
     now_seconds: float,
 ) -> list[WorkflowCommand]:
-    """Arm this child broker's phase-1 deadline when its clock is not running.
+    """Arm a fresh child broker's elapsed-alive deadline at birth.
 
-    A timed child broker's deadline arms the first time an event routes into it
-    (at descent) and re-arms after a prior activation expired and was caught (its
-    catch-error handler cleared ``started_at``). The root broker's deadline is
-    the runner's global ``TickTimeout``, never a namespace timeout.
+    Called once at boundary descent (and again, freshly, when the child catches
+    its own timeout and restarts). The child starts with an empty budget, so the
+    deadline fires ``timeout`` seconds of alive time from now; the reducer
+    confirms the budget on fire. The root broker's deadline is the runner's
+    global ``TickTimeout``, never a namespace timeout.
     """
-    if (
-        not path
-        or not handled
-        or broker.config.timeout is None
-        or broker.started_at is not None
-    ):
+    timeout = broker.config.timeout
+    if timeout is None:
         return []
-    broker.started_at = now_seconds
+    broker.elapsed_alive = 0.0
+    broker.last_alive_stamp = now_seconds
     return [
         CommandScheduleNamespaceTimeout(
             namespace=path,
-            timeout=broker.config.timeout,
-            started_at=now_seconds,
+            timeout=timeout,
+            at_time=now_seconds + timeout,
         )
     ]
 
@@ -1677,6 +1887,7 @@ def _dispatch_add_event(
             ]
         # Concrete-but-dead invocation: loud UnhandledEvent (orphan burn-off).
         return state, _unhandled_event_commands(tick, state, path)
+    _accrue_descent(descent, _tick_stamp(tick))
     commands = _local_add_event(descent.broker, path, tick, now_seconds)
     return state, commands
 
@@ -1814,45 +2025,72 @@ def _process_wakeup_tick(
     return state, commands
 
 
-def _local_catch_error_handler(config: BrokerConfig) -> StepId | None:
-    """A broker-local handler that can catch an unattributable failure (timeout).
+def _wildcard_catch_error_handler(config: BrokerConfig) -> StepId | None:
+    """The broker's wildcard ``@catch_error`` handler (``for_steps is None``).
 
-    Prefers a wildcard handler (``for_steps is None``); falls back to any.
+    A child's own timeout and an ascending boundary failure are not attributable
+    to a specific in-broker step, so only a wildcard handler catches them; a
+    step-scoped handler does not.
     """
-    candidates = list(config.catch_error_handlers)
-    if not candidates:
-        return None
-    for handler_id in candidates:
-        if config.catch_error_handlers[handler_id].for_steps is None:
+    for handler_id, handler in config.catch_error_handlers.items():
+        if handler.for_steps is None:
             return handler_id
-    return candidates[0]
+    return None
 
 
 def _process_namespace_timeout_tick(
     tick: TickNamespaceTimeout, init: BrokerState, now_seconds: float
 ) -> tuple[BrokerState, list[WorkflowCommand]]:
-    """Expire a single child invocation on its own (phase-1 absolute) deadline.
+    """Check a child invocation's elapsed-alive budget on its deadline fire.
 
-    A no-op if the child already completed (popped) or was re-armed. Otherwise
-    clears the child broker's work and routes a WorkflowTimeoutError through the
-    child's own ``@catch_error`` path; an uncaught child timeout fails the whole
-    run (phase-1 semantics — never CommandHalt, which is root-only).
+    A no-op if the child already completed (popped). Otherwise the child's alive
+    time is accrued from the tick's stamp: if the budget is not yet truly spent
+    (downtime forgiven, or a superseded re-armed deadline) it re-arms for the
+    remaining budget; if spent it expires the child — its own wildcard
+    ``@catch_error`` first (with a fresh budget), else a boundary failure ascends
+    to the parent (an uncaught child timeout is never ``CommandHalt``, which is
+    root-only).
     """
     state = init.deepcopy()
     namespace = tick.namespace
     descent = _descend(state, namespace)
     if descent is None:
         return state, []  # already popped: burn-off
+    _accrue_descent(descent, _tick_stamp(tick))
     child_broker = descent.broker
-    if child_broker.started_at != tick.started_at:
-        return state, []  # stale activation
+    timeout = child_broker.config.timeout
+    if timeout is None:
+        return state, []  # no deadline configured (should not happen)
+    if child_broker.elapsed_alive + _ALIVE_EPS < timeout:
+        # Budget not truly spent: this fire was premature (downtime forgiven, or
+        # a stale deadline left by a fresh re-arm). Re-arm for the remainder.
+        remaining = timeout - child_broker.elapsed_alive
+        return state, [
+            CommandScheduleNamespaceTimeout(
+                namespace=namespace,
+                timeout=timeout,
+                at_time=now_seconds + remaining,
+            )
+        ]
+    return _expire_child_broker(state, descent, timeout, now_seconds)
 
+
+def _expire_child_broker(
+    state: BrokerState,
+    descent: _Descent,
+    timeout: float,
+    now_seconds: float,
+) -> tuple[BrokerState, list[WorkflowCommand]]:
+    """Expire a child whose alive-time budget is spent: local catch, else ascend."""
+    child_broker = descent.broker
+    namespace = descent.path
     input_event: Event | None = None
     recovery_counts: dict[str, int] = {}
     active_steps: list[str] = []
+    static_ns = slot_namespace(namespace)
     for step_id, worker in child_broker.workers.items():
         if worker.in_progress or worker.queue:
-            active_steps.append("/".join((*namespace, step_id.name)))
+            active_steps.append("/".join((*static_ns, step_id.name)))
         if input_event is None:
             if worker.in_progress:
                 input_event = worker.in_progress[0].event
@@ -1864,11 +2102,12 @@ def _process_namespace_timeout_tick(
                 input_event = worker.collected_waiters[0].event
 
     timeout_error = WorkflowTimeoutError(
-        f"Child workflow '{'/'.join(namespace)}' timed out after "
-        f"{tick.timeout} seconds."
+        f"Child workflow '{'/'.join(static_ns)}' timed out after {timeout} seconds."
     )
 
-    handler_step_id = _local_catch_error_handler(child_broker.config)
+    # The child's OWN wildcard @catch_error recovers it locally with a fresh
+    # budget (never ascends). This mirrors an in-broker step's local catch.
+    handler_step_id = _wildcard_catch_error_handler(child_broker.config)
     handler = (
         child_broker.config.catch_error_handlers.get(handler_step_id)
         if handler_step_id is not None
@@ -1878,16 +2117,13 @@ def _process_namespace_timeout_tick(
         recovery_key = str(handler_step_id)
         new_count = recovery_counts.get(recovery_key, 0) + 1
         if new_count <= handler.max_recoveries:
-            # Clear the child's in-flight work (grandchildren too) and route the
-            # timeout to its handler. The child broker persists so it can recover.
             _terminate_broker(child_broker)
-            child_broker.started_at = None
             step_failed_event = StepFailedEvent(
-                step_name="/".join(namespace),
+                step_name="/".join(static_ns),
                 input_event=input_event if input_event is not None else Event(),
                 exception=timeout_error,
                 attempts=1,
-                elapsed_seconds=tick.timeout,
+                elapsed_seconds=timeout,
                 failed_at=datetime.fromtimestamp(now_seconds, tz=timezone.utc),
             )
             return state, [
@@ -1898,22 +2134,22 @@ def _process_namespace_timeout_tick(
                     origin_namespace=namespace,
                     recovery_counts={**recovery_counts, recovery_key: new_count},
                 ),
+                # Fresh alive budget for the recovery attempt, armed from now.
+                *_arm_child_deadline(child_broker, namespace, now_seconds),
             ]
-        # Recovery budget exhausted: fall through and fail the run.
 
-    # Uncaught (or budget-exhausted) child timeout: fail the whole run.
-    state.is_running = False
-    return state, [
-        CommandCancelNamespace(namespace=namespace),
-        CommandPublishEvent(
-            event=WorkflowTimedOutEvent(
-                timeout=tick.timeout,
-                active_steps=active_steps,
-            ),
-            origin_namespace=(),
+    # Uncaught locally: ascend the timeout to the parent as a boundary failure.
+    failure = _BoundaryFailure(
+        exception=timeout_error,
+        input_event=input_event if input_event is not None else Event(),
+        attempts=1,
+        elapsed_seconds=timeout,
+        failed_at=now_seconds,
+        origin_step_name="/".join(static_ns),
+        timed_out_event=WorkflowTimedOutEvent(
+            timeout=timeout, active_steps=active_steps
         ),
-        CommandFailWorkflow(
-            step_id=StepId(namespace, namespace[-1] if namespace else ""),
-            exception=timeout_error,
-        ),
-    ]
+    )
+    return state, _ascend_boundary_failure(
+        descent.chain, namespace, failure, now_seconds
+    )

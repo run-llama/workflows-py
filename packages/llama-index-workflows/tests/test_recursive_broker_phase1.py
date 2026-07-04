@@ -28,7 +28,6 @@ from workflows.runtime.control_loop.reduce import (
 )
 from workflows.runtime.control_loop.streams import _count_accepting_steps
 from workflows.runtime.types.commands import (
-    CommandCompleteRun,
     CommandPublishEvent,
     CommandRunWorker,
 )
@@ -212,9 +211,7 @@ def test_mixed_descend_and_waiter_resolve_in_one_tick() -> None:
     new_state, commands = _dispatch_add_event(
         TickAddEvent(event=_MixedSignal(), origin_namespace=()), root, 0.0
     )
-    assert any(
-        isinstance(c, CommandRunWorker) and c.step_id == gate for c in commands
-    )
+    assert any(isinstance(c, CommandRunWorker) and c.step_id == gate for c in commands)
     assert set(new_state.children) == {"child#0"}
 
 
@@ -223,9 +220,7 @@ async def test_child_inside_parent_fan_out_completes() -> None:
     """Three children born inside a parent fan-out each complete; the parent
     stream balances (each child is one work item, consumed once at ascent) and
     the join releases."""
-    result = await WorkflowTestRunner(
-        _FanOverChildrenParent(child=_FanChild())
-    ).run()
+    result = await WorkflowTestRunner(_FanOverChildrenParent(child=_FanChild())).run()
     assert result.result == 3
 
 

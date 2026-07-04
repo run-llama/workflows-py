@@ -155,8 +155,12 @@ class BrokerState:
         collection_release_states: Per-binding release buffers.
         children: Live child invocations keyed by ``"slot#N"`` segment.
         child_seq: Per-slot mint counter (persisted for replay determinism).
-        started_at: Phase-1 absolute-deadline clock for a child broker that
-            declares a timeout (``None`` for the root and untimed children).
+        elapsed_alive: Known-alive seconds this broker has spent against its
+            timeout budget. Accrues on each addressed tick from the journaled
+            stamp; the session-start marker resets ``last_alive_stamp`` without
+            accruing so downtime never enters the budget.
+        last_alive_stamp: Accrual reference point (the last stamp seen), reset by
+            the session-start marker at each resume. ``None`` before any stamp.
     """
 
     is_running: bool
@@ -170,7 +174,8 @@ class BrokerState:
     )
     children: dict[str, ChildBroker] = field(default_factory=dict)
     child_seq: dict[str, int] = field(default_factory=dict)
-    started_at: float | None = None
+    elapsed_alive: float = 0.0
+    last_alive_stamp: float | None = None
 
     def __post_init__(self) -> None:
         self._normalize_worker_keys()
@@ -182,7 +187,8 @@ class BrokerState:
         for name, default in (
             ("children", {}),
             ("child_seq", {}),
-            ("started_at", None),
+            ("elapsed_alive", 0.0),
+            ("last_alive_stamp", None),
         ):
             if name not in state:
                 setattr(self, name, default)
@@ -209,7 +215,8 @@ class BrokerState:
             },
             children={key: child._deepcopy() for key, child in self.children.items()},
             child_seq=dict(self.child_seq),
-            started_at=self.started_at,
+            elapsed_alive=self.elapsed_alive,
+            last_alive_stamp=self.last_alive_stamp,
         )
 
     def live_child_namespaces(self) -> set[tuple[str, ...]]:
@@ -441,7 +448,6 @@ def _broker_to_serialized(
             boundary_scope_path=list(child.boundary_scope_path),
             boundary_work_item_id=child.boundary_work_item_id,
             boundary_recovery_counts=dict(child.boundary_recovery_counts),
-            started_at=child.state.started_at,
             broker=_broker_to_serialized(child.state, serializer),
         )
         for key, child in state.children.items()
@@ -475,6 +481,8 @@ def _broker_to_serialized(
         },
         child_brokers=child_brokers,
         child_seq=dict(state.child_seq),
+        elapsed_alive=state.elapsed_alive,
+        last_alive_stamp=state.last_alive_stamp,
     )
 
 
@@ -510,6 +518,8 @@ def _load_broker_from_serialized(
     state.stream_seq = serialized.stream_seq
     state.work_item_seq = serialized.work_item_seq
     state.child_seq = dict(serialized.child_seq)
+    state.elapsed_alive = serialized.elapsed_alive
+    state.last_alive_stamp = serialized.last_alive_stamp
     state.streams = {
         sid: CollectionStreamInstance(
             stream_id=stream.stream_id,
@@ -582,7 +592,6 @@ def _load_broker_from_serialized(
             continue
         child_state = BrokerState.from_config(child_config)
         _load_broker_from_serialized(child_state, child_entry.broker, serializer)
-        child_state.started_at = child_entry.started_at
         state.children[key] = ChildBroker(
             slot=child_entry.slot,
             state=child_state,

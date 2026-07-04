@@ -222,6 +222,14 @@ class SerializedContext(BaseModel):
     # Per-slot invocation mint counter, persisted so snapshot-resume and full
     # tick-replay mint identical child ids.
     child_seq: dict[str, int] = Field(default_factory=dict)
+    # Elapsed known-alive time (seconds) this broker has consumed against its
+    # timeout budget. Persisted so a resumed run keeps its spent budget instead
+    # of resetting; downtime between sessions never accrues (see the reducer's
+    # session-start marker handling). ``last_alive_stamp`` is the accrual
+    # reference point; it is reset by the session marker on resume, so its
+    # persisted value is informational.
+    elapsed_alive: float = Field(default=0.0)
+    last_alive_stamp: float | None = Field(default=None)
 
     @staticmethod
     def from_v0(v0: SerializedContextV0) -> "SerializedContext":
@@ -346,16 +354,16 @@ class SerializedContext(BaseModel):
 class SerializedChildBroker(BaseModel):
     """A nested child invocation inside a serialized broker.
 
-    ``broker`` is the same self-similar :class:`SerializedContext`. The boundary
-    fields record the child's identity in the parent's stream accounting;
-    ``started_at`` is the child's phase-1 deadline clock.
+    ``broker`` is the same self-similar :class:`SerializedContext`, which carries
+    the child's own ``elapsed_alive``/``last_alive_stamp`` timeout budget. The
+    boundary fields record the child's identity in the parent's stream
+    accounting.
     """
 
     slot: str
     boundary_scope_path: list[str] = Field(default_factory=list)
     boundary_work_item_id: str | None = None
     boundary_recovery_counts: dict[str, int] = Field(default_factory=dict)
-    started_at: float | None = None
     broker: SerializedContext
 
 

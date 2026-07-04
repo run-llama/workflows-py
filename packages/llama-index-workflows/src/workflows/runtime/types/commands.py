@@ -89,16 +89,18 @@ class CommandScheduleWakeup:
 
 @dataclass(frozen=True)
 class CommandScheduleNamespaceTimeout:
-    """Schedule a per-child-namespace timeout via TickNamespaceTimeout.
+    """Schedule a per-child-namespace deadline via TickNamespaceTimeout.
 
-    Emitted when the first event routes into a child namespace that declares a
-    ``timeout``. ``started_at`` is the routing time; the tick fires at
-    ``started_at + timeout`` and is pinned to this activation.
+    Emitted when a child broker is born (boundary descent) or re-armed after
+    catching its own timeout, and by the runner on resume. ``at_time`` is the
+    absolute adapter-clock time the child's remaining ``timeout - elapsed_alive``
+    budget would be spent; the tick fires then and the reducer confirms via the
+    accrued budget (re-arming if downtime made the fire premature).
     """
 
     namespace: tuple[str, ...]
     timeout: float
-    started_at: float
+    at_time: float
 
 
 @dataclass(frozen=True)
