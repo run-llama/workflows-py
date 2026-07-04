@@ -7,6 +7,7 @@ import asyncio
 import logging
 import sys
 import warnings
+from collections.abc import Iterable
 from inspect import Parameter, Signature
 from typing import (
     TYPE_CHECKING,
@@ -23,7 +24,7 @@ from typing_extensions import dataclass_transform
 if TYPE_CHECKING:  # pragma: no cover
     from .context import Context
     from .runtime.types.plugin import Runtime
-from ._event_matching import step_accepts_event
+from ._event_matching import is_subclass, step_accepts_event
 from .decorators import CatchErrorHandler, StepConfig, StepFunction, WorkflowGraphCheck
 from .errors import (
     WorkflowRuntimeError,
@@ -138,6 +139,26 @@ def _warn_ignored_child_config(child: Workflow, slot_name: str) -> None:
 
 def _has_custom_workflow_init(cls: type) -> bool:
     return bool(getattr(cls, "_custom_workflow_init", False))
+
+
+def _child_forms_boundary(
+    child_start: type,
+    child_stop: type,
+    step_configs: Iterable[StepConfig],
+) -> bool:
+    """Whether a child forms a boundary in the parent graph.
+
+    True when any parent step can route the child's StartEvent (it returns the
+    StartEvent or an accepted subclass) or consumes the child's StopEvent. The
+    stop-consumption signal is what catches children triggered via
+    ``ctx.send_event`` — those emissions never appear in return-type analysis.
+    """
+    for cfg in step_configs:
+        if any(is_subclass(rt, child_start) for rt in cfg.return_types):
+            return True
+        if child_stop in cfg.accepted_events:
+            return True
+    return False
 
 
 def _config_field(*, alias: str, default: Any = None) -> Any:
@@ -608,10 +629,9 @@ class Workflow(metaclass=WorkflowMeta):
         child_stop = _ensure_stop_event_class(child_step_configs, expected.__name__)
         if child_start is StartEvent or child_stop is StopEvent:
             return False
-        for cfg in self._step_configs().values():
-            if child_start in cfg.return_types or child_stop in cfg.accepted_events:
-                return True
-        return False
+        return _child_forms_boundary(
+            child_start, child_stop, self._step_configs().values()
+        )
 
     @property
     def workflow_name(self) -> str:
@@ -902,17 +922,23 @@ class Workflow(metaclass=WorkflowMeta):
         )
 
         step_configs = self._step_configs()
-        # A child is "triggered" when some parent step emits its StartEvent; only
-        # then does it form a boundary in the parent graph (StartEvent crosses
-        # out, StopEvent crosses back in). Children attached but never triggered
-        # are inert and excluded so they don't trip reachability.
-        parent_return_types: set[type] = set()
-        for cfg in step_configs.values():
-            parent_return_types.update(cfg.return_types)
+        # A child is "triggered" when the parent interacts with it across the
+        # boundary: either a parent step can route its StartEvent into the child
+        # (StartEvent crosses out) or a parent step consumes its StopEvent
+        # (StopEvent crosses back in). A parent may trigger a child by returning
+        # the StartEvent, returning an accepted subclass of it, or emitting it via
+        # ``ctx.send_event`` — the last is invisible to return-type analysis, so
+        # consuming the child's StopEvent is what marks the boundary there.
+        # Children attached but never triggered are inert and excluded so they
+        # don't trip reachability.
         child_boundaries = [
             (child._start_event_class, child._stop_event_class)
             for child in self._child_workflows.values()
-            if child._start_event_class in parent_return_types
+            if _child_forms_boundary(
+                child._start_event_class,
+                child._stop_event_class,
+                step_configs.values(),
+            )
         ]
         result = _validate_workflow(
             step_configs,

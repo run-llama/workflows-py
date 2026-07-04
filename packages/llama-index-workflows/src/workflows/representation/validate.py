@@ -130,7 +130,14 @@ def build_step_graph(
         step_names.add(boundary)
         event_types.add(child_start)
         event_types.add(child_stop)
-        outgoing.setdefault(child_start, []).append(boundary)
+        # Any produced event routing into the child (its type is, or subclasses,
+        # the child's StartEvent) crosses the boundary — a parent may emit an
+        # accepted subclass rather than the exact declared StartEvent.
+        routing_in = {child_start} | {
+            ev for ev in event_types if is_subclass(ev, child_start)
+        }
+        for ev in routing_in:
+            outgoing.setdefault(ev, []).append(boundary)
         outgoing.setdefault(boundary, []).append(child_stop)
 
     # Forward DFS from StartEvent + HumanResponseEvent subclasses +
@@ -565,10 +572,14 @@ def _validate_event_connectivity(
 
     # A produced event is unused when no step accepts it (under that step's
     # matching mode). Boundary-out events may legitimately leave the workflow.
+    # A produced event that routes into a triggered child (its type is, or
+    # subclasses, a child's StartEvent) is consumed across the boundary.
     boundary_out = (InputRequiredEvent, HumanResponseEvent, StopEvent)
     unused_events = set()
     for x in produced_events:
-        if is_subclass(x, boundary_out) or x in child_start_event_classes:
+        if is_subclass(x, boundary_out) or any(
+            is_subclass(x, cs) for cs in child_start_event_classes
+        ):
             continue
         consumed = any(
             step_accepts_type(
