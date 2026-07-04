@@ -22,6 +22,8 @@ from test_durable_runtime import (  # type: ignore[import]
     wait_handler_status,
 )
 from workflows import Context, Workflow
+from workflows.context.serializers import JsonSerializer
+from workflows.context.state_store_integration import state_store_handoff
 from workflows.decorators import step
 from workflows.events import (
     HumanResponseEvent,
@@ -266,6 +268,73 @@ async def test_grandchild_state_isolated_per_namespace_row(
     assert await mid_store.get("mid_key") == "mid-value"
     assert await mid_store.get("grand_key", None) is None
     assert await grand_store.get("grand_key") == "grand-value"
+
+
+class CarryChild(Workflow):
+    @step
+    async def read(self, ctx: Context, ev: ChildStart) -> ChildStop:
+        # First store access of the whole run happens here, inside the child.
+        return ChildStop(answer=await ctx.store.get("carried", "MISSING"))
+
+
+class CarryParent(Workflow):
+    child: CarryChild
+
+    @step
+    async def start(self, ctx: Context, ev: StartEvent) -> ChildStart:
+        # Deliberately does not touch ctx.store: on a durable-handle fork the
+        # root store must still fan out before the child reads.
+        return ChildStart()
+
+    @step
+    async def finish(self, ctx: Context, ev: ChildStop) -> StopEvent:
+        return StopEvent(result=ev.answer)
+
+
+@pytest.mark.asyncio
+async def test_fork_restores_child_state_when_first_access_is_in_child(
+    sqlite_store: SqliteWorkflowStore,
+) -> None:
+    """A fork seeded from a durable handle restores child state even when the
+    parent never touches the root store.
+
+    The durable handle seeds only the root; the backend's copy_from_handle
+    fans out to every namespace row. If the first ``ctx.store`` access of the
+    run happens inside a child (parent start touches nothing), the fan-out must
+    still have run — otherwise the child reads an empty row.
+    """
+    # Source run: only the child namespace holds state.
+    src_child = sqlite_store.create_state_store("run-src", namespace=("child#0",))
+    await src_child.set("carried", "restored-value")
+
+    server = WorkflowServer(workflow_store=sqlite_store, idle_timeout=0.01)
+    wf = CarryParent(child=CarryChild())
+    server.add_workflow("carry", wf)
+
+    async with server.contextmanager():
+        # Build the fork context from the source run's root durable handle,
+        # exactly as the service does when restarting a completed handler.
+        old_root = sqlite_store.create_state_store("run-src")
+        state_dict = await state_store_handoff(old_root, JsonSerializer())
+        context = Context.from_dict(
+            workflow=wf,
+            data={"version": 1, "state": state_dict},
+            serializer=JsonSerializer(),
+        )
+
+        handler_data = await server._service.start_workflow(
+            wf, "carry-fork-1", context=context
+        )
+        run_id = handler_data.run_id
+        assert run_id is not None
+
+        handler = await wait_handler_status(sqlite_store, "carry-fork-1", "completed")
+        assert handler.result is not None
+        assert handler.result.result == "restored-value"
+
+    # The forked run's own child row carries the restored value.
+    forked_child = sqlite_store.create_state_store(run_id, namespace=("child#0",))
+    assert await forked_child.get("carried") == "restored-value"
 
 
 def test_event_envelope_origin_namespace_round_trips() -> None:

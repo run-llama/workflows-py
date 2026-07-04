@@ -21,6 +21,7 @@ from workflows.context.serializers import BaseSerializer
 from workflows.context.state_store import (
     DictState,
     StateStore,
+    StateStoreFacade,
     namespaced_seed_payloads,
     namespaced_state_types,
 )
@@ -43,6 +44,7 @@ from workflows.runtime.types.plugin import (
     InternalRunAdapter,
     Runtime,
 )
+from workflows.runtime.types.ticks import WorkflowTick
 from workflows.workflow import Workflow
 
 from .._store.abstract_workflow_store import (
@@ -87,6 +89,7 @@ class _ServerInternalRunAdapter(BaseInternalRunAdapterDecorator):
         # A durable handle can't be split per-namespace; it seeds the root only,
         # and the backend's copy_from_handle fans out to every namespace row.
         self._root_handle: tuple[dict[str, Any], BaseSerializer] | None = None
+        self._root_handle_materialized = False
 
     def _resolve_seeds(self) -> None:
         if self._seeds_resolved:
@@ -127,6 +130,30 @@ class _ServerInternalRunAdapter(BaseInternalRunAdapterDecorator):
         )
         self._state_stores[namespace] = store
         return store
+
+    @override
+    async def on_tick(self, tick: WorkflowTick) -> None:
+        # Fan a durable state handle out to every namespace row before any step
+        # runs. Child stores are created lazily on first ``ctx.store`` access;
+        # if that first access happens inside a child (e.g. a fork whose parent
+        # start step never touches the root store), the root store might never
+        # materialize and the backend's copy_from_handle never fires, leaving the
+        # child reading empty state. Eagerly materializing the root at the first
+        # tick — before ``process_command`` starts any step task — closes the
+        # gap. Mirrors the DBOS runtime's eager seed in ``run_workflow``.
+        await self._ensure_root_handle_materialized()
+        await super().on_tick(tick)
+
+    async def _ensure_root_handle_materialized(self) -> None:
+        if self._root_handle_materialized:
+            return
+        self._root_handle_materialized = True
+        self._resolve_seeds()
+        if self._root_handle is None:
+            return
+        store = self.get_state_store(())
+        if isinstance(store, StateStoreFacade):
+            await store.ensure_seeded()
 
     @override
     async def write_to_event_stream(self, event: Event) -> None:
