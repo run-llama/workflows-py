@@ -32,12 +32,17 @@ from workflows.events import (
     StepFailedEvent,
     StopEvent,
 )
+import workflows.runtime.control_loop.reduce as reduce_mod
 from workflows.runtime.control_loop.reduce import (
     _reduce_tick,
     rebuild_state_from_ticks,
     rewind_in_progress,
 )
-from workflows.runtime.types.commands import CommandFailWorkflow, CommandHalt
+from workflows.runtime.types.commands import (
+    CommandCancelNamespace,
+    CommandFailWorkflow,
+    CommandHalt,
+)
 from workflows.runtime.types.internal_state import BrokerState
 from workflows.runtime.types.ticks import (
     TickAddEvent,
@@ -313,6 +318,51 @@ async def test_grandparent_catches_when_parent_lacks_handler() -> None:
         _TopCatchesGrand(mid=_MidNoHandler(grand=_BoomGrand()))
     ).run()
     assert result.result == "top-caught:mid"
+
+
+def _spy_boundary_cancels(
+    monkeypatch: pytest.MonkeyPatch,
+) -> list[CommandCancelNamespace]:
+    """Record every CommandCancelNamespace produced by boundary-failure ascent."""
+    cancels: list[CommandCancelNamespace] = []
+    original = reduce_mod._ascend_boundary_failure
+
+    def spy(*args: object, **kwargs: object) -> list[object]:
+        commands = original(*args, **kwargs)  # type: ignore[arg-type]
+        cancels.extend(
+            c for c in commands if isinstance(c, CommandCancelNamespace)
+        )
+        return commands
+
+    monkeypatch.setattr(reduce_mod, "_ascend_boundary_failure", spy)
+    return cancels
+
+
+@pytest.mark.asyncio
+async def test_grandchild_failure_caught_emits_single_cancel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A grandchild failure ascending to a catching top-level parent emits exactly
+    one namespace cancel — the top-level child's subtree — not one per level."""
+    cancels = _spy_boundary_cancels(monkeypatch)
+    result = await WorkflowTestRunner(
+        _TopCatchesGrand(mid=_MidNoHandler(grand=_BoomGrand()))
+    ).run()
+    assert result.result == "top-caught:mid"
+    assert [c.namespace for c in cancels] == [("mid#0",)]
+
+
+@pytest.mark.asyncio
+async def test_root_uncaught_grandchild_failure_emits_single_cancel(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A child failure ascending uncaught to the root emits exactly one namespace
+    cancel for the failing child's subtree."""
+    cancels = _spy_boundary_cancels(monkeypatch)
+    handler = _ParentNoHandler(child=_BoomChild()).run()
+    with pytest.raises(ValueError, match="boom-in-child"):
+        await handler
+    assert [c.namespace for c in cancels] == [("child#0",)]
 
 
 # --- Root-uncaught boundary failure fails the whole run -----------------------

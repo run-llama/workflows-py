@@ -1254,11 +1254,16 @@ def _ascend_boundary_failure(
     """
     commands: list[WorkflowCommand] = []
     origin_path = failing_path
+    # The subtree to tear down grows as the failure ascends; a single
+    # path-prefixed cancel at the level where it is caught (or at root) covers
+    # every popped descendant, so emit exactly one cancel rather than one per
+    # level (a grandchild cancel is redundant with its parent's).
+    topmost_cancel = failing_path
     for i in range(len(chain) - 1, -1, -1):
         parent_broker, slot_key, child_record = chain[i]
         parent_path = failing_path[:i]  # the parent broker's own invocation path
         parent_broker.children.pop(slot_key, None)
-        commands.append(CommandCancelNamespace(namespace=failing_path))
+        topmost_cancel = failing_path
 
         handler_step_id = _wildcard_catch_error_handler(parent_broker.config)
         handler = (
@@ -1271,6 +1276,8 @@ def _ascend_boundary_failure(
             recovery_key = str(handler_step_id)
             new_count = recovery_counts.get(recovery_key, 0) + 1
             if new_count <= handler.max_recoveries:
+                # Caught here: tear the failing child's subtree down exactly once.
+                commands.append(CommandCancelNamespace(namespace=topmost_cancel))
                 step_failed_event = StepFailedEvent(
                     step_name="/".join(slot_namespace(failing_path)),
                     input_event=failure.input_event,
@@ -1294,7 +1301,9 @@ def _ascend_boundary_failure(
         # Uncaught at this level: the parent becomes the failing boundary upward.
         failing_path = parent_path
 
-    # Reached the root uncaught: fail the whole run.
+    # Reached the root uncaught: tear the topmost failing child's subtree down
+    # exactly once, then fail the whole run.
+    commands.append(CommandCancelNamespace(namespace=topmost_cancel))
     root = chain[0][0]
     root.is_running = False
     if failure.timed_out_event is not None:
