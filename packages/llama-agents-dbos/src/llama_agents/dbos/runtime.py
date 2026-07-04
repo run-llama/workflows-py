@@ -367,6 +367,12 @@ class DBOSRuntime(Runtime):
         self._tasks.append(task)
         task.add_done_callback(self._tasks.remove)
 
+    # Child workflows run inside the parent's DBOS control loop and their steps
+    # are DBOS-registered under the parent (by static slot path), so a child
+    # must not also be tracked as a separate, top-level DBOS workflow. Consumed
+    # by Workflow._attach_child via the runtime-decorator chain.
+    _register_child_workflows = False
+
     def track_workflow(self, workflow: Workflow) -> None:
         """Track a workflow for registration at launch time.
 
@@ -382,6 +388,20 @@ class DBOSRuntime(Runtime):
             if wf_id not in self._tracked_workflow_ids:
                 self._tracked_workflows.append(workflow)
                 self._tracked_workflow_ids.add(wf_id)
+
+    def untrack_workflow(self, workflow: Workflow) -> None:
+        """Drop a workflow from tracking and any prior registration.
+
+        Used when a child is attached to a parent: the child stops being an
+        independently routable top-level workflow while its steps still run
+        under the parent's registration.
+        """
+        wf_id = id(workflow)
+        self._tracked_workflow_ids.discard(wf_id)
+        self._tracked_workflows = [
+            wf for wf in self._tracked_workflows if id(wf) != wf_id
+        ]
+        self._registered.pop(wf_id, None)
 
     def get_registered(self, workflow: Workflow) -> RegisteredWorkflow | None:
         """Get the registered workflow if available."""
