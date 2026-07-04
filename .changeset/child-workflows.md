@@ -3,6 +3,7 @@
 "llama-agents-agentcore": patch
 "llama-agents-server": patch
 "llama-agents-dbos": patch
+"llama-agents-client": patch
 ---
 
 Add in-process child workflow composition with typed child declarations, namespaced execution, per-child state, catch-error recovery, timeouts, and opt-in child event streaming.
@@ -15,4 +16,4 @@ An uncaught failure or timeout inside a child no longer fails the whole run: it 
 
 Annotated Workflow attributes are only auto-attached when they use the typed child workflow contract, so existing manual composition with bare StartEvent/StopEvent workflows remains compatible.
 
-Update server, DBOS, and AgentCore runtime adapter compatibility for namespaced step IDs and state-store access.
+Child workflows run on the durable server, DBOS, and AgentCore runtimes, not just in-process. Each invocation gets its own persistent state record keyed by `(run_id, namespace)`, so per-child state survives idle release and restart and resumes with a suspended child waiter intact. On DBOS a child runs inside the parent's durable workflow rather than as a separate one. Child-origin events carry their invocation namespace over the SSE stream and are hidden unless the reader opts in with `stream_events(include_children=True)` (server query param `include_children=true`).

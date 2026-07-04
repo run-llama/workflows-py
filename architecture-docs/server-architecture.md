@@ -71,6 +71,8 @@ State persists as one record per `(run_id, namespace)`, not one bundled record p
 
 **No automatic state GC.** State records are never deleted today — there is no `DELETE FROM workflow_state`, no cascade from handler/event deletion, and no TTL. Per-namespace records multiply a childful run's footprint by the number of namespaces but add no new *category* of leak. A retention policy is future work; until then, state accumulates per run.
 
+**Adapter routing and seeding.** `_ServerInternalRunAdapter.get_state_store(namespace)` routes an invocation path to its own `(run_id, namespace)` facade, caching one per namespace and resolving the typed state model by static slot path (`slot_namespace` projects `("child#0",)` onto the declared `("child",)`). On resume, a portable snapshot is split into per-namespace seeds (`namespaced_seed_payloads`); a durable reconnect handle can't be split, so it seeds only the root and the backend's `copy_from_handle` fans out every namespace row for the `run_id`. The DBOS runtime uses the same contract (see [`packages/llama-agents-dbos/ARCHITECTURE.md`](../packages/llama-agents-dbos/ARCHITECTURE.md)); agentcore inherits the server adapter. Any runtime with namespaced state support now runs child workflows — the old `_supports_child_workflows` gate was removed once the durable adapters routed the namespace.
+
 ## Resumable Event Streams
 
 Events flow from step functions to clients through the store, which acts as both a write-ahead log and a subscription source:
@@ -93,6 +95,8 @@ The store assigns each event a monotonic **sequence number**. Clients track thei
 This means the API layer never needs to hold event history in memory — it just opens a `subscribe_events(after_sequence=cursor)` iterator from the store each time a client connects.
 
 A special `"now"` cursor skips all historical events and streams only new ones.
+
+**Child-origin events.** An event published from a child invocation carries its origin namespace on the persisted envelope (`EventEnvelopeWithMetadata.origin_namespace`, omitted from the wire when empty so root events keep their pre-child shape). The `/events/{handler_id}` endpoint hides child-origin events by default and surfaces them only when the request passes `include_children=true` (the client exposes this as `stream_events(include_children=True)`). A caller answering a child's `InputRequiredEvent` targets its concrete invocation path — `send_event(resp, step="child#0/answer")`.
 
 ## Server Lifecycle
 
