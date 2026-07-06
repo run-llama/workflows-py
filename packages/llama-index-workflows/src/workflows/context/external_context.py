@@ -18,7 +18,6 @@ from workflows.context.state_store import (
 from workflows.errors import WorkflowRuntimeError
 from workflows.events import StopEvent
 from workflows.runtime.types.internal_state import BrokerState
-from workflows.runtime.types.invocation import slot_namespace
 from workflows.runtime.types.plugin import (
     ExternalRunAdapter,
     SnapshottableAdapter,
@@ -150,11 +149,13 @@ class ExternalContext(Generic[MODEL_T, RunResultT]):
         origin_namespace: tuple[str, ...] = ()
         if step is not None:
             parsed = StepId.from_str(step)
-            static_namespace = slot_namespace(parsed.namespace)
-            static_step = "/".join((*static_namespace, parsed.name))
             # Validate against the static (namespaced) step set; the target is
             # delivered broker-local (bare step id) into the addressed invocation.
-            self._workflow._resolve_target_step(static_step, message)
+            self._workflow._resolve_target_step(
+                step,
+                message,
+                require_concrete_child_path=True,
+            )
             origin_namespace = parsed.namespace
             step_id = StepId((), parsed.name)
 

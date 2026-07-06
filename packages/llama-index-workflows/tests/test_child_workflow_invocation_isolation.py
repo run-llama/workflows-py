@@ -229,14 +229,19 @@ async def test_static_child_target_without_invocation_fails_loudly() -> None:
     handler = _HitlParent(child=_HitlChild()).run()
     async for ev in handler.stream_events(include_children=True):
         if isinstance(ev, InputRequiredEvent):
+            with pytest.raises(WorkflowRuntimeError, match="concrete child invocation"):
+                handler.ctx.send_event(
+                    HumanResponseEvent(response="bad"),  # type: ignore[reportCallIssue]
+                    step="child/answer",
+                )
+            child_origin = get_event_origin_namespace(ev)
             handler.ctx.send_event(
                 HumanResponseEvent(response="ok"),  # type: ignore[reportCallIssue]
-                step="child/answer",
+                step=f"{child_origin[0]}/answer",
             )
             break
 
-    with pytest.raises(WorkflowRuntimeError, match="concrete child invocation"):
-        await handler
+    assert await handler == "ok"
 
 
 @pytest.mark.asyncio

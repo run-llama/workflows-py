@@ -56,6 +56,103 @@ def test_child_slots_resolved_from_annotations() -> None:
     assert slots == {"child": Child}
 
 
+class ForwardRefParent(Workflow):
+    child: ForwardRefChild
+
+    @step
+    async def start(self, ev: StartEvent) -> ChildStart:
+        return ChildStart(payload="forward")
+
+    @step
+    async def finish(self, ev: ChildStop) -> StopEvent:
+        return StopEvent(result=ev.out)
+
+
+class ForwardRefChild(Workflow):
+    @step
+    async def run_child(self, ev: ChildStart) -> ChildStop:
+        return ChildStop(out=ev.payload.upper())
+
+
+@pytest.mark.asyncio
+async def test_forward_ref_child_defined_later_constructs_and_runs() -> None:
+    parent = ForwardRefParent(child=ForwardRefChild())
+    assert ForwardRefParent._get_child_workflow_slots() == {"child": ForwardRefChild}
+    assert await parent.run() == "FORWARD"
+
+
+# Simulates a TYPE_CHECKING-only annotation: resolvable for the type checker,
+# never resolvable at runtime. Defined via exec so basedpyright doesn't flag
+# the deliberately-undefined name.
+exec(
+    """
+from __future__ import annotations
+
+class UnresolvableAnnotation(Workflow):
+    helper: NeverImportedAtRuntime
+
+    @step
+    async def go(self, ev: StartEvent) -> StopEvent:
+        return StopEvent(result="ok")
+
+
+class UnresolvableWithCustomInit(Workflow):
+    helper: NeverImportedAtRuntime
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.helper = object()
+
+    @step
+    async def go(self, ev: StartEvent) -> StopEvent:
+        return StopEvent(result="ok")
+""",
+    globals(),
+)
+
+
+@pytest.mark.asyncio
+async def test_unresolvable_non_slot_annotation_is_ignored() -> None:
+    # An annotation that never resolves at runtime (e.g. a TYPE_CHECKING-only
+    # import) is not a child slot and must not break construction or runs.
+    unresolvable = globals()["UnresolvableAnnotation"]
+    assert unresolvable._get_child_workflow_slots() == {}
+    assert await unresolvable().run() == "ok"
+
+
+def test_kwarg_for_unresolvable_annotation_raises_helpful_error() -> None:
+    unresolvable = globals()["UnresolvableAnnotation"]
+    with pytest.raises(WorkflowValidationError, match="NeverImportedAtRuntime"):
+        unresolvable(helper=object())
+
+
+@pytest.mark.asyncio
+async def test_custom_init_with_unresolvable_annotation_still_works() -> None:
+    custom_init = globals()["UnresolvableWithCustomInit"]
+    instance = custom_init()
+    assert custom_init._get_child_workflow_slots() == {}
+    assert await instance.run() == "ok"
+
+
+def test_quoted_self_ref_under_future_annotations_raises_cycle_error() -> None:
+    exec(
+        """
+from __future__ import annotations
+
+class QuotedSelfRef(Workflow):
+    child: "QuotedSelfRef"
+
+    @step
+    async def start(self, ev: StartEvent) -> StopEvent:
+        return StopEvent(result="ok")
+""",
+        globals(),
+    )
+    quoted_self_ref = globals()["QuotedSelfRef"]
+    with pytest.raises(WorkflowValidationError, match="Child workflow type cycle"):
+        quoted_self_ref()
+
+
 def test_child_adopts_parent_runtime_and_is_tracked() -> None:
     runtime = BasicRuntime()
     with runtime.registering():

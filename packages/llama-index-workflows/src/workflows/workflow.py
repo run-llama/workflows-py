@@ -33,6 +33,7 @@ from .errors import (
 from .events import Event, StartEvent, StopEvent
 from .handler import WorkflowHandler
 from .resource import ResourceManager
+from .runtime.types.invocation import INVOCATION_SEPARATOR, slot_namespace
 from .runtime.types.step_id import StepId
 from .types import RunResultT
 from .utils import get_steps_from_class, get_steps_from_instance
@@ -60,6 +61,23 @@ class _UnsetTimeout:
 _UNSET_TIMEOUT = _UnsetTimeout()
 
 
+def _resolve_string_annotation(
+    annotation: str, globalns: dict[str, Any], localns: dict[str, Any]
+) -> tuple[bool, Any]:
+    """Resolve normal and nested string annotations."""
+    resolved: Any = annotation
+    seen: set[str] = set()
+    while isinstance(resolved, str):
+        if resolved in seen:
+            return False, None
+        seen.add(resolved)
+        try:
+            resolved = eval(resolved, globalns, localns)  # noqa: S307
+        except Exception:
+            return False, None
+    return True, resolved
+
+
 def _resolve_child_slots(cls: type) -> dict[str, type]:
     """Resolve workflow-typed annotations from ``cls`` and its bases."""
     workflow_cls = globals().get("Workflow")
@@ -67,6 +85,8 @@ def _resolve_child_slots(cls: type) -> dict[str, type]:
         return {}
     slots: dict[str, type] = {}
     for klass in reversed(cls.__mro__):
+        if klass is workflow_cls:
+            continue
         annotations = klass.__dict__.get("__annotations__") or getattr(
             klass, "__annotations__", None
         )
@@ -78,18 +98,60 @@ def _resolve_child_slots(cls: type) -> dict[str, type]:
         for field_name, annotation in annotations.items():
             resolved: Any = annotation
             if isinstance(annotation, str):
-                try:
-                    resolved = eval(annotation, globalns, localns)  # noqa: S307
-                except Exception:
+                is_resolved, resolved = _resolve_string_annotation(
+                    annotation, globalns, localns
+                )
+                if not is_resolved:
                     continue
             if isinstance(resolved, type) and issubclass(resolved, workflow_cls):
                 slots[field_name] = resolved
     return slots
 
 
+def _unresolved_child_slot_annotations(cls: type) -> list[tuple[str, str]]:
+    """String annotations that still cannot be resolved."""
+    workflow_cls = globals().get("Workflow")
+    unresolved: list[tuple[str, str]] = []
+    for klass in reversed(cls.__mro__):
+        if klass is workflow_cls:
+            continue
+        annotations = klass.__dict__.get("__annotations__") or getattr(
+            klass, "__annotations__", None
+        )
+        if not annotations:
+            continue
+        module = sys.modules.get(klass.__module__)
+        globalns = getattr(module, "__dict__", {})
+        localns = dict(vars(klass))
+        for field_name, annotation in annotations.items():
+            if not isinstance(annotation, str):
+                continue
+            is_resolved, _ = _resolve_string_annotation(annotation, globalns, localns)
+            if not is_resolved:
+                unresolved.append((field_name, annotation))
+    return unresolved
+
+
+def _has_unresolved_child_slot_annotations(cls: type) -> bool:
+    """Whether child-slot synthesis may need to wait for later globals."""
+    return bool(_unresolved_child_slot_annotations(cls))
+
+
 def _synthesized_workflow_init(self: Workflow, *args: Any, **kwargs: Any) -> None:
     """Constructor synthesized for classes that only declare child slots."""
     slots = type(self)._get_child_workflow_slots()
+    if slots and "__signature__" not in type(self).__dict__:
+        setattr(type(self), "__signature__", _child_slot_signature(type(self)))
+    unresolved = dict(_unresolved_child_slot_annotations(type(self)))
+    for field_name in unresolved.keys() & kwargs.keys():
+        # The caller is filling an annotation we could not resolve at runtime
+        # (likely a typo or a TYPE_CHECKING-only type) — fail with the cause
+        # rather than an opaque unexpected-keyword TypeError.
+        raise WorkflowValidationError(
+            f"Could not resolve child workflow annotation "
+            f"'{field_name}: {unresolved[field_name]}' on "
+            f"'{type(self).__name__}'; the type must be importable at runtime."
+        )
     children: dict[str, Any] = {}
     for slot_name in slots:
         if slot_name in kwargs:
@@ -204,7 +266,9 @@ class WorkflowMeta(type):
         if any(getattr(base, "_custom_workflow_init", False) for base in bases):
             cls._custom_workflow_init = True
             return
-        if not _resolve_child_slots(cls):
+        slots = _resolve_child_slots(cls)
+        has_unresolved_slots = _has_unresolved_child_slot_annotations(cls)
+        if not slots and not has_unresolved_slots:
             return
         inherited_init = cls.__init__
         if (
@@ -212,7 +276,8 @@ class WorkflowMeta(type):
             or inherited_init is _synthesized_workflow_init
         ):
             setattr(cls, "__init__", _synthesized_workflow_init)
-            cls.__signature__ = _child_slot_signature(cls)
+            if not has_unresolved_slots:
+                cls.__signature__ = _child_slot_signature(cls)
 
 
 def _child_slot_signature(cls: type) -> Signature:
@@ -473,7 +538,12 @@ class Workflow(metaclass=WorkflowMeta):
         self._resolve_target_step(step, message)
 
     def _resolve_target_step(
-        self, step: str, message: Event, base_namespace: tuple[str, ...] = ()
+        self,
+        step: str,
+        message: Event,
+        base_namespace: tuple[str, ...] = (),
+        *,
+        require_concrete_child_path: bool = False,
     ) -> StepId:
         """Resolve a ``send_event(step=...)`` target to a validated ``StepId``.
 
@@ -486,13 +556,26 @@ class Workflow(metaclass=WorkflowMeta):
         naming the valid steps when it rejects.
         """
         parsed = StepId.from_str(step)
-        target = StepId(base_namespace + parsed.namespace, parsed.name)
+        target = StepId(
+            base_namespace + slot_namespace(parsed.namespace),
+            parsed.name,
+        )
         namespaced = self._get_namespaced_steps()
         step_func = namespaced.get(target)
         if step_func is None:
             valid = ", ".join(sorted(str(s) for s in namespaced))
             raise WorkflowRuntimeError(
                 f"Step {step} does not exist. Valid steps: {valid}"
+            )
+        if require_concrete_child_path and any(
+            INVOCATION_SEPARATOR not in segment for segment in parsed.namespace
+        ):
+            path = "/".join(parsed.namespace)
+            raise WorkflowRuntimeError(
+                f"Send addressed to static child path {path!r} is "
+                "ambiguous: it has no concrete child invocation. Use the "
+                "concrete child invocation namespace from the event stream, "
+                "e.g. 'child#0/step'."
             )
         step_config = step_func._step_config
         if not step_accepts_event(
@@ -540,7 +623,11 @@ class Workflow(metaclass=WorkflowMeta):
         cached = cls.__dict__.get("_child_workflow_slots_cache")
         if cached is None:
             cached = _resolve_child_slots(cls)
-            cls._child_workflow_slots_cache = cached
+            # Annotations that still don't resolve (e.g. TYPE_CHECKING-only
+            # imports) are not child slots; skip them, but don't cache yet in
+            # case a later definition makes them resolvable.
+            if not _unresolved_child_slot_annotations(cls):
+                cls._child_workflow_slots_cache = cached
         return cached
 
     @property
