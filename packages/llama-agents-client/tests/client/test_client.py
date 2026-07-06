@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
@@ -21,6 +21,7 @@ from llama_agents.client.protocol.serializable_events import (
 )
 from llama_agents.server import MemoryWorkflowStore
 from llama_agents.server.server import WorkflowServer
+from workflows import Context
 
 
 @pytest.fixture()
@@ -416,3 +417,149 @@ async def test_get_workflow_events_with_now() -> None:
 
     assert stream.last_sequence == 5
     assert fake.captured_params[0]["after_sequence"] == "now"
+
+
+def test_client_constructor_validation() -> None:
+    # Test neither httpx_client nor base_url provided
+    with pytest.raises(
+        ValueError, match="Either httpx_client or base_url must be provided"
+    ):
+        WorkflowClient()  # type: ignore[call-overload]
+    # Test both provided
+    with pytest.raises(
+        ValueError, match="Only one of httpx_client or base_url must be provided"
+    ):
+        WorkflowClient(httpx_client=httpx.AsyncClient(), base_url="http://test")  # type: ignore[call-overload]
+
+
+@pytest.mark.asyncio
+async def test_client_5xx_error_handling() -> None:
+    async def mock_handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, content="Internal Server Error")
+
+    transport = httpx.MockTransport(mock_handler)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        wf_client = WorkflowClient(httpx_client=client)
+        with pytest.raises(httpx.HTTPStatusError) as exc_info:
+            await wf_client.is_healthy()
+        assert "500 Internal Server Error" in str(exc_info.value)
+        assert "Response: Internal Server Error" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_client_dict_event_serialization(client: WorkflowClient) -> None:
+    res = await client.run_workflow(
+        "greeting",
+        start_event={"greeting": "hello", "name": "John"},
+    )
+    assert res.status == "completed"
+
+    res_nowait = await client.run_workflow_nowait(
+        "greeting",
+        start_event={
+            "type": "InputEvent",
+            "value": {"greeting": "hello", "name": "John"},
+        },
+    )
+    assert res_nowait.handler_id is not None
+
+    handler = await client.run_workflow_nowait(
+        "greeting",
+        start_event={
+            "type": "InputEvent",
+            "value": {"greeting": "hello", "name": "John"},
+        },
+    )
+    send_res = await client.send_event(
+        handler.handler_id,
+        event={
+            "type": "GreetEvent",
+            "value": {"greeting": "Bonjour John", "exclamation_marks": 5},
+        },
+    )
+    assert send_res.status == "sent"
+
+    with pytest.raises(ValueError, match="Impossible to serialize the start event"):
+        await client.run_workflow("greeting", start_event=object())  # type: ignore[argument-type]
+
+    with pytest.raises(ValueError, match="Impossible to serialize the start event"):
+        await client.run_workflow_nowait("greeting", start_event=object())  # type: ignore[argument-type]
+
+    with pytest.raises(ValueError, match="Error while serializing the provided event"):
+        await client.send_event(handler.handler_id, event=object())  # type: ignore[argument-type]
+
+    bad_ctx = MagicMock(spec=Context)
+    bad_ctx.to_dict.side_effect = RuntimeError("Serialize failed")
+
+    with pytest.raises(ValueError, match="Impossible to serialize the context"):
+        await client.run_workflow("greeting", context=bad_ctx)
+
+    with pytest.raises(ValueError, match="Impossible to serialize the context"):
+        await client.run_workflow_nowait("greeting", context=bad_ctx)
+
+
+@pytest.mark.asyncio
+async def test_event_stream_lifecycle_errors() -> None:
+    import asyncio
+
+    from llama_agents.client.client import (
+        EventStream,
+        _QueuedDone,
+        _QueuedError,
+        _QueuedEvent,
+    )
+
+    queue: asyncio.Queue = asyncio.Queue()
+    stream = EventStream(queue, None, -1)
+
+    e1 = _envelope("ok")
+    await queue.put(_QueuedEvent(sequence=1, event=e1))
+    await queue.put(_QueuedDone())
+
+    events = []
+    async for event in stream:
+        events.append(event)
+    assert len(events) == 1
+    assert events[0] == e1
+
+    with pytest.raises(RuntimeError, match="EventStream can only be iterated once"):
+        async for _ in stream:
+            pass
+
+    stream2 = EventStream(queue, None, -1)
+    await queue.put(_QueuedError(ValueError("Stream error")))
+    with pytest.raises(ValueError, match="Stream error"):
+        async for _ in stream2:
+            pass
+
+    # Coverage for self._task is None in aclose
+    await stream2.aclose()
+
+
+@pytest.mark.asyncio
+async def test_get_workflow_events_404_response() -> None:
+    async def mock_handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404)
+
+    transport = httpx.MockTransport(mock_handler)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        wf_client = WorkflowClient(httpx_client=client)
+        stream = wf_client.get_workflow_events(handler_id="h")
+        with pytest.raises(ValueError, match="Handler not found"):
+            async for _ in stream:
+                pass
+
+
+@pytest.mark.asyncio
+async def test_get_workflow_events_204_response() -> None:
+    async def mock_handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(204)
+
+    transport = httpx.MockTransport(mock_handler)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+        wf_client = WorkflowClient(httpx_client=client)
+        stream = wf_client.get_workflow_events(handler_id="h")
+        events = []
+        async for event in stream:
+            events.append(event)
+        assert len(events) == 0

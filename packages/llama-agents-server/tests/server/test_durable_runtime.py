@@ -1229,3 +1229,221 @@ async def test_counter_state_persists_across_idle_reload(
         handler = await wait_handler_status(store, handler_id, "completed")
         assert handler.result is not None
         assert handler.result.result == "count=2"
+
+
+def test_handler_status_from_exit_command_branches() -> None:
+    from llama_agents.server._runtime.persistence_runtime import (
+        handler_status_from_exit_command,
+    )
+    from workflows.errors import WorkflowCancelledByUser
+    from workflows.events import IdleReleasedEvent, StopEvent
+    from workflows.runtime.types.commands import (
+        CommandCompleteRun,
+        CommandFailWorkflow,
+        CommandHalt,
+    )
+
+    # Test CommandCompleteRun with IdleReleasedEvent
+    assert (
+        handler_status_from_exit_command(CommandCompleteRun(result=IdleReleasedEvent()))
+        is None
+    )
+
+    # Test CommandCompleteRun with other event
+    cmd_ok = CommandCompleteRun(result=StopEvent(result="done"))
+    assert handler_status_from_exit_command(cmd_ok) == (
+        "completed",
+        StopEvent(result="done"),
+        None,
+    )
+
+    # Test CommandFailWorkflow
+    from workflows.runtime.types.step_id import StepId
+
+    cmd_fail = CommandFailWorkflow(
+        step_id=StepId.root("step1"), exception=ValueError("test failure")
+    )
+    assert handler_status_from_exit_command(cmd_fail) == (
+        "failed",
+        None,
+        "test failure",
+    )
+
+    # Test CommandHalt with WorkflowCancelledByUser
+    cmd_halt_cancel = CommandHalt(exception=WorkflowCancelledByUser("user cancelled"))
+    assert handler_status_from_exit_command(cmd_halt_cancel) == (
+        "cancelled",
+        None,
+        None,
+    )
+
+    # Test CommandHalt with other exception
+    cmd_halt_fail = CommandHalt(exception=ValueError("halt failure"))
+    assert handler_status_from_exit_command(cmd_halt_fail) == (
+        "failed",
+        None,
+        "halt failure",
+    )
+
+
+def test_persistence_decorator_track_untrack() -> None:
+    from unittest.mock import MagicMock
+
+    from llama_agents.server._runtime.persistence_runtime import (
+        TickPersistenceDecorator,
+    )
+    from workflows import Workflow
+    from workflows.runtime.types.plugin import Runtime
+
+    mock_runtime = MagicMock(spec=Runtime)
+    mock_store = MagicMock()
+    decorator = TickPersistenceDecorator(mock_runtime, mock_store)
+
+    mock_workflow = MagicMock(spec=Workflow)
+    mock_workflow.workflow_name = "test_wf"
+
+    # Track
+    decorator.track_workflow(mock_workflow)
+    assert decorator.get_tracked_workflow("test_wf") is mock_workflow
+    mock_runtime.track_workflow.assert_called_once_with(mock_workflow)
+
+    # Untrack
+    decorator.untrack_workflow(mock_workflow)
+    assert decorator.get_tracked_workflow("test_wf") is None
+    mock_runtime.untrack_workflow.assert_called_once_with(mock_workflow)
+
+
+@pytest.mark.asyncio
+async def test_persistence_adapter_on_tick_flaky_store() -> None:
+    from unittest.mock import AsyncMock, MagicMock
+
+    from llama_agents.server._runtime.persistence_runtime import (
+        _PersistenceInternalRunAdapter,
+    )
+    from workflows.runtime.types.plugin import InternalRunAdapter
+    from workflows.runtime.types.ticks import TickCancelRun
+
+    mock_inner = MagicMock(spec=InternalRunAdapter)
+    mock_inner.run_id = "run-1"
+    mock_inner.on_tick = AsyncMock()
+
+    mock_store = MagicMock()
+    mock_store.append_tick = AsyncMock(side_effect=RuntimeError("Store failure"))
+
+    adapter = _PersistenceInternalRunAdapter(mock_inner, mock_store)
+    tick = TickCancelRun()
+
+    # Should not raise exception because it logs and suppresses it
+    await adapter.on_tick(tick)
+    mock_inner.on_tick.assert_called_once_with(tick)
+    mock_store.append_tick.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_persistence_adapter_after_tick_unrelated_tick_and_flaky_store() -> None:
+    from unittest.mock import AsyncMock, MagicMock
+
+    from llama_agents.server._runtime.persistence_runtime import (
+        _PersistenceInternalRunAdapter,
+    )
+    from workflows.events import StartEvent
+    from workflows.runtime.types.plugin import InternalRunAdapter
+    from workflows.runtime.types.step_id import StepId
+    from workflows.runtime.types.ticks import TickCancelRun, TickStepResult
+
+    mock_inner = MagicMock(spec=InternalRunAdapter)
+    mock_inner.run_id = "run-1"
+    mock_inner.after_tick = AsyncMock()
+
+    mock_store = MagicMock()
+    mock_store.after_tick = AsyncMock(side_effect=RuntimeError("Store failure"))
+
+    adapter = _PersistenceInternalRunAdapter(mock_inner, mock_store)
+
+    # Tick that is NOT TickStepResult
+    unrelated_tick = TickCancelRun()
+    await adapter.after_tick(unrelated_tick)
+    mock_inner.after_tick.assert_called_once_with(unrelated_tick)
+    mock_store.after_tick.assert_not_called()
+
+    # Tick that IS TickStepResult, flaky store
+    mock_inner.after_tick.reset_mock()
+    step_result_tick = TickStepResult(
+        step_id=StepId.root("step_name"), worker_id=1, event=StartEvent(), result=[]
+    )
+    await adapter.after_tick(step_result_tick)
+    mock_inner.after_tick.assert_called_once_with(step_result_tick)
+    mock_store.after_tick.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_legacy_ctx_migration_failures(sqlite_store: SqliteWorkflowStore) -> None:
+    from unittest.mock import MagicMock
+
+    from llama_agents.server._runtime.persistence_runtime import (
+        TickPersistenceDecorator,
+    )
+    from workflows.runtime.types.plugin import Runtime
+
+    mock_runtime = MagicMock(spec=Runtime)
+
+    decorator = TickPersistenceDecorator(mock_runtime, sqlite_store)
+
+    # 1. _get_legacy_ctx: store throws exception
+    flaky_store = MagicMock()
+    flaky_store.get_legacy_ctx.side_effect = RuntimeError("Db error")
+    flaky_decorator = TickPersistenceDecorator(mock_runtime, flaky_store)
+    assert flaky_decorator._get_legacy_ctx("run-1") is None
+
+    # 2. _seed_legacy_state: invalid json parsing error
+    await decorator._seed_legacy_state("run-1", {"invalid_key": "some_value"})
+
+    # 3. _seed_legacy_state: empty state data
+    await decorator._seed_legacy_state("run-1", {"state": None})
+
+    # 4. _seed_legacy_state: store is not SqliteStateStore
+    from llama_agents.server import MemoryWorkflowStore
+
+    mem_decorator = TickPersistenceDecorator(mock_runtime, MemoryWorkflowStore())
+    await mem_decorator._seed_legacy_state(
+        "run-1", {"state": {"store_type": "in_memory"}}
+    )
+
+    # 5. _seed_legacy_state: row already exists in Sqlite state store
+    state_store = sqlite_store.create_state_store("run-exists")
+    await state_store.set("some_key", "existing")
+
+    serializer = JsonSerializer()
+    dict_state = DictState()
+    dict_state["some_key"] = "new"
+    state_data = {
+        "store_type": "in_memory",
+        "state_type": "DictState",
+        "state_module": "workflows.context.state_store",
+        "state_data": serialize_dict_state_data(dict_state, serializer, ()),
+    }
+    await decorator._seed_legacy_state("run-exists", {"state": state_data})
+    assert await state_store.get("some_key") == "existing"
+
+
+@pytest.mark.asyncio
+async def test_persistence_decorator_destroy_flaky_task() -> None:
+    from unittest.mock import MagicMock
+
+    from llama_agents.server._runtime.persistence_runtime import PersistenceDecorator
+    from workflows.runtime.types.plugin import Runtime
+
+    mock_runtime = MagicMock(spec=Runtime)
+    mock_store = MagicMock()
+    decorator = PersistenceDecorator(mock_runtime, mock_store)
+
+    # 1. destroy with resume_task is None
+    await decorator.destroy()
+
+    # 2. destroy with resume_task which throws error on cancel
+    mock_task = MagicMock()
+    mock_task.cancel.side_effect = RuntimeError("Cancel error")
+    decorator.resume_task = mock_task
+
+    await decorator.destroy()
+    mock_task.cancel.assert_called_once()
