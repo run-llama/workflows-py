@@ -93,6 +93,7 @@ from workflows.runtime.types.results import (
 )
 from workflows.runtime.types.step_id import StepId
 from workflows.runtime.types.ticks import (
+    STAMPED_TICK_TYPES,
     TickAddEvent,
     TickCancelRun,
     TickIdleCheck,
@@ -137,7 +138,10 @@ class ReplayResult:
     Attributes:
         state: Rebuilt broker state after applying all ticks.
         exit_command: The last exit-indicating command emitted during replay,
-            or None if the stream never terminated.
+            or None if the stream never terminated. Lets callers classify
+            terminal outcome (success / failure / cancel / timeout) using the
+            same command the runtime would have produced, without a second
+            pass over the ticks.
     """
 
     state: BrokerState
@@ -149,7 +153,17 @@ async def replay_ticks_stream(
     ticks: AsyncIterable[WorkflowTick],
     run_id: str | None = None,
 ) -> ReplayResult:
-    """Replay a tick stream, returning state plus the last exit-indicating command."""
+    """Replay a tick stream, returning state plus the last exit-indicating command.
+
+    The reducer already emits CommandCompleteRun / CommandFailWorkflow /
+    CommandHalt when it processes terminal ticks; this surfaces them instead
+    of discarding, so callers can classify terminal outcome (success /
+    failure / cancel / timeout) without a second pass over the ticks.
+
+    run_id must match the live run's id whenever it is known: it seeds retry
+    jitter, so replaying a failure tick recomputes the same delay (and thus
+    the same not_before) the live run journaled in its TickWakeup.
+    """
     state, _ = rewind_in_progress(state, time.time())
     exit_command: ExitCommand | None = None
     async for tick in ticks:
@@ -168,7 +182,11 @@ async def rebuild_state_from_ticks_stream(
     ticks: AsyncIterable[WorkflowTick],
     run_id: str | None = None,
 ) -> BrokerState:
-    """Streaming variant of :func:`rebuild_state_from_ticks`."""
+    """Streaming variant of :func:`rebuild_state_from_ticks`.
+
+    Thin wrapper over :func:`replay_ticks_stream` that discards the exit
+    command. Prefer ``replay_ticks_stream`` when you need terminal info.
+    """
     return (await replay_ticks_stream(state, ticks, run_id=run_id)).state
 
 
@@ -196,7 +214,7 @@ def _tick_stamp(tick: WorkflowTick) -> float | None:
     markerless journals carry no stamps, so they replay with an empty budget and
     never fire a spurious timeout under the legacy fallback.
     """
-    return getattr(tick, "stamped_at", None)
+    return tick.stamped_at if isinstance(tick, STAMPED_TICK_TYPES) else None
 
 
 def _accrue_alive(broker: BrokerState, stamp: float) -> None:
@@ -406,7 +424,12 @@ def _drain_eligible_queue(
     path: tuple[str, ...],
     now_seconds: float,
 ) -> list[WorkflowCommand]:
-    """Dispatch eligible queued attempts while worker capacity remains."""
+    """Dispatch eligible queued attempts while worker capacity remains.
+
+    Scans past ineligible (delayed) attempts so they neither block eligible
+    work queued behind them nor consume a worker slot. Relative order among
+    eligible attempts is preserved.
+    """
     commands: list[WorkflowCommand] = []
     while True:
         index = next(
@@ -535,7 +558,11 @@ def _queue_catch_error_event(
 
 @dataclass
 class _StepResultAcc:
-    """Mutable accumulator threaded through one step-result reduction."""
+    """Mutable accumulator threaded through one step-result reduction.
+
+    Holds the commands emitted so far plus the per-result flags that the
+    apply-results phase sets and the stream-accounting / finalize phases read.
+    """
 
     commands: list[WorkflowCommand]
     output_event_name: str | None = None
@@ -581,11 +608,21 @@ class _BoundaryFailure:
 
 @dataclass(frozen=True)
 class _FanOutScope:
-    """Collection-stream scope for the events this execution emits."""
+    """Collection-stream scope for the events this execution emits.
 
+    Streams are runtime facts: an execution that actually returned a list
+    (worker-reported via ``fanned_out``) mints ONE fresh stream id, stamps
+    every event it emits with it, then closes the stream. A fan-out-annotated
+    step that took a non-list branch (None or a declared bare union member)
+    mints nothing. A 1:1 step's outputs inherit the trigger stack verbatim.
+    """
+
+    # The trigger path carried on the in-progress execution.
     trigger_stack: tuple[str, ...]
     fanned_out: bool
     fan_out_stream_id: str | None
+    # Scope stamped onto emitted events: trigger_stack, plus the fresh stream
+    # id when this execution fanned out.
     emit_stack: tuple[str, ...]
 
 
@@ -609,7 +646,14 @@ def _rerun_for_stale_collect_buffer(
     this_execution: InProgressState,
     path: tuple[str, ...],
 ) -> list[WorkflowCommand] | None:
-    """Re-run the work item against fresh state if its collect snapshot is stale."""
+    """Re-run the work item against fresh state if its collect snapshot is stale.
+
+    Legacy ctx.collect_events() buffers are optimistic snapshots. If another
+    worker changed the live buffer before this invocation consumed it, the
+    invocation's result is invalid; re-run the same work item. Returns the
+    re-run command (and refreshes the execution's snapshot), or None when the
+    snapshot is still current.
+    """
     stale_firing = any(
         isinstance(r, DeleteCollectedEvent)
         and _collect_buffer_diverged(
@@ -735,14 +779,17 @@ def _apply_step_result(
             run_id=run_id,
         )
     elif isinstance(result, AddCollectedEvent):
+        # The current state of collected events.
         collected_events = state.workers[step_id].collected_events.setdefault(
             result.event_id, []
         )
+        # the events snapshot that was sent with the step function execution that yielded this result
         snapshot_events = this_execution.shared_state.collected_events.get(
             result.event_id, []
         )
         if len(collected_events) > len(snapshot_events):
-            # rerun it, don't append now, to keep the update serializable
+            # rerun it, and don't append now to ensure serializability
+            # updating the run state
             acc.step_no_longer_in_progress = False
             this_execution.shared_state = replace(
                 this_execution.shared_state,
@@ -764,8 +811,10 @@ def _apply_step_result(
             collected_events.append(result.event)
     elif isinstance(result, DeleteCollectedEvent):
         if did_complete_step:  # allow retries to grab the events
+            # indicates that a run has successfully collected its events, and they can be deleted from the collected events state
             state.workers[step_id].collected_events.pop(result.event_id, None)
     elif isinstance(result, AddWaiter):
+        # indicates that a run has added a waiter to the collected waiters state
         existing = next(
             (
                 i
@@ -782,6 +831,8 @@ def _apply_step_result(
             requirements=result.requirements,
             has_requirements=bool(len(result.requirements)),
             resolved_event=None,
+            # Store the suspended work item's record so resume re-delivers
+            # it whole: same stream scope, same collect batch.
             scope_path=this_execution.scope_path,
             collection_release_payload=this_execution.shared_state.collection_release_payload,
             work_item_id=this_execution.work_item_id,
@@ -1771,7 +1822,9 @@ def _boundary_descend(
 def _unhandled_event_commands(
     tick: TickAddEvent, state: BrokerState, path: tuple[str, ...]
 ) -> list[WorkflowCommand]:
-    # InputRequiredEvent subclasses are handled externally by human consumers.
+    # InputRequiredEvent subclasses are intentionally designed to be handled
+    # externally by human consumers, not by workflow steps. Don't emit
+    # UnhandledEvent for these since they're working as intended.
     if isinstance(tick.event, InputRequiredEvent):
         return []
     event_cls = type(tick.event)
@@ -1897,7 +1950,17 @@ def _dispatch_add_event(
 def _consume_superseded_delayed_attempt(
     tick: TickAddEvent, worker_state: InternalStepWorkerState
 ) -> None:
-    """Compat shim for journals written before delayed retries lived in state."""
+    """Compat shim for journals written before delayed retries lived in state.
+
+    Older versions re-delivered a delayed retry as a journaled TickAddEvent
+    carrying retry metadata (attempts > 0). The current reducer, replaying the
+    same journal's failure tick, also queues the attempt with a not_before.
+    Without this, replaying an old journal double-represents the retry: the
+    TickAddEvent dispatches one copy while the phantom queued attempt blocks
+    idle release and re-runs the step after a resume. The current retry path
+    never emits attempts-bearing TickAddEvents, so this only matches
+    old-format journals.
+    """
     if not tick.attempts:
         return
     match = next(
@@ -1966,6 +2029,7 @@ def _process_cancel_run_tick(
 def _process_publish_event_tick(
     tick: TickPublishEvent, init: BrokerState
 ) -> tuple[BrokerState, list[WorkflowCommand]]:
+    # doesn't affect state. Pass through as publish command
     return init, [CommandPublishEvent(event=tick.event)]
 
 

@@ -60,6 +60,7 @@ from workflows.runtime.types.results import (
 )
 from workflows.runtime.types.step_id import StepId
 from workflows.runtime.types.ticks import (
+    STAMPED_TICK_TYPES,
     TickAddEvent,
     TickIdleCheck,
     TickNamespaceTimeout,
@@ -107,7 +108,7 @@ def _stamp_tick(tick: WorkflowTick, now: float) -> WorkflowTick:
     reading the replay clock. Ticks without the field (cancel, publish, etc.) and
     already-stamped ticks pass through unchanged.
     """
-    if getattr(tick, "stamped_at", "missing") is None:
+    if isinstance(tick, STAMPED_TICK_TYPES) and tick.stamped_at is None:
         return tick.model_copy(update={"stamped_at": now})
     return tick
 

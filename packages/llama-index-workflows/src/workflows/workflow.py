@@ -206,7 +206,7 @@ class WorkflowMeta(type):
             return
         if not _resolve_child_slots(cls):
             return
-        inherited_init = getattr(cls, "__init__", None)
+        inherited_init = cls.__init__
         if (
             inherited_init is workflow_cls.__init__
             or inherited_init is _synthesized_workflow_init
@@ -565,7 +565,7 @@ class Workflow(metaclass=WorkflowMeta):
             )
         _validate_includable_child(child, name)
         _warn_ignored_child_config(child, name)
-        register_child = getattr(self._runtime, "_register_child_workflows", True)
+        register_child = self._runtime._register_child_workflows
         if child._runtime is self._runtime:
             if not register_child:
                 child._runtime.untrack_workflow(child)

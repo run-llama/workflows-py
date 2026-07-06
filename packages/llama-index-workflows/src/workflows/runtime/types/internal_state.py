@@ -196,7 +196,9 @@ class BrokerState:
         self.workers = _normalize_step_id_keys(self.workers)
 
     def deepcopy(self) -> BrokerState:
-        """Deep-ish copy of the mutable fields updated during reduction."""
+        """
+        Deep-ish copy. Copies fields that are considered mutable during updates.
+        """
         return BrokerState(
             is_running=self.is_running,
             config=self.config,  # immutable
@@ -286,10 +288,8 @@ class BrokerState:
     ) -> BrokerState:
         """Deserialize a SerializedContext into the root BrokerState.
 
-        Removed never-shipped fields (``namespace_started``,
-        ``active_invocation_namespaces``, row-level ``invocation_namespace``) are
-        accepted-and-ignored on load. Nested ``child_brokers`` rebuild the child
-        tree from the config templates.
+        Nested ``child_brokers`` rebuild the child tree from the config
+        templates.
         """
         serializer = serializer or JsonSerializer()
         base_state = BrokerState.from_workflow(workflow)
@@ -877,10 +877,12 @@ class InProgressState:
     """
     Represents a single worker execution that is currently in progress.
 
-    Each worker gets a snapshot of the step's shared state at the time it starts,
-    enabling optimistic execution: if the shared state changes during execution
-    the control loop retries the worker with the updated state. Lives inside one
-    broker, so it needs no invocation namespace of its own.
+    Each worker gets a snapshot of the step's shared state at the time it starts.
+    This enables optimistic execution - if the shared state changes during execution
+    (e.g., new collected events arrive), the control loop can detect this and retry
+    the worker with the updated state.
+
+    Lives inside one broker, so it needs no invocation namespace of its own.
     """
 
     event: Event

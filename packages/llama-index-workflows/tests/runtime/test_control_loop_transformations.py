@@ -99,7 +99,6 @@ pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
 
 TEST_STEP = StepId.root("test_step")
 OTHER_STEP = StepId.root("other_step")
-UNKNOWN_STEP = StepId.root("unknown")
 
 
 class MyTestEvent(Event):

@@ -216,8 +216,7 @@ class SerializedContext(BaseModel):
         default_factory=dict
     )
     # Live child invocations nested self-similarly, keyed by "slot#N" segment.
-    # Additive to v2: childless snapshots omit it, and never-shipped slim fields
-    # (namespace_started, active_invocation_namespaces) are ignored on load.
+    # Additive to v2: childless snapshots omit it.
     child_brokers: dict[str, "SerializedChildBroker"] = Field(default_factory=dict)
     # Per-slot invocation mint counter, persisted so snapshot-resume and full
     # tick-replay mint identical child ids.

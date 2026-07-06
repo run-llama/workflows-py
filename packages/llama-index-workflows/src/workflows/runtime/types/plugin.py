@@ -471,6 +471,12 @@ class Runtime(ABC):
     Use registering() context manager for implicit workflow registration.
     """
 
+    # Whether child workflows attached via Workflow._attach_child should be
+    # tracked as separate top-level workflows on this runtime. Runtimes that
+    # run children inside the parent's control loop (e.g. DBOS) override this
+    # to False.
+    _register_child_workflows: bool = True
+
     def __init__(self) -> None:
         self._pending: WorkflowSet = WorkflowSet()
         self._launched: bool = False

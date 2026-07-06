@@ -47,17 +47,11 @@ class BaseRuntimeDecorator(Runtime):
     def __init__(self, decorated: Runtime) -> None:
         super().__init__()
         self._decorated = decorated
-
-    @property
-    def _register_child_workflows(self) -> bool:
-        """Forward the wrapped runtime's child-registration policy.
-
-        ``Workflow._attach_child`` reads this off the workflow's runtime, which
-        is the outermost decorator; walk down to the concrete runtime so a
-        runtime opting children out of separate tracking (e.g. DBOS) is honored
-        through any decorator stack.
-        """
-        return bool(getattr(self._decorated, "_register_child_workflows", True))
+        # Forward the wrapped runtime's child-registration policy:
+        # ``Workflow._attach_child`` reads this off the outermost decorator, so
+        # a runtime opting children out of separate tracking (e.g. DBOS) is
+        # honored through any decorator stack.
+        self._register_child_workflows = decorated._register_child_workflows
 
     def register(self, workflow: Workflow) -> RegisteredWorkflow:
         return self._decorated.register(workflow)

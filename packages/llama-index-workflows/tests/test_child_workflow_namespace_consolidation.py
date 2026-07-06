@@ -134,7 +134,9 @@ def test_root_binding_id_is_byte_identical_to_pre_namespace_format() -> None:
     """
     state = BrokerState.from_workflow(_ReuseParent(child=_ReuseChild()))
     root_bindings = [
-        b for b in state.config.collection_bindings.values() if b.source_step.is_root
+        b
+        for b in state.config.collection_bindings.values()
+        if not b.source_step.namespace
     ]
     assert root_bindings, "expected a root fan->collect binding"
     for binding in root_bindings:

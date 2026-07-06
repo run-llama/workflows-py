@@ -199,6 +199,14 @@ class TickWakeup(BaseModel):
     due: float
 
 
+# Ticks that carry a journaled wall-clock stamp. See TickStepResult.stamped_at.
+STAMPED_TICK_TYPES = (
+    TickStepResult,
+    TickAddEvent,
+    TickSessionStart,
+    TickNamespaceTimeout,
+)
+
 WorkflowTick = Annotated[
     TickStepResult
     | TickAddEvent
