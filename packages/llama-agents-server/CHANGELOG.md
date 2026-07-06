@@ -1,5 +1,11 @@
 # llama-agents-server
 
+## 0.6.4
+
+### Patch Changes
+
+- c42b064: Retry transient Agent Data read failures and use a longer default timeout.
+
 ## 0.6.3
 
 ### Patch Changes
