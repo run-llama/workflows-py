@@ -23,6 +23,14 @@ _RETRY_BACKOFF_BASE = 0.5
 _RETRYABLE_STATUS = frozenset({500, 502, 503, 504})
 
 
+def _normalize_timeout(timeout: httpx.Timeout | float | None) -> httpx.Timeout:
+    if timeout is None:
+        return _DEFAULT_TIMEOUT
+    if isinstance(timeout, httpx.Timeout):
+        return timeout
+    return httpx.Timeout(timeout)
+
+
 class AgentDataClient:
     """HTTP client for the LlamaCloud Agent Data API.
 
@@ -48,7 +56,9 @@ class AgentDataClient:
         self._api_key = api_key
         self._project_id = project_id
         self._deployment_name = deployment_name
-        self._timeout = _DEFAULT_TIMEOUT if timeout is None else timeout
+        self._timeout = _normalize_timeout(timeout)
+        if max_attempts < 1:
+            raise ValueError("max_attempts must be at least 1")
         self._max_attempts = max_attempts
         self._shared_client: httpx.AsyncClient | None = None
 
@@ -84,45 +94,59 @@ class AgentDataClient:
             self._shared_client = None
 
     async def _request(
-        self, method: str, url: str, *, retry: bool = False, **kwargs: Any
+        self,
+        method: str,
+        url: str,
+        *,
+        retry_transient_errors: bool = False,
+        **kwargs: Any,
     ) -> httpx.Response:
         """Issue a request under the configured timeout.
 
-        When ``retry`` is set (idempotent reads only), transient failures
-        (connection/read errors and 5xx) are retried with exponential backoff so
-        a brief backend slowdown does not become a hard, undiagnosable error.
-        Writes pass ``retry=False`` because the API has no idempotency keys yet.
-        Non-retryable responses (4xx) and the final failure are raised.
+        When ``retry_transient_errors`` is set (idempotent reads only),
+        connection/read errors and 5xx responses are retried with exponential
+        backoff. Writes do not opt in because the API has no idempotency keys.
         """
         client = self.http_client()
-        attempts = self._max_attempts if retry else 1
-        last_exc: Exception
-        for attempt in range(attempts):
+        attempts = self._max_attempts if retry_transient_errors else 1
+        for attempt in range(1, attempts + 1):
             try:
                 resp = await client.request(method, url, **kwargs)
                 resp.raise_for_status()
                 return resp
             except httpx.HTTPStatusError as exc:
-                if not retry or exc.response.status_code not in _RETRYABLE_STATUS:
+                if (
+                    not retry_transient_errors
+                    or exc.response.status_code not in _RETRYABLE_STATUS
+                    or attempt == attempts
+                ):
                     raise
-                last_exc = exc
+                await self._sleep_before_retry(method, url, attempt, attempts, exc)
             except httpx.TransportError as exc:
-                if not retry:
+                if not retry_transient_errors or attempt == attempts:
                     raise
-                last_exc = exc
-            if attempt < attempts - 1:
-                delay = _RETRY_BACKOFF_BASE * (2**attempt)
-                logger.warning(
-                    "Agent Data %s %s failed (attempt %d/%d), retrying in %.1fs: %r",
-                    method,
-                    url,
-                    attempt + 1,
-                    attempts,
-                    delay,
-                    last_exc,
-                )
-                await asyncio.sleep(delay)
-        raise last_exc
+                await self._sleep_before_retry(method, url, attempt, attempts, exc)
+        raise RuntimeError("unreachable retry loop exit")
+
+    async def _sleep_before_retry(
+        self,
+        method: str,
+        url: str,
+        attempt: int,
+        attempts: int,
+        exc: Exception,
+    ) -> None:
+        delay = _RETRY_BACKOFF_BASE * (2 ** (attempt - 1))
+        logger.warning(
+            "Agent Data %s %s failed (attempt %d/%d), retrying in %.1fs: %r",
+            method,
+            url,
+            attempt,
+            attempts,
+            delay,
+            exc,
+        )
+        await asyncio.sleep(delay)
 
     async def search(
         self,
@@ -142,7 +166,10 @@ class AgentDataClient:
         if order_by:
             body["order_by"] = order_by
         resp = await self._request(
-            "POST", "/api/v1/beta/agent-data/:search", json=body, retry=True
+            "POST",
+            "/api/v1/beta/agent-data/:search",
+            json=body,
+            retry_transient_errors=True,
         )
         return resp.json().get("items", [])
 
