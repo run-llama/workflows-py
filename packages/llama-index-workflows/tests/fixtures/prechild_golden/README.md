@@ -1,0 +1,19 @@
+# Golden serialization fixtures
+
+Provenance: generated from `origin/main` commit `db8cd1b6` to pin the current
+snapshot and journal serialization formats.
+
+These fixtures must load and replay unchanged at the behavioral level:
+
+- `snapshot.json` — a `Context.to_dict()` (v2 `SerializedContext`) taken mid-run
+  from a HITL workflow suspended on a `ctx.wait_for_event` waiter. Loading it
+  must preserve current snapshot compatibility.
+- `snapshot_meta.json` — `{"expected_result_after_resume": ...}`: resuming the
+  snapshot and delivering `HumanResponseEvent(response="42")` must yield this.
+- `journal.json` — `{"result": 12, "ticks": [...]}`: a full tick journal for a
+  fan-out + `collect_events` run. Replaying the ticks from a canonical
+  `BrokerState.from_workflow` must reach `StopEvent(result=12)`.
+
+Regenerate only when intentionally updating the pinned main serialization
+formats; see `tests/test_prechild_golden_fixtures.py` for the workflow
+definitions the fixtures were produced from.

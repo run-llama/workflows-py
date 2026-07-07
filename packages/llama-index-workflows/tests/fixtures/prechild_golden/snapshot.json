@@ -1,0 +1,37 @@
+{
+  "version": 2,
+  "state": {
+    "store_type": "in_memory",
+    "state_type": "DictState",
+    "state_module": "workflows.context.state_store",
+    "state_data": {
+      "_data": {}
+    }
+  },
+  "is_running": true,
+  "workers": {
+    "start": {
+      "queue": [],
+      "in_progress": [],
+      "collected_events": {},
+      "static_collect_events": [],
+      "collected_waiters": [
+        {
+          "waiter_id": "waiter_workflows.events.HumanResponseEvent_{}_work_item_1",
+          "event": "{\"__is_pydantic\": true, \"value\": {}, \"qualified_name\": \"workflows.events.StartEvent\"}",
+          "bound_events": null,
+          "waiting_for_event": "workflows.events.HumanResponseEvent",
+          "has_requirements": false,
+          "resolved_event": null,
+          "scope_path": [],
+          "collection_release_payload": null,
+          "work_item_id": "work_item_1"
+        }
+      ]
+    }
+  },
+  "stream_seq": 0,
+  "work_item_seq": 1,
+  "streams": {},
+  "collection_release_states": {}
+}
