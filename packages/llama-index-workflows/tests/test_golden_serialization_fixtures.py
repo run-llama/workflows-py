@@ -4,7 +4,7 @@
 """Load-and-replay checks for current golden serialization fixtures.
 
 These fixtures pin the current ``origin/main`` snapshot and journal wire shapes
-(see ``fixtures/prechild_golden/README.md``). The tests assert that those shapes
+(see ``fixtures/golden_serialization/README.md``). The tests assert that those shapes
 load and replay unchanged at the behavioral level: load-compat plus round-trip
 equivalence, not byte identity.
 """
@@ -26,7 +26,7 @@ from workflows.runtime.types.commands import CommandCompleteRun
 from workflows.runtime.types.internal_state import BrokerState
 from workflows.runtime.types.ticks import WorkflowTickAdapter
 
-_FIXTURES = Path(__file__).parent / "fixtures" / "prechild_golden"
+_FIXTURES = Path(__file__).parent / "fixtures" / "golden_serialization"
 
 
 class Item(Event):
@@ -76,7 +76,7 @@ def _load(name: str) -> dict[str, Any]:
     return json.loads((_FIXTURES / name).read_text())
 
 
-def test_prechild_journal_replays_from_canonical_state() -> None:
+def test_golden_journal_replays_from_canonical_state() -> None:
     """Replaying the golden tick journal from a fresh ``from_workflow`` state
     reaches the same terminal ``StopEvent`` the live run recorded."""
     journal = _load("journal.json")
@@ -96,7 +96,7 @@ def test_prechild_journal_replays_from_canonical_state() -> None:
 
 
 @pytest.mark.asyncio
-async def test_prechild_snapshot_loads_and_resumes() -> None:
+async def test_golden_snapshot_loads_and_resumes() -> None:
     """A golden mid-run snapshot loads and resumes to completion."""
     snapshot = _load("snapshot.json")
     meta = _load("snapshot_meta.json")

@@ -15,5 +15,5 @@ These fixtures must load and replay unchanged at the behavioral level:
   `BrokerState.from_workflow` must reach `StopEvent(result=12)`.
 
 Regenerate only when intentionally updating the pinned main serialization
-formats; see `tests/test_prechild_golden_fixtures.py` for the workflow
+formats; see `tests/test_golden_serialization_fixtures.py` for the workflow
 definitions the fixtures were produced from.
