@@ -322,9 +322,10 @@ async def test_run_workflow_seeds_state_store_from_durable_handle() -> None:
             state_type: type[Any] | None = None,
             serialized_state: dict[str, Any] | None = None,
             serializer: Any = None,
+            namespace: tuple[str, ...] = (),
         ) -> StateStore[Any]:
             self.create_state_store_calls.append(
-                (run_id, state_type, serialized_state, serializer)
+                (run_id, state_type, serialized_state, serializer, namespace)
             )
             return self.state_store
 
@@ -374,7 +375,7 @@ async def test_run_workflow_seeds_state_store_from_durable_handle() -> None:
     assert workflow_store.start_called
     assert workflow_store.state_store.ensure_seeded_called
     assert workflow_store.create_state_store_calls == [
-        ("run-1", DictState, serialized_state, serializer)
+        ("run-1", DictState, serialized_state, serializer, ())
     ]
 
 

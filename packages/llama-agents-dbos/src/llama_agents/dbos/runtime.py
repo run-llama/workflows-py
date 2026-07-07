@@ -57,12 +57,15 @@ from sqlalchemy.engine import Engine
 from typing_extensions import Unpack
 from workflows.context.serializers import BaseSerializer, JsonSerializer
 from workflows.context.state_store import (
+    DictState,
     StateStore,
     StateStoreFacade,
-    infer_state_type,
+    namespaced_seed_payloads,
+    namespaced_state_types,
 )
 from workflows.events import Event, StartEvent, StopEvent
 from workflows.runtime.types.internal_state import BrokerState
+from workflows.runtime.types.invocation import slot_namespace
 from workflows.runtime.types.named_task import (
     NamedTask,
     PendingStart,
@@ -85,6 +88,7 @@ from workflows.runtime.types.step_function import (
     as_step_worker_functions,
     create_workflow_run_function,
 )
+from workflows.runtime.types.step_id import StepId
 from workflows.runtime.types.ticks import WorkflowTick
 from workflows.workflow import Workflow
 
@@ -363,6 +367,12 @@ class DBOSRuntime(Runtime):
         self._tasks.append(task)
         task.add_done_callback(self._tasks.remove)
 
+    # Child workflows run inside the parent's DBOS control loop and their steps
+    # are DBOS-registered under the parent (by static slot path), so a child
+    # must not also be tracked as a separate, top-level DBOS workflow. Consumed
+    # by Workflow._attach_child via the runtime-decorator chain.
+    _register_child_workflows = False
+
     def track_workflow(self, workflow: Workflow) -> None:
         """Track a workflow for registration at launch time.
 
@@ -378,6 +388,20 @@ class DBOSRuntime(Runtime):
             if wf_id not in self._tracked_workflow_ids:
                 self._tracked_workflows.append(workflow)
                 self._tracked_workflow_ids.add(wf_id)
+
+    def untrack_workflow(self, workflow: Workflow) -> None:
+        """Drop a workflow from tracking and any prior registration.
+
+        Used when a child is attached to a parent: the child stops being an
+        independently routable top-level workflow while its steps still run
+        under the parent's registration.
+        """
+        wf_id = id(workflow)
+        self._tracked_workflow_ids.discard(wf_id)
+        self._tracked_workflows = [
+            wf for wf in self._tracked_workflows if id(wf) != wf_id
+        ]
+        self._registered.pop(wf_id, None)
 
     def get_registered(self, workflow: Workflow) -> RegisteredWorkflow | None:
         """Get the registered workflow if available."""
@@ -420,7 +444,7 @@ class DBOSRuntime(Runtime):
             return await workflow_run_fn(init_state, start_event, tags)
 
         # Wrap steps with stable names
-        wrapped_steps: dict[str, StepWorkerFunction] = {
+        wrapped_steps: dict[StepId, StepWorkerFunction] = {
             step_name: DBOS.step(name=f"{name}.{step_name}")(step)
             for step_name, step in as_step_worker_functions(workflow).items()
         }
@@ -555,6 +579,30 @@ class DBOSRuntime(Runtime):
         self._migrations_run = True
         logger.info("Database migrations completed")
 
+    async def _seed_namespace_store(
+        self,
+        workflow_store: AbstractWorkflowStore,
+        run_id: str,
+        namespace: tuple[str, ...],
+        payload: dict[str, Any],
+        serializer: BaseSerializer,
+        state_types: dict[tuple[str, ...], type[BaseModel]],
+    ) -> None:
+        """Seed one namespace's durable row before the workflow starts.
+
+        Materializes the seed eagerly so the first step observes restored state.
+        """
+        state_type = state_types.get(slot_namespace(namespace), DictState)
+        store = workflow_store.create_state_store(
+            run_id,
+            cast(type[Any], state_type),
+            payload,
+            serializer,
+            namespace=namespace,
+        )
+        if isinstance(store, StateStoreFacade):
+            await store.ensure_seeded()
+
     def run_workflow(
         self,
         run_id: str,
@@ -600,16 +648,30 @@ class DBOSRuntime(Runtime):
                 if serialized_state:
                     workflow_store = self.create_workflow_store()
                     await workflow_store.start()
-                    store = workflow_store.create_state_store(
-                        run_id,
-                        infer_state_type(workflow),
-                        serialized_state,
-                        active_serializer,
-                    )
-                    # Materialize the seed before the workflow starts so the
-                    # first step observes the restored state.
-                    if isinstance(store, StateStoreFacade):
-                        await store.ensure_seeded()
+                    state_types = namespaced_state_types(workflow)
+                    seeds = namespaced_seed_payloads(serialized_state, state_types)
+                    if seeds is None:
+                        # Durable handle (or empty): seed the root row; the
+                        # backend's copy_from_handle fans out to every namespace.
+                        await self._seed_namespace_store(
+                            workflow_store,
+                            run_id,
+                            (),
+                            serialized_state,
+                            active_serializer,
+                            state_types,
+                        )
+                    else:
+                        # Portable tree snapshot: seed each namespace's own row.
+                        for namespace, payload in seeds.items():
+                            await self._seed_namespace_store(
+                                workflow_store,
+                                run_id,
+                                namespace,
+                                payload,
+                                active_serializer,
+                                state_types,
+                            )
 
                 try:
                     return await DBOS.start_workflow_async(
@@ -649,14 +711,14 @@ class DBOSRuntime(Runtime):
                 "No current run id. Must be called within a workflow run."
             )
 
-        # Infer state_type from the workflow for typed state support
-        state_type = infer_state_type(workflow)
+        # Per-namespace state types (static slot paths) for typed child state.
+        state_types = namespaced_state_types(workflow)
 
         engine = self._get_sql_engine()
         return InternalDBOSAdapter(
             run_id,
             engine,
-            state_type,
+            state_types,
             schema=self._schema,
             state_table_name=self.config.get(
                 "state_table_name", DEFAULT_STATE_TABLE_NAME
@@ -1040,7 +1102,7 @@ class InternalDBOSAdapter(InternalRunAdapter):
         self,
         run_id: str,
         engine: Engine,
-        state_type: type[BaseModel] | None = None,
+        state_types: dict[tuple[str, ...], type[BaseModel]] | None = None,
         schema: str | None = None,
         state_table_name: str = DEFAULT_STATE_TABLE_NAME,
         journal_table_name: str = DEFAULT_JOURNAL_TABLE_NAME,
@@ -1050,7 +1112,9 @@ class InternalDBOSAdapter(InternalRunAdapter):
     ) -> None:
         self._run_id = run_id
         self._engine = engine
-        self._state_type = state_type
+        # Keyed by *static* slot namespace (``("child",)``); a runtime invocation
+        # path (``("child#0",)``) projects onto it via ``slot_namespace``.
+        self._state_types = state_types or {}
         self._schema = schema
         self._state_table_name = state_table_name
         self._journal_table_name = journal_table_name
@@ -1135,16 +1199,19 @@ class InternalDBOSAdapter(InternalRunAdapter):
         """Get or lazily create the per-namespace state store.
 
         For PostgreSQL, the pool must be resolved first via _resolve_pool().
-        Call _ensure_resources() before accessing the state store.
+        Call _ensure_resources() before accessing the state store. Each
+        namespace owns an isolated durable row (``run_id``, ``namespace``);
+        the state type is looked up by static slot path.
         """
         store = self._state_stores.get(namespace)
         if store is None:
+            state_type = self._state_types.get(slot_namespace(namespace), DictState)
             if self._resolved_pool is not None:
                 store = PostgresStateStore(
                     pool=self._resolved_pool,
                     run_id=self._run_id,
                     namespace=namespace,
-                    state_type=cast(type[Any], self._state_type),
+                    state_type=cast(type[Any], state_type),
                     schema=self._schema,
                 )
             elif self._db_path is not None:
@@ -1152,7 +1219,7 @@ class InternalDBOSAdapter(InternalRunAdapter):
                     db_path=self._db_path,
                     run_id=self._run_id,
                     namespace=namespace,
-                    state_type=cast(type[Any], self._state_type),
+                    state_type=cast(type[Any], state_type),
                 )
             else:
                 raise RuntimeError(
