@@ -287,7 +287,9 @@ class _WorkflowService:
             return None
 
         try:
-            old_state_store = self._store.create_state_store(handler.run_id)
+            old_state_store = self._store.create_state_store(
+                handler.run_id, namespace=()
+            )
             state_dict = await state_store_handoff(old_state_store, JsonSerializer())
             if not state_dict:
                 return None

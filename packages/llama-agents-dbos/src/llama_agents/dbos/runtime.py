@@ -144,20 +144,24 @@ class DBOSWorkflowStore(AbstractWorkflowStore):
         state_type: type[Any] | None = None,
         serialized_state: dict[str, Any] | None = None,
         serializer: BaseSerializer | None = None,
+        namespace: tuple[str, ...] = (),
     ) -> StateStore[Any]:
         # Delegate the whole template method so memoization lives in the
         # inner store's single cache (the proxy's own cache stays unused).
         return self._resolve().create_state_store(
-            run_id, state_type, serialized_state, serializer
+            run_id, state_type, serialized_state, serializer, namespace
         )
 
     def _build_state_store(
         self,
         run_id: str,
+        namespace: tuple[str, ...],
         state_type: type[Any] | None,
         serializer: BaseSerializer | None,
     ) -> StateStoreFacade[Any]:
-        return self._resolve()._build_state_store(run_id, state_type, serializer)
+        return self._resolve()._build_state_store(
+            run_id, namespace, state_type, serializer
+        )
 
     async def query(self, query: HandlerQuery) -> list[PersistentHandler]:
         return await self._resolve().query(query)
@@ -1055,7 +1059,7 @@ class InternalDBOSAdapter(InternalRunAdapter):
         self._db_path = db_path
         self._closed = False
         self._shutdown_event = asyncio.Event()
-        self._state_store: StateStore[Any] | None = None
+        self._state_stores: dict[tuple[str, ...], StateStore[Any]] = {}
         # Journal for deterministic task ordering - lazily initialized
         self._journal: TaskJournal | None = None
         self._orphan_purge_done = False
@@ -1125,24 +1129,29 @@ class InternalDBOSAdapter(InternalRunAdapter):
         self._resolved_pool = await self._pool_provider.get()
         return self._resolved_pool
 
-    def _get_or_create_state_store(self) -> StateStore[Any]:
-        """Get or lazily create the state store.
+    def _get_or_create_state_store(
+        self, namespace: tuple[str, ...] = ()
+    ) -> StateStore[Any]:
+        """Get or lazily create the per-namespace state store.
 
         For PostgreSQL, the pool must be resolved first via _resolve_pool().
         Call _ensure_resources() before accessing the state store.
         """
-        if self._state_store is None:
+        store = self._state_stores.get(namespace)
+        if store is None:
             if self._resolved_pool is not None:
-                self._state_store = PostgresStateStore(
+                store = PostgresStateStore(
                     pool=self._resolved_pool,
                     run_id=self._run_id,
+                    namespace=namespace,
                     state_type=cast(type[Any], self._state_type),
                     schema=self._schema,
                 )
             elif self._db_path is not None:
-                self._state_store = SqliteStateStore(
+                store = SqliteStateStore(
                     db_path=self._db_path,
                     run_id=self._run_id,
+                    namespace=namespace,
                     state_type=cast(type[Any], self._state_type),
                 )
             else:
@@ -1150,10 +1159,13 @@ class InternalDBOSAdapter(InternalRunAdapter):
                     "No pool or db_path configured for state store. "
                     "Ensure the runtime pool is initialized before accessing state."
                 )
-        return self._state_store
+            self._state_stores[namespace] = store
+        return store
 
-    def get_state_store(self) -> StateStore[Any] | None:
-        return self._get_or_create_state_store()
+    def get_state_store(
+        self, namespace: tuple[str, ...] = ()
+    ) -> StateStore[Any] | None:
+        return self._get_or_create_state_store(namespace)
 
     def is_replaying(self) -> bool:
         if (

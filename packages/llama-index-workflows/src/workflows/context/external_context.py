@@ -109,7 +109,7 @@ class ExternalContext(Generic[MODEL_T, RunResultT]):
     @property
     def store(self) -> StateStore[MODEL_T]:
         """Access workflow state store."""
-        state_store = self._external_adapter.get_state_store()
+        state_store = self._external_adapter.get_state_store(())
         if state_store is None:
             raise RuntimeError("State store not available from adapter")
         return state_store  # type: ignore[return-value]
@@ -162,7 +162,7 @@ class ExternalContext(Generic[MODEL_T, RunResultT]):
 
         # Fetch state store from adapter and serialize
         state_data = {}
-        state_store = self._external_adapter.get_state_store()
+        state_store = self._external_adapter.get_state_store(())
         if state_store is not None:
             state_data = state_store.to_dict(active_serializer)
 

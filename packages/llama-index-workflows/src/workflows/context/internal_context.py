@@ -142,7 +142,7 @@ class InternalContext(Generic[MODEL_T]):
     @property
     def store(self) -> StateStore[MODEL_T]:
         """Access workflow state store."""
-        state_store = self._internal_adapter.get_state_store()
+        state_store = self._internal_adapter.get_state_store(())
         if state_store is None:
             raise RuntimeError("State store not available from adapter")
         return state_store  # type: ignore[return-value]
