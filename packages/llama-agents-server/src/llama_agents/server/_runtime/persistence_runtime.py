@@ -268,7 +268,7 @@ class TickPersistenceDecorator(BaseRuntimeDecorator):
         if not state_data:
             return
 
-        state_store = self._store.create_state_store(run_id, namespace=())
+        state_store = self._store.create_state_store(run_id)
         if not isinstance(state_store, SqliteStateStore):
             return
 

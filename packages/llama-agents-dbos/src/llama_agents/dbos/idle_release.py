@@ -383,7 +383,7 @@ class DBOSIdleReleaseDecorator(BaseRuntimeDecorator):
         if state_type is not None:
             try:
                 old_state_store = self._store.create_state_store(
-                    run_id, state_type=state_type, namespace=()
+                    run_id, state_type=state_type
                 )
                 serialized_state = await state_store_handoff(
                     old_state_store, serializer
