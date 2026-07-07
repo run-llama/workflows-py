@@ -1,9 +1,7 @@
 # Golden serialization fixtures
 
-Provenance: generated from `origin/main` commit `db8cd1b6` to pin the current
-snapshot and journal serialization formats.
-
-These fixtures must load and replay unchanged at the behavioral level:
+These pin the current snapshot and journal serialization formats. They must load
+and replay unchanged at the behavioral level:
 
 - `snapshot.json` — a `Context.to_dict()` (v2 `SerializedContext`) taken mid-run
   from a HITL workflow suspended on a `ctx.wait_for_event` waiter. Loading it
