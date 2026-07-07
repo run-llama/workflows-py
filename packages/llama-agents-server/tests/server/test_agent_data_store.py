@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import datetime, timezone
 from typing import Any
 
@@ -1028,3 +1029,136 @@ async def test_persist_error_does_not_block_in_memory_delivery(
     await store.append_event("run-1", make_envelope(event=StopEvent(data="done")))
     await asyncio.wait_for(task, timeout=2.0)
     assert len(collected) == 3
+
+
+# ---------------------------------------------------------------------------
+# Per-namespace records
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_namespace_round_trip_and_isolation(
+    backend: FakeAgentDataBackend, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Root and child namespaces persist as independent items under one run."""
+    root = create_agent_data_state_store(backend, monkeypatch, "run-ns")
+    child = create_agent_data_state_store(
+        backend, monkeypatch, "run-ns", namespace=("child",)
+    )
+
+    await root.set("k", "root-val")
+    await child.set("k", "child-val")
+
+    root2 = create_agent_data_state_store(backend, monkeypatch, "run-ns")
+    child2 = create_agent_data_state_store(
+        backend, monkeypatch, "run-ns", namespace=("child",)
+    )
+    assert await root2.get("k") == "root-val"
+    assert await child2.get("k") == "child-val"
+
+
+@pytest.mark.asyncio
+async def test_single_namespace_lookup_beyond_first_search_page(
+    backend: FakeAgentDataBackend, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A namespace lookup filters by run_id AND namespace server-side, so it
+    finds a row even when the run holds more than one search page of rows."""
+    n = 150
+    for i in range(n):
+        s = create_agent_data_state_store(
+            backend, monkeypatch, "run-many", namespace=(f"child#{i}",)
+        )
+        await s.set("k", f"v{i}")
+
+    # A fresh store (no cache) for the last-written namespace must find its row.
+    late = create_agent_data_state_store(
+        backend, monkeypatch, "run-many", namespace=("child#149",)
+    )
+    assert await late.get("k") == "v149"
+
+
+@pytest.mark.asyncio
+async def test_copy_from_handle_copies_every_namespace_across_pages(
+    store: AgentDataStore,
+) -> None:
+    """Copying a run via its durable handle reproduces every namespace row,
+    paginating past the first search page."""
+    n = 150
+    root = store.create_state_store("run-src")
+    await root.set("k", "root")
+    for i in range(n):
+        child = store.create_state_store("run-src", namespace=(f"child#{i}",))
+        await child.set("k", f"v{i}")
+
+    handle = root.to_dict(JsonSerializer())
+    target_root = AgentDataStateStore.from_dict(
+        handle, JsonSerializer(), client=store._client, run_id="run-target"
+    )
+    await target_root.ensure_seeded()
+
+    assert await store.create_state_store("run-target").get("k") == "root"
+    for i in range(n):
+        tchild = store.create_state_store("run-target", namespace=(f"child#{i}",))
+        assert await tchild.get("k") == f"v{i}"
+
+
+@pytest.mark.asyncio
+async def test_root_lookup_is_single_query_matching_pre_namespace_rows(
+    backend: FakeAgentDataBackend, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A row without a namespace field IS the root shape: the root lookup is a
+    single eq-null query that matches pre-namespace and new rows alike."""
+    serializer = JsonSerializer()
+    backend.create(
+        "test-deploy",
+        "workflow_state",
+        {
+            "run_id": "legacy-run",
+            "data": json.dumps({"_data": {"k": serializer.serialize("legacy")}}),
+            "state_type": "DictState",
+            "state_module": "workflows.context.state_store",
+        },
+    )
+
+    search_filters: list[dict[str, Any] | None] = []
+    original_search = backend.search
+
+    def counting_search(
+        deployment_name: str,
+        collection: str,
+        filters: dict[str, Any] | None = None,
+        page_size: int = 100,
+        order_by: str | None = None,
+    ) -> list[dict[str, Any]]:
+        search_filters.append(filters)
+        return original_search(
+            deployment_name, collection, filters, page_size, order_by
+        )
+
+    monkeypatch.setattr(backend, "search", counting_search)
+
+    root = create_agent_data_state_store(backend, monkeypatch, "legacy-run")
+    assert await root.get("k") == "legacy"
+    assert search_filters == [
+        {"run_id": {"eq": "legacy-run"}, "namespace": {"eq": None}}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_root_write_omits_namespace_field(
+    backend: FakeAgentDataBackend, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Root rows persist without a namespace field; child rows carry theirs."""
+    root = create_agent_data_state_store(backend, monkeypatch, "run-shape")
+    child = create_agent_data_state_store(
+        backend, monkeypatch, "run-shape", namespace=("child",)
+    )
+    await root.set("k", "r")
+    await child.set("k", "c")
+
+    rows = [item["data"] for item in backend.search("test-deploy", "workflow_state")]
+    assert len(rows) == 2
+    root_rows = [row for row in rows if "namespace" not in row]
+    child_rows = [row for row in rows if row.get("namespace") == "child"]
+    assert len(root_rows) == 1
+    assert len(child_rows) == 1

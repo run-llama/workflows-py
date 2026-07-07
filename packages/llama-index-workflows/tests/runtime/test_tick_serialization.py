@@ -33,6 +33,7 @@ from workflows.runtime.types.ticks import (
     TickAddEvent,
     TickCancelRun,
     TickPublishEvent,
+    TickSessionStart,
     TickStepResult,
     TickTimeout,
     TickWaiterTimeout,
@@ -166,6 +167,10 @@ def test_event_type_roundtrip() -> None:
             id="cancel_run",
         ),
         pytest.param(
+            TickSessionStart(stamped_at=1234567890.0),
+            id="session_start",
+        ),
+        pytest.param(
             TickTimeout(timeout=30.5),
             id="timeout",
         ),
@@ -178,6 +183,7 @@ def test_event_type_roundtrip() -> None:
                 step_id=StepId.root("process"),
                 worker_id=42,
                 event=MyEvent(value="trigger"),
+                stamped_at=1234567890.0,
                 result=[StepWorkerResult(result=StopEvent(result="done"))],
             ),
             id="step_result_with_event",
@@ -327,6 +333,7 @@ def test_workflow_tick_discriminated_union_roundtrip() -> None:
         TickAddEvent(event=StartEvent(), step_id=StepId.root("s")),
         TickPublishEvent(event=MyEvent(value="x")),
         TickCancelRun(),
+        TickSessionStart(stamped_at=123.0),
         TickTimeout(timeout=10.0),
         TickStepResult(
             step_id=StepId.root("s"),
@@ -340,3 +347,22 @@ def test_workflow_tick_discriminated_union_roundtrip() -> None:
         roundtripped = json.loads(json.dumps(dumped))
         restored = adapter.validate_python(roundtripped)
         assert type(restored) is type(tick)
+
+
+def test_legacy_step_name_key_deserializes_to_step_id() -> None:
+    """Pre-StepId journals used a ``step_name`` key; it must still decode.
+
+    The wire format now serializes a root step id as the bare name under the
+    ``step_id`` key. The ``step_name`` alias keeps old journals readable: a
+    legacy dict deserializes to a tick whose ``step_id`` is the root StepId.
+    """
+    legacy = {
+        "type": "step_result",
+        "step_name": "foo",
+        "worker_id": 0,
+        "event": _serialize_event(StartEvent()),
+        "result": [],
+    }
+    restored = WorkflowTickAdapter.validate_python(legacy)
+    assert isinstance(restored, TickStepResult)
+    assert restored.step_id == StepId.root("foo")

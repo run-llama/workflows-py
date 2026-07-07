@@ -27,6 +27,7 @@ class CommandRunWorker:
     step_id: StepId
     event: Event
     id: int
+    invocation_namespace: tuple[str, ...] = ()
     bound_events: dict[str, Event] | None = None
 
 
@@ -34,6 +35,9 @@ class CommandRunWorker:
 class CommandQueueEvent:
     event: Event
     step_id: StepId | None = None
+    # Namespace of the step (or boundary) that emitted this event; threaded into
+    # the resulting TickAddEvent so type-routing stays scoped to the namespace.
+    origin_namespace: tuple[str, ...] = ()
     recovery_counts: dict[str, int] = field(default_factory=dict)
     scope_path: tuple[str, ...] = field(default_factory=tuple)
 
@@ -57,6 +61,10 @@ class CommandFailWorkflow:
 @dataclass(frozen=True)
 class CommandPublishEvent:
     event: Event
+    # Namespace of the child execution that produced this event. Stamped onto
+    # the event at publish time so the stream can be filtered to root-only by
+    # default; ``()`` (the default) is the root/parent stream.
+    origin_namespace: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -64,6 +72,7 @@ class CommandScheduleWaiterTimeout:
     step_id: StepId
     waiter_id: str
     timeout: float
+    invocation_namespace: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -76,6 +85,37 @@ class CommandScheduleWakeup:
     """
 
     at_time: float
+
+
+@dataclass(frozen=True)
+class CommandScheduleNamespaceTimeout:
+    """Schedule a per-child-namespace deadline via TickNamespaceTimeout.
+
+    Emitted when a child broker is born (boundary descent) or re-armed after
+    catching its own timeout, and by the runner on resume. ``at_time`` is the
+    absolute adapter-clock time the child's remaining ``timeout - elapsed_alive``
+    budget would be spent; the tick fires then and the reducer confirms via the
+    accrued budget (re-arming if downtime made the fire premature).
+    """
+
+    namespace: tuple[str, ...]
+    timeout: float
+    at_time: float
+
+
+@dataclass(frozen=True)
+class CommandCancelNamespace:
+    """Cancel the live worker tasks of a namespace and all its descendants.
+
+    Teardown of a child namespace (its StopEvent boundary, or its timeout)
+    clears the reducer's journaled buffers, but only the runner owns the asyncio
+    tasks. This command carries the cancellation across the reduce/runner
+    boundary: the runner cancels every worker task whose step's namespace is
+    prefix-matched by ``namespace``, so an orphaned child coroutine cannot report
+    a result into a worker slot that no longer exists.
+    """
+
+    namespace: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -98,9 +138,11 @@ WorkflowCommand = (
     | CommandCompleteRun
     | CommandFailWorkflow
     | CommandPublishEvent
+    | CommandCancelNamespace
     | CommandScheduleIdleCheck
     | CommandScheduleWaiterTimeout
     | CommandScheduleWakeup
+    | CommandScheduleNamespaceTimeout
 )
 
 

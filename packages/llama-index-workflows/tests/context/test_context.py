@@ -27,9 +27,12 @@ from workflows.context.serializers import JsonSerializer, PickleSerializer
 from workflows.context.state_store import (
     DictState,
     InMemoryStateStore,
+    build_namespaced_state,
     decode_state,
     deserialize_state_from_dict,
     encode_state,
+    in_memory_namespace_factory,
+    namespaced_state_types,
 )
 from workflows.decorators import step
 from workflows.errors import ContextSerdeError, ContextStateError, WorkflowRuntimeError
@@ -65,11 +68,15 @@ def internal_ctx(workflow: Workflow) -> Context:
     runtime = BasicRuntime()
     run_id = "test-run"
     init_state = BrokerState.from_workflow(workflow)
-    # Create queues with state store so get_internal_adapter() returns adapter with store
+    # Per-namespace stores so get_internal_adapter() returns an adapter with state
     queues = AsyncioAdapterQueues(
         run_id=run_id,
         init_state=init_state,
-        state_store=InMemoryStateStore(DictState()),
+        namespaced=build_namespaced_state(
+            workflow,
+            in_memory_namespace_factory(namespaced_state_types(workflow)),
+            JsonSerializer(),
+        ),
     )
     runtime._queues[run_id] = queues
     workflow._runtime = runtime
@@ -226,15 +233,25 @@ async def test_send_event_step_is_none() -> None:
         handler.ctx.send_event(ev)
         external_face = handler.ctx._face
         assert isinstance(external_face, ExternalContext)
+        ext = external_face  # narrowed for use inside the closure below
 
-        # Wait for event to appear in tick log (up to 1 second)
+        # Wait for event to appear in tick log (up to 1 second). stamped_at is
+        # the journaled live-run clock; normalize it away for the comparison.
         expected_tick = TickAddEvent(event=ev, step_id=None)
+
+        def _add_events() -> list[TickAddEvent]:
+            return [
+                t.model_copy(update={"stamped_at": None})
+                for t in ext._tick_log
+                if isinstance(t, TickAddEvent)
+            ]
+
         for _ in range(100):
-            if expected_tick in external_face._tick_log:
+            if expected_tick in _add_events():
                 break
             await asyncio.sleep(0.01)
 
-        assert expected_tick in external_face._tick_log
+        assert expected_tick in _add_events()
 
         # Let workflow complete
         result = await handler

@@ -19,8 +19,11 @@ from llama_agents.client.protocol.serializable_events import (
 from typing_extensions import override
 from workflows.context.serializers import BaseSerializer
 from workflows.context.state_store import (
+    DictState,
     StateStore,
-    infer_state_type,
+    StateStoreFacade,
+    namespaced_seed_payloads,
+    namespaced_state_types,
 )
 from workflows.events import (
     Event,
@@ -35,11 +38,13 @@ from workflows.runtime.runtime_decorators import (
     BaseRuntimeDecorator,
 )
 from workflows.runtime.types.internal_state import BrokerState
+from workflows.runtime.types.invocation import slot_namespace
 from workflows.runtime.types.plugin import (
     ExternalRunAdapter,
     InternalRunAdapter,
     Runtime,
 )
+from workflows.runtime.types.ticks import WorkflowTick
 from workflows.workflow import Workflow
 
 from .._store.abstract_workflow_store import (
@@ -67,29 +72,88 @@ class _ServerInternalRunAdapter(BaseInternalRunAdapterDecorator):
         decorated: InternalRunAdapter,
         runtime: ServerRuntimeDecorator,
         *,
-        state_type: type[Any] | None = None,
+        state_types: dict[tuple[str, ...], type[Any]] | None = None,
     ) -> None:
         super().__init__(decorated)
         self._runtime = runtime
         self._store = runtime._store
-        self._state_type = state_type
-        self._state_store: StateStore[Any] | None = None
+        # State types are keyed by *static* slot namespace (e.g. ``("child",)``);
+        # a runtime invocation path (``("child#0",)``) projects onto it.
+        self._state_types = state_types or {}
+        self._state_stores: dict[tuple[str, ...], StateStore[Any]] = {}
         self._write_lock: asyncio.Lock | None = None
+        # Seed resolution: split the run's snapshot into per-namespace seeds once.
+        self._seeds_resolved = False
+        self._namespace_seeds: dict[tuple[str, ...], dict[str, Any]] = {}
+        self._seed_serializer: BaseSerializer | None = None
+        # A durable handle can't be split per-namespace; it seeds the root only,
+        # and the backend's copy_from_handle fans out to every namespace row.
+        self._root_handle: tuple[dict[str, Any], BaseSerializer] | None = None
+        self._root_handle_materialized = False
+
+    def _resolve_seeds(self) -> None:
+        if self._seeds_resolved:
+            return
+        self._seeds_resolved = True
+        initial = self._runtime._initial_state.pop(self.run_id, None)
+        if initial is None:
+            return
+        serialized_state, serializer = initial
+        seeds = namespaced_seed_payloads(serialized_state, self._state_types)
+        if seeds is None:
+            # Durable handle (or empty): seed the root; copy_from_handle fans out.
+            self._root_handle = (serialized_state, serializer)
+        else:
+            self._namespace_seeds = seeds
+            self._seed_serializer = serializer
 
     @override
-    def get_state_store(self) -> StateStore[Any]:
-        if self._state_store is not None:
-            return self._state_store
-        initial = self._runtime._initial_state.pop(self.run_id, None)
-        if initial is not None:
-            serialized_state, serializer = initial
-            store = self._store.create_state_store(
-                self.run_id, self._state_type, serialized_state, serializer
-            )
-        else:
-            store = self._store.create_state_store(self.run_id, self._state_type)
-        self._state_store = store
+    def get_state_store(self, namespace: tuple[str, ...] = ()) -> StateStore[Any]:
+        cached = self._state_stores.get(namespace)
+        if cached is not None:
+            return cached
+        self._resolve_seeds()
+        state_type = self._state_types.get(slot_namespace(namespace), DictState)
+        serialized_state: dict[str, Any] | None = None
+        serializer: BaseSerializer | None = None
+        seed = self._namespace_seeds.get(namespace)
+        if seed is not None:
+            serialized_state, serializer = seed, self._seed_serializer
+        elif namespace == () and self._root_handle is not None:
+            serialized_state, serializer = self._root_handle
+        store = self._store.create_state_store(
+            self.run_id,
+            state_type,
+            serialized_state,
+            serializer,
+            namespace=namespace,
+        )
+        self._state_stores[namespace] = store
         return store
+
+    @override
+    async def on_tick(self, tick: WorkflowTick) -> None:
+        # Fan a durable state handle out to every namespace row before any step
+        # runs. Child stores are created lazily on first ``ctx.store`` access;
+        # if that first access happens inside a child (e.g. a fork whose parent
+        # start step never touches the root store), the root store might never
+        # materialize and the backend's copy_from_handle never fires, leaving the
+        # child reading empty state. Eagerly materializing the root at the first
+        # tick — before ``process_command`` starts any step task — closes the
+        # gap. Mirrors the DBOS runtime's eager seed in ``run_workflow``.
+        await self._ensure_root_handle_materialized()
+        await super().on_tick(tick)
+
+    async def _ensure_root_handle_materialized(self) -> None:
+        if self._root_handle_materialized:
+            return
+        self._root_handle_materialized = True
+        self._resolve_seeds()
+        if self._root_handle is None:
+            return
+        store = self.get_state_store(())
+        if isinstance(store, StateStoreFacade):
+            await store.ensure_seeded()
 
     @override
     async def write_to_event_stream(self, event: Event) -> None:
@@ -264,8 +328,8 @@ class ServerRuntimeDecorator(BaseRuntimeDecorator):
     def get_internal_adapter(self, workflow: Workflow) -> InternalRunAdapter:
         """Wraps the inner runtime's adapter in _ServerInternalRunAdapter."""
         inner_adapter = self._decorated.get_internal_adapter(workflow)
-        state_type = infer_state_type(workflow)
-        return _ServerInternalRunAdapter(inner_adapter, self, state_type=state_type)
+        state_types = namespaced_state_types(workflow)
+        return _ServerInternalRunAdapter(inner_adapter, self, state_types=state_types)
 
     # ------------------------------------------------------------------
     # Handler persistence

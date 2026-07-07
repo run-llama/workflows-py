@@ -47,6 +47,11 @@ class BaseRuntimeDecorator(Runtime):
     def __init__(self, decorated: Runtime) -> None:
         super().__init__()
         self._decorated = decorated
+        # Forward the wrapped runtime's child-registration policy:
+        # ``Workflow._attach_child`` reads this off the outermost decorator, so
+        # a runtime opting children out of separate tracking (e.g. DBOS) is
+        # honored through any decorator stack.
+        self._register_child_workflows = decorated._register_child_workflows
 
     def register(self, workflow: Workflow) -> RegisteredWorkflow:
         return self._decorated.register(workflow)
@@ -135,8 +140,10 @@ class BaseInternalRunAdapterDecorator(InternalRunAdapter):
     async def close(self) -> None:
         await self._decorated.close()
 
-    def get_state_store(self) -> StateStore[Any] | None:
-        return self._decorated.get_state_store()
+    def get_state_store(
+        self, namespace: tuple[str, ...] = ()
+    ) -> StateStore[Any] | None:
+        return self._decorated.get_state_store(namespace)
 
     async def finalize_step(self) -> None:
         await self._decorated.finalize_step()
@@ -188,5 +195,7 @@ class BaseExternalRunAdapterDecorator(ExternalRunAdapter):
     async def cancel(self) -> None:
         await self._decorated.cancel()
 
-    def get_state_store(self) -> StateStore[Any] | None:
-        return self._decorated.get_state_store()
+    def get_state_store(
+        self, namespace: tuple[str, ...] = ()
+    ) -> StateStore[Any] | None:
+        return self._decorated.get_state_store(namespace)
