@@ -73,22 +73,31 @@ class _ServerInternalRunAdapter(BaseInternalRunAdapterDecorator):
         self._runtime = runtime
         self._store = runtime._store
         self._state_type = state_type
-        self._state_store: StateStore[Any] | None = None
+        self._state_stores: dict[tuple[str, ...], StateStore[Any]] = {}
         self._write_lock: asyncio.Lock | None = None
 
     @override
-    def get_state_store(self) -> StateStore[Any]:
-        if self._state_store is not None:
-            return self._state_store
-        initial = self._runtime._initial_state.pop(self.run_id, None)
+    def get_state_store(self, namespace: tuple[str, ...] = ()) -> StateStore[Any]:
+        cached = self._state_stores.get(namespace)
+        if cached is not None:
+            return cached
+        initial = (
+            None if namespace else self._runtime._initial_state.pop(self.run_id, None)
+        )
         if initial is not None:
             serialized_state, serializer = initial
             store = self._store.create_state_store(
-                self.run_id, self._state_type, serialized_state, serializer
+                self.run_id,
+                self._state_type,
+                serialized_state,
+                serializer,
+                namespace=namespace,
             )
         else:
-            store = self._store.create_state_store(self.run_id, self._state_type)
-        self._state_store = store
+            store = self._store.create_state_store(
+                self.run_id, self._state_type, namespace=namespace
+            )
+        self._state_stores[namespace] = store
         return store
 
     @override

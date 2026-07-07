@@ -23,12 +23,19 @@ from .agent_data_client import AgentDataClient
 MODEL_T = TypeVar("MODEL_T", bound=BaseModel, default=DictState)  # type: ignore[reportGeneralTypeIssues]
 
 _FIELD_RUN_ID = "run_id"
+_FIELD_NAMESPACE = "namespace"
+_STATE_PAGE_SIZE = 100
 
 
 class _AgentDataStateRecord(BaseModel):
-    """Validates the shape persisted in the Agent Data API."""
+    """Validates the shape persisted in the Agent Data API.
+
+    ``namespace`` defaults to ``""`` so pre-namespace items (which carry no
+    namespace field) read back as the root namespace.
+    """
 
     run_id: str
+    namespace: str = ""
     data: str
     state_type: str | None = None
     state_module: str | None = None
@@ -55,10 +62,14 @@ class _AgentDataStateStorage:
         *,
         client: AgentDataClient,
         run_id: str,
+        namespace: tuple[str, ...] = (),
         collection: str = "workflow_state",
     ) -> None:
         self._client = client
         self._run_id = run_id
+        self._namespace = namespace
+        # Persisted key: () -> "" (today's single root item), ("child",) -> "child".
+        self._namespace_key = "/".join(namespace)
         self._collection = collection
         self._item_id: str | None = None
 
@@ -71,16 +82,44 @@ class _AgentDataStateStorage:
         # HTTP-backed: no per-call connections, the storage scopes itself.
         yield self
 
-    async def _load_record(self) -> _AgentDataStateRecord | None:
+    async def _matching_item(self) -> tuple[str, _AgentDataStateRecord] | None:
+        """Find this namespace's item for the run.
+
+        Filtering is by ``run_id`` *and* ``namespace`` server-side, so the query
+        returns this namespace's single row directly rather than scanning the
+        run's first page and filtering in Python.
+        """
         items = await self._client.search(
             self._collection,
-            {_FIELD_RUN_ID: {"eq": self._run_id}},
-            page_size=1,
+            {
+                _FIELD_RUN_ID: {"eq": self._run_id},
+                _FIELD_NAMESPACE: {"eq": self._namespace_key},
+            },
         )
-        if not items:
+        for item in items:
+            record = _AgentDataStateRecord.model_validate(item["data"])
+            if record.namespace == self._namespace_key:
+                return item["id"], record
+        # Pre-namespace items lack the ``namespace`` field, so a namespace filter
+        # can't match them. Such runs hold a single root item; find it by run_id
+        # alone and let the record's default ("") read it back as the root.
+        if self._namespace_key == "":
+            items = await self._client.search(
+                self._collection,
+                {_FIELD_RUN_ID: {"eq": self._run_id}},
+            )
+            for item in items:
+                record = _AgentDataStateRecord.model_validate(item["data"])
+                if record.namespace == self._namespace_key:
+                    return item["id"], record
+        return None
+
+    async def _load_record(self) -> _AgentDataStateRecord | None:
+        match = await self._matching_item()
+        if match is None:
             return None
-        self._item_id = items[0]["id"]
-        return _AgentDataStateRecord.model_validate(items[0]["data"])
+        self._item_id, record = match
+        return record
 
     async def load(self) -> StateRecord | None:
         record = await self._load_record()
@@ -91,6 +130,7 @@ class _AgentDataStateStorage:
     async def save(self, record: StateRecord) -> None:
         stored = _AgentDataStateRecord(
             run_id=self._run_id,
+            namespace=self._namespace_key,
             data=record.data,
             state_type=record.state_type,
             state_module=record.state_module,
@@ -98,19 +138,14 @@ class _AgentDataStateStorage:
         payload = stored.model_dump()
         if self._item_id is not None:
             await self._client.update_item(self._item_id, payload)
+            return
+        match = await self._matching_item()
+        if match is not None:
+            self._item_id = match[0]
+            await self._client.update_item(self._item_id, payload)
         else:
-            items = await self._client.search(
-                self._collection,
-                {_FIELD_RUN_ID: {"eq": self._run_id}},
-                page_size=1,
-            )
-            if items:
-                item_id = items[0]["id"]
-                self._item_id = item_id
-                await self._client.update_item(item_id, payload)
-            else:
-                result = await self._client.create(self._collection, payload)
-                self._item_id = result["id"]
+            result = await self._client.create(self._collection, payload)
+            self._item_id = result["id"]
 
     def to_handle(self) -> dict[str, Any]:
         payload = AgentDataSerializedState(
@@ -125,21 +160,55 @@ class _AgentDataStateStorage:
             return None
         return AgentDataSerializedState.model_validate(payload)
 
-    async def copy_from_handle(self, handle: AgentDataSerializedState) -> None:
-        """Copy the source target's record into this one (no-op if absent).
+    async def _all_run_items(
+        self, collection: str, run_id: str
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Yield every state item for a run, paginating in full.
 
-        Goes through ``save`` so ``_item_id`` stays consistent with the
-        copied row.
+        A run may hold more namespace rows than a single search page (one per
+        child invocation), so iterate with a keyset cursor over ``namespace``
+        (unique per run) rather than reading only the first page.
         """
-        source = _AgentDataStateStorage(
-            client=self._client,
-            run_id=handle.run_id,
-            collection=handle.collection,
-        )
-        record = await source.load()
-        if record is None:
-            return
-        await self.save(record)
+        cursor: str | None = None
+        while True:
+            filters: dict[str, Any] = {_FIELD_RUN_ID: {"eq": run_id}}
+            if cursor is not None:
+                filters[_FIELD_NAMESPACE] = {"gt": cursor}
+            page = await self._client.search(
+                collection,
+                filters,
+                page_size=_STATE_PAGE_SIZE,
+                order_by=_FIELD_NAMESPACE,
+            )
+            for item in page:
+                yield item
+                cursor = _AgentDataStateRecord.model_validate(item["data"]).namespace
+            if len(page) < _STATE_PAGE_SIZE:
+                return
+
+    async def copy_from_handle(self, handle: AgentDataSerializedState) -> None:
+        """Copy every namespace item of the source run into this run.
+
+        The source's items are enumerated by ``run_id`` (paginated in full) and
+        each is saved under the same namespace in this run. Saves go through
+        per-namespace storages so each ``_item_id`` stays consistent.
+        """
+        async for item in self._all_run_items(handle.collection, handle.run_id):
+            source = _AgentDataStateRecord.model_validate(item["data"])
+            namespace = tuple(source.namespace.split("/")) if source.namespace else ()
+            dest = _AgentDataStateStorage(
+                client=self._client,
+                run_id=self._run_id,
+                namespace=namespace,
+                collection=self._collection,
+            )
+            await dest.save(
+                StateRecord(
+                    data=source.data,
+                    state_type=source.state_type,
+                    state_module=source.state_module,
+                )
+            )
 
 
 class AgentDataStateStore(StateStoreFacade[MODEL_T], Generic[MODEL_T]):
@@ -156,12 +225,18 @@ class AgentDataStateStore(StateStoreFacade[MODEL_T], Generic[MODEL_T]):
         *,
         client: AgentDataClient,
         run_id: str,
+        namespace: tuple[str, ...] = (),
         state_type: type[MODEL_T] | None = None,
         collection: str = "workflow_state",
         serializer: BaseSerializer | None = None,
     ) -> None:
         super().__init__(
-            _AgentDataStateStorage(client=client, run_id=run_id, collection=collection),
+            _AgentDataStateStorage(
+                client=client,
+                run_id=run_id,
+                namespace=namespace,
+                collection=collection,
+            ),
             state_type,
             serializer,
         )

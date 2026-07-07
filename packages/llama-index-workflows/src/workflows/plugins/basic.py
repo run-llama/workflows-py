@@ -137,7 +137,11 @@ class InternalAsyncioAdapter(InternalRunAdapter, SnapshottableAdapter):
     def replay(self) -> list[WorkflowTick]:
         return self._queues.ticks
 
-    def get_state_store(self) -> StateStore[Any] | None:
+    def get_state_store(
+        self, namespace: tuple[str, ...] = ()
+    ) -> StateStore[Any] | None:
+        if namespace:
+            return None
         return self._queues.state_store
 
 
@@ -178,7 +182,11 @@ class ExternalAsyncioAdapter(
     def replay(self) -> list[WorkflowTick]:
         return self._queues.ticks
 
-    def get_state_store(self) -> StateStore[Any] | None:
+    def get_state_store(
+        self, namespace: tuple[str, ...] = ()
+    ) -> StateStore[Any] | None:
+        if namespace:
+            return None
         return self._queues.state_store
 
     async def get_result(self) -> StopEvent:
