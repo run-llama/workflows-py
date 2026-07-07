@@ -1103,10 +1103,11 @@ async def test_copy_from_handle_copies_every_namespace_across_pages(
 
 
 @pytest.mark.asyncio
-async def test_pre_namespace_item_reads_as_root(
+async def test_root_lookup_is_single_query_matching_pre_namespace_rows(
     backend: FakeAgentDataBackend, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """An item written before namespaces (no namespace field) reads as root."""
+    """A row without a namespace field IS the root shape: the root lookup is a
+    single eq-null query that matches pre-namespace and new rows alike."""
     serializer = JsonSerializer()
     backend.create(
         "test-deploy",
@@ -1119,5 +1120,45 @@ async def test_pre_namespace_item_reads_as_root(
         },
     )
 
+    search_filters: list[dict[str, Any] | None] = []
+    original_search = backend.search
+
+    def counting_search(
+        deployment_name: str,
+        collection: str,
+        filters: dict[str, Any] | None = None,
+        page_size: int = 100,
+        order_by: str | None = None,
+    ) -> list[dict[str, Any]]:
+        search_filters.append(filters)
+        return original_search(
+            deployment_name, collection, filters, page_size, order_by
+        )
+
+    monkeypatch.setattr(backend, "search", counting_search)
+
     root = create_agent_data_state_store(backend, monkeypatch, "legacy-run")
     assert await root.get("k") == "legacy"
+    assert search_filters == [
+        {"run_id": {"eq": "legacy-run"}, "namespace": {"eq": None}}
+    ]
+
+
+@pytest.mark.asyncio
+async def test_root_write_omits_namespace_field(
+    backend: FakeAgentDataBackend, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Root rows persist without a namespace field; child rows carry theirs."""
+    root = create_agent_data_state_store(backend, monkeypatch, "run-shape")
+    child = create_agent_data_state_store(
+        backend, monkeypatch, "run-shape", namespace=("child",)
+    )
+    await root.set("k", "r")
+    await child.set("k", "c")
+
+    rows = [item["data"] for item in backend.search("test-deploy", "workflow_state")]
+    assert len(rows) == 2
+    root_rows = [row for row in rows if "namespace" not in row]
+    child_rows = [row for row in rows if row.get("namespace") == "child"]
+    assert len(root_rows) == 1
+    assert len(child_rows) == 1

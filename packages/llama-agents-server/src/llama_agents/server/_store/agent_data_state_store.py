@@ -30,8 +30,8 @@ _STATE_PAGE_SIZE = 100
 class _AgentDataStateRecord(BaseModel):
     """Validates the shape persisted in the Agent Data API.
 
-    ``namespace`` defaults to ``""`` so pre-namespace items (which carry no
-    namespace field) read back as the root namespace.
+    Root items carry no ``namespace`` field (matching pre-namespace items);
+    the ``""`` default reads both back as the root namespace.
     """
 
     run_id: str
@@ -88,30 +88,23 @@ class _AgentDataStateStorage:
         Filtering is by ``run_id`` *and* ``namespace`` server-side, so the query
         returns this namespace's single row directly rather than scanning the
         run's first page and filtering in Python.
+
+        Root rows carry no ``namespace`` field (same shape as pre-namespace
+        rows), and the backend's ``eq: null`` matches a missing field, so the
+        root lookup is a single query covering legacy and new rows alike.
         """
+        namespace_filter = None if self._namespace_key == "" else self._namespace_key
         items = await self._client.search(
             self._collection,
             {
                 _FIELD_RUN_ID: {"eq": self._run_id},
-                _FIELD_NAMESPACE: {"eq": self._namespace_key},
+                _FIELD_NAMESPACE: {"eq": namespace_filter},
             },
         )
         for item in items:
             record = _AgentDataStateRecord.model_validate(item["data"])
             if record.namespace == self._namespace_key:
                 return item["id"], record
-        # Pre-namespace items lack the ``namespace`` field, so a namespace filter
-        # can't match them. Such runs hold a single root item; find it by run_id
-        # alone and let the record's default ("") read it back as the root.
-        if self._namespace_key == "":
-            items = await self._client.search(
-                self._collection,
-                {_FIELD_RUN_ID: {"eq": self._run_id}},
-            )
-            for item in items:
-                record = _AgentDataStateRecord.model_validate(item["data"])
-                if record.namespace == self._namespace_key:
-                    return item["id"], record
         return None
 
     async def _load_record(self) -> _AgentDataStateRecord | None:
@@ -136,6 +129,10 @@ class _AgentDataStateStorage:
             state_module=record.state_module,
         )
         payload = stored.model_dump()
+        if self._namespace_key == "":
+            # Root rows keep the pre-namespace shape (no namespace field) so
+            # the root lookup stays a single eq-null query for all rows.
+            del payload[_FIELD_NAMESPACE]
         if self._item_id is not None:
             await self._client.update_item(self._item_id, payload)
             return
@@ -168,12 +165,26 @@ class _AgentDataStateStorage:
         A run may hold more namespace rows than a single search page (one per
         child invocation), so iterate with a keyset cursor over ``namespace``
         (unique per run) rather than reading only the first page.
+
+        The root row has no ``namespace`` field, so comparison filters can
+        never match it — fetch it with its own eq-null query, then paginate
+        the namespaced rows (every child key sorts after ``""``).
         """
-        cursor: str | None = None
+        root_items = await self._client.search(
+            collection,
+            {
+                _FIELD_RUN_ID: {"eq": run_id},
+                _FIELD_NAMESPACE: {"eq": None},
+            },
+        )
+        for item in root_items:
+            yield item
+        cursor = ""
         while True:
-            filters: dict[str, Any] = {_FIELD_RUN_ID: {"eq": run_id}}
-            if cursor is not None:
-                filters[_FIELD_NAMESPACE] = {"gt": cursor}
+            filters: dict[str, Any] = {
+                _FIELD_RUN_ID: {"eq": run_id},
+                _FIELD_NAMESPACE: {"gt": cursor},
+            }
             page = await self._client.search(
                 collection,
                 filters,
