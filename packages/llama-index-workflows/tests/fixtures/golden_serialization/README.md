@@ -7,7 +7,7 @@ and replay unchanged at the behavioral level:
   from a HITL workflow suspended on a `ctx.wait_for_event` waiter. Loading it
   must preserve current snapshot compatibility.
 - `snapshot_meta.json` — `{"expected_result_after_resume": ...}`: resuming the
-  snapshot and delivering `HumanResponseEvent(response="42")` must yield this.
+  snapshot and delivering `HumanResponse(response="42")` must yield this.
 - `journal.json` — `{"result": 12, "ticks": [...]}`: a full tick journal for a
   fan-out + `collect_events` run. Replaying the ticks from a canonical
   `BrokerState.from_workflow` must reach `StopEvent(result=12)`.

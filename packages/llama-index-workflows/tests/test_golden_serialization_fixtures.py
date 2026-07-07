@@ -63,12 +63,19 @@ class GoldenJournalWorkflow(Workflow):
         return StopEvent(result=sum(p.n for p in got))
 
 
+class HumanResponse(HumanResponseEvent):
+    """Typed ``HumanResponseEvent`` so the fixture constructs a response without
+    an untyped ``response=`` call (the base event declares no fields)."""
+
+    response: str
+
+
 class GoldenSnapshotWorkflow(Workflow):
     """HITL workflow suspended on a ``wait_for_event`` waiter (snapshot fixture)."""
 
     @step
     async def start(self, ctx: Context, ev: StartEvent) -> StopEvent:
-        response = await ctx.wait_for_event(HumanResponseEvent)
+        response = await ctx.wait_for_event(HumanResponse)
         return StopEvent(result=response.response)
 
 
@@ -104,7 +111,7 @@ async def test_golden_snapshot_loads_and_resumes() -> None:
     workflow = GoldenSnapshotWorkflow()
     ctx = Context.from_dict(workflow, snapshot)
     handler = workflow.run(ctx=ctx)
-    handler.ctx.send_event(HumanResponseEvent(response="42"))  # type: ignore[reportCallIssue]
+    handler.ctx.send_event(HumanResponse(response="42"))
 
     result = await handler
     assert result == meta["expected_result_after_resume"]

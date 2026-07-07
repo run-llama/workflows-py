@@ -17,10 +17,10 @@
       "static_collect_events": [],
       "collected_waiters": [
         {
-          "waiter_id": "waiter_workflows.events.HumanResponseEvent_{}_work_item_1",
+          "waiter_id": "waiter_tests.test_golden_serialization_fixtures.HumanResponse_{}_work_item_1",
           "event": "{\"__is_pydantic\": true, \"value\": {}, \"qualified_name\": \"workflows.events.StartEvent\"}",
           "bound_events": null,
-          "waiting_for_event": "workflows.events.HumanResponseEvent",
+          "waiting_for_event": "tests.test_golden_serialization_fixtures.HumanResponse",
           "has_requirements": false,
           "resolved_event": null,
           "scope_path": [],
