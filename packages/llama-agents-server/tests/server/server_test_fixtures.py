@@ -20,6 +20,8 @@ from llama_agents.server import (
     SqliteWorkflowStore,
     WorkflowServer,
 )
+from llama_agents.server._runtime.idle_release_runtime import IdleReleaseDecorator
+from llama_agents.server._runtime.persistence_runtime import PersistenceDecorator
 from workflows import Context, Workflow, step
 from workflows.events import (
     Event,
@@ -272,3 +274,17 @@ def cumulative_workflow() -> Workflow:
 @pytest.fixture
 def structured_start_workflow() -> Workflow:
     return StructuredStartWorkflow()
+
+
+def get_idle_release(server: WorkflowServer) -> IdleReleaseDecorator:
+    """Extract the IdleReleaseDecorator from the server's runtime stack."""
+    inner = server._runtime._decorated
+    assert isinstance(inner, IdleReleaseDecorator)
+    return inner
+
+
+def get_persistence(server: WorkflowServer) -> PersistenceDecorator:
+    """Extract the PersistenceDecorator from the server's runtime stack."""
+    idle_release = get_idle_release(server)
+    assert isinstance(idle_release._persistence, PersistenceDecorator)
+    return idle_release._persistence

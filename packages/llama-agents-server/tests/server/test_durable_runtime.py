@@ -23,14 +23,35 @@ from llama_agents.server import (
 )
 from llama_agents.server._runtime.idle_release_runtime import IdleReleaseDecorator
 from llama_agents.server._runtime.persistence_runtime import (
-    PersistenceDecorator,
+    handler_status_from_exit_command,
 )
-from server_test_fixtures import wait_for_passing  # type: ignore[import]
+from server_test_fixtures import (  # type: ignore[import]
+    get_idle_release as _get_idle_release,
+)
+from server_test_fixtures import (
+    get_persistence as _get_persistence,
+)
+from server_test_fixtures import (
+    wait_for_passing,
+)
 from workflows import Context, Workflow, step
 from workflows.context.serializers import JsonSerializer
 from workflows.context.state_store import DictState, serialize_dict_state_data
-from workflows.events import Event, HumanResponseEvent, StartEvent, StopEvent
+from workflows.errors import WorkflowCancelledByUser
+from workflows.events import (
+    Event,
+    HumanResponseEvent,
+    IdleReleasedEvent,
+    StartEvent,
+    StopEvent,
+)
+from workflows.runtime.types.commands import (
+    CommandCompleteRun,
+    CommandFailWorkflow,
+    CommandHalt,
+)
 from workflows.runtime.types.internal_state import BrokerState, EventAttempt
+from workflows.runtime.types.step_id import StepId
 
 
 class WaitableExternalEvent(HumanResponseEvent):
@@ -47,20 +68,6 @@ class WaitingWorkflow(Workflow):
     @step
     async def end(self, ctx: Context, ev: WaitableExternalEvent) -> StopEvent:
         return StopEvent(result=f"received: {ev.response}")
-
-
-def _get_idle_release(server: WorkflowServer) -> IdleReleaseDecorator:
-    """Extract the IdleReleaseDecorator from the server's runtime stack."""
-    inner = server._runtime._decorated
-    assert isinstance(inner, IdleReleaseDecorator)
-    return inner
-
-
-def _get_persistence(server: WorkflowServer) -> PersistenceDecorator:
-    """Extract the PersistenceDecorator from the server's runtime stack."""
-    idle_release = _get_idle_release(server)
-    assert isinstance(idle_release._persistence, PersistenceDecorator)
-    return idle_release._persistence
 
 
 async def wait_handler_status(
@@ -1229,3 +1236,33 @@ async def test_counter_state_persists_across_idle_reload(
         handler = await wait_handler_status(store, handler_id, "completed")
         assert handler.result is not None
         assert handler.result.result == "count=2"
+
+
+def test_handler_status_idle_release_returns_none() -> None:
+    cmd = CommandCompleteRun(result=IdleReleasedEvent())
+    assert handler_status_from_exit_command(cmd) is None
+
+
+def test_handler_status_complete_run_returns_completed_with_result() -> None:
+    stop = StopEvent(result="ok")
+    cmd = CommandCompleteRun(result=stop)
+    result = handler_status_from_exit_command(cmd)
+    assert result == ("completed", stop, None)
+
+
+def test_handler_status_fail_workflow_returns_failed_with_error_string() -> None:
+    cmd = CommandFailWorkflow(step_id=StepId.root("x"), exception=RuntimeError("bad"))
+    result = handler_status_from_exit_command(cmd)
+    assert result == ("failed", None, "bad")
+
+
+def test_handler_status_halt_cancelled_returns_cancelled() -> None:
+    cmd = CommandHalt(exception=WorkflowCancelledByUser())
+    result = handler_status_from_exit_command(cmd)
+    assert result == ("cancelled", None, None)
+
+
+def test_handler_status_halt_other_returns_failed() -> None:
+    cmd = CommandHalt(exception=TimeoutError("slow"))
+    result = handler_status_from_exit_command(cmd)
+    assert result == ("failed", None, "slow")
