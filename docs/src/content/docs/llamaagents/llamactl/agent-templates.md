@@ -14,7 +14,7 @@ You can pull these templates via our [llamactl CLI](/python/llamaagents/llamactl
 
 There are two groups of templates, with and without UI elements. You can see the most up-to-date list of templates by [initializing an agent project with `llamactl`](/python/llamaagents/llamactl/getting-started/#initialize-a-project).
 
-Below is a full list of templates available via the `llamactl` CLI. We also provide [Click to Deploy templates from within LlamaCloud](python/llamaagents/llamactl/click-to-deploy/).
+Below is a full list of templates available via the `llamactl` CLI. We also provide [Click to Deploy templates from within LlamaCloud](/python/llamaagents/cloud/click-to-deploy/).
 
 | **Template With UI**  | |
 | --- | --- |
