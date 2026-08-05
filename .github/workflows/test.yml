@@ -129,19 +129,13 @@ jobs:
         env:
           COVERALLS_REPO_TOKEN: ${{ secrets.COVERALLS_REPO_TOKEN }}
 
-  test-appserver-dependencies:
-    name: "test appserver dependencies (${{ matrix.name }})"
+  test-appserver-package:
+    name: "test appserver package (${{ matrix.resolution }})"
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - name: minimum
-            fastapi: "0.137.0"
-            instrumentator: "8.0.1"
-          - name: current
-            fastapi: "0.141.1"
-            instrumentator: "8.1.0"
+        resolution: [highest, lowest-direct]
 
     steps:
       - uses: actions/checkout@v4
@@ -154,16 +148,35 @@ jobs:
           python-version: "3.14"
           enable-cache: true
 
-      - name: Run appserver compatibility tests
+      - name: Build appserver wheel
+        run: uv build --wheel --package llama-agents-appserver --out-dir dist
+
+      - name: Resolve package dependencies
         run: >-
-          uv run --isolated
-          --with fastapi==${{ matrix.fastapi }}
-          --with prometheus-fastapi-instrumentator==${{ matrix.instrumentator }}
-          --package llama-agents-appserver
-          pytest packages/llama-agents-appserver/tests
+          uv pip compile
+          packages/llama-agents-appserver/pyproject.toml
+          --no-sources
+          --resolution ${{ matrix.resolution }}
+          --output-file "${RUNNER_TEMP}/appserver-requirements.txt"
+
+      - name: Install appserver wheel
+        run: |
+          uv venv "${RUNNER_TEMP}/appserver-venv"
+          uv pip install \
+            --python "${RUNNER_TEMP}/appserver-venv/bin/python" \
+            --requirements "${RUNNER_TEMP}/appserver-requirements.txt" \
+            dist/llama_agents_appserver-*.whl
+
+      - name: Smoke test installed appserver
+        run: |
+          mkdir -p "${RUNNER_TEMP}/appserver-smoke"
+          printf 'name: compatibility-test\nworkflows: {}\n' > "${RUNNER_TEMP}/appserver-smoke/llama_deploy.yaml"
+          LLAMA_DEPLOY_APISERVER_APP_ROOT="${RUNNER_TEMP}/appserver-smoke" \
+            "${RUNNER_TEMP}/appserver-venv/bin/python" \
+            .github/scripts/test_appserver_package.py
 
   coveralls-finish:
-    needs: [test, test-docker, test-appserver-dependencies]
+    needs: [test, test-docker, test-appserver-package]
     runs-on: ubuntu-latest
     if: github.repository == 'run-llama/llama-agents'
     steps:
