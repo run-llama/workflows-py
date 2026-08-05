@@ -1,5 +1,11 @@
 # llama-agents-control-plane
 
+## 0.12.4
+
+### Patch Changes
+
+- ce27389: Require FastAPI and Prometheus instrumentation versions that support included routers.
+
 ## 0.12.3
 
 ### Patch Changes

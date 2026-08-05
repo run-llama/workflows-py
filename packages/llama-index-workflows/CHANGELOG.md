@@ -1,5 +1,11 @@
 # llama-index-workflows
 
+## 2.23.0
+
+### Minor Changes
+
+- 26050d5: State storage is now keyed by run id and namespace; existing rows migrate to the root namespace.
+
 ## 2.22.2
 
 ### Patch Changes

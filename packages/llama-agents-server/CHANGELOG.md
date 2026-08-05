@@ -1,5 +1,21 @@
 # llama-agents-server
 
+## 0.7.0
+
+### Minor Changes
+
+- 26050d5: State storage is now keyed by run id and namespace; existing rows migrate to the root namespace.
+
+### Patch Changes
+
+- 2fd6d83: Update debugger assets
+
+  - JavaScript: https://cdn.jsdelivr.net/npm/@llamaindex/workflow-debugger@0.2.41/dist/app.js
+  - CSS: https://cdn.jsdelivr.net/npm/@llamaindex/workflow-debugger@0.2.41/dist/app.css
+
+- Updated dependencies [26050d5]
+  - llama-index-workflows@2.23.0
+
 ## 0.6.4
 
 ### Patch Changes

@@ -1,5 +1,11 @@
 # llama-agents-dbos
 
+## 0.5.0
+
+### Minor Changes
+
+- 26050d5: State storage is now keyed by run id and namespace; existing rows migrate to the root namespace.
+
 ## 0.4.1
 
 ### Patch Changes

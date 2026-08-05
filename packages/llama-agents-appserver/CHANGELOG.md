@@ -1,5 +1,11 @@
 # llama-agents-appserver
 
+## 0.11.6
+
+### Patch Changes
+
+- ce27389: Require FastAPI and Prometheus instrumentation versions that support included routers.
+
 ## 0.11.5
 
 ### Patch Changes
