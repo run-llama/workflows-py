@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: MIT
+# Copyright (c) 2026 LlamaIndex Inc.
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -47,8 +50,10 @@ def test_root_redirect_and_metrics(tmp_path: Path) -> None:
         assert b"apiserver_state" in m.content
 
         # CORS header present when Origin is sent
-        r2 = client.get("/health", headers={"Origin": "http://example.com"})
-        assert r2.headers.get("access-control-allow-origin") == "*"
+        origin = "http://example.com"
+        r2 = client.get("/health", headers={"Origin": origin})
+        assert r2.headers.get("access-control-allow-origin") == origin
+        assert r2.headers.get("access-control-allow-credentials") == "true"
 
 
 def test_static_ui_mount_serves_dist(tmp_path: Path) -> None:
