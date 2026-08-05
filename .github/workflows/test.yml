@@ -129,8 +129,41 @@ jobs:
         env:
           COVERALLS_REPO_TOKEN: ${{ secrets.COVERALLS_REPO_TOKEN }}
 
+  test-appserver-dependencies:
+    name: "test appserver dependencies (${{ matrix.name }})"
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: minimum
+            fastapi: "0.137.0"
+            instrumentator: "8.0.1"
+          - name: current
+            fastapi: "0.141.1"
+            instrumentator: "8.1.0"
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install uv and set the python version
+        uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.14"
+          enable-cache: true
+
+      - name: Run appserver compatibility tests
+        run: >-
+          uv run --isolated
+          --with fastapi==${{ matrix.fastapi }}
+          --with prometheus-fastapi-instrumentator==${{ matrix.instrumentator }}
+          --package llama-agents-appserver
+          pytest packages/llama-agents-appserver/tests
+
   coveralls-finish:
-    needs: [test, test-docker]
+    needs: [test, test-docker, test-appserver-dependencies]
     runs-on: ubuntu-latest
     if: github.repository == 'run-llama/llama-agents'
     steps:
