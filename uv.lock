@@ -2273,7 +2273,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "fastapi", specifier = ">=0.137.0,<0.142" },
+    { name = "fastapi", specifier = ">=0.137.0,<1" },
     { name = "httpx", specifier = ">=0.24.0,<1.0.0" },
     { name = "llama-agents-core", editable = "packages/llama-agents-core" },
     { name = "llama-agents-server", editable = "packages/llama-agents-server" },
@@ -2386,7 +2386,7 @@ requires-dist = [
     { name = "aiocache", specifier = ">=0.12.3" },
     { name = "cryptography", specifier = ">=44.0.0" },
     { name = "dulwich", extras = ["https"], specifier = ">=0.22.0" },
-    { name = "fastapi", extras = ["standard"], specifier = ">=0.137.0,<0.142" },
+    { name = "fastapi", extras = ["standard"], specifier = ">=0.137.0,<1" },
     { name = "gitpython", specifier = ">=3.1.40,<4" },
     { name = "kubernetes", specifier = ">=33.1.0" },
     { name = "llama-agents-core", extras = ["server"], editable = "packages/llama-agents-core" },

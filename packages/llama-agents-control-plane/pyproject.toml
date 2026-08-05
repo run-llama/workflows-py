@@ -30,7 +30,7 @@ authors = [
 ]
 requires-python = ">=3.10, <4"
 dependencies = [
-  "fastapi[standard]>=0.137.0,<0.142",
+  "fastapi[standard]>=0.137.0,<1",
   "llama-agents-core[server]>=0.5.0",
   "prometheus-client>=0.21.1,<0.22",
   "prometheus-fastapi-instrumentator>=8.0.1,<9.0.0",
