@@ -16,6 +16,40 @@ Each DBOS replica is configured with a unique `executor_id` (e.g. `"replica-8001
 
 The `executor_id` model means horizontal scaling works by adding replicas that each own a slice of the workload, not by distributing individual workflow steps across nodes.
 
+## Workflow Admission Queues
+
+`DBOSRuntime` owns one stable DBOS queue for each workflow name at registration.
+A later WorkflowServer route alias keeps that queue and its DBOS registration.
+Every run is enqueued, including workflows with no configured limit. A workflow's
+`num_concurrent_runs` value becomes the queue's `worker_concurrency`:
+
+- `None` is the default and does not impose an admission limit.
+- A positive integer limits active runs on each DBOS worker.
+
+The queue name does not depend on the limit. Turning a limit on, changing it,
+or returning to unlimited operation does not strand queued work. During a
+rolling deployment, workers in the same DBOS application version can briefly
+enforce different limits. Total capacity is the sum of the limits on all live
+workers. The first rollout from direct starts to queues can temporarily exceed
+the new limit until runs started by the previous revision finish.
+
+DBOS associates queued runs with an application version. A deployment that
+changes that version must keep old-version workers available until their queue
+has drained. A new application version does not take ownership of those runs.
+
+The runtime registers queues before `DBOS.launch()` and checks restricted
+`DBOS.listen_queues` configurations. Admission normally takes about the
+configured `polling_interval_sec`, but DBOS can back off longer while queues
+are idle. Queue objects stay owned by the live runtime. A later runtime can
+reuse their reserved names only after the owner destroys DBOS. Calling
+`runtime.destroy(destroy_dbos=False)` keeps that ownership because the
+application still owns the DBOS lifecycle.
+
+Cancellation uses `TickCancelRun` instead of DBOS hard cancellation. An
+`ENQUEUED` run therefore waits for admission before it processes cancellation,
+publishes `WorkflowCancelledEvent`, and lets server persistence record the
+terminal event.
+
 ## Process Layout
 
 ```
