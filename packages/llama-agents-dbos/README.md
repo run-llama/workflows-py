@@ -45,13 +45,30 @@ asyncio.run(main())
 ## Workflow concurrency
 
 The runtime submits every workflow run through a stable DBOS queue named
-`_llamaindex_workflow_queue:<workflow_name>`. The name is fixed when DBOS
-registers the workflow. A later WorkflowServer route alias does not replace the
-queue or strand existing work. The default remains unlimited:
+`_llamaindex_workflow_queue:<workflow_name>`. The runtime fixes that durable
+name when the workflow first enters the runtime. WorkflowServer route aliases
+do not replace the queue or the DBOS workflow registration. The default remains
+unlimited:
 
 ```python
 workflow = MyWorkflow(runtime=runtime, num_concurrent_runs=None)
 ```
+
+The default workflow name includes the Python module and class name. Set an
+explicit `workflow_name` when that code may be renamed and existing DBOS work
+must survive the deployment:
+
+```python
+workflow = MyWorkflow(
+    runtime=runtime,
+    workflow_name="orders.v1",
+    num_concurrent_runs=8,
+)
+```
+
+Treat this name as a durable identifier. Changing it also changes DBOS's
+control-loop and step registrations, so workers using the old name must drain
+their work before they are removed.
 
 Set `num_concurrent_runs` to a positive integer to limit active runs of that
 workflow on each DBOS worker. Changing the value back to `None` removes the
@@ -73,8 +90,11 @@ the cancellation request, but the run must be admitted before it can publish a
 `WorkflowCancelledEvent` and finish.
 
 If the application calls `DBOS.listen_queues`, it must include every queue in
-`runtime.workflow_queues`. The runtime raises an error before launch or late
-workflow registration when a required queue is missing.
+`runtime.workflow_queues`. DBOS does not expose its listener selection, so the
+runtime cannot validate a restricted listener configuration. DBOS's default
+listener discovers queues registered after launch, but an explicit listener
+list does not. Applications using a restricted list must register workflows
+and collect `runtime.workflow_queues` before launch.
 
 ## Features
 

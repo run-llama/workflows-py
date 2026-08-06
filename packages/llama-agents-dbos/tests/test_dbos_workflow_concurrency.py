@@ -114,15 +114,25 @@ def test_untrack_releases_exclusive_prelaunch_queue() -> None:
         runtime=runtime,
         workflow_name="tests.dbos.untracked-queue",
     )
-    queue_name = runtime.workflow_queues[0].name
+    queue = runtime.workflow_queues[0]
 
     runtime.untrack_workflow(workflow)
 
     assert runtime.workflow_queues == ()
-    Queue(queue_name)
+    replacement_runtime = DBOSRuntime()
+    _blocking_workflow_type(
+        _AdmissionGate(), class_name="ReplacementUntrackedQueueWorkflow"
+    )(
+        runtime=replacement_runtime,
+        workflow_name="tests.dbos.untracked-queue",
+        num_concurrent_runs=1,
+    )
+    assert replacement_runtime.workflow_queues == (queue,)
+    assert queue.worker_concurrency == 1
+    asyncio.run(replacement_runtime.destroy())
 
 
-def test_rename_collision_preserves_original_queue() -> None:
+def test_workflow_alias_does_not_change_declared_queue() -> None:
     runtime = DBOSRuntime()
     workflow = _blocking_workflow_type(
         _AdmissionGate(), class_name="RenamedQueueWorkflow"
@@ -131,14 +141,45 @@ def test_rename_collision_preserves_original_queue() -> None:
         workflow_name="tests.dbos.rename-original",
     )
     original_queue = runtime.workflow_queues[0]
-    Queue("_llamaindex_workflow_queue:tests.dbos.rename-collision")
-
     workflow._switch_workflow_name("tests.dbos.rename-collision")
-    with pytest.raises(RuntimeError, match="owned by the application"):
-        runtime.workflow_queues
-
-    workflow._switch_workflow_name("tests.dbos.rename-original")
     assert runtime.workflow_queues == (original_queue,)
+    assert original_queue.name == (
+        "_llamaindex_workflow_queue:tests.dbos.rename-original"
+    )
+
+
+def test_server_alias_before_launch_keeps_dbos_queue_name() -> None:
+    runtime = DBOSRuntime()
+    workflow = _blocking_workflow_type(
+        _AdmissionGate(), class_name="PrelaunchServerAliasWorkflow"
+    )(
+        runtime=runtime,
+        workflow_name="tests.dbos.stable-registration-name",
+    )
+    server = WorkflowServer(
+        runtime=runtime.build_server_runtime(),
+        workflow_store=runtime.create_workflow_store(),
+    )
+
+    server.add_workflow("route-alias", workflow)
+
+    assert workflow.workflow_name == "route-alias"
+    assert runtime.workflow_queues[0].name == (
+        "_llamaindex_workflow_queue:tests.dbos.stable-registration-name"
+    )
+
+
+def test_runtime_rejects_queue_declared_by_application() -> None:
+    queue_name = "_llamaindex_workflow_queue:tests.dbos.application-queue"
+    Queue(queue_name)
+    runtime = DBOSRuntime()
+    _blocking_workflow_type(_AdmissionGate(), class_name="ApplicationQueueWorkflow")(
+        runtime=runtime,
+        workflow_name="tests.dbos.application-queue",
+    )
+
+    with pytest.raises(RuntimeError, match="DBOS rejected workflow queue"):
+        runtime.workflow_queues
 
 
 def test_runtime_rejects_duplicate_name_with_conflicting_limits() -> None:
@@ -220,12 +261,18 @@ def test_destroy_without_dbos_retains_queue_ownership() -> None:
     workflow_name = "tests.dbos.externally-owned-queue"
     owner_runtime = DBOSRuntime()
     workflow_type(runtime=owner_runtime, workflow_name=workflow_name)
+    owner_runtime.workflow_queues
 
     asyncio.run(owner_runtime.destroy(destroy_dbos=False))
 
     other_runtime = DBOSRuntime()
-    with pytest.raises(RuntimeError, match="another live DBOS runtime"):
-        workflow_type(runtime=other_runtime, workflow_name=workflow_name)
+    workflow_type(
+        runtime=other_runtime,
+        workflow_name=workflow_name,
+        num_concurrent_runs=1,
+    )
+    with pytest.raises(RuntimeError, match="already declared"):
+        other_runtime.workflow_queues
     asyncio.run(owner_runtime.destroy())
 
 
@@ -245,36 +292,6 @@ def test_destroyed_queue_does_not_retain_runtime() -> None:
     gc.collect()
 
     assert runtime_ref() is None
-
-
-def test_launch_rejects_restricted_listener_missing_workflow_queue(
-    tmp_path: Path,
-) -> None:
-    DBOS(
-        config=_dbos_config(
-            tmp_path / "restricted-listener.sqlite3",
-            "dbos-restricted-listener-test",
-        )
-    )
-    runtime = DBOSRuntime(polling_interval_sec=0.01)
-    workflow = _blocking_workflow_type(
-        _AdmissionGate(), class_name="RestrictedListenerWorkflow"
-    )(
-        runtime=runtime,
-        workflow_name="tests.dbos.restricted-listener",
-    )
-    unrelated_queue = Queue("tests.dbos.unrelated-listener")
-    DBOS.listen_queues([unrelated_queue])
-
-    try:
-        with pytest.raises(
-            RuntimeError,
-            match="tests.dbos.restricted-listener",
-        ):
-            runtime.launch_sync()
-        assert not workflow._runtime_locked
-    finally:
-        asyncio.run(runtime.destroy())
 
 
 def test_launch_accepts_runtime_workflow_queues(tmp_path: Path) -> None:
@@ -300,7 +317,7 @@ def test_launch_accepts_runtime_workflow_queues(tmp_path: Path) -> None:
         asyncio.run(runtime.destroy())
 
 
-def test_late_registration_rejects_missing_restricted_queue(tmp_path: Path) -> None:
+def test_late_registration_joins_default_queue_listener(tmp_path: Path) -> None:
     DBOS(
         config=_dbos_config(
             tmp_path / "late-listener.sqlite3",
@@ -312,17 +329,18 @@ def test_late_registration_rejects_missing_restricted_queue(tmp_path: Path) -> N
         _AdmissionGate(), class_name="InitialListenerWorkflow"
     )
     first_type(runtime=runtime, workflow_name="tests.dbos.initial-listener")
-    DBOS.listen_queues(list(runtime.workflow_queues))
-
     try:
         runtime.launch_sync()
         late_type = _blocking_workflow_type(
             _AdmissionGate(), class_name="LateListenerWorkflow"
         )
-        with pytest.raises(RuntimeError, match="late-listener"):
-            late_type(runtime=runtime, workflow_name="tests.dbos.late-listener")
-        assert all(
-            queue.name != "_llamaindex_workflow_queue:tests.dbos.late-listener"
+        late_workflow = late_type(
+            runtime=runtime,
+            workflow_name="tests.dbos.late-listener",
+        )
+        assert runtime.get_registered(late_workflow) is not None
+        assert any(
+            queue.name == "_llamaindex_workflow_queue:tests.dbos.late-listener"
             for queue in runtime.workflow_queues
         )
     finally:

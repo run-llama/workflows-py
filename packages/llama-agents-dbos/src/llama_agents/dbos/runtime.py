@@ -15,9 +15,8 @@ import sqlite3
 import threading
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
-from dataclasses import dataclass
 from typing import Any, AsyncGenerator, TypedDict, cast
-from weakref import ReferenceType, WeakKeyDictionary, ref
+from weakref import WeakKeyDictionary
 
 import asyncpg
 from llama_agents.client.protocol.serializable_events import (
@@ -92,8 +91,8 @@ from workflows.workflow import Workflow
 
 from dbos import DBOS, Queue, SetWorkflowID, WorkflowHandleAsync
 from dbos._context import get_local_dbos_context
-from dbos._dbos import _get_dbos_instance, _get_or_create_dbos_registry
-from dbos._error import DBOSException, DBOSNonExistentWorkflowError
+from dbos._dbos import _get_dbos_instance
+from dbos._error import DBOSNonExistentWorkflowError
 
 from .executor_lease import ExecutorLeaseManager
 from .idle_release import DBOSIdleReleaseDecorator
@@ -115,16 +114,66 @@ STATE_TABLE_NAME = "workflow_state"
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class _QueueOwnership:
-    owner_ref: ReferenceType[DBOSRuntime] | None
-    dbos_id: int | None
-    reusable: bool = False
+class _WorkflowQueueDeclarations:
+    """Coordinate LlamaIndex queue declarations in DBOS's global process scope."""
+
+    def __init__(self) -> None:
+        self._lock = threading.RLock()
+        self._queues: dict[str, Queue] = {}
+        self._configs: dict[str, tuple[int | None, float]] = {}
+        self._owners: dict[str, set[object]] = {}
+
+    def declare(
+        self,
+        *,
+        owner: object,
+        name: str,
+        worker_concurrency: int | None,
+        polling_interval_sec: float,
+    ) -> Queue:
+        config = (worker_concurrency, polling_interval_sec)
+        with self._lock:
+            queue = self._queues.get(name)
+            if queue is None:
+                try:
+                    queue = Queue(
+                        name,
+                        worker_concurrency=worker_concurrency,
+                        polling_interval_sec=polling_interval_sec,
+                    )
+                except Exception as exc:
+                    raise RuntimeError(
+                        f"DBOS rejected workflow queue {name!r}: {exc}"
+                    ) from exc
+                self._queues[name] = queue
+                self._configs[name] = config
+                self._owners[name] = {owner}
+                return queue
+
+            owners = self._owners[name]
+            existing_config = self._configs[name]
+            other_owners = owners - {owner}
+            if existing_config != config and other_owners:
+                raise RuntimeError(
+                    f"DBOS workflow queue {name!r} is already declared with "
+                    f"worker_concurrency={existing_config[0]!r} and "
+                    f"polling_interval_sec={existing_config[1]!r}"
+                )
+            if existing_config != config:
+                queue.worker_concurrency = worker_concurrency
+                queue.polling_interval_sec = polling_interval_sec
+                self._configs[name] = config
+            owners.add(owner)
+            return queue
+
+    def release(self, *, owner: object, name: str) -> None:
+        with self._lock:
+            owners = self._owners.get(name)
+            if owners is not None:
+                owners.discard(owner)
 
 
-_RUNTIME_QUEUE_OWNERSHIP: WeakKeyDictionary[Queue, _QueueOwnership] = (
-    WeakKeyDictionary()
-)
+_WORKFLOW_QUEUE_DECLARATIONS = _WorkflowQueueDeclarations()
 
 
 class DBOSWorkflowStore(AbstractWorkflowStore):
@@ -352,7 +401,11 @@ class DBOSRuntime(Runtime):
         self._tracked_workflows: list[Workflow] = []
         self._tracked_workflow_ids: set[int] = set()  # Track by id for dedup
         self._registered: dict[int, RegisteredWorkflow] = {}  # keyed by id(workflow)
+        self._registration_name_by_workflow: WeakKeyDictionary[Workflow, str] = (
+            WeakKeyDictionary()
+        )
         self._workflow_queue_by_workflow_id: dict[int, tuple[str, Queue]] = {}
+        self._queue_owner = object()
 
         self._dbos_launched = False
         # Signaled once DBOS is launched and config (engine, schema, etc.) is
@@ -385,25 +438,22 @@ class DBOSRuntime(Runtime):
         This allows late registration for testing scenarios.
         """
         workflow_id = id(workflow)
+        registration_name = self._registration_name_by_workflow.setdefault(
+            workflow,
+            workflow.workflow_name,
+        )
         duplicate = next(
             (
                 tracked
                 for tracked in self._tracked_workflows
                 if id(tracked) != workflow_id
-                and tracked.workflow_name == workflow.workflow_name
+                and self._registration_name_by_workflow[tracked] == registration_name
             ),
             None,
         )
         if duplicate is not None:
             self._validate_shared_workflow(duplicate, workflow)
 
-        self._queue_for_workflow(workflow)
-        if self._dbos_launched:
-            try:
-                self._ensure_queue_is_listened_to(workflow)
-            except RuntimeError:
-                self._release_workflow_queue(workflow_id, remove_reservation=True)
-                raise
         if workflow_id not in self._tracked_workflow_ids:
             self._tracked_workflows.append(workflow)
             self._tracked_workflow_ids.add(workflow_id)
@@ -436,107 +486,60 @@ class DBOSRuntime(Runtime):
         return tuple(queues)
 
     def _queue_for_workflow(self, workflow: Workflow) -> Queue:
-        """Return the runtime-owned queue for the workflow's current name."""
+        """Return the queue for the workflow's stable DBOS registration name."""
         workflow_id = id(workflow)
-        workflow_name = workflow.workflow_name
+        workflow_name = self._registration_name_by_workflow.setdefault(
+            workflow,
+            workflow.workflow_name,
+        )
         existing_entry = self._workflow_queue_by_workflow_id.get(workflow_id)
         if existing_entry is not None:
-            existing_name, existing_queue = existing_entry
-            if existing_name == workflow_name or self._dbos_launched:
-                ownership = _RUNTIME_QUEUE_OWNERSHIP[existing_queue]
-                if ownership.dbos_id is None:
-                    try:
-                        ownership.dbos_id = id(_get_dbos_instance())
-                    except DBOSException:
-                        pass
-                return existing_queue
+            return existing_entry[1]
 
         duplicate = next(
             (
                 tracked
                 for tracked in self._tracked_workflows
-                if id(tracked) != workflow_id and tracked.workflow_name == workflow_name
+                if id(tracked) != workflow_id
+                and self._registration_name_by_workflow[tracked] == workflow_name
             ),
             None,
         )
         if duplicate is not None:
             self._validate_shared_workflow(duplicate, workflow)
-            shared_queue = self._queue_for_workflow(duplicate)
-            self._workflow_queue_by_workflow_id[workflow_id] = (
-                workflow_name,
-                shared_queue,
-            )
-            return shared_queue
+            duplicate_entry = self._workflow_queue_by_workflow_id.get(id(duplicate))
+            if duplicate_entry is not None:
+                self._workflow_queue_by_workflow_id[workflow_id] = (
+                    workflow_name,
+                    duplicate_entry[1],
+                )
+                return duplicate_entry[1]
 
         queue_name = f"_llamaindex_workflow_queue:{workflow_name}"
-        queue = self._reserve_queue(queue_name, workflow._num_concurrent_runs)
+        queue = _WORKFLOW_QUEUE_DECLARATIONS.declare(
+            owner=self._queue_owner,
+            name=queue_name,
+            worker_concurrency=workflow._num_concurrent_runs,
+            polling_interval_sec=self.config.get("polling_interval_sec", 1.0),
+        )
 
-        # Reserve and validate the destination before releasing the old name.
         self._workflow_queue_by_workflow_id[workflow_id] = (workflow_name, queue)
-        if existing_entry is not None and existing_entry[1] is not queue:
-            self._remove_queue_reservation_if_exclusive(existing_entry[1])
         return queue
 
     def _validate_shared_workflow(
         self, existing: Workflow, candidate: Workflow
     ) -> None:
+        candidate_name = self._registration_name_by_workflow[candidate]
         if type(existing) is not type(candidate):
             raise RuntimeError(
                 f"DBOSRuntime cannot share workflow name "
-                f"{candidate.workflow_name!r} across different workflow classes"
+                f"{candidate_name!r} across different workflow classes"
             )
         if existing._num_concurrent_runs != candidate._num_concurrent_runs:
             raise RuntimeError(
-                f"DBOSRuntime workflow {candidate.workflow_name!r} has conflicting "
+                f"DBOSRuntime workflow {candidate_name!r} has conflicting "
                 "num_concurrent_runs declarations"
             )
-
-    def _reserve_queue(self, queue_name: str, worker_concurrency: int | None) -> Queue:
-        registry = _get_or_create_dbos_registry()
-        queue = registry.queue_info_map.get(queue_name)
-        if queue is None:
-            queue = Queue(
-                queue_name,
-                worker_concurrency=worker_concurrency,
-                polling_interval_sec=self.config.get("polling_interval_sec", 1.0),
-            )
-            ownership = _QueueOwnership(owner_ref=ref(self), dbos_id=None)
-            _RUNTIME_QUEUE_OWNERSHIP[queue] = ownership
-        else:
-            ownership = _RUNTIME_QUEUE_OWNERSHIP.get(queue)
-            if ownership is None:
-                raise RuntimeError(
-                    f"Queue name {queue_name!r} is already owned by the application"
-                )
-            owner = ownership.owner_ref() if ownership.owner_ref is not None else None
-            try:
-                current_dbos = _get_dbos_instance()
-            except DBOSException:
-                current_dbos = None
-            can_reuse = ownership.reusable or (
-                ownership.dbos_id is not None
-                and ownership.dbos_id
-                != (id(current_dbos) if current_dbos is not None else None)
-            )
-            if owner is not self and not can_reuse:
-                raise RuntimeError(
-                    f"Queue name {queue_name!r} is already owned by another live "
-                    "DBOS runtime or by the application"
-                )
-        ownership = _RUNTIME_QUEUE_OWNERSHIP[queue]
-        owner = ownership.owner_ref() if ownership.owner_ref is not None else None
-        if owner is not self:
-            queue.concurrency = None
-            queue.worker_concurrency = worker_concurrency
-            queue.polling_interval_sec = self.config.get("polling_interval_sec", 1.0)
-
-        ownership.owner_ref = ref(self)
-        ownership.reusable = False
-        try:
-            ownership.dbos_id = id(_get_dbos_instance())
-        except DBOSException:
-            ownership.dbos_id = None
-        return queue
 
     def _release_workflow_queue(
         self, workflow_id: int, *, remove_reservation: bool
@@ -551,28 +554,10 @@ class DBOSRuntime(Runtime):
             for _, tracked_queue in self._workflow_queue_by_workflow_id.values()
         ):
             return
-        ownership = _RUNTIME_QUEUE_OWNERSHIP.get(queue)
-        if (
-            ownership is not None
-            and ownership.owner_ref is not None
-            and ownership.owner_ref() is not self
-        ):
-            return
-        registry = _get_or_create_dbos_registry()
-        if registry.queue_info_map.get(queue.name) is queue:
-            del registry.queue_info_map[queue.name]
-        _RUNTIME_QUEUE_OWNERSHIP.pop(queue, None)
-
-    def _ensure_queue_is_listened_to(self, workflow: Workflow) -> None:
-        listening_queues = _get_dbos_instance()._listening_queues
-        if listening_queues is None:
-            return
-        queue = self._queue_for_workflow(workflow)
-        if all(candidate.name != queue.name for candidate in listening_queues):
-            raise RuntimeError(
-                f"DBOS.listen_queues does not include the workflow queue for "
-                f"{workflow.workflow_name!r}: {queue.name!r}"
-            )
+        _WORKFLOW_QUEUE_DECLARATIONS.release(
+            owner=self._queue_owner,
+            name=queue.name,
+        )
 
     def get_registered(self, workflow: Workflow) -> RegisteredWorkflow | None:
         """Get the registered workflow if available."""
@@ -583,7 +568,7 @@ class DBOSRuntime(Runtime):
         Wrap workflow with DBOS decorators.
 
         Called at launch() time for each tracked workflow.
-        Uses workflow.workflow_name for stable DBOS registration names.
+        Uses the name captured when the workflow first entered this runtime.
         Idempotent: returns existing registration if already registered.
         """
         # Return existing registration if already registered
@@ -591,8 +576,11 @@ class DBOSRuntime(Runtime):
         if existing is not None:
             return existing
 
-        # Use workflow's name directly
-        name = workflow.workflow_name
+        # DBOS names are fixed when the workflow first enters this runtime.
+        name = self._registration_name_by_workflow.setdefault(
+            workflow,
+            workflow.workflow_name,
+        )
         self._queue_for_workflow(workflow)
 
         # Create DBOS-wrapped control loop with stable name
@@ -1052,7 +1040,6 @@ class DBOSRuntime(Runtime):
         # Register each pending workflow with DBOS
         for workflow in self._tracked_workflows:
             self._queue_for_workflow(workflow)
-            self._ensure_queue_is_listened_to(workflow)
             # Register with DBOS (this applies decorators)
             registered = self.register(workflow)
             self._registered[id(workflow)] = registered
@@ -1183,6 +1170,7 @@ class DBOSRuntime(Runtime):
         self._tracked_workflows.clear()
         self._tracked_workflow_ids.clear()
         self._registered.clear()
+        self._registration_name_by_workflow.clear()
         self._dbos_launched = False
         self._launch_ready = threading.Event()
         self._sql_engine = None
@@ -1219,15 +1207,10 @@ class DBOSRuntime(Runtime):
         if destroy_dbos:
             DBOS.destroy()
             for queue in owned_queues:
-                ownership = _RUNTIME_QUEUE_OWNERSHIP.get(queue)
-                if (
-                    ownership is not None
-                    and ownership.owner_ref is not None
-                    and ownership.owner_ref() is self
-                ):
-                    ownership.owner_ref = None
-                    ownership.dbos_id = None
-                    ownership.reusable = True
+                _WORKFLOW_QUEUE_DECLARATIONS.release(
+                    owner=self._queue_owner,
+                    name=queue.name,
+                )
             self._workflow_queue_by_workflow_id.clear()
 
 

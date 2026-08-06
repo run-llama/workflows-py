@@ -18,8 +18,9 @@ The `executor_id` model means horizontal scaling works by adding replicas that e
 
 ## Workflow Admission Queues
 
-`DBOSRuntime` owns one stable DBOS queue for each workflow name at registration.
-A later WorkflowServer route alias keeps that queue and its DBOS registration.
+`DBOSRuntime` owns one stable DBOS queue for each workflow name captured when
+the workflow first enters the runtime. WorkflowServer route aliases keep that
+queue and its DBOS registration.
 Every run is enqueued, including workflows with no configured limit. A workflow's
 `num_concurrent_runs` value becomes the queue's `worker_concurrency`:
 
@@ -36,14 +37,26 @@ the new limit until runs started by the previous revision finish.
 DBOS associates queued runs with an application version. A deployment that
 changes that version must keep old-version workers available until their queue
 has drained. A new application version does not take ownership of those runs.
+The default durable name includes the workflow's Python module and class name.
+Applications that may rename either should set an explicit `workflow_name` and
+treat it as a durable identifier. Changing it also changes DBOS's control-loop
+and step registration names, so a queue alias alone cannot migrate old work.
 
-The runtime registers queues before `DBOS.launch()` and checks restricted
-`DBOS.listen_queues` configurations. Admission normally takes about the
-configured `polling_interval_sec`, but DBOS can back off longer while queues
-are idle. Queue objects stay owned by the live runtime. A later runtime can
-reuse their reserved names only after the owner destroys DBOS. Calling
-`runtime.destroy(destroy_dbos=False)` keeps that ownership because the
-application still owns the DBOS lifecycle.
+The runtime declares queues through DBOS's public `Queue` API before
+`DBOS.launch()`. Matching declarations reuse the same process-global queue.
+Conflicting declarations from live runtimes fail, while a later runtime can
+change the local limit after the owner destroys DBOS. Calling
+`runtime.destroy(destroy_dbos=False)` keeps that declaration active because
+the application still owns the DBOS lifecycle. The adapter does not inspect or
+mutate DBOS's private queue registry.
+
+Applications that restrict `DBOS.listen_queues` must include
+`runtime.workflow_queues`; DBOS does not expose that listener selection for
+validation. The default listener discovers late queue declarations, but an
+explicit listener list does not. Applications using one must register all
+workflows and collect their queues before launch. Admission normally takes
+about the configured `polling_interval_sec`, but DBOS can back off longer while
+queues are idle.
 
 Cancellation uses `TickCancelRun` instead of DBOS hard cancellation. An
 `ENQUEUED` run therefore waits for admission before it processes cancellation,
