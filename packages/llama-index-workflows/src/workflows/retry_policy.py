@@ -832,7 +832,15 @@ class _ComposableRetryPolicy:
         if self.retry is not None and not self.retry(error):
             return None
 
-        delay = self.wait(attempts, seed=seed)
+        # `attempts` counts completed failures starting at 1 (the runtime
+        # never calls `.next()` before at least one failure has occurred; see
+        # runtime/control_loop/reduce.py: `failures = this_execution.attempts
+        # + 1`). Wait strategies, however, are 0-indexed by convention: index
+        # 0 is the delay before the *first* retry (see e.g. wait_exponential,
+        # wait_incrementing, wait_chain docstrings and unit tests). Subtract 1
+        # here so wait strategies see the index they expect instead of being
+        # silently shifted one step ahead.
+        delay = self.wait(attempts - 1, seed=seed)
         if self.stop(attempts, elapsed_time, upcoming_sleep=delay):
             return None
         return delay
