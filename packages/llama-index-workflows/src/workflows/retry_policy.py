@@ -90,7 +90,8 @@ class RetryPolicy(Protocol):
 
         Args:
             elapsed_time: Seconds since the first failure.
-            attempts: Number of attempts made so far.
+            attempts: Number of failures so far, starting at 1 for the
+                first failure.
             error: The last exception encountered.
             seed: Optional RNG seed for deterministic jitter (DBOS replay).
 
@@ -106,7 +107,11 @@ class RetryCondition(Protocol):
 
 
 class WaitStrategy(Protocol):
-    """Compute the delay in seconds before the next retry attempt."""
+    """Compute the delay in seconds before the next retry attempt.
+
+    ``attempts`` starts at 0 for the first retry. ``RetryPolicy.next`` counts
+    failures from 1 and subtracts one before calling the wait strategy.
+    """
 
     def __call__(self, attempts: int, *, seed: int | None = None) -> float: ...
 
@@ -463,7 +468,8 @@ class wait_exponential(_WaitStrategyBase):
     """
     Wait with exponentially increasing delays, clamped between ``min`` and ``max``.
 
-    The delay for attempt ``n`` is ``multiplier * exp_base**n`` before clamping.
+    The delay for retry ``n`` is ``multiplier * exp_base**n`` before clamping,
+    with ``n=0`` for the first retry.
 
     Examples:
         ```python
@@ -494,8 +500,8 @@ class wait_incrementing(_WaitStrategyBase):
     """
     Wait an incrementally larger amount after each attempt.
 
-    The delay starts at ``start`` and increases by ``increment`` on each retry,
-    capped by ``max`` and never going below zero.
+    The delay is ``start`` for the first retry and increases by ``increment``
+    on each subsequent retry, capped by ``max`` and never going below zero.
 
     Examples:
         ```python
@@ -630,10 +636,11 @@ def wait_full_jitter(
 
 class wait_chain(_WaitStrategyBase):
     """
-    Use a different wait strategy for each attempt in order.
+    Use a different wait strategy for each retry in order, starting with the
+    first.
 
     After the provided strategies are exhausted, the last strategy is reused
-    for all subsequent attempts.
+    for all subsequent retries.
 
     Examples:
         ```python
@@ -832,7 +839,12 @@ class _ComposableRetryPolicy:
         if self.retry is not None and not self.retry(error):
             return None
 
-        delay = self.wait(attempts, seed=seed)
+        # `attempts` counts failures from 1 (see runtime/control_loop/
+        # reduce.py: `failures = this_execution.attempts + 1`) while wait
+        # strategies count retries from 0, so subtract one. The clamp keeps
+        # a direct caller passing 0 on the first delay instead of index -1,
+        # which wait_chain would map to its last strategy.
+        delay = self.wait(max(attempts - 1, 0), seed=seed)
         if self.stop(attempts, elapsed_time, upcoming_sleep=delay):
             return None
         return delay

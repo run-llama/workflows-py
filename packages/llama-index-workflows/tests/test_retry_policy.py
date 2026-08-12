@@ -438,9 +438,11 @@ def test_retry_policy_with_wait_strategy() -> None:
         wait=wait_exponential(multiplier=1.0, exp_base=2.0, max=100.0, min=0.0),
         stop=stop_after_attempt(max_attempt_number=5),
     )
-    assert p.next(0.0, 0, Exception()) == 1.0
-    assert p.next(0.0, 1, Exception()) == 2.0
-    assert p.next(0.0, 2, Exception()) == 4.0
+    # `attempts` mirrors the real call site: 1 on the first failure, 2 on the
+    # second, etc. (see runtime/control_loop/reduce.py: failures = attempts + 1).
+    assert p.next(0.0, 1, Exception()) == 1.0
+    assert p.next(0.0, 2, Exception()) == 2.0
+    assert p.next(0.0, 3, Exception()) == 4.0
 
 
 def test_retry_policy_with_random_exponential_wait() -> None:
@@ -469,8 +471,9 @@ def test_retry_policy_stop_before_delay_stops_using_next_sleep() -> None:
         wait=wait_incrementing(start=1.0, increment=1.0, max=10.0),
         stop=stop_before_delay(5.0),
     )
-    assert p.next(2.0, 1, Exception("retry")) == 2.0
-    assert p.next(2.0, 2, Exception("retry")) is None
+    assert p.next(2.0, 1, Exception("retry")) == 1.0
+    assert p.next(2.0, 2, Exception("retry")) == 2.0
+    assert p.next(2.0, 3, Exception("retry")) is None
 
 
 def test_retry_policy_seed_forwarded() -> None:
@@ -496,11 +499,41 @@ def test_retry_policy_all_three_composed() -> None:
         stop=stop_after_attempt(max_attempt_number=3),
     )
     err = ConnectionError("refused")
-    assert p.next(0.0, 0, err) == 0.5
-    assert p.next(0.0, 1, err) == 1.5
-    assert p.next(0.0, 2, err) == 4.5
+    # `attempts` counts failures so far, matching how the runtime actually
+    # calls `.next()` (1 on the first failure, never 0 — see
+    # runtime/control_loop/reduce.py: `failures = this_execution.attempts + 1`).
+    assert p.next(0.0, 1, err) == 0.5
+    assert p.next(0.0, 2, err) == 1.5
     assert p.next(0.0, 3, err) is None
-    assert p.next(0.0, 0, ValueError("bad")) is None
+    assert p.next(0.0, 1, ValueError("bad")) is None
+
+
+def test_retry_policy_wait_indexing_matches_real_call_site() -> None:
+    """Regression test for an off-by-one between wait strategies and the
+    runtime's actual calling convention.
+
+    The runtime always calls ``RetryPolicy.next()`` with ``attempts`` counting
+    completed failures starting at 1 (see
+    ``runtime/control_loop/reduce.py``: ``failures = this_execution.attempts +
+    1``); it is never 0. Every attempt-indexed wait strategy (``wait_chain``,
+    ``wait_exponential``, ``wait_incrementing``, ...) is documented and
+    unit-tested as 0-indexed: the first configured delay corresponds to index
+    0. Before the fix, ``_ComposableRetryPolicy.next()`` forwarded the
+    1-indexed ``attempts`` straight to the wait strategy, silently skipping
+    each strategy's first configured delay and shifting every later delay one
+    step ahead of schedule.
+    """
+    p = retry_policy(
+        wait=wait_chain(wait_fixed(1.0), wait_fixed(2.0), wait_fixed(5.0)),
+        stop=stop_after_attempt(4),
+    )
+    err = Exception("boom")
+
+    # Simulate the real retry loop: `attempts` starts at 1 on the first
+    # failure and increments by 1 on each subsequent failure.
+    delays = [p.next(0.0, attempts, err) for attempts in range(1, 4)]
+
+    assert delays == [1.0, 2.0, 5.0]
 
 
 def test_retry_policy_with_operator_composition() -> None:
@@ -561,10 +594,10 @@ def test_ExponentialBackoffRetryPolicy_next_basic() -> None:
     )
     assert type(p).__name__ == "_ComposableRetryPolicy"
     err = Exception()
-    assert p.next(elapsed_time=0.0, attempts=0, error=err) == 1.0
-    assert p.next(elapsed_time=0.0, attempts=1, error=err) == 2.0
-    assert p.next(elapsed_time=0.0, attempts=2, error=err) == 4.0
-    assert p.next(elapsed_time=0.0, attempts=3, error=err) == 8.0
+    assert p.next(elapsed_time=0.0, attempts=1, error=err) == 1.0
+    assert p.next(elapsed_time=0.0, attempts=2, error=err) == 2.0
+    assert p.next(elapsed_time=0.0, attempts=3, error=err) == 4.0
+    assert p.next(elapsed_time=0.0, attempts=4, error=err) == 8.0
 
 
 @pytest.mark.filterwarnings("ignore::DeprecationWarning")
@@ -572,7 +605,7 @@ def test_ExponentialBackoffRetryPolicy_max_delay_cap() -> None:
     p = ExponentialBackoffRetryPolicy(
         initial_delay=1.0, multiplier=10.0, max_delay=50.0, jitter=False
     )
-    assert p.next(elapsed_time=0.0, attempts=2, error=Exception()) == 50.0
+    assert p.next(elapsed_time=0.0, attempts=3, error=Exception()) == 50.0
     assert p.next(elapsed_time=0.0, attempts=5, error=Exception()) is None
 
 
@@ -624,10 +657,10 @@ def test_ExponentialBackoffRetryPolicy_no_jitter() -> None:
         initial_delay=0.5, multiplier=3.0, max_delay=100.0, jitter=False
     )
     err = Exception()
-    assert p.next(elapsed_time=0.0, attempts=0, error=err) == 0.5
-    assert p.next(elapsed_time=0.0, attempts=1, error=err) == 1.5
-    assert p.next(elapsed_time=0.0, attempts=2, error=err) == 4.5
-    assert p.next(elapsed_time=0.0, attempts=3, error=err) == 13.5
+    assert p.next(elapsed_time=0.0, attempts=1, error=err) == 0.5
+    assert p.next(elapsed_time=0.0, attempts=2, error=err) == 1.5
+    assert p.next(elapsed_time=0.0, attempts=3, error=err) == 4.5
+    assert p.next(elapsed_time=0.0, attempts=4, error=err) == 13.5
 
 
 # ---------------------------------------------------------------------------

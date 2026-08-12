@@ -162,6 +162,7 @@ def next(
 ```
 
 Return the number of seconds to wait before retrying, or `None` to stop.
+`attempts` counts failures so far, starting at 1 for the first failure.
 The optional `seed` is used by durable runtimes to make jitter deterministic during replay.
 
 For example, this policy only retries on Fridays:
