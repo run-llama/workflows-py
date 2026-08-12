@@ -1,5 +1,11 @@
 # llama-index-workflows
 
+## 2.23.1
+
+### Patch Changes
+
+- 47c7e3f: Fix an off-by-one that made retry wait strategies skip their first configured delay, so every retry delay is now one step shorter than before.
+
 ## 2.23.0
 
 ### Minor Changes
