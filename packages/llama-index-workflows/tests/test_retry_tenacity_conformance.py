@@ -7,9 +7,10 @@ import inspect
 import types as builtin_types
 import typing
 from collections.abc import Callable
-from typing import Protocol, Union, cast
+from typing import Any, Protocol, Union, cast
 
 import pytest
+import tenacity
 from tenacity import retry_all as tenacity_retry_all
 from tenacity import retry_any as tenacity_retry_any
 from tenacity import retry_if_exception as tenacity_retry_if_exception
@@ -56,6 +57,7 @@ from workflows.retry_policy import (
     retry_if_not_exception_message,
     retry_if_not_exception_type,
     retry_never,
+    retry_policy,
     retry_unless_exception_type,
     stop_after_attempt,
     stop_after_delay,
@@ -205,3 +207,88 @@ def test_wait_full_jitter_alias_matches_wait_random_exponential_signature() -> N
     assert _parameter_types(wait_full_jitter) == _parameter_types(
         wait_random_exponential
     )
+
+
+# ---------------------------------------------------------------------------
+# Value conformance: same config in, same delay sequence out.
+#
+# The signature tests above catch API drift but not behavioral drift. Each
+# case drives our policy the way the runtime does (attempts counts failures
+# from 1) and tenacity's wait strategy the way its retry loop does
+# (attempt_number from 1), and requires identical delays. Deterministic
+# strategies only, since tenacity's jitter uses global random state.
+# ---------------------------------------------------------------------------
+
+
+def _tenacity_delays(strategy: Callable[..., float], n: int) -> list[float]:
+    """Delay sequence tenacity's retry loop would produce for n failures."""
+    delays = []
+    for attempt_number in range(1, n + 1):
+        state = tenacity.RetryCallState(cast(Any, None), None, (), {})
+        state.attempt_number = attempt_number
+        delays.append(strategy(state))
+    return delays
+
+
+def _our_delays(wait: object, n: int) -> list[float | None]:
+    """Delay sequence our runtime would produce for n failures."""
+    policy = retry_policy(wait=cast(Any, wait), stop=stop_never())
+    err = Exception("boom")
+    return [policy.next(0.0, attempts, err) for attempts in range(1, n + 1)]
+
+
+VALUE_CONFORMANCE_CASES: list[tuple[str, object, Callable[..., float]]] = [
+    ("wait_fixed", wait_fixed(1.5), tenacity_wait_fixed(1.5)),
+    ("wait_none", wait_none(), tenacity_wait_none()),
+    (
+        "wait_exponential",
+        wait_exponential(multiplier=1.0, exp_base=2.0, max=60.0, min=0.0),
+        tenacity_wait_exponential(multiplier=1.0, exp_base=2.0, max=60.0, min=0.0),
+    ),
+    (
+        "wait_exponential_capped",
+        wait_exponential(multiplier=0.5, exp_base=3.0, max=10.0, min=1.0),
+        tenacity_wait_exponential(multiplier=0.5, exp_base=3.0, max=10.0, min=1.0),
+    ),
+    (
+        "wait_incrementing",
+        wait_incrementing(start=1.0, increment=2.0, max=10.0),
+        tenacity_wait_incrementing(start=1.0, increment=2.0, max=10.0),
+    ),
+    (
+        "wait_exponential_jitter_zero_jitter",
+        wait_exponential_jitter(initial=1.0, exp_base=2.0, max=100.0, jitter=0.0),
+        tenacity_wait_exponential_jitter(
+            initial=1.0, exp_base=2.0, max=100.0, jitter=0.0
+        ),
+    ),
+    (
+        "wait_chain",
+        wait_chain(wait_fixed(1.0), wait_fixed(2.0), wait_fixed(5.0)),
+        tenacity_wait_chain(
+            tenacity_wait_fixed(1.0),
+            tenacity_wait_fixed(2.0),
+            tenacity_wait_fixed(5.0),
+        ),
+    ),
+    (
+        "wait_combine",
+        wait_combine(wait_fixed(1.0), wait_incrementing(start=0.0, increment=1.0)),
+        tenacity_wait_combine(
+            tenacity_wait_fixed(1.0),
+            tenacity_wait_incrementing(start=0.0, increment=1.0),
+        ),
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "wait, tenacity_wait",
+    [(c[1], c[2]) for c in VALUE_CONFORMANCE_CASES],
+    ids=[c[0] for c in VALUE_CONFORMANCE_CASES],
+)
+def test_retry_policy_delays_match_tenacity(
+    wait: object, tenacity_wait: Callable[..., float]
+) -> None:
+    n = 6
+    assert _our_delays(wait, n) == _tenacity_delays(tenacity_wait, n)

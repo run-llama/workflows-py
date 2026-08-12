@@ -33,6 +33,7 @@ from workflows.retry_policy import (
     ExponentialBackoffRetryPolicy,
     retry_policy,
     stop_after_attempt,
+    wait_chain,
     wait_exponential_jitter,
     wait_fixed,
 )
@@ -731,6 +732,42 @@ def test_step_worker_failed_retry_preserves_delay(base_state: BrokerState) -> No
     # The retry must not be dispatched within this reduction
     assert not any(isinstance(c, CommandRunWorker) for c in commands)
     assert len(new_state.workers["test_step"].in_progress) == 0
+
+
+@pytest.mark.parametrize(
+    "prior_attempts, expected_delay",
+    [(0, 1.0), (1, 2.0), (2, 5.0)],
+)
+def test_step_worker_failed_uses_attempt_indexed_delay(
+    base_state: BrokerState, prior_attempts: int, expected_delay: float
+) -> None:
+    """The Nth failure re-queues with the Nth configured delay.
+
+    A constant delay can't see an indexing off-by-one, so this uses
+    wait_chain with three distinct values and checks the absolute
+    not_before for each failure.
+    """
+    base_state.workers["test_step"].config.retry_policy = retry_policy(
+        wait=wait_chain(wait_fixed(1.0), wait_fixed(2.0), wait_fixed(5.0)),
+        stop=stop_after_attempt(4),
+    )
+    event = MyTestEvent(value=42)
+    add_worker(base_state, event)
+    base_state.workers["test_step"].in_progress[0].attempts = prior_attempts
+
+    tick: TickStepResult = TickStepResult(
+        step_id=StepId.root("test_step"),
+        worker_id=0,
+        event=event,
+        result=[StepWorkerFailed(exception=ValueError("test"), failed_at=110.0)],
+    )
+
+    new_state, _ = _process_step_result_tick(tick, base_state, now_seconds=110.0)
+
+    queue = new_state.workers["test_step"].queue
+    assert len(queue) == 1
+    assert queue[0].not_before == 110.0 + expected_delay
+    assert queue[0].attempts == prior_attempts + 1
 
 
 def test_step_worker_failed_retry_preserves_first_attempt_at(
