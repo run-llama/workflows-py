@@ -116,7 +116,11 @@ class Workflow(metaclass=WorkflowMeta):
             verbose (bool): If True, print step activity.
             resource_manager (ResourceManager | None): Custom resource manager
                 for dependency injection.
-            num_concurrent_runs (int | None): Limit on concurrent `run()` calls.
+            num_concurrent_runs (int | None): Maximum number of active runs for
+                this workflow. Must be a positive integer or `None`. The
+                default, `None`, allows unlimited runs. The basic runtime
+                applies the limit to this workflow instance. `DBOSRuntime`
+                applies it to each worker through DBOS queue concurrency.
             runtime (Runtime | None): Optional runtime to use for this workflow.
                 If not provided, uses the current context-scoped runtime or
                 falls back to basic_runtime.

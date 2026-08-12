@@ -8,6 +8,53 @@ Workflows can run steps at the same time. When several steps are independent and
 
 The usual pattern is fan-out and fan-in. You split the work into pieces, run them at the same time, then join the results back together. You write this directly in the step signatures. Return a `list` from a step and it fans out, with one event per element. Take a `list` parameter and it fans in, firing once on the whole batch. The `@step` decorator reads those types. The validator and the [visualization](/python/llamaagents/workflows/drawing) then connect each producer step to the steps that consume its events, with no extra work from you. When you need to emit events that do not follow from the signature, you can send them yourself with `ctx.send_event`. The [dynamic API](#the-dynamic-api) at the end of this page covers that.
 
+## Limit simultaneous workflow runs
+
+Whole-run concurrency and step concurrency are separate. Set
+`num_concurrent_runs` on a workflow to limit how many calls to `run()` may be
+active at once:
+
+```python
+workflow = ParallelFlow(num_concurrent_runs=4)
+```
+
+The value must be a positive integer or `None`. The default is `None`, which
+allows unlimited runs. With the default runtime, the limit applies to one
+workflow instance in one Python process. Additional calls wait until an active
+run finishes.
+
+With `DBOSRuntime`, every run goes through a stable DBOS queue and
+`num_concurrent_runs` sets that queue's concurrency for each worker. For
+example, `num_concurrent_runs=4` with three live workers allows roughly 12
+active runs across the deployment. `None` leaves each worker unlimited.
+
+Changing between a positive limit and `None` keeps the same queue, so queued
+work is not stranded. Set an explicit, stable `workflow_name` if a workflow's
+Python module or class may be renamed. The name identifies its DBOS queue and
+durable registrations:
+
+```python
+from llama_agents.dbos import DBOSRuntime
+
+runtime = DBOSRuntime()
+workflow = ParallelFlow(
+    runtime=runtime,
+    workflow_name="document-processing.v1",
+    num_concurrent_runs=4,
+)
+```
+
+During the first rollout from direct DBOS starts to queued starts, runs started
+by the old code may finish alongside the newly limited runs. The deployment can
+therefore exceed the new limit temporarily. Let the old workers and their
+active runs drain before treating the limit as strict. See
+[DBOS-backed workflows](/python/llamaagents/workflows/dbos) for durable naming,
+scaling, and deployment guidance.
+
+Use `@step(num_workers=...)` for concurrency inside each run. It controls how
+many copies of that step can process events at once and does not limit the
+number of workflow runs.
+
 ## Fan-out: return a list
 
 Return a `list` from a step and each element fires as its own event. Here five `Task`s run concurrently under `work`:
