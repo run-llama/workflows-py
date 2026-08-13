@@ -75,7 +75,7 @@ async def _run_limited_admission_case(tmp_path: Path) -> None:
             "dbos-limited-admission-test",
         )
     )
-    runtime = DBOSRuntime(polling_interval_sec=0.01)
+    runtime = DBOSRuntime(polling_interval_sec=0.01, queue_polling_interval_sec=0.01)
     gate = _AdmissionGate()
     workflow = _blocking_workflow_type(
         gate,
@@ -130,7 +130,7 @@ async def _run_unlimited_admission_case(tmp_path: Path) -> None:
             "dbos-unlimited-admission-test",
         )
     )
-    runtime = DBOSRuntime(polling_interval_sec=0.01)
+    runtime = DBOSRuntime(polling_interval_sec=0.01, queue_polling_interval_sec=0.01)
     gate = _AdmissionGate()
     workflow = _blocking_workflow_type(
         gate,
@@ -182,7 +182,7 @@ async def _run_queue_declaration_case(tmp_path: Path) -> None:
             "dbos-queue-declaration-test",
         )
     )
-    runtime = DBOSRuntime(polling_interval_sec=0.125)
+    runtime = DBOSRuntime(queue_polling_interval_sec=0.125)
     _blocking_workflow_type(
         _AdmissionGate(),
         class_name="LimitedQueueWorkflow",
@@ -234,7 +234,9 @@ async def _run_destroy_relaunch_case(tmp_path: Path) -> None:
     workflow_name = "tests.dbos.reused-queue"
 
     DBOS(config=config)
-    first_runtime = DBOSRuntime(polling_interval_sec=0.01)
+    first_runtime = DBOSRuntime(
+        polling_interval_sec=0.01, queue_polling_interval_sec=0.01
+    )
     _blocking_workflow_type(
         _AdmissionGate(),
         class_name="FirstReusedQueueWorkflow",
@@ -248,7 +250,9 @@ async def _run_destroy_relaunch_case(tmp_path: Path) -> None:
     await first_runtime.destroy(destroy_dbos=True)
 
     DBOS(config=config)
-    second_runtime = DBOSRuntime(polling_interval_sec=0.02)
+    second_runtime = DBOSRuntime(
+        polling_interval_sec=0.01, queue_polling_interval_sec=0.02
+    )
     _blocking_workflow_type(
         _AdmissionGate(),
         class_name="SecondReusedQueueWorkflow",
@@ -278,7 +282,7 @@ async def _run_restricted_listener_case(tmp_path: Path) -> None:
             "dbos-restricted-listener-test",
         )
     )
-    runtime = DBOSRuntime(polling_interval_sec=0.01)
+    runtime = DBOSRuntime(polling_interval_sec=0.01, queue_polling_interval_sec=0.01)
     gate = _AdmissionGate()
     workflow = _blocking_workflow_type(
         gate,
@@ -326,7 +330,7 @@ async def _run_queued_cancellation_case(tmp_path: Path) -> None:
             "dbos-queued-cancellation-test",
         )
     )
-    runtime = DBOSRuntime(polling_interval_sec=0.01)
+    runtime = DBOSRuntime(polling_interval_sec=0.01, queue_polling_interval_sec=0.01)
     gate = _AdmissionGate()
 
     class QueuedCancellationWorkflow(Workflow):

@@ -55,7 +55,7 @@ The default is `None`, which is unlimited. Unlimited workflows start directly,
 with no queue in the path. Limited workflows submit through a DBOS queue named
 `_llamaindex_workflow_queue:<workflow_name>`, and runs beyond the limit wait as
 `ENQUEUED`. Admission takes about the configured
-`DBOSRuntime(polling_interval_sec=...)`, one second by default. Capacity across
+`DBOSRuntime(queue_polling_interval_sec=...)`, one second by default. Capacity across
 a deployment is the limit times the number of workers. The queue is shared, so
 an enqueued run has no affinity to the replica that submitted it. Any worker
 with a free slot can pick it up.

@@ -249,6 +249,7 @@ class DBOSRuntimeConfig(TypedDict, total=False):
     """
 
     polling_interval_sec: float
+    queue_polling_interval_sec: float
     run_migrations_on_launch: bool
     schema: str | None
     state_table_name: str
@@ -324,6 +325,9 @@ class DBOSRuntime(Runtime):
         Args:
             **kwargs: Configuration options. See DBOSRuntimeConfig for details.
                 polling_interval_sec: Interval for polling workflow results. Default 1.0.
+                queue_polling_interval_sec: Interval for polling workflow
+                    admission queues. Bounds how long a run limited by
+                    ``num_concurrent_runs`` waits for a free slot. Default 1.0.
                 run_migrations_on_launch: Auto-run migrations on launch(). Default True.
                 schema: Database schema name. Default: auto-detected at launch
                     ("dbos" for PostgreSQL, None for SQLite). Pass None explicitly
@@ -441,7 +445,7 @@ class DBOSRuntime(Runtime):
         queue = _declare_workflow_queue(
             f"_llamaindex_workflow_queue:{name}",
             workflow._num_concurrent_runs,
-            self.config.get("polling_interval_sec", 1.0),
+            self.config.get("queue_polling_interval_sec", 1.0),
         )
 
         # Create DBOS-wrapped control loop with stable name
