@@ -50,8 +50,7 @@ class Fetcher(Workflow):
 
 Every run shares the one semaphore, so at most three `fetch` steps are in the
 API call at any moment, whichever runs they belong to. The semaphore lives in
-one Python process. Under a multi-replica DBOS deployment each replica has its
-own, so the effective cap is the value times the number of replicas.
+one Python process. If you deploy multiple processes, each has its own.
 
 ## Fan-out: return a list
 
