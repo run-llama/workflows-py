@@ -64,17 +64,20 @@ The runtime declares the queue for every workflow, limited or not, so turning a
 limit on or off never strands queued work. A new limit does not count runs that
 started before it, so a worker can briefly exceed the limit while those finish.
 
-The queue name comes from `workflow_name`, which defaults to the Python module
-and class name. Treat it as a durable identifier. Renaming it also renames the
-DBOS registrations, so workers using the old name must drain their work before
-they are removed.
+Waiting runs are rows in the database, filed under the workflow's name
+(`workflow_name`, defaulting to the Python module and class name). A worker
+only looks for waiting work under the names it knows, so if you rename a
+workflow, rows filed under the old name are invisible to the new deployment.
+Keep old workers running until they finish that work.
 
-Cancelling an `ENQUEUED` run takes effect after admission, because cancellation
-is delivered as an event to the running control loop.
+A run that is still waiting in the queue cannot be cancelled yet, because
+cancellation is a message delivered to the running workflow. The request is
+saved, and the run stops itself as soon as it starts.
 
-Applications that restrict `DBOS.listen_queues` must include every queue in
-`runtime.workflow_queues`, collected after registering workflows and before
-launch.
+DBOS normally watches every queue automatically. An application that instead
+passes an explicit list to `DBOS.listen_queues` must add this runtime's
+queues to it (`runtime.workflow_queues`), or waiting runs are never picked
+up. Build the list after registering workflows and before launch.
 
 ## Features
 

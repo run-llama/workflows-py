@@ -25,22 +25,26 @@ through the queue. Workflows without one start directly and never touch it.
 The queue is declared either way, so removing a limit still leaves a listener
 for rows that were `ENQUEUED` under the old one.
 
-Queue declarations live in a process-level map because DBOS's own registry
-survives `DBOS.destroy()` and rejects redeclaring a name. Recreating the
-runtime reuses the existing queue object and updates its `worker_concurrency`
-in place, which DBOS's poller reads live on every tick.
+DBOS remembers every queue ever declared in the process, even after
+`DBOS.destroy()`, and declaring the same name twice raises. So the adapter
+keeps its own module-level dict of queue objects. A recreated runtime reuses
+the existing object and just changes `worker_concurrency` on it, which DBOS
+reads fresh on every poll.
 
-DBOS stamps every run with an application version and only dequeues or
-recovers runs whose version matches. Under this adapter the version is stable
-across changes to workflow step code, because every workflow registers the
-same control-loop wrapper. It shifts when a workflow is added or removed, or
-when the `dbos` or `llama-agents-dbos` package changes. After such a
-deployment, keep old workers running until their in-flight and enqueued runs
-drain.
+DBOS tags every run with an application version, a fingerprint of the
+registered workflow functions, and a worker only picks up runs whose
+fingerprint matches its own. This protects a run from being resumed by code
+that changed under it. Under this adapter every workflow registers the same
+control-loop wrapper, so the fingerprint does not change when users edit
+their step code. It does change when a workflow is added or removed, or when
+the `dbos` or `llama-agents-dbos` package changes. After such a deployment,
+runs tagged with the old fingerprint can only be finished by workers running
+the old code, so keep those workers up until that work drains.
 
-Cancellation uses `TickCancelRun` instead of DBOS hard cancellation, so an
-`ENQUEUED` run processes the cancellation after admission and publishes
-`WorkflowCancelledEvent` on its way out.
+Cancellation uses `TickCancelRun` instead of DBOS hard cancellation. A run
+still waiting in the queue cannot process it yet; the request is saved, and
+the run publishes `WorkflowCancelledEvent` and stops as soon as it is
+admitted.
 
 ## Process Layout
 
