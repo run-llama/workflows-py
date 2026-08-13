@@ -56,7 +56,9 @@ with no queue in the path. Limited workflows submit through a DBOS queue named
 `_llamaindex_workflow_queue:<workflow_name>`, and runs beyond the limit wait as
 `ENQUEUED`. Admission takes about the configured
 `DBOSRuntime(polling_interval_sec=...)`, one second by default. Capacity across
-a deployment is the limit times the number of workers.
+a deployment is the limit times the number of workers. The queue is shared, so
+an enqueued run has no affinity to the replica that submitted it. Any worker
+with a free slot can pick it up.
 
 The runtime declares the queue for every workflow, limited or not, so turning a
 limit on or off never strands queued work. A new limit does not count runs that
