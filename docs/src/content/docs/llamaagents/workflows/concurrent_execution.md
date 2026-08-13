@@ -28,6 +28,31 @@ Use `@step(num_workers=...)` for concurrency inside each run. It controls how
 many copies of that step can process events at once and does not limit the
 number of workflow runs.
 
+## Limit active steps across runs
+
+To limit how many copies of a step run at once across all runs, for example to
+cap concurrent calls to an external API, share an `asyncio.Semaphore` between
+them. Steps are plain async functions, so this needs no library support:
+
+```python
+import asyncio
+
+API_SLOTS = asyncio.Semaphore(3)
+
+
+class Fetcher(Workflow):
+    @step
+    async def fetch(self, ev: FetchRequest) -> FetchResult:
+        async with API_SLOTS:
+            data = await call_external_api(ev.url)
+        return FetchResult(data=data)
+```
+
+Every run shares the one semaphore, so at most three `fetch` steps are in the
+API call at any moment, whichever runs they belong to. The semaphore lives in
+one Python process. Under a multi-replica DBOS deployment each replica has its
+own, so the effective cap is the value times the number of replicas.
+
 ## Fan-out: return a list
 
 Return a `list` from a step and each element fires as its own event. Here five `Task`s run concurrently under `work`:
