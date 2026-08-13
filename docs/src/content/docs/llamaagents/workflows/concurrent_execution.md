@@ -23,31 +23,11 @@ allows unlimited runs. With the default runtime, the limit applies to one
 workflow instance in one Python process. Additional calls wait until an active
 run finishes.
 
-With `DBOSRuntime`, every run goes through a stable DBOS queue and
-`num_concurrent_runs` sets that queue's concurrency for each worker. For
-example, `num_concurrent_runs=4` with three live workers allows roughly 12
-active runs across the deployment. `None` leaves each worker unlimited.
-
-Changing between a positive limit and `None` keeps the same queue, so queued
-work is not stranded. Set an explicit, stable `workflow_name` if a workflow's
-Python module or class may be renamed. The name identifies its DBOS queue and
-durable registrations:
-
-```python
-from llama_agents.dbos import DBOSRuntime
-
-runtime = DBOSRuntime()
-workflow = ParallelFlow(
-    runtime=runtime,
-    workflow_name="document-processing.v1",
-    num_concurrent_runs=4,
-)
-```
-
-During the first rollout from direct DBOS starts to queued starts, runs started
-by the old code may finish alongside the newly limited runs. The deployment can
-therefore exceed the new limit temporarily. Let the old workers and their
-active runs drain before treating the limit as strict. See
+With `DBOSRuntime`, the limit applies to each worker. `num_concurrent_runs=4`
+with three live workers allows roughly 12 active runs across the deployment.
+Runs beyond the limit wait in a DBOS queue and start within about a second of
+a slot opening. Leaving the value unset keeps runs starting directly, with no
+queue in the path. See
 [DBOS-backed workflows](/python/llamaagents/workflows/dbos) for durable naming,
 scaling, and deployment guidance.
 

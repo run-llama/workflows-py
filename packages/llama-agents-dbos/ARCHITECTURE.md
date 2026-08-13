@@ -18,50 +18,29 @@ The `executor_id` model means horizontal scaling works by adding replicas that e
 
 ## Workflow Admission Queues
 
-`DBOSRuntime` owns one stable DBOS queue for each workflow name captured when
-the workflow first enters the runtime. WorkflowServer route aliases keep that
-queue and its DBOS registration.
-Every run is enqueued, including workflows with no configured limit. A workflow's
-`num_concurrent_runs` value becomes the queue's `worker_concurrency`:
+`DBOSRuntime.register()` declares one DBOS queue per workflow, named
+`_llamaindex_workflow_queue:<workflow_name>`, with `worker_concurrency` taken
+from the workflow's `num_concurrent_runs`. Workflows with a limit submit runs
+through the queue. Workflows without one start directly and never touch it.
+The queue is declared either way, so removing a limit still leaves a listener
+for rows that were `ENQUEUED` under the old one.
 
-- `None` is the default and does not impose an admission limit.
-- A positive integer limits active runs on each DBOS worker.
+Queue declarations live in a process-level map because DBOS's own registry
+survives `DBOS.destroy()` and rejects redeclaring a name. Recreating the
+runtime reuses the existing queue object and updates its `worker_concurrency`
+in place, which DBOS's poller reads live on every tick.
 
-The queue name does not depend on the limit. Turning a limit on, changing it,
-or returning to unlimited operation does not strand queued work. During a
-rolling deployment, workers in the same DBOS application version can briefly
-enforce different limits. Total capacity is the sum of the limits on all live
-workers. The first rollout from direct starts to queues can temporarily exceed
-the new limit until runs started by the previous revision finish.
+DBOS stamps every run with an application version and only dequeues or
+recovers runs whose version matches. Under this adapter the version is stable
+across changes to workflow step code, because every workflow registers the
+same control-loop wrapper. It shifts when a workflow is added or removed, or
+when the `dbos` or `llama-agents-dbos` package changes. After such a
+deployment, keep old workers running until their in-flight and enqueued runs
+drain.
 
-DBOS associates queued runs with an application version. A deployment that
-changes that version must keep old-version workers available until their queue
-has drained. A new application version does not take ownership of those runs.
-The default durable name includes the workflow's Python module and class name.
-Applications that may rename either should set an explicit `workflow_name` and
-treat it as a durable identifier. Changing it also changes DBOS's control-loop
-and step registration names, so a queue alias alone cannot migrate old work.
-
-The runtime declares queues through DBOS's public `Queue` API before
-`DBOS.launch()`. Matching declarations reuse the same process-global queue.
-Conflicting declarations from live runtimes fail, while a later runtime can
-change the local limit after the owner destroys DBOS. Calling
-`runtime.destroy(destroy_dbos=False)` keeps that declaration active because
-the application still owns the DBOS lifecycle. The adapter does not inspect or
-mutate DBOS's private queue registry.
-
-Applications that restrict `DBOS.listen_queues` must include
-`runtime.workflow_queues`; DBOS does not expose that listener selection for
-validation. The default listener discovers late queue declarations, but an
-explicit listener list does not. Applications using one must register all
-workflows and collect their queues before launch. Admission normally takes
-about the configured `polling_interval_sec`, but DBOS can back off longer while
-queues are idle.
-
-Cancellation uses `TickCancelRun` instead of DBOS hard cancellation. An
-`ENQUEUED` run therefore waits for admission before it processes cancellation,
-publishes `WorkflowCancelledEvent`, and lets server persistence record the
-terminal event.
+Cancellation uses `TickCancelRun` instead of DBOS hard cancellation, so an
+`ENQUEUED` run processes the cancellation after admission and publishes
+`WorkflowCancelledEvent` on its way out.
 
 ## Process Layout
 

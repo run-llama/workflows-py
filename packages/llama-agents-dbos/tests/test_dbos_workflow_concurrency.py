@@ -4,16 +4,13 @@
 from __future__ import annotations
 
 import asyncio
-import gc
 import threading
-import weakref
 from pathlib import Path
 from typing import Any
 
 import pytest
-from dbos import DBOS, DBOSConfig, Queue
+from dbos import DBOS, DBOSConfig
 from llama_agents.dbos import DBOSRuntime
-from llama_agents.server import WorkflowServer
 from workflows.decorators import step
 from workflows.errors import WorkflowCancelledByUser
 from workflows.events import StartEvent, StopEvent, WorkflowCancelledEvent
@@ -71,409 +68,207 @@ def _blocking_workflow_type(
     return BlockingWorkflow
 
 
-def test_runtime_creates_stable_unlimited_workflow_queue() -> None:
-    runtime = DBOSRuntime(polling_interval_sec=0.125)
-    workflow = _blocking_workflow_type(
-        _AdmissionGate(), class_name="UnlimitedQueueWorkflow"
-    )(
-        runtime=runtime,
-        workflow_name="tests.dbos.unlimited-queue",
-    )
-
-    assert len(runtime.workflow_queues) == 1
-    queue = runtime.workflow_queues[0]
-    assert queue.name == ("_llamaindex_workflow_queue:tests.dbos.unlimited-queue")
-    assert queue.worker_concurrency is None
-    assert queue.polling_interval_sec == 0.125
-
-    runtime.track_workflow(workflow)
-    assert runtime.workflow_queues == (queue,)
-
-
-def test_runtime_creates_stable_limited_workflow_queue() -> None:
-    runtime = DBOSRuntime(polling_interval_sec=0.25)
-    _blocking_workflow_type(_AdmissionGate(), class_name="LimitedQueueWorkflow")(
-        runtime=runtime,
-        workflow_name="tests.dbos.limited-queue",
-        num_concurrent_runs=3,
-    )
-
-    assert len(runtime.workflow_queues) == 1
-    queue = runtime.workflow_queues[0]
-    assert queue.name == "_llamaindex_workflow_queue:tests.dbos.limited-queue"
-    assert queue.worker_concurrency == 3
-    assert queue.concurrency is None
-    assert queue.polling_interval_sec == 0.25
-
-
-def test_untrack_releases_exclusive_prelaunch_queue() -> None:
-    runtime = DBOSRuntime()
-    workflow = _blocking_workflow_type(
-        _AdmissionGate(), class_name="UntrackedQueueWorkflow"
-    )(
-        runtime=runtime,
-        workflow_name="tests.dbos.untracked-queue",
-    )
-    queue = runtime.workflow_queues[0]
-
-    runtime.untrack_workflow(workflow)
-
-    assert runtime.workflow_queues == ()
-    replacement_runtime = DBOSRuntime()
-    _blocking_workflow_type(
-        _AdmissionGate(), class_name="ReplacementUntrackedQueueWorkflow"
-    )(
-        runtime=replacement_runtime,
-        workflow_name="tests.dbos.untracked-queue",
-        num_concurrent_runs=1,
-    )
-    assert replacement_runtime.workflow_queues == (queue,)
-    assert queue.worker_concurrency == 1
-    asyncio.run(replacement_runtime.destroy())
-
-
-def test_workflow_alias_does_not_change_declared_queue() -> None:
-    runtime = DBOSRuntime()
-    workflow = _blocking_workflow_type(
-        _AdmissionGate(), class_name="RenamedQueueWorkflow"
-    )(
-        runtime=runtime,
-        workflow_name="tests.dbos.rename-original",
-    )
-    original_queue = runtime.workflow_queues[0]
-    workflow._switch_workflow_name("tests.dbos.rename-collision")
-    assert runtime.workflow_queues == (original_queue,)
-    assert original_queue.name == (
-        "_llamaindex_workflow_queue:tests.dbos.rename-original"
-    )
-
-
-def test_server_alias_before_launch_keeps_dbos_queue_name() -> None:
-    runtime = DBOSRuntime()
-    workflow = _blocking_workflow_type(
-        _AdmissionGate(), class_name="PrelaunchServerAliasWorkflow"
-    )(
-        runtime=runtime,
-        workflow_name="tests.dbos.stable-registration-name",
-    )
-    server = WorkflowServer(
-        runtime=runtime.build_server_runtime(),
-        workflow_store=runtime.create_workflow_store(),
-    )
-
-    server.add_workflow("route-alias", workflow)
-
-    assert workflow.workflow_name == "route-alias"
-    assert runtime.workflow_queues[0].name == (
-        "_llamaindex_workflow_queue:tests.dbos.stable-registration-name"
-    )
-
-
-def test_runtime_rejects_queue_declared_by_application() -> None:
-    queue_name = "_llamaindex_workflow_queue:tests.dbos.application-queue"
-    Queue(queue_name)
-    runtime = DBOSRuntime()
-    _blocking_workflow_type(_AdmissionGate(), class_name="ApplicationQueueWorkflow")(
-        runtime=runtime,
-        workflow_name="tests.dbos.application-queue",
-    )
-
-    with pytest.raises(RuntimeError, match="DBOS rejected workflow queue"):
-        runtime.workflow_queues
-
-
-def test_runtime_rejects_duplicate_name_with_conflicting_limits() -> None:
-    runtime = DBOSRuntime()
-    workflow_type = _blocking_workflow_type(
-        _AdmissionGate(), class_name="DuplicateNameWorkflow"
-    )
-    workflow_type(
-        runtime=runtime,
-        workflow_name="tests.dbos.duplicate-name",
-    )
-
-    with pytest.raises(RuntimeError, match="conflicting num_concurrent_runs"):
-        workflow_type(
-            runtime=runtime,
-            workflow_name="tests.dbos.duplicate-name",
-            num_concurrent_runs=2,
-        )
-
-
-def test_equivalent_workflows_share_queue_with_instance_registrations() -> None:
-    runtime = DBOSRuntime()
-    workflow_type = _blocking_workflow_type(
-        _AdmissionGate(), class_name="SharedNameWorkflow"
-    )
-    first = workflow_type(
-        runtime=runtime,
-        workflow_name="tests.dbos.shared-name",
-        num_concurrent_runs=2,
-    )
-    second = workflow_type(
-        runtime=runtime,
-        workflow_name="tests.dbos.shared-name",
-        num_concurrent_runs=2,
-    )
-
-    assert len(runtime.workflow_queues) == 1
-    assert runtime.register(first) is not runtime.register(second)
-
-
-def test_destroy_reuses_queue_across_limit_transitions(tmp_path: Path) -> None:
-    workflow_type = _blocking_workflow_type(
-        _AdmissionGate(), class_name="ReusedQueueWorkflow"
-    )
-    workflow_name = "tests.dbos.reused-queue"
-    config = _dbos_config(
-        tmp_path / "reused-queue.sqlite3",
-        "dbos-reused-queue-test",
-    )
-    DBOS(config=config)
-    first_runtime = DBOSRuntime()
-    workflow_type(runtime=first_runtime, workflow_name=workflow_name)
-    queue = first_runtime.workflow_queues[0]
-    asyncio.run(first_runtime.destroy())
-
-    DBOS(config=config)
-    second_runtime = DBOSRuntime()
-    workflow_type(
-        runtime=second_runtime,
-        workflow_name=workflow_name,
-        num_concurrent_runs=1,
-    )
-    assert second_runtime.workflow_queues == (queue,)
-    assert queue.worker_concurrency == 1
-    asyncio.run(second_runtime.destroy())
-
-    DBOS(config=config)
-    third_runtime = DBOSRuntime()
-    workflow_type(runtime=third_runtime, workflow_name=workflow_name)
-    assert third_runtime.workflow_queues == (queue,)
-    assert queue.worker_concurrency is None
-    asyncio.run(third_runtime.destroy())
-
-
-def test_destroy_without_dbos_retains_queue_ownership() -> None:
-    workflow_type = _blocking_workflow_type(
-        _AdmissionGate(), class_name="ExternallyOwnedQueueWorkflow"
-    )
-    workflow_name = "tests.dbos.externally-owned-queue"
-    owner_runtime = DBOSRuntime()
-    workflow_type(runtime=owner_runtime, workflow_name=workflow_name)
-    owner_runtime.workflow_queues
-
-    asyncio.run(owner_runtime.destroy(destroy_dbos=False))
-
-    other_runtime = DBOSRuntime()
-    workflow_type(
-        runtime=other_runtime,
-        workflow_name=workflow_name,
-        num_concurrent_runs=1,
-    )
-    with pytest.raises(RuntimeError, match="already declared"):
-        other_runtime.workflow_queues
-    asyncio.run(owner_runtime.destroy())
-
-
-def test_destroyed_queue_does_not_retain_runtime() -> None:
-    runtime = DBOSRuntime()
-    workflow_type = _blocking_workflow_type(
-        _AdmissionGate(), class_name="ReleasedOwnerQueueWorkflow"
-    )
-    workflow_type(
-        runtime=runtime,
-        workflow_name="tests.dbos.released-owner-queue",
-    )
-    runtime_ref = weakref.ref(runtime)
-
-    asyncio.run(runtime.destroy())
-    del runtime
-    gc.collect()
-
-    assert runtime_ref() is None
-
-
-def test_launch_accepts_runtime_workflow_queues(tmp_path: Path) -> None:
+async def _run_limited_admission_case(tmp_path: Path) -> None:
     DBOS(
         config=_dbos_config(
-            tmp_path / "accepted-listener.sqlite3",
-            "dbos-accepted-listener-test",
+            tmp_path / "limited-admission.sqlite3",
+            "dbos-limited-admission-test",
         )
     )
     runtime = DBOSRuntime(polling_interval_sec=0.01)
+    gate = _AdmissionGate()
     workflow = _blocking_workflow_type(
-        _AdmissionGate(), class_name="AcceptedListenerWorkflow"
-    )(
-        runtime=runtime,
-        workflow_name="tests.dbos.accepted-listener",
-    )
-    DBOS.listen_queues(list(runtime.workflow_queues))
-
-    try:
-        runtime.launch_sync()
-        assert not workflow._runtime_locked
-    finally:
-        asyncio.run(runtime.destroy())
-
-
-def test_late_registration_joins_default_queue_listener(tmp_path: Path) -> None:
-    DBOS(
-        config=_dbos_config(
-            tmp_path / "late-listener.sqlite3",
-            "dbos-late-listener-test",
-        )
-    )
-    runtime = DBOSRuntime(polling_interval_sec=0.01)
-    first_type = _blocking_workflow_type(
-        _AdmissionGate(), class_name="InitialListenerWorkflow"
-    )
-    first_type(runtime=runtime, workflow_name="tests.dbos.initial-listener")
-    try:
-        runtime.launch_sync()
-        late_type = _blocking_workflow_type(
-            _AdmissionGate(), class_name="LateListenerWorkflow"
-        )
-        late_workflow = late_type(
-            runtime=runtime,
-            workflow_name="tests.dbos.late-listener",
-        )
-        assert runtime.get_registered(late_workflow) is not None
-        assert any(
-            queue.name == "_llamaindex_workflow_queue:tests.dbos.late-listener"
-            for queue in runtime.workflow_queues
-        )
-    finally:
-        asyncio.run(runtime.destroy())
-
-
-async def _run_server_rename_after_launch(tmp_path: Path) -> None:
-    DBOS(
-        config=_dbos_config(
-            tmp_path / "server-rename.sqlite3",
-            "dbos-server-rename-test",
-        )
-    )
-    runtime = DBOSRuntime(polling_interval_sec=0.01)
-    workflow_type = _blocking_workflow_type(
-        _AdmissionGate(), class_name="ServerRenamedWorkflow"
-    )
-    workflow = workflow_type(runtime=runtime)
-    original_queue = runtime.workflow_queues[0]
-
-    try:
-        await runtime.launch()
-        server = WorkflowServer(
-            runtime=runtime.build_server_runtime(),
-            workflow_store=runtime.create_workflow_store(),
-        )
-        server.add_workflow("server-alias", workflow)
-
-        assert workflow.workflow_name == "server-alias"
-        assert runtime.workflow_queues == (original_queue,)
-        assert runtime.get_registered(workflow) is not None
-    finally:
-        await runtime.destroy()
-
-
-def test_server_can_rename_workflow_after_dbos_launch(tmp_path: Path) -> None:
-    asyncio.run(_run_server_rename_after_launch(tmp_path))
-
-
-async def _run_admission_cases(
-    tmp_path: Path,
-) -> None:
-    name = "workflow-admission"
-    DBOS(config=_dbos_config(tmp_path / f"{name}.sqlite3", name))
-    runtime = DBOSRuntime(polling_interval_sec=0.01)
-    limited_gate = _AdmissionGate()
-    unlimited_gate = _AdmissionGate()
-    limited_type = _blocking_workflow_type(
-        limited_gate,
+        gate,
         class_name="LimitedAdmissionWorkflow",
-    )
-    unlimited_type = _blocking_workflow_type(
-        unlimited_gate,
-        class_name="UnlimitedAdmissionWorkflow",
-    )
-    limited_workflow = limited_type(
+    )(
         runtime=runtime,
         workflow_name="tests.dbos.limited-admission",
         num_concurrent_runs=1,
         timeout=10,
     )
-    unlimited_workflow = unlimited_type(
+    handlers: dict[str, Any] = {}
+
+    try:
+        await runtime.launch()
+        handlers = {
+            run_id: workflow.run(run=run_id, run_id=run_id)
+            for run_id in ("limited-first", "limited-second")
+        }
+        admitted = await asyncio.to_thread(gate.wait_for_started, 1)
+        assert admitted
+        assert len(gate.started) == 1
+
+        queued_run = (
+            "limited-second" if gate.started == ["limited-first"] else "limited-first"
+        )
+        status = await DBOS.get_workflow_status_async(queued_run)
+        assert status is not None
+        assert status.status == "ENQUEUED"
+
+        gate.release()
+        results = await asyncio.wait_for(
+            asyncio.gather(*handlers.values()),
+            timeout=10,
+        )
+        assert set(results) == {"limited-first", "limited-second"}
+        assert set(gate.started) == {"limited-first", "limited-second"}
+    finally:
+        gate.release()
+        if handlers:
+            await asyncio.gather(*handlers.values(), return_exceptions=True)
+        await runtime.destroy()
+
+
+def test_limited_workflow_queues_excess_runs(tmp_path: Path) -> None:
+    asyncio.run(_run_limited_admission_case(tmp_path))
+
+
+async def _run_unlimited_admission_case(tmp_path: Path) -> None:
+    DBOS(
+        config=_dbos_config(
+            tmp_path / "unlimited-admission.sqlite3",
+            "dbos-unlimited-admission-test",
+        )
+    )
+    runtime = DBOSRuntime(polling_interval_sec=0.01)
+    gate = _AdmissionGate()
+    workflow = _blocking_workflow_type(
+        gate,
+        class_name="UnlimitedAdmissionWorkflow",
+    )(
         runtime=runtime,
         workflow_name="tests.dbos.unlimited-admission",
         timeout=10,
     )
-    handlers: list[Any] = []
+    handlers: dict[str, Any] = {}
 
     try:
         await runtime.launch()
-        handlers = [
-            limited_workflow.run(run="limited-first", run_id="limited-first"),
-            limited_workflow.run(run="limited-second", run_id="limited-second"),
-            unlimited_workflow.run(
-                run="unlimited-first",
-                run_id="unlimited-first",
-            ),
-            unlimited_workflow.run(
-                run="unlimited-second",
-                run_id="unlimited-second",
-            ),
-        ]
-
-        limited_admitted = await asyncio.to_thread(
-            limited_gate.wait_for_started,
-            1,
-        )
-        unlimited_admitted = await asyncio.to_thread(
-            unlimited_gate.wait_for_started,
-            2,
-        )
-        assert limited_admitted
-        assert unlimited_admitted
-        assert len(limited_gate.started) == 1
-        assert limited_gate.started[0] in {"limited-first", "limited-second"}
-        assert set(unlimited_gate.started) == {
-            "unlimited-first",
-            "unlimited-second",
+        handlers = {
+            run_id: workflow.run(run=run_id, run_id=run_id)
+            for run_id in ("unlimited-first", "unlimited-second")
         }
+        admitted = await asyncio.to_thread(gate.wait_for_started, 2)
+        assert admitted
+        assert set(gate.started) == {"unlimited-first", "unlimited-second"}
 
-        unstarted_run = (
-            "limited-second"
-            if limited_gate.started == ["limited-first"]
-            else "limited-first"
+        statuses = await asyncio.gather(
+            *(DBOS.get_workflow_status_async(run_id) for run_id in handlers)
         )
-        status = await DBOS.get_workflow_status_async(unstarted_run)
-        assert status is not None
-        assert status.status == "ENQUEUED"
+        assert all(status is not None for status in statuses)
+        assert all(status.status != "ENQUEUED" for status in statuses if status)
 
-        limited_gate.release()
-        unlimited_gate.release()
+        gate.release()
         results = await asyncio.wait_for(
-            asyncio.gather(*handlers),
+            asyncio.gather(*handlers.values()),
             timeout=10,
         )
-        assert results == [
-            "limited-first",
-            "limited-second",
-            "unlimited-first",
-            "unlimited-second",
-        ]
+        assert set(results) == {"unlimited-first", "unlimited-second"}
     finally:
-        limited_gate.release()
-        unlimited_gate.release()
+        gate.release()
         if handlers:
-            await asyncio.gather(*handlers, return_exceptions=True)
+            await asyncio.gather(*handlers.values(), return_exceptions=True)
         await runtime.destroy()
 
 
-def test_limited_and_unlimited_worker_admission(
-    tmp_path: Path,
-) -> None:
-    asyncio.run(_run_admission_cases(tmp_path))
+def test_unlimited_workflow_starts_runs_directly(tmp_path: Path) -> None:
+    asyncio.run(_run_unlimited_admission_case(tmp_path))
+
+
+async def _run_queue_declaration_case(tmp_path: Path) -> None:
+    DBOS(
+        config=_dbos_config(
+            tmp_path / "queue-declaration.sqlite3",
+            "dbos-queue-declaration-test",
+        )
+    )
+    runtime = DBOSRuntime(polling_interval_sec=0.125)
+    _blocking_workflow_type(
+        _AdmissionGate(),
+        class_name="LimitedQueueWorkflow",
+    )(
+        runtime=runtime,
+        workflow_name="tests.dbos.limited-queue",
+        num_concurrent_runs=3,
+    )
+    _blocking_workflow_type(
+        _AdmissionGate(),
+        class_name="UnlimitedQueueWorkflow",
+    )(
+        runtime=runtime,
+        workflow_name="tests.dbos.unlimited-queue",
+    )
+
+    try:
+        await runtime.launch()
+        queues = {queue.name: queue for queue in runtime.workflow_queues}
+        assert list(queues) == [
+            "_llamaindex_workflow_queue:tests.dbos.limited-queue",
+            "_llamaindex_workflow_queue:tests.dbos.unlimited-queue",
+        ]
+        assert (
+            queues[
+                "_llamaindex_workflow_queue:tests.dbos.limited-queue"
+            ].worker_concurrency
+            == 3
+        )
+        assert (
+            queues[
+                "_llamaindex_workflow_queue:tests.dbos.unlimited-queue"
+            ].worker_concurrency
+            is None
+        )
+    finally:
+        await runtime.destroy()
+
+
+def test_runtime_declares_queue_for_every_workflow(tmp_path: Path) -> None:
+    asyncio.run(_run_queue_declaration_case(tmp_path))
+
+
+async def _run_destroy_relaunch_case(tmp_path: Path) -> None:
+    config = _dbos_config(
+        tmp_path / "reused-queue.sqlite3",
+        "dbos-reused-queue-test",
+    )
+    workflow_name = "tests.dbos.reused-queue"
+
+    DBOS(config=config)
+    first_runtime = DBOSRuntime(polling_interval_sec=0.01)
+    _blocking_workflow_type(
+        _AdmissionGate(),
+        class_name="FirstReusedQueueWorkflow",
+    )(
+        runtime=first_runtime,
+        workflow_name=workflow_name,
+        num_concurrent_runs=1,
+    )
+    await first_runtime.launch()
+    queue = first_runtime.workflow_queues[0]
+    await first_runtime.destroy(destroy_dbos=True)
+
+    DBOS(config=config)
+    second_runtime = DBOSRuntime(polling_interval_sec=0.02)
+    _blocking_workflow_type(
+        _AdmissionGate(),
+        class_name="SecondReusedQueueWorkflow",
+    )(
+        runtime=second_runtime,
+        workflow_name=workflow_name,
+        num_concurrent_runs=2,
+    )
+
+    try:
+        await second_runtime.launch()
+        assert second_runtime.workflow_queues == (queue,)
+        assert queue.worker_concurrency == 2
+        assert queue.polling_interval_sec == 0.02
+    finally:
+        await second_runtime.destroy(destroy_dbos=True)
+
+
+def test_destroy_relaunch_reuses_queue_with_updated_limit(tmp_path: Path) -> None:
+    asyncio.run(_run_destroy_relaunch_case(tmp_path))
 
 
 async def _run_queued_cancellation_case(tmp_path: Path) -> None:
@@ -492,8 +287,6 @@ async def _run_queued_cancellation_case(tmp_path: Path) -> None:
             run = ev.get("run")
             assert isinstance(run, str)
             await gate.enter(run)
-            # Keep the admitted run active while the control loop reduces the
-            # cancellation tick that was stored before admission.
             await asyncio.sleep(0.2)
             return StopEvent(result=run)
 

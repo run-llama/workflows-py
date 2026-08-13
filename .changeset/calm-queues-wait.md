@@ -2,4 +2,4 @@
 "llama-agents-dbos": minor
 ---
 
-Route workflow runs through stable DBOS queues and enforce per-worker concurrency limits.
+Enforce `num_concurrent_runs` on `DBOSRuntime` as per-worker DBOS queue concurrency. Workflows without a limit keep starting directly.

@@ -348,18 +348,18 @@ async def test_run_workflow_seeds_state_store_from_durable_handle() -> None:
     serialized_state = {"store_type": "sqlite", "run_id": "old-run"}
     serializer = JsonSerializer()
     fake_handle = AsyncMock()
-    enqueue_observations: dict[str, Any] = {}
+    start_observations: dict[str, Any] = {}
 
-    async def enqueue_async(*args: Any, **kwargs: Any) -> Any:
+    async def start_workflow_async(*args: Any, **kwargs: Any) -> Any:
         context = get_local_dbos_context()
         assert context is not None
-        enqueue_observations["run_id"] = context.id_assigned_for_next_workflow
-        enqueue_observations["state_seeded"] = (
+        start_observations["run_id"] = context.id_assigned_for_next_workflow
+        start_observations["state_seeded"] = (
             workflow_store.state_store.ensure_seeded_called
         )
         return fake_handle
 
-    enqueue_mock = AsyncMock(side_effect=enqueue_async)
+    start_mock = AsyncMock(side_effect=start_workflow_async)
 
     with (
         patch.object(runtime, "create_workflow_store", return_value=workflow_store),
@@ -370,10 +370,9 @@ async def test_run_workflow_seeds_state_store_from_durable_handle() -> None:
                 workflow=workflow, workflow_run_fn=workflow_run_fn, steps={}
             ),
         ),
-        patch.object(
-            runtime.workflow_queues[0],
-            "enqueue_async",
-            new=enqueue_mock,
+        patch(
+            "llama_agents.dbos.runtime.DBOS.start_workflow_async",
+            new=start_mock,
         ),
     ):
         adapter = runtime.run_workflow(
@@ -390,11 +389,11 @@ async def test_run_workflow_seeds_state_store_from_durable_handle() -> None:
     assert workflow_store.create_state_store_calls == [
         ("run-1", DictState, serialized_state, serializer)
     ]
-    enqueue_mock.assert_awaited_once()
-    enqueue_args = enqueue_mock.await_args
-    assert enqueue_args is not None
-    assert enqueue_args.args[0] is workflow_run_fn
-    assert enqueue_observations == {"run_id": "run-1", "state_seeded": True}
+    start_mock.assert_awaited_once()
+    start_args = start_mock.await_args
+    assert start_args is not None
+    assert start_args.args[0] is workflow_run_fn
+    assert start_observations == {"run_id": "run-1", "state_seeded": True}
 
 
 @pytest.mark.asyncio
