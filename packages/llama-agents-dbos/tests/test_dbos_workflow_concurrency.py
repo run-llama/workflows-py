@@ -271,6 +271,54 @@ def test_destroy_relaunch_reuses_queue_with_updated_limit(tmp_path: Path) -> Non
     asyncio.run(_run_destroy_relaunch_case(tmp_path))
 
 
+async def _run_restricted_listener_case(tmp_path: Path) -> None:
+    DBOS(
+        config=_dbos_config(
+            tmp_path / "restricted-listener.sqlite3",
+            "dbos-restricted-listener-test",
+        )
+    )
+    runtime = DBOSRuntime(polling_interval_sec=0.01)
+    gate = _AdmissionGate()
+    workflow = _blocking_workflow_type(
+        gate,
+        class_name="RestrictedListenerWorkflow",
+    )(
+        runtime=runtime,
+        workflow_name="tests.dbos.restricted-listener",
+        num_concurrent_runs=1,
+        timeout=10,
+    )
+    runtime.register(workflow)
+    DBOS.listen_queues(list(runtime.workflow_queues))
+    handlers: dict[str, Any] = {}
+
+    try:
+        await runtime.launch()
+        handlers = {
+            run_id: workflow.run(run=run_id, run_id=run_id)
+            for run_id in ("restricted-first", "restricted-second")
+        }
+        admitted = await asyncio.to_thread(gate.wait_for_started, 1)
+        assert admitted
+
+        gate.release()
+        results = await asyncio.wait_for(
+            asyncio.gather(*handlers.values()),
+            timeout=10,
+        )
+        assert set(results) == {"restricted-first", "restricted-second"}
+    finally:
+        gate.release()
+        if handlers:
+            await asyncio.gather(*handlers.values(), return_exceptions=True)
+        await runtime.destroy()
+
+
+def test_restricted_listener_admits_runtime_queues(tmp_path: Path) -> None:
+    asyncio.run(_run_restricted_listener_case(tmp_path))
+
+
 async def _run_queued_cancellation_case(tmp_path: Path) -> None:
     DBOS(
         config=_dbos_config(
