@@ -19,17 +19,10 @@ workflow = ParallelFlow(num_concurrent_runs=4)
 ```
 
 The value must be a positive integer or `None`. The default is `None`, which
-allows unlimited runs. With the default runtime, the limit applies to one
-workflow instance in one Python process. Additional calls wait until an active
-run finishes.
-
-With `DBOSRuntime`, the limit applies to each worker. `num_concurrent_runs=4`
-with three live workers allows roughly 12 active runs across the deployment.
-Runs beyond the limit wait in a DBOS queue and start within about a second of
-a slot opening. Leaving the value unset keeps runs starting directly, with no
-queue in the path. See
-[DBOS-backed workflows](/python/llamaagents/workflows/dbos) for durable naming,
-scaling, and deployment guidance.
+allows unlimited runs. The limit restricts concurrency within a process:
+additional calls wait until an active run finishes.
+[DBOS-backed workflows](/python/llamaagents/workflows/dbos#run-concurrency-limits)
+also support it, applied per worker.
 
 Use `@step(num_workers=...)` for concurrency inside each run. It controls how
 many copies of that step can process events at once and does not limit the

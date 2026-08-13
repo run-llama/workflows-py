@@ -265,6 +265,20 @@ When using a server, the name passed to `add_workflow` is the HTTP route name, i
 server.add_workflow("counter-v2", CounterWorkflow(runtime=runtime, workflow_name="counter-v2"))
 ```
 
+### Run concurrency limits
+
+`Workflow(num_concurrent_runs=N)` limits active runs of that workflow to N per
+replica, so deployment capacity is roughly N times the number of replicas.
+Runs beyond the limit wait in a DBOS queue and start within about a second of
+a slot opening. The queue is shared across replicas: a waiting run has no
+affinity to the replica that submitted it, and any replica with a free slot
+can pick it up. Leaving the value unset keeps runs starting directly, with no
+queue in the path.
+
+```python
+wf = CounterWorkflow(runtime=runtime, num_concurrent_runs=4)
+```
+
 ### Event streaming behavior
 
 When using `handler.stream_events()` in-process (outside of a server), DBOS streams are replayed from the beginning on each call. This means you will receive all events the workflow has ever emitted, not just new ones.
