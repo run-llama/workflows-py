@@ -1,5 +1,11 @@
 # llama-agents-dbos
 
+## 0.6.0
+
+### Minor Changes
+
+- 386f190: Enforce `num_concurrent_runs` on `DBOSRuntime` as per-worker DBOS queue concurrency. Workflows without a limit keep starting directly.
+
 ## 0.5.0
 
 ### Minor Changes
