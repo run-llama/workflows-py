@@ -17,6 +17,7 @@ from unittest.mock import AsyncMock, patch
 import asyncpg
 import pytest
 from dbos import DBOS, DBOSConfig
+from dbos._context import get_local_dbos_context
 from llama_agents.dbos import DBOSRuntime
 from llama_agents.dbos.journal.crud import SqliteJournalCrud
 from llama_agents.dbos.journal.task_journal import TaskJournal
@@ -341,12 +342,24 @@ async def test_run_workflow_seeds_state_store_from_durable_handle() -> None:
         return StopEvent(result="done")
 
     runtime = DBOSRuntime(polling_interval_sec=0.01)
+    workflow = SimpleWf(runtime=runtime)
     runtime._dbos_launched = True
-    workflow = SimpleWf()
     workflow_store = RecordingWorkflowStore()
     serialized_state = {"store_type": "sqlite", "run_id": "old-run"}
     serializer = JsonSerializer()
     fake_handle = AsyncMock()
+    start_observations: dict[str, Any] = {}
+
+    async def start_workflow_async(*args: Any, **kwargs: Any) -> Any:
+        context = get_local_dbos_context()
+        assert context is not None
+        start_observations["run_id"] = context.id_assigned_for_next_workflow
+        start_observations["state_seeded"] = (
+            workflow_store.state_store.ensure_seeded_called
+        )
+        return fake_handle
+
+    start_mock = AsyncMock(side_effect=start_workflow_async)
 
     with (
         patch.object(runtime, "create_workflow_store", return_value=workflow_store),
@@ -359,7 +372,7 @@ async def test_run_workflow_seeds_state_store_from_durable_handle() -> None:
         ),
         patch(
             "llama_agents.dbos.runtime.DBOS.start_workflow_async",
-            new=AsyncMock(return_value=fake_handle),
+            new=start_mock,
         ),
     ):
         adapter = runtime.run_workflow(
@@ -376,6 +389,11 @@ async def test_run_workflow_seeds_state_store_from_durable_handle() -> None:
     assert workflow_store.create_state_store_calls == [
         ("run-1", DictState, serialized_state, serializer)
     ]
+    start_mock.assert_awaited_once()
+    start_args = start_mock.await_args
+    assert start_args is not None
+    assert start_args.args[0] is workflow_run_fn
+    assert start_observations == {"run_id": "run-1", "state_seeded": True}
 
 
 @pytest.mark.asyncio

@@ -64,4 +64,7 @@ def setup_dbos(db_url: str, app_name: str = "test-workflow") -> DBOSRuntime:
         "notification_listener_polling_interval_sec": 0.01,
     }
     DBOS(config=config)
-    return DBOSRuntime(polling_interval_sec=0.01)
+    # Keep queue polling at its slow default: these workflows are unlimited, and
+    # a 10ms queue poll writes-locks the SQLite file hard enough to starve the
+    # workflow's own journal writes on slow CI runners.
+    return DBOSRuntime(polling_interval_sec=0.01, queue_polling_interval_sec=1.0)

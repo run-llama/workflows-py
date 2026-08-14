@@ -231,6 +231,22 @@ For production multi-replica deployments, [DBOS Conductor](https://docs.dbos.dev
 
 Understanding the DBOS execution model helps you write workflows that behave correctly across restarts and replicas.
 
+### Workflow identity
+
+A workflow's name is its durable identity. Journal entries, step registrations, and the admission queue are all keyed by it, so everything DBOS has recorded for a workflow is filed under that name. The default is the module-qualified class name (e.g. `my_app.CounterWorkflow`), which means moving or renaming the class silently changes the identity. For anything long-lived, set the name explicitly and treat it as permanent:
+
+```python
+wf = CounterWorkflow(runtime=runtime, workflow_name="counter-v1")
+```
+
+A worker only looks for recorded work under the names it registers. After a rename, in-flight and queued runs filed under the old name are invisible to the new deployment — keep workers registering the old name running until that work finishes.
+
+When using a server, the name passed to `add_workflow` is the HTTP route name, independent of the workflow's durable name:
+
+```python
+server.add_workflow("counter", CounterWorkflow(runtime=runtime, workflow_name="counter-v1"))
+```
+
 ### Replica ownership
 
 Each replica is identified by its `executor_id` and **owns** every workflow it starts. A workflow and all of its steps run in the same process — there is no distribution of individual steps across replicas. This means your steps can safely rely on local state like in-memory caches, local files, or process-level singletons. The trade-off is that a single workflow's workload cannot be spread across multiple replicas.
@@ -251,19 +267,37 @@ Replica IDs and replica counts must be stable. If you scale down and remove a re
 
 Since resumption is based on journal replay, changing a workflow's code while historical runs are still in progress can cause non-determinism — for example, a step that now accepts a different set of events than when the run was originally started. To avoid this:
 - **Drain in-flight workflows** before deploying code changes, or
-- **Register the updated workflow under a new name** so that old runs continue against the original code and new runs use the updated version
+- **Register the updated workflow under a new name** (e.g. `workflow_name="counter-v2"`) so that old runs continue against the original code and new runs use the updated version. This is a deliberate identity change — see [Workflow identity](#workflow-identity) for what the name keys.
 
-A workflow's name defaults to its module-qualified class name (e.g. `my_app.CounterWorkflow`). You can set it explicitly with the `workflow_name` parameter:
+### Run concurrency limits
+
+`Workflow(num_concurrent_runs=N)` limits active runs of that workflow to N per
+replica, so deployment capacity is roughly N times the number of replicas.
+Runs beyond the limit wait in a DBOS queue and start within about a second of
+a slot opening. The queue is shared across replicas: a waiting run has no
+affinity to the replica that submitted it, and any replica with a free slot
+can pick it up. Leaving the value unset keeps runs starting directly, with no
+queue in the path.
 
 ```python
-wf = CounterWorkflow(runtime=runtime, workflow_name="counter-v2")
+wf = CounterWorkflow(runtime=runtime, num_concurrent_runs=4)
 ```
 
-When using a server, the name passed to `add_workflow` is the HTTP route name, independent of the workflow's internal name:
+The queue is keyed by the workflow's durable name (see
+[Workflow identity](#workflow-identity)), so runs waiting under an old name
+are invisible after a rename. Changing or removing the limit itself is safe:
+waiting runs stay on the same queue and keep admitting. A new limit does not
+count runs that started before it, so a replica can briefly exceed it while
+those finish.
 
-```python
-server.add_workflow("counter-v2", CounterWorkflow(runtime=runtime, workflow_name="counter-v2"))
-```
+A waiting run cannot be cancelled until it starts, because cancellation is a
+message delivered to the running workflow. The request is saved, and the run
+stops itself as soon as it is admitted.
+
+DBOS normally watches every queue automatically. An application that instead
+passes an explicit list to `DBOS.listen_queues` must add this runtime's
+queues to it (`runtime.workflow_queues`), collected after registering
+workflows and before launch.
 
 ### Event streaming behavior
 

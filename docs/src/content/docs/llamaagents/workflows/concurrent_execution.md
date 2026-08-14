@@ -8,6 +8,50 @@ Workflows can run steps at the same time. When several steps are independent and
 
 The usual pattern is fan-out and fan-in. You split the work into pieces, run them at the same time, then join the results back together. You write this directly in the step signatures. Return a `list` from a step and it fans out, with one event per element. Take a `list` parameter and it fans in, firing once on the whole batch. The `@step` decorator reads those types. The validator and the [visualization](/python/llamaagents/workflows/drawing) then connect each producer step to the steps that consume its events, with no extra work from you. When you need to emit events that do not follow from the signature, you can send them yourself with `ctx.send_event`. The [dynamic API](#the-dynamic-api) at the end of this page covers that.
 
+## Limit simultaneous workflow runs
+
+Whole-run concurrency and step concurrency are separate. Set
+`num_concurrent_runs` on a workflow to limit how many calls to `run()` may be
+active at once:
+
+```python
+workflow = ParallelFlow(num_concurrent_runs=4)
+```
+
+The value must be a positive integer or `None`. The default is `None`, which
+allows unlimited runs. The limit restricts concurrency within a process:
+additional calls wait until an active run finishes.
+[DBOS-backed workflows](/python/llamaagents/workflows/dbos#run-concurrency-limits)
+also support it, applied per worker.
+
+Use `@step(num_workers=...)` for concurrency inside each run. It controls how
+many copies of that step can process events at once and does not limit the
+number of workflow runs.
+
+## Limit active steps across runs
+
+To limit how many copies of a step run at once across all runs, for example to
+cap concurrent calls to an external API, share an `asyncio.Semaphore` between
+them. Steps are plain async functions, so this needs no library support:
+
+```python
+import asyncio
+
+API_SLOTS = asyncio.Semaphore(3)
+
+
+class Fetcher(Workflow):
+    @step
+    async def fetch(self, ev: FetchRequest) -> FetchResult:
+        async with API_SLOTS:
+            data = await call_external_api(ev.url)
+        return FetchResult(data=data)
+```
+
+Every run shares the one semaphore, so at most three `fetch` steps are in the
+API call at any moment, whichever runs they belong to. The semaphore lives in
+one Python process. If you deploy multiple processes, each has its own.
+
 ## Fan-out: return a list
 
 Return a `list` from a step and each element fires as its own event. Here five `Task`s run concurrently under `work`:

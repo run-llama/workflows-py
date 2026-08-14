@@ -16,6 +16,36 @@ Each DBOS replica is configured with a unique `executor_id` (e.g. `"replica-8001
 
 The `executor_id` model means horizontal scaling works by adding replicas that each own a slice of the workload, not by distributing individual workflow steps across nodes.
 
+## Workflow Admission Queues
+
+`DBOSRuntime.register()` declares one DBOS queue per workflow, named
+`_llamaindex_workflow_queue:<workflow_name>`, with `worker_concurrency` taken
+from the workflow's `num_concurrent_runs`. Workflows with a limit submit runs
+through the queue. Workflows without one start directly and never touch it.
+The queue is declared either way, so removing a limit still leaves a listener
+for rows that were `ENQUEUED` under the old one.
+
+DBOS remembers every queue ever declared in the process, even after
+`DBOS.destroy()`, and declaring the same name twice raises. So the adapter
+keeps its own module-level dict of queue objects. A recreated runtime reuses
+the existing object and just changes `worker_concurrency` on it, which DBOS
+reads fresh on every poll.
+
+DBOS tags every run with an application version, a fingerprint of the
+registered workflow functions, and a worker only picks up runs whose
+fingerprint matches its own. This protects a run from being resumed by code
+that changed under it. Under this adapter every workflow registers the same
+control-loop wrapper, so the fingerprint does not change when users edit
+their step code. It does change when a workflow is added or removed, or when
+the `dbos` or `llama-agents-dbos` package changes. After such a deployment,
+runs tagged with the old fingerprint can only be finished by workers running
+the old code, so keep those workers up until that work drains.
+
+Cancellation uses `TickCancelRun` instead of DBOS hard cancellation. A run
+still waiting in the queue cannot process it yet; the request is saved, and
+the run publishes `WorkflowCancelledEvent` and stops as soon as it is
+admitted.
+
 ## Process Layout
 
 ```

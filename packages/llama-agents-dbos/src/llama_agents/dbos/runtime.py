@@ -15,6 +15,7 @@ import sqlite3
 import threading
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
+from dataclasses import dataclass
 from typing import Any, AsyncGenerator, TypedDict, cast
 
 import asyncpg
@@ -73,12 +74,14 @@ from workflows.runtime.types.named_task import (
 from workflows.runtime.types.plugin import (
     ExternalRunAdapter,
     InternalRunAdapter,
-    RegisteredWorkflow,
     Runtime,
     WaitForNextTaskResult,
     WaitResult,
     WaitResultTick,
     WaitResultTimeout,
+)
+from workflows.runtime.types.plugin import (
+    RegisteredWorkflow as BaseRegisteredWorkflow,
 )
 from workflows.runtime.types.step_function import (
     StepWorkerFunction,
@@ -88,7 +91,7 @@ from workflows.runtime.types.step_function import (
 from workflows.runtime.types.ticks import WorkflowTick
 from workflows.workflow import Workflow
 
-from dbos import DBOS, SetWorkflowID, WorkflowHandleAsync
+from dbos import DBOS, Queue, SetWorkflowID, WorkflowHandleAsync
 from dbos._context import get_local_dbos_context
 from dbos._dbos import _get_dbos_instance
 from dbos._error import DBOSNonExistentWorkflowError
@@ -111,6 +114,35 @@ from .journal.task_journal import TaskJournal
 STATE_TABLE_NAME = "workflow_state"
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class RegisteredWorkflow(BaseRegisteredWorkflow):
+    queue: Queue
+
+
+_workflow_queues: dict[str, Queue] = {}
+_workflow_queues_lock = threading.Lock()
+
+
+def _declare_workflow_queue(
+    name: str,
+    worker_concurrency: int | None,
+    polling_interval_sec: float,
+) -> Queue:
+    with _workflow_queues_lock:
+        queue = _workflow_queues.get(name)
+        if queue is None:
+            queue = Queue(
+                name,
+                worker_concurrency=worker_concurrency,
+                polling_interval_sec=polling_interval_sec,
+            )
+            _workflow_queues[name] = queue
+        else:
+            queue.worker_concurrency = worker_concurrency
+            queue.polling_interval_sec = polling_interval_sec
+        return queue
 
 
 class DBOSWorkflowStore(AbstractWorkflowStore):
@@ -217,6 +249,7 @@ class DBOSRuntimeConfig(TypedDict, total=False):
     """
 
     polling_interval_sec: float
+    queue_polling_interval_sec: float | None
     run_migrations_on_launch: bool
     schema: str | None
     state_table_name: str
@@ -292,6 +325,10 @@ class DBOSRuntime(Runtime):
         Args:
             **kwargs: Configuration options. See DBOSRuntimeConfig for details.
                 polling_interval_sec: Interval for polling workflow results. Default 1.0.
+                queue_polling_interval_sec: Interval for polling workflow
+                    admission queues. Bounds how long a run limited by
+                    ``num_concurrent_runs`` waits for a free slot. Defaults to
+                    ``polling_interval_sec``.
                 run_migrations_on_launch: Auto-run migrations on launch(). Default True.
                 schema: Database schema name. Default: auto-detected at launch
                     ("dbos" for PostgreSQL, None for SQLite). Pass None explicitly
@@ -379,6 +416,14 @@ class DBOSRuntime(Runtime):
                 self._tracked_workflows.append(workflow)
                 self._tracked_workflow_ids.add(wf_id)
 
+    @property
+    def workflow_queues(self) -> tuple[Queue, ...]:
+        """Queues declared by this runtime, in registration order."""
+        queues = dict.fromkeys(
+            registered.queue for registered in self._registered.values()
+        )
+        return tuple(queues)
+
     def get_registered(self, workflow: Workflow) -> RegisteredWorkflow | None:
         """Get the registered workflow if available."""
         return self._registered.get(id(workflow))
@@ -398,6 +443,14 @@ class DBOSRuntime(Runtime):
 
         # Use workflow's name directly
         name = workflow.workflow_name
+        queue_polling_interval = self.config.get("queue_polling_interval_sec")
+        if queue_polling_interval is None:
+            queue_polling_interval = self.config.get("polling_interval_sec", 1.0)
+        queue = _declare_workflow_queue(
+            f"_llamaindex_workflow_queue:{name}",
+            workflow._num_concurrent_runs,
+            queue_polling_interval,
+        )
 
         # Create DBOS-wrapped control loop with stable name
         wf_kwargs: dict[str, Any] = {"name": f"{name}.control_loop"}
@@ -426,7 +479,10 @@ class DBOSRuntime(Runtime):
         }
 
         registered = RegisteredWorkflow(
-            workflow=workflow, workflow_run_fn=_dbos_control_loop, steps=wrapped_steps
+            workflow=workflow,
+            workflow_run_fn=_dbos_control_loop,
+            steps=wrapped_steps,
+            queue=queue,
         )
         self._registered[id(workflow)] = registered
         return registered
@@ -612,6 +668,13 @@ class DBOSRuntime(Runtime):
                         await store.ensure_seeded()
 
                 try:
+                    if workflow._num_concurrent_runs is not None:
+                        return await registered.queue.enqueue_async(
+                            registered.workflow_run_fn,
+                            init_state,
+                            start_event,
+                            get_dispatcher().capture_propagation_context(),
+                        )
                     return await DBOS.start_workflow_async(
                         registered.workflow_run_fn,
                         init_state,

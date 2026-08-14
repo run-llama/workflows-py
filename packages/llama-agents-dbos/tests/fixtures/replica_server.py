@@ -43,7 +43,9 @@ async def main() -> None:
         "executor_id": args.executor_id or f"test-replica-{args.port}",
     }
     DBOS(config=config)
-    dbos_runtime = DBOSRuntime(polling_interval_sec=0.01)
+    dbos_runtime = DBOSRuntime(
+        polling_interval_sec=0.01, queue_polling_interval_sec=1.0
+    )
 
     wf = workflow_class(runtime=dbos_runtime)
     await dbos_runtime.launch()
