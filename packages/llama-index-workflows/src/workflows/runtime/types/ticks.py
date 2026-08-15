@@ -110,6 +110,7 @@ class TickTimeout(BaseModel):
     model_config = ConfigDict(frozen=True)
     type: Literal["timeout"] = "timeout"
     timeout: float
+    stamped_at: float | None = None
 
 
 class TickWaiterTimeout(BaseModel):
@@ -120,6 +121,7 @@ class TickWaiterTimeout(BaseModel):
     step_id: StepId = Field(validation_alias=_STEP_ID_ALIAS)
     waiter_id: str
     invocation_namespace: tuple[str, ...] = Field(default=(), exclude=True)
+    stamped_at: float | None = None
 
 
 class TickSessionStart(BaseModel):
@@ -165,13 +167,17 @@ class TickWakeup(BaseModel):
     model_config = ConfigDict(frozen=True)
     type: Literal["wakeup"] = "wakeup"
     due: float
+    stamped_at: float | None = None
 
 
 # Ticks that carry a journaled wall-clock stamp. See TickStepResult.stamped_at.
 STAMPED_TICK_TYPES = (
     TickStepResult,
     TickAddEvent,
+    TickTimeout,
+    TickWaiterTimeout,
     TickSessionStart,
+    TickWakeup,
 )
 
 WorkflowTick = Annotated[
