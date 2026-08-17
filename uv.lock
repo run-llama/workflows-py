@@ -2484,7 +2484,7 @@ dev = [
 
 [[package]]
 name = "llama-agents-dbos"
-version = "0.5.0"
+version = "0.6.0"
 source = { editable = "packages/llama-agents-dbos" }
 dependencies = [
     { name = "dbos" },
@@ -2794,7 +2794,7 @@ dev = [
 
 [[package]]
 name = "llama-index-workflows"
-version = "2.23.1"
+version = "2.23.2"
 source = { editable = "packages/llama-index-workflows" }
 dependencies = [
     { name = "llama-index-instrumentation" },

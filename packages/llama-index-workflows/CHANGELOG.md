@@ -1,5 +1,11 @@
 # llama-index-workflows
 
+## 2.23.2
+
+### Patch Changes
+
+- 386f190: Reject invalid workflow concurrency limits during construction.
+
 ## 2.23.1
 
 ### Patch Changes
