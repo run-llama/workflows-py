@@ -346,10 +346,7 @@ func (r *LlamaDeploymentReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{}, err
 	}
 	if isFailedPhase(phase) && ld.Status.FailedRolloutGeneration != ld.Generation {
-		if result := r.remediateFailedRollout(ctx, ld, phase, buildId); result != nil {
-			return *result, nil
-		}
-		statusDirty = true
+		return r.remediateAndFinalizeFailure(ctx, ld, phase, message, requeueAfter, buildId)
 	}
 
 	return r.finalizePhase(ctx, ld, phase, message, requeueAfter, statusDirty)
