@@ -40,6 +40,7 @@ from workflows.utils import _nanoid as nanoid
 
 from ._service import (
     EventSendError,
+    HandlerAlreadyRunningError,
     HandlerCompletedError,
     HandlerNotFoundError,
     _WorkflowService,
@@ -414,6 +415,8 @@ class _WorkflowAPI:
                 context=context,
                 start_event=input_ev,
             )
+        except HandlerAlreadyRunningError as e:
+            raise HTTPException(detail=str(e), status_code=409)
         except Exception as e:
             logger.error(f"Error running workflow: {e}", exc_info=True)
             raise HTTPException(detail=f"Error running workflow: {e}", status_code=500)
@@ -596,6 +599,8 @@ class _WorkflowAPI:
                 context=context,
                 start_event=input_ev,
             )
+        except HandlerAlreadyRunningError as e:
+            raise HTTPException(detail=str(e), status_code=409)
         except Exception as e:
             raise HTTPException(
                 detail=f"Initial persistence failed: {e}", status_code=500

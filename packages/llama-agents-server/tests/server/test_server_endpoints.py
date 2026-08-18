@@ -395,6 +395,52 @@ async def test_run_workflow_nowait_success(client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("endpoint", ["run", "run-nowait"])
+async def test_run_workflow_rejects_active_handler_id(
+    endpoint: str,
+    client: AsyncClient,
+    server: WorkflowServer,
+) -> None:
+    await server._service.store.update(
+        PersistentHandler(
+            handler_id="shared-handler",
+            workflow_name="test",
+            status="running",
+        )
+    )
+
+    response = await client.post(
+        f"/workflows/test/{endpoint}",
+        json={"handler_id": "shared-handler"},
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "Handler 'shared-handler' is already running"}
+
+
+@pytest.mark.asyncio
+async def test_run_workflow_nowait_reuses_terminal_handler_id(
+    client: AsyncClient,
+    server: WorkflowServer,
+) -> None:
+    await server._service.store.update(
+        PersistentHandler(
+            handler_id="completed-handler",
+            workflow_name="test",
+            status="completed",
+        )
+    )
+
+    response = await client.post(
+        "/workflows/test/run-nowait",
+        json={"handler_id": "completed-handler"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["handler_id"] == "completed-handler"
+
+
+@pytest.mark.asyncio
 async def test_run_workflow_nowait_with_start_event(client: AsyncClient) -> None:
     # Test with start event containing message
     start_event_json = '{"__is_pydantic": true, "value": {"_data": {"message": "async start event"}}, "qualified_name": "workflows.events.StartEvent"}'
