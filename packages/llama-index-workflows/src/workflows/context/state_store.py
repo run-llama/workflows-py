@@ -9,7 +9,7 @@ import json
 import uuid
 import warnings
 from contextlib import asynccontextmanager
-from copy import deepcopy
+from copy import copy, deepcopy
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -443,6 +443,17 @@ def get_by_path(state: Any, path: str, default: Any = Ellipsis) -> Any:
     return value
 
 
+def _split_write_path(path: str) -> list[str]:
+    """Validate and split a write path."""
+    if not path:
+        raise ValueError("Path cannot be empty")
+
+    segments = path.split(".")
+    if len(segments) > MAX_DEPTH:
+        raise ValueError(f"Path length exceeds {MAX_DEPTH} segments")
+    return segments
+
+
 def set_by_path(state: Any, path: str, value: Any) -> None:
     """Set a nested value on state using a dot-separated path.
 
@@ -456,12 +467,7 @@ def set_by_path(state: Any, path: str, value: Any) -> None:
     Raises:
         ValueError: If the path is empty or exceeds MAX_DEPTH.
     """
-    if not path:
-        raise ValueError("Path cannot be empty")
-
-    segments = path.split(".")
-    if len(segments) > MAX_DEPTH:
-        raise ValueError(f"Path length exceeds {MAX_DEPTH} segments")
+    segments = _split_write_path(path)
 
     current = state
     for segment in segments[:-1]:
@@ -473,6 +479,64 @@ def set_by_path(state: Any, path: str, value: Any) -> None:
             current = intermediate
 
     assign_path_step(current, segments[-1], value)
+
+
+class _CannotRebuild(Exception):
+    """A container on the write path cannot be copied or reassigned."""
+
+
+def _shallow_copy_container(obj: Any) -> Any:
+    """Shallow-copy a supported path container."""
+    if isinstance(obj, BaseModel):
+        copied = obj.model_copy()
+    elif isinstance(obj, (dict, list)):
+        copied = copy(obj)
+    else:
+        raise _CannotRebuild
+
+    if copied is obj:
+        raise _CannotRebuild
+    if isinstance(copied, DictLikeModel):
+        # model_copy rebuilds the private-attr mapping but keeps its values,
+        # so the clone would otherwise write dynamic keys straight into the
+        # committed _data.
+        copied._data = dict(copied._data)
+    return copied
+
+
+def _rebuild_child(parent: Any, segment: str) -> Any:
+    """Replace one child with a shallow copy and return it."""
+    try:
+        child = traverse_path_step(parent, segment)
+    except (KeyError, AttributeError, IndexError, TypeError):
+        child = {}
+    else:
+        child = _shallow_copy_container(child)
+
+    try:
+        assign_path_step(parent, segment, child)
+    except Exception as exc:
+        raise _CannotRebuild from exc
+    return child
+
+
+def set_by_path_copy(state: MODEL_T, path: str, value: Any) -> MODEL_T:
+    """Set a path by copying its containers and sharing unrelated values.
+
+    Unsupported containers fall back to the in-place writer for compatibility.
+    """
+    segments = _split_write_path(path)
+    try:
+        root = _shallow_copy_container(state)
+        current = root
+        for segment in segments[:-1]:
+            current = _rebuild_child(current, segment)
+    except _CannotRebuild:
+        set_by_path(state, path, value)
+        return state
+
+    assign_path_step(current, segments[-1], value)
+    return cast(MODEL_T, root)
 
 
 def merge_state(current_state: MODEL_T, incoming: BaseModel) -> MODEL_T:
@@ -701,7 +765,8 @@ class StateStoreFacade(Generic[MODEL_T]):
     the backend's committed row, in-memory reads see the committed record.
     An in-flight `edit_state` block works on an isolated copy, so reads
     (including reads inside the block) return the pre-edit state until the
-    block commits on exit. Nested writers raise.
+    block commits on exit. `set` swaps in a rebuilt path atomically. Nested
+    writers raise.
 
     Workflow stores memoize one facade per run so in-process writers share
     that lock. Writers in other processes or replicas are not serialized;
@@ -878,9 +943,15 @@ class StateStoreFacade(Generic[MODEL_T]):
         return get_by_path(await self._load_state(), path, default)
 
     async def set(self, path: str, value: Any) -> None:
-        """Set a nested value using dot-separated paths."""
-        async with self.edit_state() as state:
-            set_by_path(state, path, value)
+        """Set a nested value using dot-separated paths.
+
+        Only containers along `path` are copied. Durable backends still
+        re-encode the full state row.
+        """
+        async with self._lock.acquire_write():
+            async with self._storage.session() as storage:
+                state = await self._load_state(storage)
+                await self._save_state(set_by_path_copy(state, path, value), storage)
 
     async def clear(self) -> None:
         """Reset the state to its type defaults.
