@@ -148,6 +148,33 @@ def test_cycles_terminate_and_mirror_the_original_shape() -> None:
     assert copied.name == "a"
 
 
+def test_a_tuple_reachable_from_its_own_elements_is_copied_once() -> None:
+    """A tuple is built after its elements, so a cycle can reach it first."""
+    items: list[Any] = []
+    root = (items,)
+    items.append(root)
+
+    copied = copy_state_for_edit(DictState(root=root))["root"]
+
+    assert copied is not root
+    assert copied[0][0] is copied
+
+
+def test_a_failed_copy_does_not_leave_a_broken_entry_behind() -> None:
+    """A copier that raises part-way can strand a partial value in the memo."""
+
+    class Poison:
+        def __deepcopy__(self, memo: dict[int, Any]) -> Poison:
+            memo[id(self)] = "partial"
+            raise TypeError("cannot pickle this object")
+
+    poison = Poison()
+    copied = copy_state_for_edit(DictState(a=poison, b=poison))
+
+    assert copied["a"] is poison
+    assert copied["b"] is poison
+
+
 def test_objects_referenced_twice_stay_one_object() -> None:
     shared = [1]
     pair = Pair()
@@ -217,17 +244,24 @@ def test_a_handle_inside_a_container_does_not_cost_its_neighbors() -> None:
     assert copied["items"][1] == [1, 2]
 
 
+class SelfSharing(BaseModel):
+    """`__deepcopy__` is the standard opt-out from being copied."""
+
+    nums: list[int] = Field(default_factory=list)
+
+    def __deepcopy__(self, memo: dict[int, Any] | None = None) -> SelfSharing:
+        return self
+
+
 def test_a_model_with_its_own_deepcopy_keeps_it() -> None:
-    """`__deepcopy__` is the standard opt-out; the field-wise walk defers to it."""
-
-    class SelfSharing(BaseModel):
-        nums: list[int] = Field(default_factory=list)
-
-        def __deepcopy__(self, memo: dict[int, Any] | None = None) -> SelfSharing:
-            return self
-
     value = SelfSharing(nums=[1])
     assert copy_state_for_edit(DictState(value=value))["value"] is value
+
+
+def test_the_deepcopy_opt_out_holds_for_typed_root_state() -> None:
+    """The root is copied by the same rule as any value nested under it."""
+    state = SelfSharing(nums=[1])
+    assert copy_state_for_edit(state) is state
 
 
 def test_typed_state_follows_the_same_rule() -> None:
