@@ -99,6 +99,16 @@ async def test_multi_agent_handoff_streams_with_memory() -> None:
     assert specialist_stream == "specialist answer"
     assert result.response.content == "specialist answer"
 
+    stored_memory = await handler.ctx.store.get("memory")
+    assert isinstance(stored_memory, Memory)
+    assert stored_memory.tokenizer_fn is memory.tokenizer_fn
+    assert stored_memory.sql_store is memory.sql_store
+    messages = stored_memory.get_all()
+    assert messages == memory.get_all()
+    assert messages[0].content == "earlier turn"
+    assert any(message.content == "help me" for message in messages)
+    assert messages[-1].content == "specialist answer"
+
 
 async def test_store_set_accepts_non_serializable_object(
     create_workflow: WorkflowFactory,
