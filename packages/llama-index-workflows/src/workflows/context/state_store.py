@@ -36,6 +36,8 @@ if TYPE_CHECKING:
 
 MAX_DEPTH = 1000
 
+_MODEL_DEEPCOPY = BaseModel.__deepcopy__
+
 # Keys set by pre-built workflows that are known to be unserializable in some cases.
 KNOWN_UNSERIALIZABLE_KEYS: tuple[str, ...] = ("memory",)
 
@@ -564,13 +566,22 @@ class DictState(DictLikeModel):
 MODEL_T = TypeVar("MODEL_T", bound=BaseModel, default=DictState)  # type: ignore[reportGeneralTypeIssues]
 
 
-def _copy_value_for_edit(value: Any, memo: dict[int, Any]) -> Any:
-    """Copy a single state value, or keep the live reference if it can't be copied.
+def _deepcopy_or_share(value: Any, memo: dict[int, Any]) -> Any:
+    """Deep-copy a value, or keep the live reference when it cannot be copied.
 
     State can hold live workflow objects (memory, LLM clients) that wrap thread
     locks, modules, or sockets and raise on ``deepcopy``. Those are shared live
     handles, so there is nothing to isolate by copying — preserve the reference
     instead of failing the edit.
+    """
+    try:
+        return deepcopy(value, memo)
+    except Exception:
+        return value
+
+
+def _copy_value_for_edit(value: Any, memo: dict[int, Any]) -> Any:
+    """Copy a single state value for an ``edit_state`` block.
 
     ``memo`` is the standard ``deepcopy`` memo, shared across the whole walk so
     cycles terminate and an object referenced twice stays one object in the copy.
@@ -583,7 +594,11 @@ def _copy_value_for_edit(value: Any, memo: dict[int, Any]) -> Any:
     """
     if id(value) in memo:
         return memo[id(value)]
+
     if isinstance(value, BaseModel):
+        # A model with its own __deepcopy__ has already declared how it copies.
+        if type(value).__deepcopy__ is not _MODEL_DEEPCOPY:
+            return _deepcopy_or_share(value, memo)
         try:
             return _copy_model_for_edit(value, memo)
         except Exception:
@@ -614,10 +629,7 @@ def _copy_value_for_edit(value: Any, memo: dict[int, Any]) -> Any:
         memo[id(value)] = copied
         return copied
 
-    try:
-        return deepcopy(value, memo)
-    except Exception:
-        return value
+    return _deepcopy_or_share(value, memo)
 
 
 def _copy_model_for_edit(value: BaseModel, memo: dict[int, Any]) -> BaseModel:

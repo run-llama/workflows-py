@@ -217,6 +217,19 @@ def test_a_handle_inside_a_container_does_not_cost_its_neighbors() -> None:
     assert copied["items"][1] == [1, 2]
 
 
+def test_a_model_with_its_own_deepcopy_keeps_it() -> None:
+    """`__deepcopy__` is the standard opt-out; the field-wise walk defers to it."""
+
+    class SelfSharing(BaseModel):
+        nums: list[int] = Field(default_factory=list)
+
+        def __deepcopy__(self, memo: dict[int, Any] | None = None) -> SelfSharing:
+            return self
+
+    value = SelfSharing(nums=[1])
+    assert copy_state_for_edit(DictState(value=value))["value"] is value
+
+
 def test_typed_state_follows_the_same_rule() -> None:
     client = Handle()
     state = TypedState(nums=[1], client=client)
