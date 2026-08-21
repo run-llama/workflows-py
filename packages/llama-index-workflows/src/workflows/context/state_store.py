@@ -493,7 +493,18 @@ class _CannotRebuild(Exception):
 
 
 def _shallow_copy_container(obj: Any) -> Any:
-    """Copy one container on a write path, sharing everything it holds."""
+    """Copy one container on a write path, sharing everything it holds.
+
+    Only the types whose shallow copy is known to be independent of the
+    original. A hand-written ``__copy__`` may return the object itself, or a
+    new instance still backed by the same mutable state, and writing through
+    one of those would make the write visible to a lockless reader before the
+    new root is committed. That cannot be detected from the outside, so anything
+    unrecognized is left to the in-place writer instead.
+
+    Raises:
+        _CannotRebuild: If obj is not a container this can safely copy.
+    """
     if isinstance(obj, DictLikeModel):
         copied = obj.model_copy()
         # model_copy rebuilds the private-attr mapping but keeps its values,
@@ -503,16 +514,9 @@ def _shallow_copy_container(obj: Any) -> Any:
         return copied
     if isinstance(obj, BaseModel):
         return obj.model_copy()
-    try:
-        copied = copy(obj)
-    except Exception as exc:
-        raise _CannotRebuild from exc
-    if copied is obj:
-        # Immutables, and live handles that opt out by returning self. Writing
-        # through one would make the write visible to readers before the new
-        # root is committed, so treat it as unrebuildable.
-        raise _CannotRebuild
-    return copied
+    if isinstance(obj, (dict, list, set)):
+        return copy(obj)
+    raise _CannotRebuild
 
 
 def _rebuild_child(parent: Any, segment: str) -> Any:
@@ -548,11 +552,13 @@ def set_by_path_copy(state: MODEL_T, path: str, value: Any) -> MODEL_T:
 
     Intermediate dicts are created as needed, matching `set_by_path`.
 
-    Some containers cannot be rebuilt: live handles wrapping a lock or a socket,
-    frozen models, read-only properties. Writing one of those used to work,
-    because the old writer only ever assigned the leaf. Rather than fail it now,
-    fall back to writing in place and return the same root — that write loses
-    reader isolation for this one path, and reproduces the old behavior exactly,
+    Some containers cannot be rebuilt: anything that is not a dict, list, set,
+    or pydantic model (see `_shallow_copy_container`), and any container that
+    refuses to be reassigned to its own parent, such as a frozen model or a
+    read-only property. Writing through one of those used to work, because the
+    old writer only ever assigned the leaf. Rather than fail it now, fall back
+    to writing in place and return the same root — that write loses reader
+    isolation for this one path, and reproduces the old behavior exactly,
     including the exception when there was one.
 
     Args:

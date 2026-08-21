@@ -75,6 +75,22 @@ class SelfCopy:
         return self
 
 
+class SharedBacking:
+    """Path container whose copy is a new object over the same backing dict."""
+
+    def __init__(self, backing: dict[str, Any]) -> None:
+        object.__setattr__(self, "backing", backing)
+
+    def __copy__(self) -> SharedBacking:
+        return type(self)(self.backing)
+
+    def __getattr__(self, name: str) -> Any:
+        return self.backing[name]
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        self.backing[name] = value
+
+
 class Uncopyable:
     """Live handle that refuses to be copied, like a lock or socket wrapper."""
 
@@ -368,6 +384,23 @@ class CountingSetter:
     def __setattr__(self, name: str, value: Any) -> None:
         self.writes.append(value)
         object.__setattr__(self, name, value)
+
+
+def test_container_with_a_sharing_copy_is_not_rebuilt() -> None:
+    """A copy that still shares its backing is not isolation, so don't claim it.
+
+    Rebuilding through one would publish the write to a lockless reader before
+    the new root is committed. Nothing can tell such a copy apart from a real
+    one, so only known container types are rebuilt and this takes the in-place
+    path instead.
+    """
+    backing: dict[str, Any] = {"leaf": 0}
+    state = DictState(node=SharedBacking(backing))
+
+    result = set_by_path_copy(state, "node.leaf", 9)
+
+    assert result is state
+    assert backing["leaf"] == 9
 
 
 def test_fallback_writes_through_a_live_handle_once() -> None:
