@@ -568,9 +568,8 @@ MODEL_T = TypeVar("MODEL_T", bound=BaseModel, default=DictState)  # type: ignore
 def _deepcopy_or_share(value: Any, memo: dict[int, Any]) -> Any:
     """Deep-copy a value, or share the live reference when it cannot be copied.
 
-    State can hold live handles — an LLM client wrapping a thread lock, a chat
-    store wrapping a module — that raise on ``deepcopy``. Sharing those is what
-    keeps the edit from crashing on them (issues 709/710).
+    State can hold live handles that raise on ``deepcopy``. Sharing those keeps
+    the edit from crashing.
     """
     try:
         return deepcopy(value, memo)

@@ -45,18 +45,7 @@ def _mock_agent(
 
 
 async def test_multi_agent_handoff_streams_with_memory() -> None:
-    """End-to-end regression for issue 709.
-
-    The reported failure was a router-to-specialist handoff in a streamed
-    multi-agent chat that passed a ``Memory`` object to ``run()``. The handoff
-    tool and agent setup write to ``ctx.store``, which deep-copies state for
-    edit isolation, and the live ``Memory`` (sqlalchemy/aiosqlite/tiktoken
-    internals) used to crash that copy with ``cannot pickle 'module' object``.
-
-    This drives the whole pattern at once: a router hands off to a specialist,
-    the specialist streams the final answer, and a ``Memory`` rides through
-    ``run()`` the way the original repro had it.
-    """
+    """A streamed handoff preserves the supplied memory."""
     router = _mock_agent(
         "router",
         "Routes the chat to a specialist.",
@@ -113,12 +102,7 @@ async def test_multi_agent_handoff_streams_with_memory() -> None:
 async def test_store_set_accepts_non_serializable_object(
     create_workflow: WorkflowFactory,
 ) -> None:
-    """Regression for issue 710: ctx.store.set with an unpicklable live object.
-
-    Storing an object that wraps a thread lock (e.g. an LLM client) used to
-    raise ``TypeError: cannot pickle '_thread.lock' object`` from the edit-time
-    whole-state deep copy. The object is kept by reference instead.
-    """
+    """The store keeps an uncopyable live object by reference."""
     lock = threading.Lock()
     captured = None
 

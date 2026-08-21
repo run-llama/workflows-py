@@ -206,7 +206,7 @@ def test_non_model_values_are_deep_copied() -> None:
 
 
 def test_non_deepcopyable_values_are_kept_by_reference() -> None:
-    """Regression for issues 709/710: an edit must not crash on a live handle."""
+    """An edit must not crash on a live handle."""
     client = Undeepcopyable()
     copied = copy_state_for_edit(DictState(client=client, nums=[1]))
 
@@ -311,8 +311,7 @@ def encoding() -> Iterator[RegistryEncoding]:
 def test_repeated_copies_of_a_declared_tokenizer_never_rebuild_it(
     encoding: RegistryEncoding,
 ) -> None:
-    """The reported regression: each copy detaches the tokenizer, so the next
-    one rebuilds it. An excluded field is shared, so nothing ever detaches."""
+    """An excluded tokenizer stays attached to its registry instance."""
     state = DictState(memory=Memoryish(messages=["hi"], tokenizer=encoding))
 
     for _ in range(5):
@@ -322,7 +321,7 @@ def test_repeated_copies_of_a_declared_tokenizer_never_rebuild_it(
     assert RegistryEncoding.rebuilds == 0
 
 
-def test_an_undeclared_tokenizer_still_shows_the_pathology(
+def test_an_undeclared_tokenizer_is_still_copied(
     encoding: RegistryEncoding,
 ) -> None:
     """Control: without the marker there is nothing to go on, and the rebuilds
@@ -341,7 +340,7 @@ def test_an_undeclared_tokenizer_still_shows_the_pathology(
 
 
 def test_tiktoken_backed_tokenizer_copies_stay_cheap() -> None:
-    """Same regression against the real thing, when tiktoken is installed."""
+    """A real tiktoken tokenizer stays shared when tiktoken is installed."""
     tiktoken = pytest.importorskip("tiktoken")
     try:
         enc = tiktoken.get_encoding("cl100k_base")
