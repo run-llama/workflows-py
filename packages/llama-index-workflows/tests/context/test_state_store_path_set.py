@@ -75,6 +75,13 @@ class SelfCopy:
         return self
 
 
+class SelfCopyingDict(dict):  # type: ignore[type-arg]
+    """dict subclass whose copy hook hands back the original."""
+
+    def __copy__(self) -> SelfCopyingDict:
+        return self
+
+
 class SharedBacking:
     """Path container whose copy is a new object over the same backing dict."""
 
@@ -384,6 +391,17 @@ class CountingSetter:
     def __setattr__(self, name: str, value: Any) -> None:
         self.writes.append(value)
         object.__setattr__(self, name, value)
+
+
+def test_subclass_whose_copy_returns_itself_is_not_rebuilt() -> None:
+    """Being a dict is not enough; the copy has to actually be a copy."""
+    node = SelfCopyingDict(leaf=0)
+    state = DictState(node=node)
+
+    result = set_by_path_copy(state, "node.leaf", 9)
+
+    assert result is state
+    assert node["leaf"] == 9
 
 
 def test_container_with_a_sharing_copy_is_not_rebuilt() -> None:

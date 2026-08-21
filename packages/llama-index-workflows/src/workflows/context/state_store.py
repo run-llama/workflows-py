@@ -495,28 +495,34 @@ class _CannotRebuild(Exception):
 def _shallow_copy_container(obj: Any) -> Any:
     """Copy one container on a write path, sharing everything it holds.
 
-    Only the types whose shallow copy is known to be independent of the
-    original. A hand-written ``__copy__`` may return the object itself, or a
-    new instance still backed by the same mutable state, and writing through
-    one of those would make the write visible to a lockless reader before the
-    new root is committed. That cannot be detected from the outside, so anything
-    unrecognized is left to the in-place writer instead.
+    Only pydantic models, dicts, and lists are rebuilt. Rebuilding through a
+    container whose copy still shares its backing state would publish the write
+    to a lockless reader before the new root is committed, and a hand-written
+    copy hook can do exactly that. A hook that hands back the original is caught
+    below; one that hands back a proxy over the same storage is not detectable
+    from the outside, which is why unrecognized types are left to the in-place
+    writer rather than copied hopefully.
 
     Raises:
-        _CannotRebuild: If obj is not a container this can safely copy.
+        _CannotRebuild: If obj is not a container this can copy.
     """
-    if isinstance(obj, DictLikeModel):
+    if isinstance(obj, BaseModel):
         copied = obj.model_copy()
+    elif isinstance(obj, (dict, list)):
+        copied = copy(obj)
+    else:
+        # Sets included: assign_path_step cannot write into one, so rebuilding
+        # a set only ever precedes a failure.
+        raise _CannotRebuild
+
+    if copied is obj:
+        raise _CannotRebuild
+    if isinstance(copied, DictLikeModel):
         # model_copy rebuilds the private-attr mapping but keeps its values,
         # so the clone would otherwise write dynamic keys straight into the
         # committed _data.
-        copied._data = dict(obj._data)
-        return copied
-    if isinstance(obj, BaseModel):
-        return obj.model_copy()
-    if isinstance(obj, (dict, list, set)):
-        return copy(obj)
-    raise _CannotRebuild
+        copied._data = dict(copied._data)
+    return copied
 
 
 def _rebuild_child(parent: Any, segment: str) -> Any:
@@ -552,8 +558,8 @@ def set_by_path_copy(state: MODEL_T, path: str, value: Any) -> MODEL_T:
 
     Intermediate dicts are created as needed, matching `set_by_path`.
 
-    Some containers cannot be rebuilt: anything that is not a dict, list, set,
-    or pydantic model (see `_shallow_copy_container`), and any container that
+    Some containers cannot be rebuilt: anything that is not a dict, list, or
+    pydantic model (see `_shallow_copy_container`), and any container that
     refuses to be reassigned to its own parent, such as a frozen model or a
     read-only property. Writing through one of those used to work, because the
     old writer only ever assigned the leaf. Rather than fail it now, fall back
