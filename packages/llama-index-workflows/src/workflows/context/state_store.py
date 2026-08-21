@@ -8,6 +8,7 @@ import functools
 import json
 import uuid
 import warnings
+from collections import deque
 from contextlib import asynccontextmanager
 from copy import copy, deepcopy
 from typing import (
@@ -34,6 +35,8 @@ if TYPE_CHECKING:
     from workflows.workflow import Workflow
 
 MAX_DEPTH = 1000
+
+_MODEL_DEEPCOPY = BaseModel.__deepcopy__
 
 # Keys set by pre-built workflows that are known to be unserializable in some cases.
 KNOWN_UNSERIALIZABLE_KEYS: tuple[str, ...] = ("memory",)
@@ -627,38 +630,120 @@ class DictState(DictLikeModel):
 MODEL_T = TypeVar("MODEL_T", bound=BaseModel, default=DictState)  # type: ignore[reportGeneralTypeIssues]
 
 
-def _copy_value_for_edit(value: Any) -> Any:
-    """Deep-copy a single state value, or keep the live reference if it can't be.
+def _deepcopy_or_share(value: Any, memo: dict[int, Any]) -> Any:
+    """Deep-copy a value, or share the live reference when it cannot be copied.
 
-    State can hold live workflow objects (memory, LLM clients) that wrap thread
-    locks, modules, or sockets and raise on ``deepcopy``. Those are shared live
-    handles, so there is nothing to isolate by copying — preserve the reference
-    instead of failing the edit.
+    State can hold live handles that raise on ``deepcopy``. Sharing those keeps
+    the edit from crashing.
     """
     try:
-        return deepcopy(value)
+        return deepcopy(value, memo)
     except Exception:
+        # A copier that raised part-way may have left a broken entry behind.
+        memo[id(value)] = value
         return value
+
+
+def _copy_value_for_edit(value: Any, memo: dict[int, Any]) -> Any:
+    """Copy one state value for an ``edit_state`` block.
+
+    ``memo`` is the standard ``deepcopy`` memo, shared across the whole walk so
+    cycles terminate and an object referenced twice stays one object.
+
+    Built-in containers are walked here rather than handed to ``deepcopy``, so
+    a model nested in one still gets the exclude rule. Everything else,
+    including container subclasses, goes to ``deepcopy``.
+    """
+    if id(value) in memo:
+        return memo[id(value)]
+
+    if isinstance(value, BaseModel):
+        # A model with its own __deepcopy__ has already declared how it copies.
+        if type(value).__deepcopy__ is not _MODEL_DEEPCOPY:
+            return _deepcopy_or_share(value, memo)
+        try:
+            return _copy_model_for_edit(value, memo)
+        except Exception:
+            memo[id(value)] = value
+            return value
+
+    kind = type(value)
+    if kind is list:
+        list_items: list[Any] = []
+        memo[id(value)] = list_items
+        list_items.extend(_copy_value_for_edit(item, memo) for item in value)
+        return list_items
+    if kind is dict:
+        entries: dict[Any, Any] = {}
+        memo[id(value)] = entries
+        for key, item in value.items():
+            entries[_copy_value_for_edit(key, memo)] = _copy_value_for_edit(item, memo)
+        return entries
+    if kind is tuple:
+        # A tuple cannot be filled in after the fact, so it is memoized last —
+        # a cycle through its elements may have already copied it.
+        tuple_items = [_copy_value_for_edit(item, memo) for item in value]
+        return memo.setdefault(id(value), tuple(tuple_items))
+    if kind is set:
+        set_items: set[Any] = set()
+        memo[id(value)] = set_items
+        set_items.update(_copy_value_for_edit(item, memo) for item in value)
+        return set_items
+    if kind is frozenset:
+        frozen_items = frozenset(_copy_value_for_edit(item, memo) for item in value)
+        return memo.setdefault(id(value), frozen_items)
+    if kind is deque:
+        deque_items: deque[Any] = deque(maxlen=value.maxlen)
+        memo[id(value)] = deque_items
+        deque_items.extend(_copy_value_for_edit(item, memo) for item in value)
+        return deque_items
+
+    return _deepcopy_or_share(value, memo)
+
+
+def _copy_model_for_edit(value: BaseModel, memo: dict[int, Any]) -> BaseModel:
+    """Copy a model, sharing ``Field(exclude=True)`` values by reference.
+
+    ``exclude=True`` marks a field as not part of the model's data, which is how
+    a live handle hung off a model is already declared — a tokenizer, a chat
+    store, a client. Copying one is wasted at best and ruinous at worst:
+    deep-copying a tiktoken tokenizer detaches it from tiktoken's registry, and
+    every copy after that rebuilds a 100k-entry BPE. Sharing them keeps the edit
+    isolated on the data a reader could otherwise catch mid-edit.
+
+    ``model_copy()`` lays out the new instance (fields, extras, private attrs,
+    fields-set); this fills in the copies field by field.
+    """
+    copied = value.model_copy()
+    # Registered before recursing so a cycle back to this model resolves here.
+    memo[id(value)] = copied
+
+    fields = type(value).model_fields
+    contents = vars(copied)
+    for name, child in value.__dict__.items():
+        field = fields.get(name)
+        if field is None or field.exclude is not True:
+            contents[name] = _copy_value_for_edit(child, memo)
+
+    # Extras and private attrs carry data too: ``DictLikeModel._data`` is where
+    # every dynamic entry of a ``DictState`` lives.
+    for store in (copied.__pydantic_extra__, copied.__pydantic_private__):
+        if not store:
+            continue
+        for name, child in list(store.items()):
+            store[name] = _copy_value_for_edit(child, memo)
+    return copied
 
 
 def copy_state_for_edit(state: MODEL_T) -> MODEL_T:
     """Return an isolated copy of state for an ``edit_state`` block.
 
     ``edit_state`` mutates a copy so lockless readers keep seeing committed
-    state until the block commits. Ordinary data entries are deep-copied for
-    that isolation; entries holding non-deepcopyable live objects are kept by
-    reference (see ``_copy_value_for_edit``) so the edit cannot crash on them.
-
-    Typed (non-``DictState``) state copies whole-model; if that model holds a
-    non-deepcopyable field, fall back to a shallow copy rather than crash.
+    state until the block commits. Data is copied for that isolation; live
+    handles are shared instead — declared ones via ``Field(exclude=True)``,
+    undeclared ones via the ``deepcopy`` failure fallback.
     """
-    if isinstance(state, DictState):
-        copied = {key: _copy_value_for_edit(value) for key, value in state.items()}
-        return cast(MODEL_T, DictState(**copied))
-    try:
-        return state.model_copy(deep=True)
-    except Exception:
-        return state.model_copy()
+    return cast(MODEL_T, _copy_value_for_edit(state, {}))
 
 
 @runtime_checkable
