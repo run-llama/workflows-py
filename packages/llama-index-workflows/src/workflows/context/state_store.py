@@ -501,7 +501,7 @@ def _shallow_copy_container(obj: Any) -> Any:
     copy hook can do exactly that. A hook that hands back the original is caught
     below; one that hands back a proxy over the same storage is not detectable
     from the outside, which is why unrecognized types are left to the in-place
-    writer rather than copied hopefully.
+    writer instead.
 
     Raises:
         _CannotRebuild: If obj is not a container this can copy.
