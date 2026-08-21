@@ -22,10 +22,13 @@ allow_k8s_contexts(K8S_CONTEXTS[target])
 def dev_docker_build(ref, context, dockerfile, build_target, deps):
     if target == 'k3s':
         target_arg = ' --target %s' % build_target if build_target else ''
+        local_deps = []
+        for dep in deps:
+            local_deps.append('%s/%s' % (context, dep[2:] if dep.startswith('./') else dep))
         custom_build(
             ref,
             'docker build -t $EXPECTED_REF -f %s%s %s' % (dockerfile, target_arg, context),
-            deps=deps,
+            deps=local_deps,
             disable_push=True,
         )
     else:
