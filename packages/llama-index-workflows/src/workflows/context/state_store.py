@@ -488,21 +488,17 @@ def set_by_path(state: Any, path: str, value: Any) -> None:
     assign_path_step(current, segments[-1], value)
 
 
-class _UncopyablePathContainer(Exception):
-    """A container on a write path could not be shallow-copied."""
+class _CannotRebuild(Exception):
+    """A container on the write path cannot be copied or reassigned."""
 
 
 def _shallow_copy_container(obj: Any) -> Any:
-    """Copy one container on a write path, sharing everything it holds.
-
-    Raises:
-        _UncopyablePathContainer: If obj cannot be shallow-copied.
-    """
+    """Copy one container on a write path, sharing everything it holds."""
     if isinstance(obj, DictLikeModel):
         copied = obj.model_copy()
-        # Pydantic's shallow copy rebuilds the private-attr mapping but keeps
-        # its values, so the clone would otherwise write dynamic keys straight
-        # into the committed _data.
+        # model_copy rebuilds the private-attr mapping but keeps its values,
+        # so the clone would otherwise write dynamic keys straight into the
+        # committed _data.
         copied._data = dict(obj._data)
         return copied
     if isinstance(obj, BaseModel):
@@ -510,72 +506,57 @@ def _shallow_copy_container(obj: Any) -> Any:
     try:
         copied = copy(obj)
     except Exception as exc:
-        raise _UncopyablePathContainer from exc
+        raise _CannotRebuild from exc
     if copied is obj:
-        # Immutables and handles that opt out of copying by returning self.
-        # There is nothing to rebuild, so this is a write-through too.
-        raise _UncopyablePathContainer
+        # Immutables, and live handles that opt out by returning self. Writing
+        # through one would make the write visible to readers before the new
+        # root is committed, so treat it as unrebuildable.
+        raise _CannotRebuild
     return copied
 
 
-def _rebuild_path(state: Any, segments: list[str], value: Any) -> Any:
-    """Rebuild the containers along segments, sharing everything else."""
-    # Walk down the existing spine, recording the container to rebuild at each
-    # step. Iterative on purpose: a recursive rebuild would raise RecursionError
-    # well before MAX_DEPTH.
-    spine: list[tuple[Any, str]] = []
-    current: Any = state
-    missing_at: int | None = None
-    for i, segment in enumerate(segments[:-1]):
-        spine.append((current, segment))
-        try:
-            current = traverse_path_step(current, segment)
-        except (KeyError, AttributeError, IndexError, TypeError):
-            missing_at = i
-            break
+def _rebuild_child(parent: Any, segment: str) -> Any:
+    """Replace parent's child at segment with a copy of it, and return the copy.
+
+    Raises:
+        _CannotRebuild: If the child cannot be copied, or the parent refuses the
+            copy (a frozen model, a read-only property).
+    """
+    try:
+        child = traverse_path_step(parent, segment)
+    except (KeyError, AttributeError, IndexError, TypeError):
+        child = {}  # missing intermediate, matching set_by_path
     else:
-        spine.append((current, segments[-1]))
+        child = _shallow_copy_container(child)
 
-    # Copy the whole spine before assigning anything. Copying as we go would
-    # let an uncopyable ancestor abort a rebuild that had already run the
-    # assignments below it, and the in-place fallback would then repeat them.
-    copies = [_shallow_copy_container(container) for container, _ in spine]
-
-    child: Any = value
-    if missing_at is not None:
-        # The walk stopped early: the rest of the path becomes fresh dicts,
-        # matching the intermediates set_by_path creates in place.
-        for segment in reversed(segments[missing_at + 1 :]):
-            child = {segment: child}
-
-    # Bottom-up, so each container is assigned the subtree rebuilt beneath it.
-    # Only copies are mutated: an exception here leaves state untouched.
-    for copied, (_, segment) in zip(reversed(copies), reversed(spine)):
-        assign_path_step(copied, segment, child)
-        child = copied
+    try:
+        assign_path_step(parent, segment, child)
+    except Exception as exc:
+        raise _CannotRebuild from exc
     return child
 
 
 def set_by_path_copy(state: MODEL_T, path: str, value: Any) -> MODEL_T:
     """Return state with path set to value, copying only the path.
 
-    Copy-on-write counterpart of `set_by_path`: the containers along `path` are
-    shallow-copied and rebuilt bottom-up, so every value off the path stays the
+    Copy-on-write counterpart of `set_by_path`: each container along `path` is
+    replaced by a shallow copy of itself, so every value off the path stays the
     same object. Cost is the summed width of the containers on the path and does
-    not depend on the size of anything stored elsewhere. The input state is not
-    mutated, so a reader holding it keeps seeing the pre-write values.
+    not depend on the size of anything stored elsewhere. The walk only ever
+    mutates copies, so the input state is untouched and a reader holding it
+    keeps seeing the pre-write values.
 
     Intermediate dicts are created as needed, matching `set_by_path`.
 
-    A container on the path that cannot be shallow-copied is the one exception:
-    a live handle wrapping a lock, module, or socket, or one that opts out by
-    returning itself from `__copy__`. Rather than fail a write that used to
-    succeed, write through it in place and return the same root. The whole path
-    is copied before anything is assigned, so the fallback never repeats an
-    assignment the rebuild already made.
+    Some containers cannot be rebuilt: live handles wrapping a lock or a socket,
+    frozen models, read-only properties. Writing one of those used to work,
+    because the old writer only ever assigned the leaf. Rather than fail it now,
+    fall back to writing in place and return the same root — that write loses
+    reader isolation for this one path, and reproduces the old behavior exactly,
+    including the exception when there was one.
 
     Args:
-        state: The root state object (not mutated, outside the fallback above).
+        state: The root state object (mutated only in the fallback above).
         path: Dot-separated path to write.
         value: Value to assign.
 
@@ -587,10 +568,20 @@ def set_by_path_copy(state: MODEL_T, path: str, value: Any) -> MODEL_T:
     """
     segments = _split_write_path(path)
     try:
-        return cast(MODEL_T, _rebuild_path(state, segments, value))
-    except _UncopyablePathContainer:
+        root = _shallow_copy_container(state)
+        current = root
+        # Iterative on purpose: a recursive rebuild would raise RecursionError
+        # well before MAX_DEPTH.
+        for segment in segments[:-1]:
+            current = _rebuild_child(current, segment)
+    except _CannotRebuild:
         set_by_path(state, path, value)
         return state
+
+    # Outside the try: a leaf that rejects the value rejected it before this
+    # change too, so that error belongs to the caller, not to the fallback.
+    assign_path_step(current, segments[-1], value)
+    return cast(MODEL_T, root)
 
 
 def merge_state(current_state: MODEL_T, incoming: BaseModel) -> MODEL_T:
