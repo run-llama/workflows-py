@@ -9,7 +9,7 @@ import json
 import uuid
 import warnings
 from contextlib import asynccontextmanager
-from copy import deepcopy
+from copy import copy, deepcopy
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -443,6 +443,24 @@ def get_by_path(state: Any, path: str, default: Any = Ellipsis) -> Any:
     return value
 
 
+def _split_write_path(path: str) -> list[str]:
+    """Validate and split a write path into segments.
+
+    Shared by the in-place and copy-on-write writers so their errors cannot
+    drift apart.
+
+    Raises:
+        ValueError: If the path is empty or exceeds MAX_DEPTH.
+    """
+    if not path:
+        raise ValueError("Path cannot be empty")
+
+    segments = path.split(".")
+    if len(segments) > MAX_DEPTH:
+        raise ValueError(f"Path length exceeds {MAX_DEPTH} segments")
+    return segments
+
+
 def set_by_path(state: Any, path: str, value: Any) -> None:
     """Set a nested value on state using a dot-separated path.
 
@@ -456,12 +474,7 @@ def set_by_path(state: Any, path: str, value: Any) -> None:
     Raises:
         ValueError: If the path is empty or exceeds MAX_DEPTH.
     """
-    if not path:
-        raise ValueError("Path cannot be empty")
-
-    segments = path.split(".")
-    if len(segments) > MAX_DEPTH:
-        raise ValueError(f"Path length exceeds {MAX_DEPTH} segments")
+    segments = _split_write_path(path)
 
     current = state
     for segment in segments[:-1]:
@@ -473,6 +486,111 @@ def set_by_path(state: Any, path: str, value: Any) -> None:
             current = intermediate
 
     assign_path_step(current, segments[-1], value)
+
+
+class _UncopyablePathContainer(Exception):
+    """A container on a write path could not be shallow-copied."""
+
+
+def _shallow_copy_container(obj: Any) -> Any:
+    """Copy one container on a write path, sharing everything it holds.
+
+    Raises:
+        _UncopyablePathContainer: If obj cannot be shallow-copied.
+    """
+    if isinstance(obj, DictLikeModel):
+        copied = obj.model_copy()
+        # Pydantic's shallow copy rebuilds the private-attr mapping but keeps
+        # its values, so the clone would otherwise write dynamic keys straight
+        # into the committed _data.
+        copied._data = dict(obj._data)
+        return copied
+    if isinstance(obj, BaseModel):
+        return obj.model_copy()
+    try:
+        copied = copy(obj)
+    except Exception as exc:
+        raise _UncopyablePathContainer from exc
+    if copied is obj:
+        # Immutables and handles that opt out of copying by returning self.
+        # There is nothing to rebuild, so this is a write-through too.
+        raise _UncopyablePathContainer
+    return copied
+
+
+def _rebuild_path(state: Any, segments: list[str], value: Any) -> Any:
+    """Rebuild the containers along segments, sharing everything else."""
+    # Walk down the existing spine, recording the container to rebuild at each
+    # step. Iterative on purpose: a recursive rebuild would raise RecursionError
+    # well before MAX_DEPTH.
+    spine: list[tuple[Any, str]] = []
+    current: Any = state
+    missing_at: int | None = None
+    for i, segment in enumerate(segments[:-1]):
+        spine.append((current, segment))
+        try:
+            current = traverse_path_step(current, segment)
+        except (KeyError, AttributeError, IndexError, TypeError):
+            missing_at = i
+            break
+    else:
+        spine.append((current, segments[-1]))
+
+    # Copy the whole spine before assigning anything. Copying as we go would
+    # let an uncopyable ancestor abort a rebuild that had already run the
+    # assignments below it, and the in-place fallback would then repeat them.
+    copies = [_shallow_copy_container(container) for container, _ in spine]
+
+    child: Any = value
+    if missing_at is not None:
+        # The walk stopped early: the rest of the path becomes fresh dicts,
+        # matching the intermediates set_by_path creates in place.
+        for segment in reversed(segments[missing_at + 1 :]):
+            child = {segment: child}
+
+    # Bottom-up, so each container is assigned the subtree rebuilt beneath it.
+    # Only copies are mutated: an exception here leaves state untouched.
+    for copied, (_, segment) in zip(reversed(copies), reversed(spine)):
+        assign_path_step(copied, segment, child)
+        child = copied
+    return child
+
+
+def set_by_path_copy(state: MODEL_T, path: str, value: Any) -> MODEL_T:
+    """Return state with path set to value, copying only the path.
+
+    Copy-on-write counterpart of `set_by_path`: the containers along `path` are
+    shallow-copied and rebuilt bottom-up, so every value off the path stays the
+    same object. Cost is the summed width of the containers on the path and does
+    not depend on the size of anything stored elsewhere. The input state is not
+    mutated, so a reader holding it keeps seeing the pre-write values.
+
+    Intermediate dicts are created as needed, matching `set_by_path`.
+
+    A container on the path that cannot be shallow-copied is the one exception:
+    a live handle wrapping a lock, module, or socket, or one that opts out by
+    returning itself from `__copy__`. Rather than fail a write that used to
+    succeed, write through it in place and return the same root. The whole path
+    is copied before anything is assigned, so the fallback never repeats an
+    assignment the rebuild already made.
+
+    Args:
+        state: The root state object (not mutated, outside the fallback above).
+        path: Dot-separated path to write.
+        value: Value to assign.
+
+    Returns:
+        The state to commit: a new root, or `state` itself in the fallback case.
+
+    Raises:
+        ValueError: If the path is empty or exceeds MAX_DEPTH.
+    """
+    segments = _split_write_path(path)
+    try:
+        return cast(MODEL_T, _rebuild_path(state, segments, value))
+    except _UncopyablePathContainer:
+        set_by_path(state, path, value)
+        return state
 
 
 def merge_state(current_state: MODEL_T, incoming: BaseModel) -> MODEL_T:
@@ -701,7 +819,10 @@ class StateStoreFacade(Generic[MODEL_T]):
     the backend's committed row, in-memory reads see the committed record.
     An in-flight `edit_state` block works on an isolated copy, so reads
     (including reads inside the block) return the pre-edit state until the
-    block commits on exit. Nested writers raise.
+    block commits on exit. `set` rebuilds only the containers along the
+    written path and swaps in the new root, so it is equally invisible
+    until it commits, while values off the path stay shared with the
+    previous state. Nested writers raise.
 
     Workflow stores memoize one facade per run so in-process writers share
     that lock. Writers in other processes or replicas are not serialized;
@@ -878,9 +999,20 @@ class StateStoreFacade(Generic[MODEL_T]):
         return get_by_path(await self._load_state(), path, default)
 
     async def set(self, path: str, value: Any) -> None:
-        """Set a nested value using dot-separated paths."""
-        async with self.edit_state() as state:
-            set_by_path(state, path, value)
+        """Set a nested value using dot-separated paths.
+
+        Copy-on-write: only the containers along `path` are rebuilt, so the cost
+        does not scale with the size of values stored elsewhere, and those values
+        stay the same objects instead of being cloned. Readers stay lockless and
+        read-committed — the rebuilt root is swapped in atomically.
+
+        Durable backends still decode and re-encode the whole state row per
+        write; this removes the in-process copy, not the round trip.
+        """
+        async with self._lock.acquire_write():
+            async with self._storage.session() as storage:
+                state = await self._load_state(storage)
+                await self._save_state(set_by_path_copy(state, path, value), storage)
 
     async def clear(self) -> None:
         """Reset the state to its type defaults.
