@@ -444,14 +444,7 @@ def get_by_path(state: Any, path: str, default: Any = Ellipsis) -> Any:
 
 
 def _split_write_path(path: str) -> list[str]:
-    """Validate and split a write path into segments.
-
-    Shared by the in-place and copy-on-write writers so their errors cannot
-    drift apart.
-
-    Raises:
-        ValueError: If the path is empty or exceeds MAX_DEPTH.
-    """
+    """Validate and split a write path."""
     if not path:
         raise ValueError("Path cannot be empty")
 
@@ -493,26 +486,12 @@ class _CannotRebuild(Exception):
 
 
 def _shallow_copy_container(obj: Any) -> Any:
-    """Copy one container on a write path, sharing everything it holds.
-
-    Only pydantic models, dicts, and lists are rebuilt. Rebuilding through a
-    container whose copy still shares its backing state would publish the write
-    to a lockless reader before the new root is committed, and a hand-written
-    copy hook can do exactly that. A hook that hands back the original is caught
-    below; one that hands back a proxy over the same storage is not detectable
-    from the outside, which is why unrecognized types are left to the in-place
-    writer instead.
-
-    Raises:
-        _CannotRebuild: If obj is not a container this can copy.
-    """
+    """Shallow-copy a supported path container."""
     if isinstance(obj, BaseModel):
         copied = obj.model_copy()
     elif isinstance(obj, (dict, list)):
         copied = copy(obj)
     else:
-        # Sets included: assign_path_step cannot write into one, so rebuilding
-        # a set only ever precedes a failure.
         raise _CannotRebuild
 
     if copied is obj:
@@ -526,16 +505,11 @@ def _shallow_copy_container(obj: Any) -> Any:
 
 
 def _rebuild_child(parent: Any, segment: str) -> Any:
-    """Replace parent's child at segment with a copy of it, and return the copy.
-
-    Raises:
-        _CannotRebuild: If the child cannot be copied, or the parent refuses the
-            copy (a frozen model, a read-only property).
-    """
+    """Replace one child with a shallow copy and return it."""
     try:
         child = traverse_path_step(parent, segment)
     except (KeyError, AttributeError, IndexError, TypeError):
-        child = {}  # missing intermediate, matching set_by_path
+        child = {}
     else:
         child = _shallow_copy_container(child)
 
@@ -547,51 +521,20 @@ def _rebuild_child(parent: Any, segment: str) -> Any:
 
 
 def set_by_path_copy(state: MODEL_T, path: str, value: Any) -> MODEL_T:
-    """Return state with path set to value, copying only the path.
+    """Set a path by copying its containers and sharing unrelated values.
 
-    Copy-on-write counterpart of `set_by_path`: each container along `path` is
-    replaced by a shallow copy of itself, so every value off the path stays the
-    same object. Cost is the summed width of the containers on the path and does
-    not depend on the size of anything stored elsewhere. The walk only ever
-    mutates copies, so the input state is untouched and a reader holding it
-    keeps seeing the pre-write values.
-
-    Intermediate dicts are created as needed, matching `set_by_path`.
-
-    Some containers cannot be rebuilt: anything that is not a dict, list, or
-    pydantic model (see `_shallow_copy_container`), and any container that
-    refuses to be reassigned to its own parent, such as a frozen model or a
-    read-only property. Writing through one of those used to work, because the
-    old writer only ever assigned the leaf. Rather than fail it now, fall back
-    to writing in place and return the same root — that write loses reader
-    isolation for this one path, and reproduces the old behavior exactly,
-    including the exception when there was one.
-
-    Args:
-        state: The root state object (mutated only in the fallback above).
-        path: Dot-separated path to write.
-        value: Value to assign.
-
-    Returns:
-        The state to commit: a new root, or `state` itself in the fallback case.
-
-    Raises:
-        ValueError: If the path is empty or exceeds MAX_DEPTH.
+    Unsupported containers fall back to the in-place writer for compatibility.
     """
     segments = _split_write_path(path)
     try:
         root = _shallow_copy_container(state)
         current = root
-        # Iterative on purpose: a recursive rebuild would raise RecursionError
-        # well before MAX_DEPTH.
         for segment in segments[:-1]:
             current = _rebuild_child(current, segment)
     except _CannotRebuild:
         set_by_path(state, path, value)
         return state
 
-    # Outside the try: a leaf that rejects the value rejected it before this
-    # change too, so that error belongs to the caller, not to the fallback.
     assign_path_step(current, segments[-1], value)
     return cast(MODEL_T, root)
 
@@ -822,10 +765,8 @@ class StateStoreFacade(Generic[MODEL_T]):
     the backend's committed row, in-memory reads see the committed record.
     An in-flight `edit_state` block works on an isolated copy, so reads
     (including reads inside the block) return the pre-edit state until the
-    block commits on exit. `set` rebuilds only the containers along the
-    written path and swaps in the new root, so it is equally invisible
-    until it commits, while values off the path stay shared with the
-    previous state. Nested writers raise.
+    block commits on exit. `set` swaps in a rebuilt path atomically. Nested
+    writers raise.
 
     Workflow stores memoize one facade per run so in-process writers share
     that lock. Writers in other processes or replicas are not serialized;
@@ -1004,13 +945,8 @@ class StateStoreFacade(Generic[MODEL_T]):
     async def set(self, path: str, value: Any) -> None:
         """Set a nested value using dot-separated paths.
 
-        Copy-on-write: only the containers along `path` are rebuilt, so the cost
-        does not scale with the size of values stored elsewhere, and those values
-        stay the same objects instead of being cloned. Readers stay lockless and
-        read-committed — the rebuilt root is swapped in atomically.
-
-        Durable backends still decode and re-encode the whole state row per
-        write; this removes the in-process copy, not the round trip.
+        Only containers along `path` are copied. Durable backends still
+        re-encode the full state row.
         """
         async with self._lock.acquire_write():
             async with self._storage.session() as storage:

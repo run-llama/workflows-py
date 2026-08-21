@@ -1,12 +1,7 @@
 # SPDX-License-Identifier: MIT
 # Copyright (c) 2026 LlamaIndex Inc.
 
-"""Copy-on-write behavior of `StateStore.set` and `set_by_path_copy`.
-
-`set` rebuilds only the containers along the written path. These tests pin the
-two things that buys — values off the path keep their identity and are never
-copied — and the parity with the in-place `set_by_path` it replaced.
-"""
+"""Copy-on-write path tests for `StateStore.set`."""
 
 from __future__ import annotations
 
@@ -147,11 +142,6 @@ def dump(value: Any) -> Any:
     return value
 
 
-# ============================================================================
-# Readers hold committed state across a write
-# ============================================================================
-
-
 @pytest.mark.asyncio
 @pytest.mark.parametrize("durable", [False, True])
 async def test_reader_holding_state_is_unaffected_by_set(durable: bool) -> None:
@@ -244,10 +234,6 @@ async def test_uncopyable_container_on_path_is_written_through() -> None:
     assert await store.get("live.slot") == 7
 
 
-# ============================================================================
-# Parity with the in-place writer
-# ============================================================================
-
 PARITY_CASES: list[tuple[str, Callable[[], Any], str, Any]] = [
     ("missing_intermediates", DictState, "x.y.z", 1),
     ("method_named_segment", DictState, "items.nested", 1),
@@ -262,8 +248,6 @@ PARITY_CASES: list[tuple[str, Callable[[], Any], str, Any]] = [
     ("through_a_tuple", lambda: DictState(t=(1, 2)), "t.0", 9),
     ("read_only_attribute", lambda: DictState(obj=ReadOnlyAttr()), "obj.value", 5),
     ("nested_existing", lambda: DictState(a={"b": {"c": 0}}), "a.b.c", 1),
-    # Ancestors the rebuild cannot replace. The old writer only ever assigned
-    # the leaf, so these writes must keep working.
     ("frozen_ancestor", lambda: FrozenRoot(inner={"x": 0}), "inner.x", 1),
     ("read_only_ancestor", lambda: ReadOnlyAncestor(data={"k": 0}), "view.k", 1),
     ("self_copying_ancestor", lambda: DictState(s=SelfCopy()), "s.slot", 1),
@@ -300,8 +284,6 @@ def test_set_by_path_copy_matches_set_by_path(
         return
     assert dump(result) == dump(in_place)
     if result is not copied_from:
-        # A real rebuild leaves the input alone. The write-through fallback
-        # returns the input itself, and is allowed to have mutated it.
         assert dump(copied_from) == untouched
 
 
@@ -323,11 +305,6 @@ def test_set_by_path_copy_shares_values_off_the_path() -> None:
     assert result["sibling"] is sibling
     assert result["a"] is not state["a"]
     assert state["a"]["b"] == 0
-
-
-# ============================================================================
-# Path validation
-# ============================================================================
 
 
 def test_empty_path_raises() -> None:
@@ -353,11 +330,6 @@ async def test_invalid_path_inside_edit_state_still_raises_nested_writer() -> No
     with pytest.raises(RuntimeError):
         async with store.edit_state():
             await store.set("", 1)
-
-
-# ============================================================================
-# Durable backends
-# ============================================================================
 
 
 @pytest.mark.asyncio
@@ -405,13 +377,7 @@ def test_subclass_whose_copy_returns_itself_is_not_rebuilt() -> None:
 
 
 def test_container_with_a_sharing_copy_is_not_rebuilt() -> None:
-    """A copy that still shares its backing is not isolation, so don't claim it.
-
-    Rebuilding through one would publish the write to a lockless reader before
-    the new root is committed. Nothing can tell such a copy apart from a real
-    one, so only known container types are rebuilt and this takes the in-place
-    path instead.
-    """
+    """Unknown containers use the in-place fallback."""
     backing: dict[str, Any] = {"leaf": 0}
     state = DictState(node=SharedBacking(backing))
 
