@@ -150,6 +150,7 @@ k8s_yaml(
         namespace='llama-agents',
         values=['tilt/helm/values-dev.yaml'],
         set=helm_sets,
+        skip_crds=True,
     ),
 )
 
