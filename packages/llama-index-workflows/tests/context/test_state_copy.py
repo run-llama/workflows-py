@@ -6,7 +6,8 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Iterator
+from collections import deque
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -43,6 +44,13 @@ class Blockish(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     facts: list[str] = Field(default_factory=list)
+    llm: Any = Field(default=None, exclude=True)
+
+
+class FrozenBlockish(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True, frozen=True)
+
+    name: str
     llm: Any = Field(default=None, exclude=True)
 
 
@@ -101,6 +109,23 @@ def test_nested_models_recurse_with_the_same_rule() -> None:
     assert block.llm is llm
     block.facts.append("b")
     assert memory.blocks[0].facts == ["a"]
+
+
+@pytest.mark.parametrize(
+    "container",
+    [set, frozenset, deque],
+)
+def test_models_inside_builtin_containers_use_the_same_rule(
+    container: Callable[[list[FrozenBlockish]], Any],
+) -> None:
+    llm = Handle()
+    block = FrozenBlockish(name="facts", llm=llm)
+
+    copied = copy_state_for_edit(DictState(items=container([block])))["items"]
+    copied_block = next(iter(copied))
+
+    assert copied_block is not block
+    assert copied_block.llm is llm
 
 
 def test_model_keeps_its_identity_and_validation_state() -> None:

@@ -8,6 +8,7 @@ import functools
 import json
 import uuid
 import warnings
+from collections import deque
 from contextlib import asynccontextmanager
 from copy import deepcopy
 from typing import (
@@ -585,10 +586,9 @@ def _copy_value_for_edit(value: Any, memo: dict[int, Any]) -> Any:
     ``memo`` is the standard ``deepcopy`` memo, shared across the whole walk so
     cycles terminate and an object referenced twice stays one object.
 
-    Lists, dicts and tuples are walked here rather than handed to ``deepcopy``,
-    so a model nested in one still gets the exclude rule — an agent's memory
-    keeps its blocks in a list. Everything else, container subclasses included,
-    goes to ``deepcopy``.
+    Built-in containers are walked here rather than handed to ``deepcopy``, so
+    a model nested in one still gets the exclude rule. Everything else,
+    including container subclasses, goes to ``deepcopy``.
     """
     if id(value) in memo:
         return memo[id(value)]
@@ -605,10 +605,10 @@ def _copy_value_for_edit(value: Any, memo: dict[int, Any]) -> Any:
 
     kind = type(value)
     if kind is list:
-        items: list[Any] = []
-        memo[id(value)] = items
-        items.extend(_copy_value_for_edit(item, memo) for item in value)
-        return items
+        list_items: list[Any] = []
+        memo[id(value)] = list_items
+        list_items.extend(_copy_value_for_edit(item, memo) for item in value)
+        return list_items
     if kind is dict:
         entries: dict[Any, Any] = {}
         memo[id(value)] = entries
@@ -618,8 +618,21 @@ def _copy_value_for_edit(value: Any, memo: dict[int, Any]) -> Any:
     if kind is tuple:
         # A tuple cannot be filled in after the fact, so it is memoized last —
         # a cycle through its elements may have already copied it.
-        items = [_copy_value_for_edit(item, memo) for item in value]
-        return memo.setdefault(id(value), tuple(items))
+        tuple_items = [_copy_value_for_edit(item, memo) for item in value]
+        return memo.setdefault(id(value), tuple(tuple_items))
+    if kind is set:
+        set_items: set[Any] = set()
+        memo[id(value)] = set_items
+        set_items.update(_copy_value_for_edit(item, memo) for item in value)
+        return set_items
+    if kind is frozenset:
+        frozen_items = frozenset(_copy_value_for_edit(item, memo) for item in value)
+        return memo.setdefault(id(value), frozen_items)
+    if kind is deque:
+        deque_items: deque[Any] = deque(maxlen=value.maxlen)
+        memo[id(value)] = deque_items
+        deque_items.extend(_copy_value_for_edit(item, memo) for item in value)
+        return deque_items
 
     return _deepcopy_or_share(value, memo)
 
