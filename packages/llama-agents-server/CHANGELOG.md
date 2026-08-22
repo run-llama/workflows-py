@@ -1,5 +1,21 @@
 # llama-agents-server
 
+## 0.7.1
+
+### Patch Changes
+
+- 0ca383f: Reject concurrent HTTP runs that reuse an active workflow handler ID
+- bd0e242: Update debugger assets
+
+  - JavaScript: https://cdn.jsdelivr.net/npm/@llamaindex/workflow-debugger@0.2.42/dist/app.js
+  - CSS: https://cdn.jsdelivr.net/npm/@llamaindex/workflow-debugger@0.2.42/dist/app.css
+
+- Updated dependencies [5ec5f1d]
+- Updated dependencies [ee6db66]
+- Updated dependencies [440f79b]
+  - llama-index-workflows@2.23.3
+  - llama-agents-client@0.3.12
+
 ## 0.7.0
 
 ### Minor Changes

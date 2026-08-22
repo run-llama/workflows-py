@@ -1,5 +1,14 @@
 # llama-agents-client
 
+## 0.3.12
+
+### Patch Changes
+
+- 440f79b: Expose workflow schemas, event schemas, and graphs through WorkflowClient
+- Updated dependencies [5ec5f1d]
+- Updated dependencies [ee6db66]
+  - llama-index-workflows@2.23.3
+
 ## 0.3.11
 
 ### Patch Changes
