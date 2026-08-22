@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 from typing import Any, Callable
 
 import pytest
@@ -105,6 +106,20 @@ class Uncopyable:
 
     def __deepcopy__(self, memo: dict[int, Any]) -> Uncopyable:
         raise TypeError("cannot copy a live handle")
+
+
+@dataclasses.dataclass
+class DataHolder:
+    """Dataclass on the write path: copyable, but not a model/dict/list."""
+
+    x: int = 1
+
+
+class PlainHolder:
+    """Plain object on the write path: copyable, but not a model/dict/list."""
+
+    def __init__(self) -> None:
+        self.x = 1
 
 
 class CopyCounter:
@@ -365,26 +380,27 @@ class CountingSetter:
         object.__setattr__(self, name, value)
 
 
-def test_subclass_whose_copy_returns_itself_is_not_rebuilt() -> None:
+def test_subclass_whose_copy_returns_itself_falls_back_to_copying_state() -> None:
     """Being a dict is not enough; the copy has to actually be a copy."""
     node = SelfCopyingDict(leaf=0)
     state = DictState(node=node)
 
     result = set_by_path_copy(state, "node.leaf", 9)
 
-    assert result is state
-    assert node["leaf"] == 9
+    assert result is not state
+    assert node["leaf"] == 0
+    assert result["node"]["leaf"] == 9
 
 
-def test_container_with_a_sharing_copy_is_not_rebuilt() -> None:
-    """Unknown containers use the in-place fallback."""
+def test_container_with_a_sharing_copy_falls_back_to_copying_state() -> None:
+    """Unknown containers cost a full state copy rather than a live write."""
     backing: dict[str, Any] = {"leaf": 0}
     state = DictState(node=SharedBacking(backing))
 
     result = set_by_path_copy(state, "node.leaf", 9)
 
-    assert result is state
-    assert backing["leaf"] == 9
+    assert result is not state
+    assert result["node"].leaf == 9
 
 
 def test_fallback_writes_through_a_live_handle_once() -> None:
@@ -395,6 +411,41 @@ def test_fallback_writes_through_a_live_handle_once() -> None:
 
     result = set_by_path_copy(state, "live.target.slot", 7)
 
-    assert result is state
+    assert result is not state
     assert live.target.slot == 7
     assert writes == [7]
+
+
+@pytest.mark.parametrize(
+    ("build", "path", "read"),
+    [
+        pytest.param(PlainHolder, "node.x", lambda n: n.x, id="plain_object"),
+        pytest.param(DataHolder, "node.x", lambda n: n.x, id="dataclass"),
+        pytest.param(lambda: ({"x": 1},), "node.0.x", lambda n: n[0]["x"], id="tuple"),
+    ],
+)
+def test_unrebuildable_container_on_the_path_is_copied_not_written_through(
+    build: Callable[[], Any], path: str, read: Callable[[Any], Any]
+) -> None:
+    """A container the rebuild cannot handle is copied, not written through."""
+    node = build()
+    state = DictState(node=node)
+
+    result = set_by_path_copy(state, path, 99)
+
+    assert read(node) == 1
+    assert get_by_path(result, path) == 99
+
+
+@pytest.mark.asyncio
+async def test_reader_is_unaffected_by_a_set_through_an_unsupported_container() -> None:
+    """The read-committed contract holds on the fallback path too."""
+    store: InMemoryStateStore[DictState] = InMemoryStateStore(
+        DictState(node=DataHolder())
+    )
+    snapshot = await store.get_state()
+
+    await store.set("node.x", 99)
+
+    assert snapshot["node"].x == 1
+    assert await store.get("node.x") == 99

@@ -526,7 +526,11 @@ def _rebuild_child(parent: Any, segment: str) -> Any:
 def set_by_path_copy(state: MODEL_T, path: str, value: Any) -> MODEL_T:
     """Set a path by copying its containers and sharing unrelated values.
 
-    Unsupported containers fall back to the in-place writer for compatibility.
+    A container the rebuild cannot handle falls back to copying all of state,
+    because writing through to ``state`` would mutate what readers are reading.
+    The fallback copies through ``copy_state_for_edit`` so it keeps the exclude
+    rule; a value that cannot be copied at all is shared, and a write through
+    one is still visible immediately.
     """
     segments = _split_write_path(path)
     try:
@@ -535,8 +539,9 @@ def set_by_path_copy(state: MODEL_T, path: str, value: Any) -> MODEL_T:
         for segment in segments[:-1]:
             current = _rebuild_child(current, segment)
     except _CannotRebuild:
-        set_by_path(state, path, value)
-        return state
+        copied = copy_state_for_edit(state)
+        set_by_path(copied, path, value)
+        return copied
 
     assign_path_step(current, segments[-1], value)
     return cast(MODEL_T, root)
