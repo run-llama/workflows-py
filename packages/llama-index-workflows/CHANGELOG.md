@@ -1,5 +1,12 @@
 # llama-index-workflows
 
+## 2.23.3
+
+### Patch Changes
+
+- 5ec5f1d: Share pydantic fields marked exclude=True by reference when copying state for an edit
+- ee6db66: ctx.store.set now rebuilds only the written path instead of copying the whole state, so the cost of a write no longer grows with the size of unrelated values.
+
 ## 2.23.2
 
 ### Patch Changes
