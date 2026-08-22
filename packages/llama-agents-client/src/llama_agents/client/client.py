@@ -25,6 +25,9 @@ from .protocol import (
     HealthResponse,
     SendEventResponse,
     Status,
+    WorkflowEventsListResponse,
+    WorkflowGraphResponse,
+    WorkflowSchemaResponse,
     WorkflowsListResponse,
 )
 from .protocol.serializable_events import (
@@ -218,6 +221,29 @@ class WorkflowClient:
             _raise_for_status_with_body(response)
 
             return WorkflowsListResponse.model_validate(response.json())
+
+    async def get_workflow_schema(self, workflow_name: str) -> WorkflowSchemaResponse:
+        """Get the start and stop event schemas for a workflow."""
+        async with self._get_client() as client:
+            response = await client.get(f"/workflows/{workflow_name}/schema")
+            _raise_for_status_with_body(response)
+            return WorkflowSchemaResponse.model_validate(response.json())
+
+    async def get_workflow_events_schema(
+        self, workflow_name: str
+    ) -> WorkflowEventsListResponse:
+        """Get the schemas of events registered for a workflow."""
+        async with self._get_client() as client:
+            response = await client.get(f"/workflows/{workflow_name}/events")
+            _raise_for_status_with_body(response)
+            return WorkflowEventsListResponse.model_validate(response.json())
+
+    async def get_workflow_graph(self, workflow_name: str) -> WorkflowGraphResponse:
+        """Get the directed graph representation of a workflow."""
+        async with self._get_client() as client:
+            response = await client.get(f"/workflows/{workflow_name}/representation")
+            _raise_for_status_with_body(response)
+            return WorkflowGraphResponse.model_validate(response.json())
 
     async def run_workflow(
         self,

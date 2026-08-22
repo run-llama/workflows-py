@@ -56,6 +56,51 @@ async def test_list_workflows(client: WorkflowClient) -> None:
 
 
 @pytest.mark.asyncio
+async def test_get_workflow_schema(client: WorkflowClient) -> None:
+    schema = await client.get_workflow_schema("greeting")
+
+    assert schema.start["title"] == "InputEvent"
+    assert schema.stop["title"] == "OutputEvent"
+
+
+@pytest.mark.asyncio
+async def test_get_workflow_events_schema(client: WorkflowClient) -> None:
+    response = await client.get_workflow_events_schema("greeting")
+
+    event_titles = {event["title"] for event in response.events}
+    assert {"InputEvent", "OutputEvent"} <= event_titles
+
+
+@pytest.mark.asyncio
+async def test_get_workflow_graph(client: WorkflowClient) -> None:
+    response = await client.get_workflow_graph("greeting")
+
+    assert response.graph.name == "GreetingWorkflow"
+    assert {node.id for node in response.graph.nodes} >= {
+        "first_step",
+        "second_step",
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "method_name",
+    [
+        "get_workflow_schema",
+        "get_workflow_events_schema",
+        "get_workflow_graph",
+    ],
+)
+async def test_workflow_introspection_unknown_workflow_raises(
+    client: WorkflowClient, method_name: str
+) -> None:
+    method = getattr(client, method_name)
+
+    with pytest.raises(httpx.HTTPStatusError, match="404 Not Found"):
+        await method("missing")
+
+
+@pytest.mark.asyncio
 async def test_run_nowait_and_stream_events(client: WorkflowClient) -> None:
     handler = await client.run_workflow_nowait(
         "greeting", start_event=InputEvent(greeting="hello", name="John")

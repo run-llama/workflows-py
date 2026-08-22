@@ -4,6 +4,9 @@ from .protocol import (
     HandlerData,
     HandlersListResponse,
     SendEventResponse,
+    WorkflowEventsListResponse,
+    WorkflowGraphResponse,
+    WorkflowSchemaResponse,
 )
 from .protocol.serializable_events import EventEnvelopeWithMetadata
 
@@ -14,5 +17,8 @@ __all__ = [
     "HandlerData",
     "HandlersListResponse",
     "SendEventResponse",
+    "WorkflowEventsListResponse",
+    "WorkflowGraphResponse",
+    "WorkflowSchemaResponse",
     "WorkflowClient",
 ]
