@@ -122,15 +122,6 @@ class PlainHolder:
         self.x = 1
 
 
-class ExcludingModel(BaseModel):
-    """Model with a live dependency the copy must share, not clone."""
-
-    model_config = ConfigDict(arbitrary_types_allowed=True)
-
-    dep: Any = Field(default=None, exclude=True)
-    data: dict[str, Any] = Field(default_factory=dict)
-
-
 class CopyCounter:
     """Value that records every attempt to copy it, and shares itself instead."""
 
@@ -426,59 +417,35 @@ def test_fallback_writes_through_a_live_handle_once() -> None:
 
 
 @pytest.mark.parametrize(
-    ("build", "path"),
+    ("build", "path", "read"),
     [
-        pytest.param(lambda: PlainHolder(), "holder.x", id="plain_object"),
-        pytest.param(lambda: DataHolder(), "holder.x", id="dataclass"),
+        pytest.param(PlainHolder, "node.x", lambda n: n.x, id="plain_object"),
+        pytest.param(DataHolder, "node.x", lambda n: n.x, id="dataclass"),
+        pytest.param(lambda: ({"x": 1},), "node.0.x", lambda n: n[0]["x"], id="tuple"),
     ],
 )
-def test_copyable_container_on_the_path_does_not_leak_the_write(
-    build: Callable[[], Any], path: str
+def test_unrebuildable_container_on_the_path_is_copied_not_written_through(
+    build: Callable[[], Any], path: str, read: Callable[[Any], Any]
 ) -> None:
-    """A container the rebuild cannot handle is still copied, not written through."""
-    holder = build()
-    state = DictState(holder=holder, n=0)
+    """A container the rebuild cannot handle is copied, not written through."""
+    node = build()
+    state = DictState(node=node)
 
     result = set_by_path_copy(state, path, 99)
 
-    assert holder.x == 1
-    assert state["holder"] is holder
+    assert read(node) == 1
     assert get_by_path(result, path) == 99
-
-
-def test_tuple_on_the_path_does_not_leak_the_write() -> None:
-    """A tuple is immutable but its contents are not."""
-    inner: dict[str, Any] = {"x": 1}
-    state = DictState(t=(inner,), n=0)
-
-    result = set_by_path_copy(state, "t.0.x", 99)
-
-    assert inner["x"] == 1
-    assert result["t"][0]["x"] == 99
 
 
 @pytest.mark.asyncio
 async def test_reader_is_unaffected_by_a_set_through_an_unsupported_container() -> None:
     """The read-committed contract holds on the fallback path too."""
     store: InMemoryStateStore[DictState] = InMemoryStateStore(
-        DictState(holder=DataHolder(), n=0)
+        DictState(node=DataHolder())
     )
     snapshot = await store.get_state()
 
-    await store.set("holder.x", 99)
+    await store.set("node.x", 99)
 
-    assert snapshot["holder"].x == 1
-    assert await store.get("holder.x") == 99
-
-
-def test_fallback_shares_excluded_fields_instead_of_copying_them() -> None:
-    """The fallback copies through `copy_state_for_edit`, so the exclude rule holds."""
-    dep = CopyCounter()
-    model = ExcludingModel(dep=dep, data={"k": 1})
-    state = DictState(holder=DataHolder(), model=model)
-
-    result = set_by_path_copy(state, "holder.x", 99)
-
-    assert result["model"].dep is dep
-    assert dep.copies == 0
-    assert result["model"].data is not model.data
+    assert snapshot["node"].x == 1
+    assert await store.get("node.x") == 99

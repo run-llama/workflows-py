@@ -523,34 +523,14 @@ def _rebuild_child(parent: Any, segment: str) -> Any:
     return child
 
 
-def _copy_state_and_set(state: MODEL_T, path: str, value: Any) -> MODEL_T:
-    """Copy all of state the way ``edit_state`` does, then write into the copy.
-
-    Uses ``copy_state_for_edit`` rather than a plain ``deepcopy`` so the
-    fallback inherits the exclude rule: a live handle hung off a model still
-    gets shared instead of cloned.
-
-    A container that ``copy_state_for_edit`` cannot copy at all is shared, so a
-    write through one is still visible immediately. That is unchanged, and
-    unavoidable — an uncopyable handle is shared with readers whether or not
-    anything writes to it, so there was never isolation there to keep.
-    """
-    copied = copy_state_for_edit(state)
-    set_by_path(copied, path, value)
-    return copied
-
-
 def set_by_path_copy(state: MODEL_T, path: str, value: Any) -> MODEL_T:
     """Set a path by copying its containers and sharing unrelated values.
 
-    Only containers along ``path`` are rebuilt; everything else is shared by
-    reference, so the cost is the depth of the path rather than the size of
-    state.
-
-    ``_shallow_copy_container`` knows how to rebuild models, dicts and lists.
-    A write path through anything else — a dataclass, a tuple, a plain object —
-    falls back to copying all of state, because writing through to ``state``
-    would mutate the committed value that lockless readers are reading.
+    A container the rebuild cannot handle falls back to copying all of state,
+    because writing through to ``state`` would mutate what readers are reading.
+    The fallback copies through ``copy_state_for_edit`` so it keeps the exclude
+    rule; a value that cannot be copied at all is shared, and a write through
+    one is still visible immediately.
     """
     segments = _split_write_path(path)
     try:
@@ -559,7 +539,9 @@ def set_by_path_copy(state: MODEL_T, path: str, value: Any) -> MODEL_T:
         for segment in segments[:-1]:
             current = _rebuild_child(current, segment)
     except _CannotRebuild:
-        return _copy_state_and_set(state, path, value)
+        copied = copy_state_for_edit(state)
+        set_by_path(copied, path, value)
+        return copied
 
     assign_path_step(current, segments[-1], value)
     return cast(MODEL_T, root)
@@ -1053,11 +1035,8 @@ class StateStoreFacade(Generic[MODEL_T]):
     async def set(self, path: str, value: Any) -> None:
         """Set a nested value using dot-separated paths.
 
-        Only containers along `path` are copied, so the cost is the depth of
-        the path rather than the size of state. A path through a container
-        that cannot be rebuilt (a dataclass, a tuple, a plain object) copies
-        all of state instead. Durable backends still re-encode the full state
-        row.
+        Only containers along `path` are copied. Durable backends still
+        re-encode the full state row.
         """
         async with self._lock.acquire_write():
             async with self._storage.session() as storage:
