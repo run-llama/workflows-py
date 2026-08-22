@@ -51,6 +51,10 @@ class HandlerCompletedError(Exception):
     pass
 
 
+class HandlerAlreadyRunningError(Exception):
+    pass
+
+
 class EventSendError(Exception):
     pass
 
@@ -213,6 +217,11 @@ class _WorkflowService:
         context: Context | None = None,
     ) -> HandlerData:
         with instrument_tags({"llamaindex.handler_id": handler_id}):
+            existing = await self.load_handler(handler_id)
+            if existing is not None and not is_terminal_status(existing.status):
+                raise HandlerAlreadyRunningError(
+                    f"Handler {handler_id!r} is already running"
+                )
             if context is None:
                 context = await self._context_from_handler_id(workflow, handler_id)
             # Pre-generate run_id and persist the handler record BEFORE starting
