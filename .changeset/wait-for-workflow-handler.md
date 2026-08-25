@@ -2,4 +2,4 @@
 "llama-agents-client": patch
 ---
 
-Add a polling helper for waiting on workflow handler completion
+Add a polling helper with configurable backoff for workflow handler completion

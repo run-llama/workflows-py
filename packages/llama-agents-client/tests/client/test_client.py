@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
-from typing import Any, AsyncIterator, Callable
-from unittest.mock import AsyncMock
+from typing import Any, AsyncIterator, Callable, Literal
+from unittest.mock import AsyncMock, call
 
 import httpx
 import pytest
@@ -164,6 +164,62 @@ async def test_wait_for_handler_observes_completion() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("backoff", "expected_sleeps"),
+    [
+        ("constant", [call(0.5), call(0.5), call(0.5)]),
+        ("linear", [call(0.5), call(1.5), call(2.5)]),
+        ("exponential", [call(0.5), call(1.0), call(2.0)]),
+    ],
+)
+async def test_wait_for_handler_applies_backoff(
+    monkeypatch: pytest.MonkeyPatch,
+    backoff: Literal["constant", "linear", "exponential"],
+    expected_sleeps: list[Any],
+) -> None:
+    statuses = iter(["running", "running", "running", "completed"])
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_handler_payload(next(statuses)))
+
+    sleep = AsyncMock()
+    monkeypatch.setattr(asyncio, "sleep", sleep)
+
+    async with _mock_client(respond) as http_client:
+        wf_client = WorkflowClient(httpx_client=http_client)
+        await wf_client.wait_for_handler("handler-1", backoff=backoff)
+
+    assert sleep.await_args_list == expected_sleeps
+
+
+@pytest.mark.asyncio
+async def test_wait_for_handler_default_backoff_caps_interval(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    statuses = iter(["running"] * 7 + ["completed"])
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_handler_payload(next(statuses)))
+
+    sleep = AsyncMock()
+    monkeypatch.setattr(asyncio, "sleep", sleep)
+
+    async with _mock_client(respond) as http_client:
+        wf_client = WorkflowClient(httpx_client=http_client)
+        await wf_client.wait_for_handler("handler-1")
+
+    assert sleep.await_args_list == [
+        call(0.5),
+        call(1.5),
+        call(2.5),
+        call(3.5),
+        call(4.5),
+        call(5.0),
+        call(5.0),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_wait_for_handler_zero_timeout_fetches_once() -> None:
     requests = 0
 
@@ -202,10 +258,16 @@ async def test_wait_for_handler_caps_sleep_at_timeout() -> None:
     [
         ({"timeout": -1}, "timeout must be non-negative or None"),
         ({"poll_interval": -1}, "poll_interval must be non-negative"),
+        ({"max_poll_interval": -1}, "max_poll_interval must be non-negative"),
+        (
+            {"poll_interval": 2, "max_poll_interval": 1},
+            "max_poll_interval must be greater than or equal to poll_interval",
+        ),
+        ({"backoff": "invalid"}, "invalid backoff strategy"),
     ],
 )
 async def test_wait_for_handler_validates_before_request(
-    kwargs: dict[str, float], message: str
+    kwargs: dict[str, Any], message: str
 ) -> None:
     requests = 0
 

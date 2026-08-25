@@ -55,6 +55,20 @@ def _raise_for_status_with_body(response: httpx.Response) -> None:
         raise
 
 
+def _next_poll_interval(
+    current_interval: float,
+    backoff: Literal["constant", "linear", "exponential"],
+    max_interval: float,
+) -> float:
+    if backoff == "constant":
+        return current_interval
+    if backoff == "linear":
+        return min(current_interval + 1.0, max_interval)
+    if backoff == "exponential":
+        return min(current_interval * 2.0, max_interval)
+    raise ValueError(f"invalid backoff strategy: {backoff}")
+
+
 @dataclass(frozen=True)
 class _QueuedEvent:
     sequence: int | Literal["now"]
@@ -516,6 +530,8 @@ class WorkflowClient:
         *,
         timeout: float | None = None,
         poll_interval: float = 0.5,
+        max_poll_interval: float = 5.0,
+        backoff: Literal["constant", "linear", "exponential"] = "linear",
     ) -> HandlerData:
         """Wait until a workflow handler reaches a terminal status.
 
@@ -523,7 +539,10 @@ class WorkflowClient:
             handler_id: ID of the handler to poll.
             timeout: Maximum number of seconds to wait. ``None`` waits
                 indefinitely.
-            poll_interval: Number of seconds between status requests.
+            poll_interval: Initial number of seconds between status requests.
+            max_poll_interval: Maximum number of seconds between requests.
+            backoff: Strategy for increasing the polling interval after each
+                non-terminal response.
 
         Raises:
             TimeoutError: If the handler is still running after ``timeout``.
@@ -534,9 +553,18 @@ class WorkflowClient:
             raise ValueError("timeout must be non-negative or None")
         if poll_interval < 0:
             raise ValueError("poll_interval must be non-negative")
+        if max_poll_interval < 0:
+            raise ValueError("max_poll_interval must be non-negative")
+        if max_poll_interval < poll_interval:
+            raise ValueError(
+                "max_poll_interval must be greater than or equal to poll_interval"
+            )
+        if backoff not in ("constant", "linear", "exponential"):
+            raise ValueError(f"invalid backoff strategy: {backoff}")
 
         loop = asyncio.get_running_loop()
         deadline = None if timeout is None else loop.time() + timeout
+        current_interval = poll_interval
 
         while True:
             handler = await self.get_handler(handler_id)
@@ -544,15 +572,19 @@ class WorkflowClient:
                 return handler
 
             if deadline is None:
-                await asyncio.sleep(poll_interval)
-                continue
+                sleep_interval = current_interval
+            else:
+                remaining = deadline - loop.time()
+                if remaining <= 0:
+                    raise TimeoutError(
+                        f"Handler {handler_id!r} did not complete within {timeout} seconds"
+                    )
+                sleep_interval = min(current_interval, remaining)
 
-            remaining = deadline - loop.time()
-            if remaining <= 0:
-                raise TimeoutError(
-                    f"Handler {handler_id!r} did not complete within {timeout} seconds"
-                )
-            await asyncio.sleep(min(poll_interval, remaining))
+            await asyncio.sleep(sleep_interval)
+            current_interval = _next_poll_interval(
+                current_interval, backoff, max_poll_interval
+            )
 
     async def cancel_handler(
         self, handler_id: str, purge: bool = False
