@@ -4,4 +4,4 @@
 "llama-agents-server": patch
 ---
 
-fix: replace mutable default arguments with None sentinels
+fix: replace mutable default arguments with immutable tuple defaults
