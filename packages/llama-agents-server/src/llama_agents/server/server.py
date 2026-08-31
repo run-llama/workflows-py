@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from contextlib import asynccontextmanager
 from typing import Any, AsyncGenerator
 
@@ -59,7 +59,7 @@ class WorkflowServer:
         middleware: list[Middleware] | None = None,
         exception_handlers: Mapping[Any, Any] | None = None,
         workflow_store: AbstractWorkflowStore | None = None,
-        persistence_backoff: list[float] | None = None,
+        persistence_backoff: Sequence[float] = (0.5, 3.0),
         runtime: Runtime | None = None,
         idle_timeout: float = 60.0,
         sse_heartbeat_interval: float | None = 25.0,
@@ -98,8 +98,6 @@ class WorkflowServer:
                 instantiate arbitrary Pydantic objects via ``importlib``, so
                 only enable this on trusted networks.
         """
-        if persistence_backoff is None:
-            persistence_backoff = [0.5, 3]
         if runtime is None:
             self._runtime_core = _DurableWorkflowRuntime(
                 workflow_store=workflow_store,
