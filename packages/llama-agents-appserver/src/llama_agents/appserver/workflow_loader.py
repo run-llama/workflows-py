@@ -6,6 +6,7 @@ import os
 import socket
 import subprocess
 import sys
+from collections.abc import Sequence
 from dataclasses import dataclass
 from importlib.metadata import requires as pkg_requires
 from importlib.metadata import version as pkg_version
@@ -311,14 +312,14 @@ def run_uv(
     source_root: Path,
     path: Path,
     cmd: str,
-    args: list[str] = [],
+    args: Sequence[str] = (),
     extra_env: dict[str, str] | None = None,
 ) -> None:
     env = os.environ.copy()
     if extra_env:
         env.update(extra_env)
     run_process(
-        ["uv", cmd] + args,
+        ["uv", cmd, *args],
         cwd=source_root / path,
         prefix=f"[uv {cmd}]",
         color_code="36",

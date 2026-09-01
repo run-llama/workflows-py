@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import builtins
 import json
+from collections.abc import Sequence
 from typing import Any
 
 from pydantic import BaseModel, ValidationError, model_validator
@@ -27,7 +28,7 @@ class EventEnvelopeWithMetadata(BaseModel):
     type: str
     types: list[str] | None
 
-    def load_event(self, registry: list[type[Event]] = []) -> Event:
+    def load_event(self, registry: Sequence[type[Event]] = ()) -> Event:
         """
         Attempts to load the event data as a python class based on the envelope metadata.
         Looks up the event from the registry, if provided. Falls back to the qualified_name, attempting to load from the module path.
